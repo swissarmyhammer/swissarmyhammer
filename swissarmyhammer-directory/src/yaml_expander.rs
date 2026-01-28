@@ -203,9 +203,7 @@ impl<C: DirectoryConfig> YamlExpander<C> {
                 for item in seq {
                     // Check if this is an @include that should be spliced
                     if let serde_yaml::Value::String(s) = &item {
-                        if s.starts_with('@') {
-                            let include_name = &s[1..];
-
+                        if let Some(include_name) = s.strip_prefix('@') {
                             // Check for cycles
                             if visited.contains(&include_name.to_string()) {
                                 return Err(DirectoryError::Other {

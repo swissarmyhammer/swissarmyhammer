@@ -2,12 +2,14 @@
 
 use std::marker::PhantomData;
 
+use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::error::ChainError;
-use crate::types::LinkOutput;
 
 use super::context::ChainContext;
+use super::output::LinkOutput;
+use super::VALIDATOR_BLOCK_EXIT_CODE;
 
 /// Marker trait for hook input types.
 ///
@@ -57,6 +59,10 @@ impl ChainResult {
 ///
 /// Chain links process typed input data and can modify the chain context.
 /// They return a `ChainResult` indicating whether to continue, stop, or error.
+///
+/// Links are async to support operations like validator execution that
+/// require async I/O.
+#[async_trait(?Send)]
 pub trait ChainLink<I: HookInputType>: Send + Sync {
     /// Process the input and potentially modify the context.
     ///
@@ -66,7 +72,7 @@ pub trait ChainLink<I: HookInputType>: Send + Sync {
     ///
     /// # Returns
     /// A `ChainResult` indicating the outcome of processing
-    fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult;
+    async fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult;
 
     /// Get the human-readable name of this link for logging/debugging.
     fn name(&self) -> &'static str;
@@ -94,8 +100,9 @@ impl<I: HookInputType> PassThroughLink<I> {
     }
 }
 
+#[async_trait(?Send)]
 impl<I: HookInputType> ChainLink<I> for PassThroughLink<I> {
-    fn process(&self, _input: &I, _ctx: &mut ChainContext) -> ChainResult {
+    async fn process(&self, _input: &I, _ctx: &mut ChainContext) -> ChainResult {
         ChainResult::continue_empty()
     }
 
@@ -130,16 +137,17 @@ where
     }
 }
 
+#[async_trait(?Send)]
 impl<I, F> ChainLink<I> for ValidationLink<I, F>
 where
     I: HookInputType,
     F: Fn(&I) -> Result<(), String> + Send + Sync,
 {
-    fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult {
+    async fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult {
         match (self.validator)(input) {
             Ok(()) => ChainResult::continue_empty(),
             Err(reason) => {
-                ctx.set_exit_code(2);
+                ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
                 ChainResult::stop(LinkOutput::block(reason))
             }
         }
@@ -180,12 +188,13 @@ where
     }
 }
 
+#[async_trait(?Send)]
 impl<I, F> ChainLink<I> for ContextLink<I, F>
 where
     I: HookInputType,
     F: Fn(&I) -> Option<String> + Send + Sync,
 {
-    fn process(&self, input: &I, _ctx: &mut ChainContext) -> ChainResult {
+    async fn process(&self, input: &I, _ctx: &mut ChainContext) -> ChainResult {
         if let Some(message) = (self.context_fn)(input) {
             ChainResult::continue_with(LinkOutput::empty().with_message(message))
         } else {
@@ -203,8 +212,8 @@ mod tests {
     use super::*;
     use crate::types::PreToolUseInput;
 
-    #[test]
-    fn test_pass_through_link() {
+    #[tokio::test]
+    async fn test_pass_through_link() {
         let link: PassThroughLink<PreToolUseInput> = PassThroughLink::new();
         let input: PreToolUseInput = serde_json::from_value(serde_json::json!({
             "session_id": "test",
@@ -218,14 +227,14 @@ mod tests {
         .unwrap();
         let mut ctx = ChainContext::new();
 
-        match link.process(&input, &mut ctx) {
+        match link.process(&input, &mut ctx).await {
             ChainResult::Continue(None) => {}
             _ => panic!("Expected Continue(None)"),
         }
     }
 
-    #[test]
-    fn test_validation_link_pass() {
+    #[tokio::test]
+    async fn test_validation_link_pass() {
         let link = ValidationLink::new("TestValidator", |input: &PreToolUseInput| {
             if input.tool_name == "Bash" {
                 Ok(())
@@ -246,14 +255,14 @@ mod tests {
         .unwrap();
         let mut ctx = ChainContext::new();
 
-        match link.process(&input, &mut ctx) {
+        match link.process(&input, &mut ctx).await {
             ChainResult::Continue(_) => {}
             _ => panic!("Expected Continue"),
         }
     }
 
-    #[test]
-    fn test_validation_link_fail() {
+    #[tokio::test]
+    async fn test_validation_link_fail() {
         let link = ValidationLink::new("TestValidator", |input: &PreToolUseInput| {
             if input.tool_name == "Bash" {
                 Ok(())
@@ -274,7 +283,7 @@ mod tests {
         .unwrap();
         let mut ctx = ChainContext::new();
 
-        match link.process(&input, &mut ctx) {
+        match link.process(&input, &mut ctx).await {
             ChainResult::Stop(_) => {}
             _ => panic!("Expected Stop"),
         }

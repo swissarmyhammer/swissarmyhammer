@@ -23,7 +23,7 @@ use std::time::Duration;
 /// # Examples
 /// ```rust
 /// use std::process::Command;
-/// use swissarmyhammer::workflow::handle_command_error;
+/// use swissarmyhammer_workflow::error_utils::handle_command_error;
 ///
 /// let output = Command::new("echo").arg("hello").output().unwrap();
 /// let result = handle_command_error(output, "echo");

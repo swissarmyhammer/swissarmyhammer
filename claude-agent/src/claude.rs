@@ -16,6 +16,47 @@ use crate::{
     session::{MessageRole, SessionId},
 };
 
+/// Timeout in seconds for reading the initial system/init message from Claude CLI.
+const INIT_TIMEOUT_SECS: u64 = 15;
+
+/// Maximum time in seconds to wait for init result message consumption.
+const MAX_INIT_WAIT_SECS: u64 = 30;
+
+/// Context for streaming operations from the Claude CLI process.
+///
+/// This struct bundles together all the resources needed during a streaming
+/// session, allowing them to be passed as a single unit to helper methods.
+struct StreamContext {
+    /// Handle to the Claude CLI process for reading output lines.
+    process: Arc<Mutex<ClaudeProcess>>,
+    /// ACP session ID for correlating responses with the protocol translator.
+    acp_session_id: agent_client_protocol::SessionId,
+    /// Optional sender for forwarding session notifications to ACP clients.
+    notification_sender: Option<Arc<crate::agent::NotificationSender>>,
+    /// Optional manager for recording raw JSON-RPC messages for debugging.
+    raw_message_manager: Option<crate::agent::RawMessageManager>,
+    /// Translator for converting Claude CLI output to ACP protocol messages.
+    protocol_translator: Arc<ProtocolTranslator>,
+    /// Channel sender for emitting parsed message chunks to the stream consumer.
+    tx: tokio::sync::mpsc::UnboundedSender<MessageChunk>,
+}
+
+/// State tracked during streaming to detect duplicates and accumulate text.
+///
+/// This struct maintains the running state needed to properly parse and
+/// deduplicate streaming output from the Claude CLI process.
+#[derive(Default)]
+struct StreamState {
+    /// Whether we've seen any stream events (used for duplicate detection).
+    saw_stream_events: bool,
+    /// Accumulated text for detecting duplicate final messages.
+    accumulated_text: String,
+    /// Count of lines read from the process (for debugging/metrics).
+    lines_read: u32,
+    /// Count of chunks sent to the consumer (for debugging/metrics).
+    chunks_sent: u32,
+}
+
 /// Claude client wrapper with session management
 pub struct ClaudeClient {
     process_manager: Arc<ClaudeProcessManager>,
@@ -60,6 +101,21 @@ impl ClaudeClient {
         Option<Vec<(String, String, Option<String>)>>,
         Option<String>,
     )> {
+        self.log_spawn_config(&config);
+        let acp_session_id = config.acp_session_id.clone();
+
+        let process = self.process_manager.spawn_process(config).await?;
+        self.send_init_trigger(&process).await?;
+
+        let init_line = self.read_init_message(&process).await;
+        let (available_agents, current_agent) =
+            self.process_init_line(init_line, &acp_session_id, &process).await;
+
+        Ok((available_agents, current_agent))
+    }
+
+    /// Log spawn configuration details.
+    fn log_spawn_config(&self, config: &SpawnConfig) {
         tracing::debug!(
             "Spawning Claude process for session: {} in {} with {} MCP servers, agent_mode={:?}, system_prompt={}, ephemeral={}",
             config.session_id,
@@ -69,258 +125,324 @@ impl ClaudeClient {
             config.system_prompt.as_ref().map(|s| format!("{} chars", s.len())).unwrap_or_else(|| "None".to_string()),
             config.ephemeral
         );
+    }
 
-        let acp_session_id = config.acp_session_id.clone();
-
-        // Spawn the process with config
-        let process = self.process_manager.spawn_process(config).await?;
-
-        // The Claude CLI emits a system/init message AFTER receiving the first input
-        // Send a minimal greeting to trigger init without priming Claude's behavior
-        // CRITICAL: This message stays in conversation history! Avoid "init"/"help"/"setup"
-        // which prime Claude into initialization mode, causing generic responses.
+    /// Send initialization trigger message to Claude process.
+    async fn send_init_trigger(&self, process: &Arc<Mutex<ClaudeProcess>>) -> Result<()> {
         tracing::debug!("Sending init trigger message to Claude");
-        {
+        let mut proc = process.lock().await;
+        let init_trigger = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
+        if let Err(e) = proc.write_line(init_trigger).await {
+            tracing::error!("Failed to write init trigger to Claude: {}", e);
+            return Err(e);
+        }
+        tracing::debug!("Init trigger sent successfully");
+        Ok(())
+    }
+
+    /// Read the init message from Claude process with timeout.
+    async fn read_init_message(
+        &self,
+        process: &Arc<Mutex<ClaudeProcess>>,
+    ) -> std::result::Result<std::result::Result<Option<String>, crate::error::AgentError>, tokio::time::error::Elapsed> {
+        tracing::debug!("Reading system/init message from Claude CLI");
+        tokio::time::timeout(std::time::Duration::from_secs(INIT_TIMEOUT_SECS), async {
             let mut proc = process.lock().await;
-            // Use simple greeting that won't bias Claude's behavior on subsequent prompts
-            let init_trigger = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
-            if let Err(e) = proc.write_line(init_trigger).await {
-                tracing::error!("Failed to write init trigger to Claude: {}", e);
-                return Err(e);
+            proc.read_line().await
+        })
+        .await
+    }
+
+    /// Process the init line and extract agents info.
+    async fn process_init_line(
+        &self,
+        init_line: std::result::Result<std::result::Result<Option<String>, crate::error::AgentError>, tokio::time::error::Elapsed>,
+        acp_session_id: &agent_client_protocol::SessionId,
+        process: &Arc<Mutex<ClaudeProcess>>,
+    ) -> (Option<Vec<(String, String, Option<String>)>>, Option<String>) {
+        match init_line {
+            Ok(Ok(Some(line))) => {
+                self.handle_init_line_received(&line, acp_session_id, process).await
             }
-            tracing::debug!("Init trigger sent successfully");
+            Ok(Ok(None)) => {
+                tracing::error!("Claude process closed before sending init message");
+                (None, None)
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Error reading init message: {}", e);
+                (None, None)
+            }
+            Err(_) => {
+                tracing::error!("Timeout waiting for init message from Claude CLI");
+                (None, None)
+            }
+        }
+    }
+
+    /// Handle a successfully received init line.
+    async fn handle_init_line_received(
+        &self,
+        line: &str,
+        acp_session_id: &agent_client_protocol::SessionId,
+        process: &Arc<Mutex<ClaudeProcess>>,
+    ) -> (Option<Vec<(String, String, Option<String>)>>, Option<String>) {
+        tracing::info!("Received init line from Claude CLI ({} bytes)", line.len());
+
+        if let Some(ref manager) = self.raw_message_manager {
+            manager.record(line.to_string());
         }
 
-        // Read the init message (should be first line after sending message)
-        tracing::debug!("Reading system/init message from Claude CLI");
+        let (available_agents, current_agent) =
+            self.parse_init_notification(line, acp_session_id).await;
 
-        let init_line = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        self.consume_remaining_init_response(process).await;
+
+        (available_agents, current_agent)
+    }
+
+    /// Parse init notification and extract agents.
+    async fn parse_init_notification(
+        &self,
+        line: &str,
+        acp_session_id: &agent_client_protocol::SessionId,
+    ) -> (Option<Vec<(String, String, Option<String>)>>, Option<String>) {
+        match self.protocol_translator.stream_json_to_acp(line, acp_session_id).await {
+            Ok(Some(notification)) => {
+                tracing::info!("Protocol translator created notification from init message");
+                let available_agents = Self::extract_available_agents(&notification);
+                let current_agent = Self::extract_current_agent(&notification);
+                self.forward_init_notification(notification).await;
+                (available_agents, current_agent)
+            }
+            Ok(None) => {
+                tracing::warn!("Init message produced no notification - check protocol_translator parsing");
+                (None, None)
+            }
+            Err(e) => {
+                tracing::error!("Failed to parse init message: {}", e);
+                (None, None)
+            }
+        }
+    }
+
+    /// Extract available_agents from notification metadata.
+    fn extract_available_agents(
+        notification: &agent_client_protocol::SessionNotification,
+    ) -> Option<Vec<(String, String, Option<String>)>> {
+        notification
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("available_agents"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|agent_arr| {
+                        let agent_tuple = agent_arr.as_array()?;
+                        let id = agent_tuple.first()?.as_str()?.to_string();
+                        let name = agent_tuple.get(1)?.as_str()?.to_string();
+                        let description = agent_tuple.get(2).and_then(|v| {
+                            if v.is_null() { None } else { v.as_str().map(|s| s.to_string()) }
+                        });
+                        Some((id, name, description))
+                    })
+                    .collect()
+            })
+    }
+
+    /// Extract current_agent from notification metadata.
+    fn extract_current_agent(
+        notification: &agent_client_protocol::SessionNotification,
+    ) -> Option<String> {
+        notification
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("current_agent"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Forward the init notification to subscribers.
+    async fn forward_init_notification(
+        &self,
+        notification: agent_client_protocol::SessionNotification,
+    ) {
+        if let Some(sender) = &self.notification_sender {
+            tracing::info!("Forwarding AvailableCommandsUpdate from Claude init message");
+            if let Err(e) = sender.send_update(notification).await {
+                tracing::warn!("Failed to send init notification (expected in tests): {}", e);
+            }
+        } else {
+            tracing::warn!("No notification sender configured - cannot forward init notification");
+        }
+    }
+
+    /// Consume remaining init response lines until result message.
+    async fn consume_remaining_init_response(&self, process: &Arc<Mutex<ClaudeProcess>>) {
+        tracing::debug!("Consuming remaining init response lines until result message");
+        let mut lines_consumed = 0;
+        let start_time = std::time::Instant::now();
+
+        loop {
+            if start_time.elapsed().as_secs() > MAX_INIT_WAIT_SECS {
+                tracing::error!(
+                    "Timeout after {}s waiting for init result (consumed {} lines)",
+                    MAX_INIT_WAIT_SECS,
+                    lines_consumed
+                );
+                break;
+            }
+
+            match self.read_next_init_line(process).await {
+                InitLineResult::Line(line) => {
+                    lines_consumed += 1;
+                    if self.is_result_message(&line, lines_consumed) {
+                        break;
+                    }
+                }
+                InitLineResult::Eof(count) => {
+                    tracing::warn!("EOF while consuming init after {} lines", count);
+                    break;
+                }
+                InitLineResult::Error(count, e) => {
+                    tracing::error!("Error reading init line after {}: {}", count, e);
+                    break;
+                }
+                InitLineResult::Timeout(count) => {
+                    tracing::debug!("Read timeout after {} lines (continuing...)", count);
+                }
+            }
+        }
+    }
+
+    /// Read next line during init consumption.
+    async fn read_next_init_line(&self, process: &Arc<Mutex<ClaudeProcess>>) -> InitLineResult {
+        let remaining = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let mut proc = process.lock().await;
             proc.read_line().await
         })
         .await;
 
-        let mut available_agents = None;
-        let mut current_agent = None;
+        match remaining {
+            Ok(Ok(Some(line))) => InitLineResult::Line(line),
+            Ok(Ok(None)) => InitLineResult::Eof(0),
+            Ok(Err(e)) => InitLineResult::Error(0, e),
+            Err(_) => InitLineResult::Timeout(0),
+        }
+    }
 
-        match init_line {
-            Ok(Ok(Some(line))) => {
-                tracing::info!("Received init line from Claude CLI ({} bytes)", line.len());
-
-                // Record raw JSON-RPC message
-                if let Some(ref manager) = self.raw_message_manager {
-                    manager.record(line.clone());
-                }
-
-                // Parse through protocol_translator
-                match self
-                    .protocol_translator
-                    .stream_json_to_acp(&line, &acp_session_id)
-                    .await
-                {
-                    Ok(Some(notification)) => {
-                        tracing::info!(
-                            "Protocol translator created notification from init message"
-                        );
-
-                        // Extract available_agents from metadata before forwarding
-                        available_agents = notification
-                            .meta
-                            .as_ref()
-                            .and_then(|meta| meta.get("available_agents"))
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|agent_arr| {
-                                        let agent_tuple = agent_arr.as_array()?;
-                                        let id = agent_tuple.first()?.as_str()?.to_string();
-                                        let name = agent_tuple.get(1)?.as_str()?.to_string();
-                                        let description = agent_tuple.get(2).and_then(|v| {
-                                            if v.is_null() {
-                                                None
-                                            } else {
-                                                v.as_str().map(|s| s.to_string())
-                                            }
-                                        });
-                                        Some((id, name, description))
-                                    })
-                                    .collect::<Vec<_>>()
-                            });
-
-                        // Extract current_agent from metadata if present
-                        current_agent = notification
-                            .meta
-                            .as_ref()
-                            .and_then(|meta| meta.get("current_agent"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-
-                        // Forward the notification
-                        if let Some(sender) = &self.notification_sender {
-                            tracing::info!(
-                                "Forwarding AvailableCommandsUpdate from Claude init message"
-                            );
-                            if let Err(e) = sender.send_update(notification).await {
-                                tracing::warn!(
-                                    "Failed to send init notification (expected in tests): {}",
-                                    e
-                                );
-                            }
-                        } else {
-                            tracing::warn!("No notification sender configured - cannot forward init notification");
-                        }
-                    }
-                    Ok(None) => {
-                        tracing::warn!("Init message produced no notification - check protocol_translator parsing");
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to parse init message: {}", e);
-                    }
-                }
-
-                // Consume remaining response lines (assistant message, result)
-                // CRITICAL: Must consume the complete response including final "result" message.
-                // If we don't, the init trigger response leaks into real prompt history.
-                tracing::debug!("Consuming remaining init response lines until result message");
-                let mut lines_consumed = 0;
-                let max_wait_seconds = 30;
-                let start_time = std::time::Instant::now();
-
-                loop {
-                    if start_time.elapsed().as_secs() > max_wait_seconds {
-                        tracing::error!(
-                            "Timeout after {}s waiting for init result (consumed {} lines)",
-                            max_wait_seconds,
-                            lines_consumed
-                        );
-                        break;
-                    }
-
-                    let remaining =
-                        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                            let mut proc = process.lock().await;
-                            proc.read_line().await
-                        })
-                        .await;
-
-                    match remaining {
-                        Ok(Ok(Some(line))) => {
-                            lines_consumed += 1;
-
-                            // Record to raw transcript but don't forward as notification
-                            if let Some(ref manager) = self.raw_message_manager {
-                                manager.record(line.clone());
-                            }
-
-                            // Check if this is the result line (end of response)
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                                let msg_type = json.get("type").and_then(|t| t.as_str());
-                                tracing::trace!("Init response type: {}", Pretty(&msg_type));
-                                if msg_type == Some("result") {
-                                    tracing::info!(
-                                        "✅ Consumed complete init response ({} lines)",
-                                        lines_consumed
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                        Ok(Ok(None)) => {
-                            tracing::warn!(
-                                "EOF while consuming init after {} lines",
-                                lines_consumed
-                            );
-                            break;
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!(
-                                "Error reading init line after {}: {}",
-                                lines_consumed,
-                                e
-                            );
-                            break;
-                        }
-                        Err(_) => {
-                            tracing::debug!(
-                                "Read timeout after {} lines (continuing...)",
-                                lines_consumed
-                            );
-                            // Continue - don't give up on single timeout
-                        }
-                    }
-                }
-            }
-            Ok(Ok(None)) => {
-                tracing::error!("Claude process closed before sending init message");
-            }
-            Ok(Err(e)) => {
-                tracing::error!("Error reading init message: {}", e);
-            }
-            Err(_) => {
-                tracing::error!("Timeout waiting for init message from Claude CLI");
-            }
+    /// Check if line is a result message and log accordingly.
+    fn is_result_message(&self, line: &str, lines_consumed: usize) -> bool {
+        if let Some(ref manager) = self.raw_message_manager {
+            manager.record(line.to_string());
         }
 
-        Ok((available_agents, current_agent))
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            let msg_type = json.get("type").and_then(|t| t.as_str());
+            tracing::trace!("Init response type: {}", Pretty(&msg_type));
+            if msg_type == Some("result") {
+                tracing::info!("✅ Consumed complete init response ({} lines)", lines_consumed);
+                return true;
+            }
+        }
+        false
     }
 }
 
-/// Session context for managing conversation history
+/// Result of reading a line during init consumption.
+enum InitLineResult {
+    Line(String),
+    Eof(usize),
+    Error(usize, crate::error::AgentError),
+    Timeout(usize),
+}
+
+/// Session context for managing conversation history.
+///
+/// Maintains the full conversation state including messages, token usage,
+/// and cost tracking for a single Claude session.
 pub struct SessionContext {
+    /// Unique identifier for this session.
     pub session_id: SessionId,
+    /// Ordered list of messages in the conversation.
     pub messages: Vec<ClaudeMessage>,
+    /// When this session was created.
     pub created_at: SystemTime,
-    /// Working directory for this session
+    /// Working directory for this session.
     pub cwd: std::path::PathBuf,
-    /// Total cost in USD for all messages in this session
+    /// Total cost in USD for all messages in this session.
     pub total_cost_usd: f64,
-    /// Total input tokens used across all messages
+    /// Total input tokens used across all messages.
     pub total_input_tokens: u64,
-    /// Total output tokens used across all messages
+    /// Total output tokens used across all messages.
     pub total_output_tokens: u64,
 }
 
-/// Individual message in a conversation
+/// Individual message in a conversation.
+///
+/// Represents a single message exchange (user input or assistant response)
+/// with its role, content, and timestamp.
 #[derive(Debug, Clone)]
 pub struct ClaudeMessage {
+    /// The role of the message sender (user or assistant).
     pub role: MessageRole,
+    /// The text content of the message.
     pub content: String,
+    /// When this message was created.
     pub timestamp: SystemTime,
 }
 
-/// Streaming message chunk
+/// Streaming message chunk from Claude responses.
+///
+/// Represents a single chunk of data received during streaming,
+/// which may contain text, tool calls, or metadata.
 #[derive(Debug, Clone)]
 pub struct MessageChunk {
+    /// The text content of this chunk.
     pub content: String,
+    /// The type of content in this chunk.
     pub chunk_type: ChunkType,
-    /// Tool call information (only present when chunk_type is ToolCall)
+    /// Tool call information (only present when chunk_type is ToolCall).
     pub tool_call: Option<ToolCallInfo>,
-    /// Token usage information (only present in Result messages)
+    /// Token usage information (only present in Result messages).
     pub token_usage: Option<TokenUsageInfo>,
-    /// Stop reason from Claude (only present in final chunk from result message)
+    /// Stop reason from Claude (only present in final chunk from result message).
     pub stop_reason: Option<String>,
 }
 
-/// Tool call information extracted from Message::Tool
+/// Tool call information extracted from Claude Message::Tool responses.
+///
+/// Contains the tool call identifier, name, and parameters for execution.
 #[derive(Debug, Clone)]
 pub struct ToolCallInfo {
+    /// Unique identifier for this tool call.
     pub id: String,
+    /// Name of the tool to execute.
     pub name: String,
+    /// Parameters to pass to the tool as JSON.
     pub parameters: serde_json::Value,
 }
 
-/// Token usage information extracted from Message metadata
+/// Token usage information extracted from Message metadata.
+///
+/// Tracks the number of tokens consumed for billing and context management.
 #[derive(Debug, Clone)]
 pub struct TokenUsageInfo {
+    /// Number of tokens in the input prompt.
     pub input_tokens: u64,
+    /// Number of tokens in the model's output.
     pub output_tokens: u64,
 }
 
-/// Types of message chunks in streaming responses
+/// Types of message chunks in streaming responses.
+///
+/// Identifies the content type of each chunk received during streaming.
 #[derive(Debug, Clone)]
 pub enum ChunkType {
+    /// Plain text content from the model.
     Text,
+    /// A tool call request from the model.
     ToolCall,
+    /// Result from a completed tool execution.
     ToolResult,
 }
 
@@ -359,12 +481,18 @@ impl ClaudeClient {
         &self.process_manager
     }
 
-    /// Convert session::SessionId to agent_client_protocol::SessionId
+    /// Convert internal session ID to ACP protocol session ID.
+    ///
+    /// Maps between the internal `SessionId` type and the protocol-level
+    /// `agent_client_protocol::SessionId` for ACP communication.
     fn to_acp_session_id(session_id: &SessionId) -> agent_client_protocol::SessionId {
         agent_client_protocol::SessionId::new(session_id.to_string())
     }
 
-    /// Convert ContentBlock to MessageChunk
+    /// Convert ACP ContentBlock to internal MessageChunk format.
+    ///
+    /// Transforms protocol-level content blocks into the internal streaming
+    /// chunk representation used for response processing.
     fn content_block_to_message_chunk(content: ContentBlock) -> MessageChunk {
         match content {
             ContentBlock::Text(text) => MessageChunk {
@@ -385,7 +513,10 @@ impl ClaudeClient {
         }
     }
 
-    /// Helper method to send prompt to process
+    /// Send a prompt to the Claude process via stream-json protocol.
+    ///
+    /// Converts the prompt text to the stream-json format and writes it
+    /// to the process stdin.
     async fn send_prompt_to_process(
         &self,
         process: Arc<Mutex<ClaudeProcess>>,
@@ -400,7 +531,10 @@ impl ClaudeClient {
         Ok(())
     }
 
-    /// Helper method to check if a line indicates end of stream
+    /// Check if a JSON line indicates the end of a streaming response.
+    ///
+    /// Returns true if the line contains a "result" type message,
+    /// signaling that the response stream has completed.
     fn is_end_of_stream(line: &str) -> bool {
         // Parse JSON and check type field properly
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
@@ -419,62 +553,41 @@ impl ClaudeClient {
             ));
         }
 
-        // Get the existing process for this session
         let process = self.process_manager.get_process(session_id)?;
-
-        // Send prompt to process
         self.send_prompt_to_process(process.clone(), prompt).await?;
 
-        // Read response lines until we get a result
-        let mut response_text = String::new();
         let acp_session_id = Self::to_acp_session_id(session_id);
+        self.collect_query_response(process, &acp_session_id).await
+    }
 
-        // Track whether we've seen stream_event chunks to enable duplicate filtering
+    /// Collect response text from a query by processing stream lines.
+    async fn collect_query_response(
+        &self,
+        process: Arc<Mutex<ClaudeProcess>>,
+        acp_session_id: &agent_client_protocol::SessionId,
+    ) -> Result<String> {
+        let mut response_text = String::new();
         let mut saw_stream_events = false;
         let mut accumulated_text = String::new();
 
         loop {
-            let line = {
-                let mut proc = process.lock().await;
-                proc.read_line().await?
-            };
+            let line = Self::read_process_line(&process).await?;
 
             match line {
                 Some(line) => {
-                    // Check if this is a stream_event to enable duplicate filtering
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                        if json.get("type").and_then(|t| t.as_str()) == Some("stream_event") {
-                            saw_stream_events = true;
+                    Self::update_stream_event_flag(&line, &mut saw_stream_events);
+
+                    if let Some(text) = self.extract_text_from_line(&line, acp_session_id).await {
+                        if self.should_filter_duplicate(&text, saw_stream_events, &accumulated_text)
+                        {
+                            continue;
                         }
+                        if saw_stream_events {
+                            accumulated_text.push_str(&text);
+                        }
+                        response_text.push_str(&text);
                     }
 
-                    if let Ok(Some(notification)) = self
-                        .protocol_translator
-                        .stream_json_to_acp(&line, &acp_session_id)
-                        .await
-                    {
-                        if let SessionUpdate::AgentMessageChunk(chunk) = notification.update {
-                            if let ContentBlock::Text(text) = chunk.content {
-                                // If we've seen stream_events and this chunk's text equals
-                                // the accumulated text, it's the duplicate assistant message - skip it
-                                if saw_stream_events && text.text == accumulated_text {
-                                    tracing::debug!(
-                                        "Filtered duplicate assistant message ({} chars) in non-streaming query",
-                                        text.text.len()
-                                    );
-                                    continue;
-                                }
-
-                                // Accumulate text from stream_event chunks
-                                if saw_stream_events {
-                                    accumulated_text.push_str(&text.text);
-                                }
-
-                                response_text.push_str(&text.text);
-                            }
-                        }
-                    }
-                    // Check if this is a result message (indicates end)
                     if Self::is_end_of_stream(&line) {
                         break;
                     }
@@ -484,6 +597,50 @@ impl ClaudeClient {
         }
 
         Ok(response_text)
+    }
+
+    /// Read a line from the process with proper locking.
+    async fn read_process_line(process: &Arc<Mutex<ClaudeProcess>>) -> Result<Option<String>> {
+        let mut proc = process.lock().await;
+        proc.read_line().await
+    }
+
+    /// Extract text content from a stream-json line if present.
+    async fn extract_text_from_line(
+        &self,
+        line: &str,
+        acp_session_id: &agent_client_protocol::SessionId,
+    ) -> Option<String> {
+        let notification = self
+            .protocol_translator
+            .stream_json_to_acp(line, acp_session_id)
+            .await
+            .ok()??;
+
+        if let SessionUpdate::AgentMessageChunk(chunk) = notification.update {
+            if let ContentBlock::Text(text) = chunk.content {
+                return Some(text.text);
+            }
+        }
+        None
+    }
+
+    /// Check if a text chunk should be filtered as a duplicate.
+    fn should_filter_duplicate(
+        &self,
+        text: &str,
+        saw_stream_events: bool,
+        accumulated_text: &str,
+    ) -> bool {
+        if saw_stream_events && text == accumulated_text {
+            tracing::debug!(
+                "Filtered duplicate assistant message ({} chars) in non-streaming query",
+                text.len()
+            );
+            true
+        } else {
+            false
+        }
     }
 
     /// Execute a streaming query without session context
@@ -498,210 +655,205 @@ impl ClaudeClient {
             ));
         }
 
-        // Get the existing process for this session
         let process = self.process_manager.get_process(session_id)?;
-
-        // Send prompt to process
         self.send_prompt_to_process(process.clone(), prompt).await?;
 
-        // Create a channel-based stream to avoid holding mutex across await
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let process_clone = process.clone();
-        let acp_session_id = Self::to_acp_session_id(session_id);
-        let notification_sender_clone = self.notification_sender.clone();
-        let raw_message_manager_clone = self.raw_message_manager.clone();
-        let protocol_translator = self.protocol_translator.clone();
+        let ctx = StreamContext {
+            process: process.clone(),
+            acp_session_id: Self::to_acp_session_id(session_id),
+            notification_sender: self.notification_sender.clone(),
+            raw_message_manager: self.raw_message_manager.clone(),
+            protocol_translator: self.protocol_translator.clone(),
+            tx,
+        };
 
-        // Spawn an async task to read from the process and send chunks
-        tokio::task::spawn(async move {
-            // Track whether we've seen any stream_event chunks during this streaming session.
-            // If true, we need to filter duplicate assistant messages that contain the full text.
-            let mut saw_stream_events = false;
+        tokio::task::spawn(Self::run_stream_loop(ctx));
 
-            // Accumulates text content from stream_event chunks to detect duplicate assistant messages.
-            // When an assistant message text matches this accumulated text, it's a duplicate.
-            let mut accumulated_text = String::new();
-
-            let mut lines_read = 0u32;
-            let mut chunks_sent = 0u32;
-
-            loop {
-                let line = {
-                    let mut proc = process_clone.lock().await;
-                    match proc.read_line().await {
-                        Ok(Some(line)) => line,
-                        Ok(None) => {
-                            tracing::debug!(
-                                "Stream reading loop: EOF after {} lines, {} chunks sent",
-                                lines_read,
-                                chunks_sent
-                            );
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Stream reading loop: Error after {} lines: {}",
-                                lines_read,
-                                e
-                            );
-                            break;
-                        }
-                    }
-                };
-                lines_read += 1;
-
-                // Record raw JSON-RPC message
-                if let Some(ref manager) = raw_message_manager_clone {
-                    manager.record(line.clone());
-                }
-
-                // DEBUG: Capture ALL stdout to debug file
-                {
-                    use std::io::Write;
-                    let debug_file = std::path::PathBuf::from("/tmp/claude_stdout_debug.jsonl");
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&debug_file)
-                    {
-                        let _ = writeln!(file, "{}", line);
-                    }
-                }
-
-                // Check if this is a result message (indicates end)
-                if Self::is_end_of_stream(&line) {
-                    // Parse the result message to extract stop_reason
-                    if let Ok(Some(result)) = protocol_translator.parse_result_message(&line) {
-                        // Send a final chunk with the stop_reason
-                        let final_chunk = MessageChunk {
-                            content: String::new(),
-                            chunk_type: ChunkType::Text,
-                            tool_call: None,
-                            token_usage: None,
-                            stop_reason: result.stop_reason.clone(),
-                        };
-                        tracing::debug!(
-                            "Stream reading loop: Sending final chunk with stop_reason={:?}",
-                            result.stop_reason
-                        );
-                        let _ = tx.send(final_chunk);
-                    }
-                    break;
-                }
-
-                // Check if this is a stream_event to enable duplicate filtering.
-                // When --include-partial-messages is used, claude CLI sends:
-                // 1. Real-time stream_event chunks (which we want)
-                // 2. A final assistant message with full text (which duplicates #1)
-                // We track stream_events to know when to filter the duplicate.
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if json.get("type").and_then(|t| t.as_str()) == Some("stream_event") {
-                        saw_stream_events = true;
-                    }
-                }
-
-                // Translate to ACP notification
-                let translation_result = protocol_translator
-                    .stream_json_to_acp(&line, &acp_session_id)
-                    .await;
-
-                match &translation_result {
-                    Ok(Some(_)) => {
-                        tracing::debug!("stream_json_to_acp returned Some notification");
-                    }
-                    Ok(None) => {
-                        // Log the message type that returned None
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                            let msg_type = json
-                                .get("type")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("unknown");
-                            tracing::debug!(
-                                "stream_json_to_acp returned None for type={}",
-                                msg_type
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "stream_json_to_acp error: {}. Line: {}",
-                            e,
-                            &line.chars().take(200).collect::<String>()
-                        );
-                    }
-                }
-
-                if let Ok(Some(notification)) = translation_result {
-                    // Forward notification first (if sender configured)
-                    // This must clone to avoid moving from borrowed content
-                    if let Some(ref sender) = notification_sender_clone {
-                        let _ = sender.send_update(notification.clone()).await;
-                    }
-
-                    // Then convert to chunks for conversation flow
-                    match notification.update {
-                        SessionUpdate::AgentMessageChunk(content_chunk) => {
-                            let chunk =
-                                Self::content_block_to_message_chunk(content_chunk.content.clone());
-
-                            // Track accumulated text for logging and duplicate detection
-                            if let ContentBlock::Text(text) = &content_chunk.content {
-                                // If we've seen stream_events and this chunk's text equals
-                                // the accumulated text, it's the duplicate assistant message - skip it
-                                if saw_stream_events && text.text == accumulated_text {
-                                    tracing::debug!(
-                                        "Filtered duplicate assistant message ({} chars) after stream_events",
-                                        text.text.len()
-                                    );
-                                    continue;
-                                }
-
-                                // Always accumulate text for response logging
-                                accumulated_text.push_str(&text.text);
-                            }
-
-                            if tx.send(chunk).is_err() {
-                                tracing::debug!("Stream reading loop: Channel closed, breaking");
-                                break;
-                            }
-                            chunks_sent += 1;
-                        }
-                        SessionUpdate::ToolCall(tool_call) => {
-                            // Send ToolCall as a special MessageChunk with tool_call info
-                            let tool_chunk = MessageChunk {
-                                content: String::new(),
-                                chunk_type: ChunkType::ToolCall,
-                                tool_call: Some(ToolCallInfo {
-                                    id: tool_call.tool_call_id.0.to_string(),
-                                    name: tool_call.title.clone(),
-                                    parameters: tool_call
-                                        .raw_input
-                                        .unwrap_or_else(|| serde_json::json!({})),
-                                }),
-                                token_usage: None,
-                                stop_reason: None,
-                            };
-                            if tx.send(tool_chunk).is_err() {
-                                tracing::debug!("Stream reading loop: Channel closed, breaking");
-                                break;
-                            }
-                            chunks_sent += 1;
-                        }
-                        SessionUpdate::ToolCallUpdate(_update) => {
-                            // ToolCallUpdate notifications were already forwarded above
-                            tracing::debug!("ToolCallUpdate notification forwarded");
-                        }
-                        _ => {
-                            // Other notification types forwarded above, no chunk conversion
-                        }
-                    }
-                }
-            }
-        });
-
-        // Convert receiver to stream
         let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
         Ok(Box::pin(stream))
+    }
+
+    /// Run the streaming read loop.
+    async fn run_stream_loop(ctx: StreamContext) {
+        let mut state = StreamState::default();
+
+        loop {
+            let line = match Self::read_stream_line(&ctx.process).await {
+                Some(line) => line,
+                None => break,
+            };
+            state.lines_read += 1;
+
+            Self::record_raw_message(&ctx.raw_message_manager, &line);
+            Self::write_debug_log(&line);
+
+            if Self::is_end_of_stream(&line) {
+                Self::send_final_chunk(&ctx, &line);
+                break;
+            }
+
+            Self::update_stream_event_flag(&line, &mut state.saw_stream_events);
+
+            let notification = match ctx.protocol_translator
+                .stream_json_to_acp(&line, &ctx.acp_session_id)
+                .await
+            {
+                Ok(Some(n)) => n,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!("stream_json_to_acp error: {}", e);
+                    continue;
+                }
+            };
+
+            Self::forward_notification(&ctx.notification_sender, &notification).await;
+
+            if !Self::process_notification(&ctx, notification, &mut state) {
+                break;
+            }
+        }
+    }
+
+    /// Read a line from the stream process.
+    async fn read_stream_line(process: &Arc<Mutex<ClaudeProcess>>) -> Option<String> {
+        let mut proc = process.lock().await;
+        match proc.read_line().await {
+            Ok(Some(line)) => Some(line),
+            Ok(None) => {
+                tracing::debug!("Stream reading loop: EOF");
+                None
+            }
+            Err(e) => {
+                tracing::warn!("Stream reading loop error: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Record raw message to manager.
+    fn record_raw_message(manager: &Option<crate::agent::RawMessageManager>, line: &str) {
+        if let Some(ref m) = manager {
+            m.record(line.to_string());
+        }
+    }
+
+    /// Write line to debug log file.
+    fn write_debug_log(line: &str) {
+        use std::io::Write;
+        let debug_file = std::path::PathBuf::from("/tmp/claude_stdout_debug.jsonl");
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&debug_file)
+        {
+            let _ = writeln!(file, "{}", line);
+        }
+    }
+
+    /// Send final chunk with stop reason.
+    fn send_final_chunk(ctx: &StreamContext, line: &str) {
+        if let Ok(Some(result)) = ctx.protocol_translator.parse_result_message(line) {
+            let chunk = MessageChunk {
+                content: String::new(),
+                chunk_type: ChunkType::Text,
+                tool_call: None,
+                token_usage: None,
+                stop_reason: result.stop_reason.clone(),
+            };
+            tracing::debug!("Sending final chunk with stop_reason={:?}", result.stop_reason);
+            let _ = ctx.tx.send(chunk);
+        }
+    }
+
+    /// Update stream_event flag for duplicate detection.
+    fn update_stream_event_flag(line: &str, saw_stream_events: &mut bool) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            if json.get("type").and_then(|t| t.as_str()) == Some("stream_event") {
+                *saw_stream_events = true;
+            }
+        }
+    }
+
+    /// Forward notification to sender.
+    async fn forward_notification(
+        sender: &Option<Arc<crate::agent::NotificationSender>>,
+        notification: &agent_client_protocol::SessionNotification,
+    ) {
+        if let Some(ref s) = sender {
+            let _ = s.send_update(notification.clone()).await;
+        }
+    }
+
+    /// Process notification and send chunks. Returns false if loop should break.
+    fn process_notification(
+        ctx: &StreamContext,
+        notification: agent_client_protocol::SessionNotification,
+        state: &mut StreamState,
+    ) -> bool {
+        match notification.update {
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                Self::handle_message_chunk(ctx, chunk, state)
+            }
+            SessionUpdate::ToolCall(tool_call) => {
+                Self::handle_tool_call(ctx, tool_call, state)
+            }
+            SessionUpdate::ToolCallUpdate(_) => {
+                tracing::debug!("ToolCallUpdate notification forwarded");
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// Handle agent message chunk. Returns false if channel closed.
+    fn handle_message_chunk(
+        ctx: &StreamContext,
+        content_chunk: agent_client_protocol::ContentChunk,
+        state: &mut StreamState,
+    ) -> bool {
+        let chunk = Self::content_block_to_message_chunk(content_chunk.content.clone());
+
+        if let ContentBlock::Text(text) = &content_chunk.content {
+            if state.saw_stream_events && text.text == state.accumulated_text {
+                tracing::debug!("Filtered duplicate assistant message");
+                return true;
+            }
+            state.accumulated_text.push_str(&text.text);
+        }
+
+        if ctx.tx.send(chunk).is_err() {
+            tracing::debug!("Channel closed");
+            return false;
+        }
+        state.chunks_sent += 1;
+        true
+    }
+
+    /// Handle tool call. Returns false if channel closed.
+    fn handle_tool_call(
+        ctx: &StreamContext,
+        tool_call: agent_client_protocol::ToolCall,
+        state: &mut StreamState,
+    ) -> bool {
+        let chunk = MessageChunk {
+            content: String::new(),
+            chunk_type: ChunkType::ToolCall,
+            tool_call: Some(ToolCallInfo {
+                id: tool_call.tool_call_id.0.to_string(),
+                name: tool_call.title.clone(),
+                parameters: tool_call.raw_input.unwrap_or_else(|| serde_json::json!({})),
+            }),
+            token_usage: None,
+            stop_reason: None,
+        };
+
+        if ctx.tx.send(chunk).is_err() {
+            tracing::debug!("Channel closed");
+            return false;
+        }
+        state.chunks_sent += 1;
+        true
     }
 
     /// Execute a query with full session context

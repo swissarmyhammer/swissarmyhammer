@@ -4,7 +4,7 @@ use crate::context::AvpContext;
 use crate::error::AvpError;
 use crate::types::HookOutput;
 
-use super::claude_code::ClaudeCodeHookStrategy;
+use super::claude::strategy::ClaudeCodeHookStrategy;
 use super::traits::AgentHookStrategy;
 
 /// Dispatcher for routing hook inputs to the appropriate agent strategy.

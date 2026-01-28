@@ -3,11 +3,10 @@
 use std::marker::PhantomData;
 
 use crate::error::ChainError;
-use crate::types::HookOutput;
 
-use super::aggregator::ChainAggregator;
 use super::context::ChainContext;
 use super::link::{ChainLink, ChainResult, HookInputType};
+use super::output::{ChainOutput, ChainOutputAggregator};
 use super::starters::{ChainStarter, StarterResult, SuccessStarter};
 
 /// A chain of processing links with a starter and aggregator.
@@ -27,7 +26,7 @@ pub struct Chain<I: HookInputType> {
     links: Vec<Box<dyn ChainLink<I>>>,
 
     /// Aggregator for combining link outputs.
-    aggregator: ChainAggregator,
+    aggregator: ChainOutputAggregator,
 
     _phantom: PhantomData<I>,
 }
@@ -38,7 +37,7 @@ impl<I: HookInputType> Chain<I> {
         Self {
             starter: Box::new(starter),
             links: Vec::new(),
-            aggregator: ChainAggregator::new(),
+            aggregator: ChainOutputAggregator::new(),
             _phantom: PhantomData,
         }
     }
@@ -56,8 +55,9 @@ impl<I: HookInputType> Chain<I> {
 
     /// Execute the chain with the given input.
     ///
-    /// Returns the final output and exit code.
-    pub fn execute(&mut self, input: &I) -> Result<(HookOutput, i32), ChainError> {
+    /// Returns the agent-agnostic chain output and exit code.
+    /// Agent strategies transform this into their platform-specific format.
+    pub async fn execute(&mut self, input: &I) -> Result<(ChainOutput, i32), ChainError> {
         let mut ctx = ChainContext::new();
 
         // Execute starter
@@ -70,7 +70,7 @@ impl<I: HookInputType> Chain<I> {
 
         // Execute each link
         for link in &self.links {
-            match link.process(input, &mut ctx) {
+            match link.process(input, &mut ctx).await {
                 ChainResult::Continue(output) => {
                     if let Some(o) = output {
                         self.aggregator.add(o);
@@ -91,7 +91,7 @@ impl<I: HookInputType> Chain<I> {
         let exit_code = if output.continue_execution {
             ctx.exit_code()
         } else {
-            2 // Blocking error
+            super::VALIDATOR_BLOCK_EXIT_CODE
         };
 
         Ok((output, exit_code))
@@ -156,7 +156,7 @@ impl<I: HookInputType> ChainBuilder<I> {
         Chain {
             starter,
             links: self.links,
-            aggregator: ChainAggregator::new(),
+            aggregator: ChainOutputAggregator::new(),
             _phantom: PhantomData,
         }
     }
@@ -172,8 +172,10 @@ impl<I: HookInputType> Default for ChainBuilder<I> {
 mod tests {
     use super::*;
     use crate::chain::link::PassThroughLink;
+    use crate::chain::output::LinkOutput;
     use crate::chain::starters::BlockingErrorStarter;
-    use crate::types::{LinkOutput, PreToolUseInput};
+    use crate::types::PreToolUseInput;
+    use async_trait::async_trait;
 
     fn make_input() -> PreToolUseInput {
         serde_json::from_value(serde_json::json!({
@@ -188,35 +190,37 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn test_empty_chain() {
+    #[tokio::test]
+    async fn test_empty_chain() {
         let mut chain: Chain<PreToolUseInput> = Chain::success();
         let input = make_input();
 
-        let (output, exit_code) = chain.execute(&input).unwrap();
+        let (output, exit_code) = chain.execute(&input).await.unwrap();
         assert!(output.continue_execution);
         assert_eq!(exit_code, 0);
     }
 
-    #[test]
-    fn test_chain_with_pass_through() {
+    #[tokio::test]
+    async fn test_chain_with_pass_through() {
         let mut chain: Chain<PreToolUseInput> = Chain::success().add_link(PassThroughLink::new());
         let input = make_input();
 
-        let (output, exit_code) = chain.execute(&input).unwrap();
+        let (output, exit_code) = chain.execute(&input).await.unwrap();
         assert!(output.continue_execution);
         assert_eq!(exit_code, 0);
     }
 
-    #[test]
-    fn test_blocking_error_starter() {
+    #[tokio::test]
+    async fn test_blocking_error_starter() {
+        use crate::chain::VALIDATOR_BLOCK_EXIT_CODE;
+
         let mut chain: Chain<PreToolUseInput> = Chain::new(BlockingErrorStarter::new("Blocked"));
         let input = make_input();
 
-        let (output, exit_code) = chain.execute(&input).unwrap();
+        let (output, exit_code) = chain.execute(&input).await.unwrap();
         assert!(!output.continue_execution);
         assert_eq!(output.stop_reason, Some("Blocked".to_string()));
-        assert_eq!(exit_code, 2);
+        assert_eq!(exit_code, VALIDATOR_BLOCK_EXIT_CODE);
     }
 
     #[test]
@@ -232,8 +236,9 @@ mod tests {
 
     struct BlockingLink;
 
+    #[async_trait(?Send)]
     impl ChainLink<PreToolUseInput> for BlockingLink {
-        fn process(&self, _input: &PreToolUseInput, _ctx: &mut ChainContext) -> ChainResult {
+        async fn process(&self, _input: &PreToolUseInput, _ctx: &mut ChainContext) -> ChainResult {
             ChainResult::stop(LinkOutput::block("Link blocked"))
         }
 
@@ -246,15 +251,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_chain_short_circuit() {
+    #[tokio::test]
+    async fn test_chain_short_circuit() {
+        use crate::chain::VALIDATOR_BLOCK_EXIT_CODE;
+
         let mut chain: Chain<PreToolUseInput> = Chain::success()
             .add_link(BlockingLink)
             .add_link(PassThroughLink::new());
         let input = make_input();
 
-        let (output, exit_code) = chain.execute(&input).unwrap();
+        let (output, exit_code) = chain.execute(&input).await.unwrap();
         assert!(!output.continue_execution);
-        assert_eq!(exit_code, 2);
+        assert_eq!(exit_code, VALIDATOR_BLOCK_EXIT_CODE);
     }
 }

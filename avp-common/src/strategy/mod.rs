@@ -1,9 +1,10 @@
 //! Strategy pattern implementation for hook processing.
 
-mod claude_code;
+pub mod claude;
 mod dispatcher;
 mod traits;
 
-pub use claude_code::ClaudeCodeHookStrategy;
+pub use claude::strategy::ClaudeCodeHookStrategy;
+pub use claude::ClaudeHookOutput;
 pub use dispatcher::HookDispatcher;
 pub use traits::{AgentHookStrategy, TypedHookStrategy};

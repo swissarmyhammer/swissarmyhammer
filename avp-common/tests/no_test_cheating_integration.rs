@@ -6,69 +6,14 @@
 //! 3. Detects test.skip and similar patterns
 //! 4. Executes via PlaybackAgent for deterministic testing
 
-use agent_client_protocol_extras::PlaybackAgent;
+mod test_helpers;
+
 use avp_common::{
-    context::AvpContext,
     strategy::ClaudeCodeHookStrategy,
     types::HookType,
     validator::{ValidatorLoader, ValidatorRunner},
 };
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tempfile::TempDir;
-
-/// Create a test context in a temporary git repository.
-fn create_test_context() -> (TempDir, AvpContext) {
-    let temp = TempDir::new().unwrap();
-    fs::create_dir_all(temp.path().join(".git")).unwrap();
-
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = AvpContext::init().unwrap();
-
-    std::env::set_current_dir(&original_dir).unwrap();
-
-    (temp, context)
-}
-
-/// Build a PostToolUse input for a Write operation to a test file.
-fn build_post_tool_use_write_test_input(file_path: &str, content: &str) -> serde_json::Value {
-    serde_json::json!({
-        "session_id": "test-session",
-        "transcript_path": "/tmp/test-transcript.jsonl",
-        "cwd": "/tmp",
-        "permission_mode": "default",
-        "hook_event_name": "PostToolUse",
-        "tool_name": "Write",
-        "tool_input": {
-            "file_path": file_path,
-            "content": content
-        }
-    })
-}
-
-/// Get the path to test fixtures directory.
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".fixtures/claude")
-}
-
-/// Create an AvpContext with a PlaybackAgent for testing.
-fn create_context_with_playback(temp: &TempDir, fixture_name: &str) -> AvpContext {
-    let fixture_path = fixtures_dir().join(fixture_name);
-    let agent = PlaybackAgent::new(fixture_path, "claude");
-    let notification_rx = agent.subscribe_notifications();
-
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = AvpContext::with_agent(Arc::new(agent), notification_rx)
-        .expect("Should create context with playback agent");
-
-    std::env::set_current_dir(&original_dir).unwrap();
-    context
-}
+use test_helpers::{create_context_with_playback, create_test_context, HookInputBuilder};
 
 // ============================================================================
 // Validator Loading Tests
@@ -145,7 +90,7 @@ fn test_no_test_cheating_validator_matches_write_to_test_file() {
     let strategy = ClaudeCodeHookStrategy::new(context);
     std::env::remove_var("AVP_SKIP_AGENT");
 
-    let input = build_post_tool_use_write_test_input(
+    let input = HookInputBuilder::post_tool_use_write(
         "src/utils.test.ts",
         "test.skip('broken test', () => {})",
     );
@@ -169,7 +114,7 @@ fn test_no_test_cheating_validator_matches_source_files() {
     std::env::remove_var("AVP_SKIP_AGENT");
 
     // Source files should match because tests can be embedded anywhere
-    let input = build_post_tool_use_write_test_input("src/utils.ts", "export const foo = 'bar';");
+    let input = HookInputBuilder::post_tool_use_write("src/utils.ts", "export const foo = 'bar';");
 
     let matching = strategy.matching_validators(HookType::PostToolUse, &input);
     let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
@@ -203,7 +148,7 @@ async fn test_no_test_cheating_validator_detects_skip_playback() {
     let validator = loader.get("no-test-cheating").unwrap();
 
     // Build input with test file containing test.skip
-    let input = build_post_tool_use_write_test_input(
+    let input = HookInputBuilder::post_tool_use_write(
         "src/feature.test.ts",
         r#"
 describe('feature', () => {
@@ -216,7 +161,7 @@ describe('feature', () => {
 
     // Execute the validator
     let (result, _rate_limited) = runner
-        .execute_validator(validator, HookType::PostToolUse, &input)
+        .execute_validator(validator, HookType::PostToolUse, &input, None)
         .await;
 
     // The validator should FAIL (test.skip detected)
@@ -252,7 +197,7 @@ async fn test_no_test_cheating_validator_passes_clean_code_playback() {
     let validator = loader.get("no-test-cheating").unwrap();
 
     // Build input with clean test file
-    let input = build_post_tool_use_write_test_input(
+    let input = HookInputBuilder::post_tool_use_write(
         "src/feature.test.ts",
         r#"
 describe('feature', () => {
@@ -266,7 +211,7 @@ describe('feature', () => {
 
     // Execute the validator
     let (result, _rate_limited) = runner
-        .execute_validator(validator, HookType::PostToolUse, &input)
+        .execute_validator(validator, HookType::PostToolUse, &input, None)
         .await;
 
     // The validator should PASS (clean code)

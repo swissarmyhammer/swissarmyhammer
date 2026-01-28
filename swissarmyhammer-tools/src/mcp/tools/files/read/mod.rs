@@ -92,7 +92,7 @@ use tracing::{debug, info};
 /// use swissarmyhammer_tools::mcp::tool_registry::McpTool;
 ///
 /// let tool = ReadFileTool::new();
-/// assert_eq!(tool.name(), "files_read");
+/// assert_eq!(tool.name, "files_read");
 /// ```
 #[derive(Default, Debug, Clone)]
 pub struct ReadFileTool;

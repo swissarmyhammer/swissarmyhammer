@@ -9,18 +9,13 @@
 
 use crate::agent::ClaudeAgent;
 use crate::agent_file_operations::{ReadTextFileParams, WriteTextFileParams};
-use crate::claude_process::SpawnConfig;
 use agent_client_protocol::{
-    Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock,
-    ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, RawValue, SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason,
+    Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification,
+    ExtRequest, ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+    RawValue, SessionId, SetSessionModeRequest, SetSessionModeResponse,
 };
 use std::sync::Arc;
-use swissarmyhammer_common::Pretty;
-
-use crate::agent_raw_messages::RawMessageManager;
 
 #[async_trait::async_trait(?Send)]
 impl Agent for ClaudeAgent {
@@ -137,156 +132,25 @@ impl Agent for ClaudeAgent {
         self.log_request("new_session", &request);
         tracing::info!("Creating new session");
 
-        // ACP requires strict transport capability enforcement:
-        // 1. stdio: Always supported (mandatory per spec)
-        // 2. http: Only if mcpCapabilities.http: true was declared
-        // 3. sse: Only if mcpCapabilities.sse: true was declared
-        //
-        // This prevents protocol violations and ensures capability negotiation contract.
+        // Validate MCP transport requirements
+        self.validate_new_session_mcp_config(&request)?;
 
-        // Convert ACP MCP server configs to internal types for validation
-        let internal_mcp_servers: Vec<crate::config::McpServerConfig> = request
-            .mcp_servers
-            .iter()
-            .filter_map(|server| self.convert_acp_to_internal_mcp_config(server))
-            .collect();
-
-        // Validate transport requirements against agent capabilities
-        if let Err(validation_error) = crate::capability_validation::CapabilityRequirementChecker::check_new_session_requirements(
-            &self.capabilities,
-            &internal_mcp_servers,
-        ) {
-            tracing::error!("Session creation failed: Transport validation error - {}", validation_error);
-            return Err(self.convert_session_setup_error_to_acp_error(validation_error));
-        }
-
-        let client_caps = {
-            let guard = self.client_capabilities.read().await;
-            guard.clone()
-        };
-
-        let session_id = self
-            .session_manager
-            .create_session(request.cwd.clone(), client_caps)
-            .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-        // Register RawMessageManager for this session so subagents can find it
-        if let Some(ref manager) = self.raw_message_manager {
-            RawMessageManager::register(session_id.to_string(), manager.clone());
-            tracing::debug!("Registered RawMessageManager for session {}", session_id);
-        }
-
-        // Store MCP servers in the session if provided
-        if !request.mcp_servers.is_empty() {
-            self.session_manager
-                .update_session(&session_id, |session| {
-                    // Store the actual MCP server info from the request as JSON strings
-                    session.mcp_servers = request
-                        .mcp_servers
-                        .iter()
-                        .map(|server| {
-                            serde_json::to_string(server)
-                                .unwrap_or_else(|_| format!("{:?}", server))
-                        })
-                        .collect();
-                })
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-        }
-
-        tracing::info!("Created session: {}", session_id);
-
+        // Create the session
+        let session_id = self.create_new_session_internal(&request).await?;
         let protocol_session_id = SessionId::new(session_id.to_string());
 
-        // Spawn Claude process immediately and read init message with slash_commands and available_agents
-        // Pass agent's configured MCP servers (self.config.mcp_servers) to Claude CLI
-        // These are the MCP servers configured during agent creation, not from the request
-        tracing::info!("Spawning Claude process for session: {}", session_id);
-        let spawn_config = SpawnConfig::builder()
-            .session_id(session_id)
-            .acp_session_id(protocol_session_id.clone())
-            .cwd(request.cwd.clone())
-            .mcp_servers(self.config.mcp_servers.clone())
-            .ephemeral(self.config.claude.ephemeral)
-            .build();
-
-        match self
-            .claude_client
-            .spawn_process_and_consume_init(spawn_config)
-            .await
-        {
-            Ok((Some(agents), current_agent)) => {
-                tracing::info!(
-                    "Storing {} available agents from Claude CLI init",
-                    agents.len()
-                );
-                self.set_available_agents(agents).await;
-
-                // Set initial mode if Claude CLI specified current_agent
-                if let Some(mode) = current_agent {
-                    tracing::info!("Setting initial mode from Claude CLI: {}", mode);
-                    self.session_manager
-                        .update_session(&session_id, |session| {
-                            session.current_mode = Some(mode.clone());
-                        })
-                        .map_err(|_| {
-                            tracing::warn!("Failed to set initial mode");
-                        })
-                        .ok();
-                } else {
-                    tracing::debug!(
-                        "No current_agent in init - session starts without mode (no --agent flag)"
-                    );
-                }
-            }
-            Ok((None, _)) => {
-                tracing::debug!("No available agents in Claude CLI init message");
-                // Still load SwissArmyHammer modes even if Claude CLI didn't provide agents
-                self.set_available_agents(vec![]).await;
-            }
-            Err(e) => {
-                tracing::error!("Failed to spawn Claude process and read init: {}", e);
-                // Still load SwissArmyHammer modes even if Claude CLI failed
-                self.set_available_agents(vec![]).await;
-            }
-        }
-
-        // Send initial available commands after session creation (core + tool_handler commands)
-        let initial_commands = self
-            .get_available_commands_for_session(&protocol_session_id)
+        // Spawn Claude process and handle init
+        self.spawn_claude_for_new_session(&session_id, &protocol_session_id, &request)
             .await;
-        if let Err(e) = self
-            .update_session_available_commands(&protocol_session_id, initial_commands)
-            .await
-        {
-            tracing::warn!(
-                "Failed to send initial available commands for session {}: {}",
-                session_id,
-                e
-            );
-        }
 
-        let mut response = NewSessionResponse::new(SessionId::new(session_id.to_string()));
+        // Send initial commands
+        self.send_initial_session_commands(&session_id, &protocol_session_id)
+            .await;
 
-        // Add available modes only if the session has a mode explicitly set
-        // Per user requirement: don't assume any default mode - no mode means no --agent flag
-        if let Some(available_modes) = self.get_available_modes().await {
-            // Only include modes in response if session has current_mode set
-            if let Some(current_mode_id) = self.get_session_mode(&session_id).await {
-                let mode_state = agent_client_protocol::SessionModeState::new(
-                    agent_client_protocol::SessionModeId::new(current_mode_id.as_str()),
-                    available_modes,
-                );
-                response = response.modes(mode_state);
-                tracing::info!("Session created with mode: {}", current_mode_id);
-            } else {
-                // Modes are available but not set - don't include in response
-                // This allows sessions to run without --agent flag until mode is explicitly set
-                tracing::debug!(
-                    "Session created without mode (available modes: {}, will not use --agent flag)",
-                    available_modes.len()
-                );
-            }
-        }
+        // Build response with modes if applicable
+        let response = self
+            .build_new_session_response(&session_id, &protocol_session_id)
+            .await;
 
         self.log_response("new_session", &response);
         Ok(response)
@@ -299,32 +163,10 @@ impl Agent for ClaudeAgent {
         self.log_request("load_session", &request);
         tracing::info!("Loading session: {}", request.session_id);
 
-        // ACP requires complete conversation history replay during session loading:
-        // 1. Validate loadSession capability before allowing session/load
-        // 2. Stream ALL historical messages via session/update notifications
-        // 3. Maintain exact chronological order of original conversation
-        // 4. Only respond to session/load AFTER all history is streamed
-        // 5. Client can then continue conversation seamlessly
-
-        // ACP requires strict transport capability enforcement for session loading:
-        // Convert ACP MCP server configs to internal types for validation
-        let internal_mcp_servers: Vec<crate::config::McpServerConfig> = request
-            .mcp_servers
-            .iter()
-            .filter_map(|server| self.convert_acp_to_internal_mcp_config(server))
-            .collect();
-
-        // Validate transport requirements and loadSession capability
-        if let Err(validation_error) = crate::capability_validation::CapabilityRequirementChecker::check_load_session_requirements(
-            &self.capabilities,
-            &internal_mcp_servers,
-        ) {
-            tracing::error!("Session loading failed: Transport/capability validation error - {}", validation_error);
-            return Err(self.convert_session_setup_error_to_acp_error(validation_error));
-        }
+        // Validate MCP transport requirements
+        self.validate_load_session_mcp_config(&request)?;
 
         let session_id = self.parse_session_id(&request.session_id)?;
-
         let session = self
             .session_manager
             .get_session(&session_id)
@@ -332,106 +174,11 @@ impl Agent for ClaudeAgent {
 
         match session {
             Some(session) => {
-                tracing::info!(
-                    "Loaded session: {} with {} historical messages",
-                    session_id,
-                    session.context.len()
-                );
-
-                // Step 2-3: Stream ALL historical messages via session/update notifications
-                // Maintain exact chronological order using message timestamps
-                if !session.context.is_empty() {
-                    tracing::info!(
-                        "Replaying {} historical messages for session {}",
-                        session.context.len(),
-                        session_id
-                    );
-
-                    for message in &session.context {
-                        // Use the SessionUpdate stored in the message directly
-                        let mut meta_map = serde_json::Map::new();
-                        meta_map.insert(
-                            "timestamp".to_string(),
-                            serde_json::json!(message
-                                .timestamp
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs()),
-                        );
-                        meta_map.insert(
-                            "message_type".to_string(),
-                            serde_json::json!("historical_replay"),
-                        );
-
-                        let notification = SessionNotification::new(
-                            SessionId::new(session.id.to_string()),
-                            message.update.clone(),
-                        )
-                        .meta(meta_map);
-
-                        // Stream historical message via session/update notification
-                        // Note: send_update() queues the notification in the broadcast channel
-                        // The notification_handler task processes these concurrently
-                        if let Err(e) = self.notification_sender.send_update(notification).await {
-                            tracing::error!(
-                                "Failed to send historical message notification: {}",
-                                e
-                            );
-                            // Continue with other messages even if one fails
-                        }
-                    }
-
-                    tracing::info!(
-                        "Completed queueing {} history notifications for session {}",
-                        session.context.len(),
-                        session_id
-                    );
-                }
-
-                // Step 4: Return LoadSessionResponse after all history notifications are queued
-                // The notifications are processed by the notification_handler task concurrently.
-                // The broadcast channel and shared writer Mutex ensure notifications are delivered
-                // to the client before this response due to:
-                // 1. FIFO ordering in the broadcast channel
-                // 2. Notification handler actively polling the channel
-                // 3. Serialized writes through the shared Mutex-protected writer
-                let mut meta_map = serde_json::Map::new();
-                meta_map.insert(
-                    "session_id".to_string(),
-                    serde_json::json!(session.id.to_string()),
-                );
-                meta_map.insert(
-                    "created_at".to_string(),
-                    serde_json::json!(session
-                        .created_at
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()),
-                );
-                meta_map.insert(
-                    "message_count".to_string(),
-                    serde_json::json!(session.context.len()),
-                );
-                meta_map.insert(
-                    "history_replayed".to_string(),
-                    serde_json::json!(session.context.len()),
-                );
-
-                let response = LoadSessionResponse::new().meta(meta_map);
+                let response = self.handle_session_found(&session).await;
                 self.log_response("load_session", &response);
                 Ok(response)
             }
-            None => {
-                tracing::warn!("Session not found: {}", session_id);
-                Err(agent_client_protocol::Error::new(
-                    -32602,
-                    "Session not found: sessionId does not exist or has expired".to_string(),
-                )
-                .data(serde_json::json!({
-                    "sessionId": request.session_id,
-                    "error": "session_not_found"
-                })))
-            }
+            None => Err(self.session_not_found_error(&request.session_id)),
         }
     }
 
@@ -441,162 +188,24 @@ impl Agent for ClaudeAgent {
     ) -> Result<SetSessionModeResponse, agent_client_protocol::Error> {
         self.log_request("set_session_mode", &request);
 
-        let parsed_session_id = match crate::session::SessionId::parse(&request.session_id.0) {
-            Ok(id) => id,
-            Err(_) => {
-                return Err(agent_client_protocol::Error::invalid_request());
-            }
-        };
-
+        let parsed_session_id = self.parse_mode_session_id(&request.session_id)?;
         let mode_id_string = request.mode_id.0.to_string();
 
         // Validate mode ID is in available modes
-        let available_agents = self.available_agents.read().await;
-        if let Some(agents) = available_agents.as_ref() {
-            let mode_exists = agents.iter().any(|(id, _, _)| id == &mode_id_string);
-            if !mode_exists {
-                tracing::error!(
-                    "Invalid mode '{}' requested. Available modes: {:?}",
-                    mode_id_string,
-                    agents
-                        .iter()
-                        .map(|(id, name, _)| format!("{}:{}", id, name))
-                        .collect::<Vec<_>>()
-                );
-                return Err(agent_client_protocol::Error::invalid_params());
-            }
-        } else {
-            // No available modes - shouldn't happen but reject to be safe
-            tracing::warn!("set_session_mode called but no available modes configured");
-            return Err(agent_client_protocol::Error::invalid_params());
-        }
-        drop(available_agents);
+        self.validate_mode_exists(&mode_id_string).await?;
 
-        // Get the current mode to check if it will change
-        let current_mode = self
-            .session_manager
-            .get_session(&parsed_session_id)
-            .map_err(|_| agent_client_protocol::Error::internal_error())?
-            .map(|session| session.current_mode.clone())
-            .unwrap_or(None);
+        // Check if mode will change and update session
+        let mode_changed = self
+            .check_and_update_session_mode(&parsed_session_id, &mode_id_string)
+            .await?;
 
-        let mode_changed = current_mode != Some(mode_id_string.clone());
-
-        // Update session with new mode
-        self.session_manager
-            .update_session(&parsed_session_id, |session| {
-                session.current_mode = Some(mode_id_string.clone());
-            })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
-
-        tracing::info!("Session mode set to: {}", mode_id_string);
-
-        // When mode changes, terminate the existing process and spawn a new one
-        // This is effectively a powerful "clear" - the new process starts fresh
+        // Handle process replacement if mode changed
         if mode_changed {
-            // Get session cwd for spawning new process
-            let session = self
-                .session_manager
-                .get_session(&parsed_session_id)
-                .map_err(|_| agent_client_protocol::Error::internal_error())?
-                .ok_or_else(agent_client_protocol::Error::internal_error)?;
-            let cwd = session.cwd.clone();
-
-            // Terminate the existing Claude process
-            tracing::info!(
-                "Mode changed for session {}, terminating process and spawning new one with mode '{}'",
-                parsed_session_id,
-                mode_id_string
-            );
-
-            if let Err(e) = self
-                .claude_client
-                .terminate_session(&parsed_session_id)
-                .await
-            {
-                tracing::warn!(
-                    "Failed to terminate Claude process for session {}: {}",
-                    parsed_session_id,
-                    e
-                );
-            }
-
-            // Determine spawn flags based on mode type
-            let (agent_mode, system_prompt) =
-                if let Some(prompt) = self.get_sah_mode_system_prompt(&mode_id_string).await {
-                    // SAH mode: use --system-prompt
-                    tracing::info!(
-                    "Spawning new Claude process with --system-prompt ({} chars) for SAH mode '{}'",
-                    prompt.len(),
-                    mode_id_string
-                );
-                    (None, Some(prompt))
-                } else {
-                    // Claude CLI mode: use --agent
-                    tracing::info!(
-                        "Spawning new Claude process with --agent '{}' for Claude CLI mode",
-                        mode_id_string
-                    );
-                    (Some(mode_id_string.clone()), None)
-                };
-
-            // Spawn new process with appropriate flags
-            let protocol_session_id = SessionId::new(parsed_session_id.to_string());
-            let spawn_config = SpawnConfig::builder()
-                .session_id(parsed_session_id)
-                .acp_session_id(protocol_session_id.clone())
-                .cwd(cwd.clone())
-                .mcp_servers(self.config.mcp_servers.clone())
-                .agent_mode(agent_mode)
-                .system_prompt(system_prompt)
-                .ephemeral(self.config.claude.ephemeral)
-                .build();
-
-            if let Err(e) = self
-                .claude_client
-                .spawn_process_and_consume_init(spawn_config)
-                .await
-            {
-                tracing::error!("Failed to spawn new Claude process for mode change: {}", e);
-                return Err(agent_client_protocol::Error::internal_error());
-            }
-
-            let current_mode_update =
-                agent_client_protocol::CurrentModeUpdate::new(request.mode_id.clone());
-            let update = SessionUpdate::CurrentModeUpdate(current_mode_update);
-
-            // Store in session context for history replay
-            let mode_message = crate::session::Message::from_update(update.clone());
-            self.session_manager
-                .update_session(&parsed_session_id, |session| {
-                    session.add_message(mode_message);
-                })
-                .map_err(|_| agent_client_protocol::Error::internal_error())?;
-
-            if let Err(e) = self
-                .send_session_update(SessionNotification::new(request.session_id.clone(), update))
-                .await
-            {
-                tracing::warn!("Failed to send current mode update notification: {}", e);
-            }
+            self.handle_mode_change_process(&parsed_session_id, &mode_id_string, &request)
+                .await?;
         }
 
-        let mut meta_map = serde_json::Map::new();
-        meta_map.insert("mode_set".to_string(), serde_json::json!(true));
-        meta_map.insert(
-            "message".to_string(),
-            serde_json::json!("Session mode updated"),
-        );
-        meta_map.insert("mode_changed".to_string(), serde_json::json!(mode_changed));
-        if mode_changed {
-            meta_map.insert(
-                "process_action".to_string(),
-                serde_json::json!("process_replaced"),
-            );
-        }
-
-        let response = SetSessionModeResponse::new().meta(meta_map);
-
+        let response = self.build_set_mode_response(mode_changed);
         self.log_response("set_session_mode", &response);
         Ok(response)
     }
@@ -606,241 +215,35 @@ impl Agent for ClaudeAgent {
         request: PromptRequest,
     ) -> Result<PromptResponse, agent_client_protocol::Error> {
         self.log_request("prompt", &request);
-        tracing::info!(
-            "Processing prompt request for session: {}",
-            request.session_id
-        );
+        self.log_prompt_debug(&request);
 
-        // 🚨 DEBUG: Log exactly what prompt text we're receiving
-        tracing::debug!("📨 PROMPT REQUEST DEBUG:");
-        tracing::debug!("  Session: {}", request.session_id);
-        tracing::debug!("  Content blocks: {}", request.prompt.len());
-        for (i, block) in request.prompt.iter().enumerate() {
-            match block {
-                agent_client_protocol::ContentBlock::Text(text) => {
-                    tracing::debug!("  Block {}: TEXT ({} chars)", i + 1, text.text.len());
-                    tracing::debug!(
-                        "  Text preview: {}",
-                        if text.text.len() > 200 {
-                            format!("{}...", &text.text[..200])
-                        } else {
-                            text.text.clone()
-                        }
-                    );
-                }
-                _ => {
-                    tracing::debug!("  Block {}: {}", i + 1, Pretty(block));
-                }
-            }
-        }
-
-        // Validate the request
         self.validate_prompt_request(&request).await?;
-
-        // Parse session ID
         let session_id = self.parse_session_id(&request.session_id)?;
 
-        // ACP requires user message chunk updates for conversation transparency:
-        // 1. Echo user input via session/update with user_message_chunk
-        // 2. Send before agent processing begins
-        // 3. Include all content blocks from user prompt
-        // 4. Maintain conversation flow visibility for clients
-        // 5. Support conversation history reconstruction
-        //
-        // User message chunks provide consistent conversation reporting.
-        for content_block in &request.prompt {
-            let content_chunk = agent_client_protocol::ContentChunk::new(content_block.clone());
-            let notification = SessionNotification::new(
-                request.session_id.clone(),
-                SessionUpdate::UserMessageChunk(content_chunk),
-            );
+        // Send user message chunks for conversation transparency
+        self.send_user_message_chunks(&request).await;
 
-            if let Err(e) = self.send_session_update(notification).await {
-                tracing::warn!(
-                    "Failed to send user message chunk for session {}: {}",
-                    request.session_id,
-                    e
-                );
-            }
+        // Check for pre-cancelled session
+        if let Some(response) = self.check_cancelled_before_processing(&session_id).await {
+            return Ok(response);
         }
 
-        // Check if session is already cancelled before processing
-        if self
-            .cancellation_manager
-            .is_cancelled(&session_id.to_string())
-            .await
-        {
-            tracing::info!(
-                "Session {} is cancelled, returning cancelled response",
-                session_id
-            );
+        // Extract prompt content and validate session
+        let prompt_text = self.extract_prompt_text(&request);
+        let session = self.get_validated_session(&session_id)?;
 
-            // CRITICAL: Reset cancellation state for next turn
-            self.cancellation_manager
-                .reset_for_new_turn(&session_id.to_string())
-                .await;
+        // Prepare session for new turn
+        self.prepare_session_for_turn(&session_id, &prompt_text)?;
 
-            let mut meta_map = serde_json::Map::new();
-            meta_map.insert(
-                "cancelled_before_processing".to_string(),
-                serde_json::json!(true),
-            );
-            meta_map.insert(
-                "session_id".to_string(),
-                serde_json::json!(session_id.to_string()),
-            );
-            return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
+        // Check turn limits
+        if let Some(response) = self.check_turn_limits(&session_id, &prompt_text)? {
+            return Ok(response);
         }
 
-        // Extract and process all content from the prompt
-        let mut prompt_text = String::new();
-        let mut has_binary_content = false;
+        // Get session for prompt handling
+        let updated_session = self.get_updated_session(&session_id)?;
 
-        for content_block in &request.prompt {
-            match content_block {
-                ContentBlock::Text(text_content) => {
-                    prompt_text.push_str(&text_content.text);
-                }
-                ContentBlock::Image(image_content) => {
-                    // Add descriptive text for plan analysis
-                    prompt_text.push_str(&format!(
-                        "\n[Image content: {} ({})]",
-                        image_content.mime_type,
-                        if let Some(ref uri) = image_content.uri {
-                            uri
-                        } else {
-                            "embedded data"
-                        }
-                    ));
-                    has_binary_content = true;
-                }
-                ContentBlock::Audio(audio_content) => {
-                    // Add descriptive text for plan analysis
-                    prompt_text.push_str(&format!(
-                        "\n[Audio content: {} (embedded data)]",
-                        audio_content.mime_type
-                    ));
-                    has_binary_content = true;
-                }
-                ContentBlock::Resource(_resource_content) => {
-                    // Add descriptive text for the resource
-                    prompt_text.push_str("\n[Embedded Resource]");
-                    has_binary_content = true;
-                }
-                ContentBlock::ResourceLink(resource_link) => {
-                    // Add descriptive text for the resource link
-                    prompt_text.push_str(&format!("\n[Resource Link: {}]", resource_link.uri));
-                    // ResourceLink is just a URI reference, not binary content
-                }
-                _ => {
-                    // Unknown content block type, skip it
-                    tracing::warn!("Unknown content block type, skipping");
-                }
-            }
-        }
-
-        if has_binary_content {
-            tracing::info!(
-                "Processing prompt with binary content for plan analysis in session: {}",
-                session_id
-            );
-        }
-
-        // Validate session exists and get it
-        let session = self
-            .session_manager
-            .get_session(&session_id)
-            .map_err(|_| agent_client_protocol::Error::internal_error())?
-            .ok_or_else(agent_client_protocol::Error::invalid_params)?;
-
-        // Reset turn counters at the start of each new turn.
-        // ACP defines a turn as: a single user prompt and all subsequent LM requests
-        // until the final response. This prevents unbounded counter growth across turns.
-        self.session_manager
-            .update_session(&session_id, |session| {
-                session.reset_turn_counters();
-            })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
-
-        // Add user message to session
-        let user_message =
-            crate::session::Message::new(crate::session::MessageRole::User, prompt_text.clone());
-
-        self.session_manager
-            .update_session(&session_id, |session| {
-                session.add_message(user_message);
-            })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
-
-        // Get updated session for context
-        let mut updated_session = self
-            .session_manager
-            .get_session(&session_id)
-            .map_err(|_| agent_client_protocol::Error::internal_error())?
-            .ok_or_else(agent_client_protocol::Error::internal_error)?;
-
-        // ACP requires specific stop reasons for all prompt turn completions:
-        // 1. max_tokens: Token limit exceeded (configurable)
-        // 2. max_turn_requests: Too many LM requests in single turn
-        // Check limits before making Claude API calls
-
-        // Check turn request limit
-        let current_requests = updated_session.increment_turn_requests();
-        if current_requests > self.config.max_turn_requests {
-            tracing::info!(
-                "Turn request limit exceeded ({} > {}) for session: {}",
-                current_requests,
-                self.config.max_turn_requests,
-                session_id
-            );
-            let mut meta_map = serde_json::Map::new();
-            meta_map.insert(
-                "turn_requests".to_string(),
-                serde_json::json!(current_requests),
-            );
-            meta_map.insert(
-                "max_turn_requests".to_string(),
-                serde_json::json!(self.config.max_turn_requests),
-            );
-            meta_map.insert(
-                "session_id".to_string(),
-                serde_json::json!(session_id.to_string()),
-            );
-            return Ok(PromptResponse::new(StopReason::MaxTurnRequests).meta(meta_map));
-        }
-
-        // Estimate token usage for the prompt (rough approximation: 4 chars per token)
-        let estimated_tokens = (prompt_text.len() as u64) / 4;
-        let current_tokens = updated_session.add_turn_tokens(estimated_tokens);
-        if current_tokens > self.config.max_tokens_per_turn {
-            tracing::info!(
-                "Token limit exceeded ({} > {}) for session: {}",
-                current_tokens,
-                self.config.max_tokens_per_turn,
-                session_id
-            );
-            let mut meta_map = serde_json::Map::new();
-            meta_map.insert("turn_tokens".to_string(), serde_json::json!(current_tokens));
-            meta_map.insert(
-                "max_tokens_per_turn".to_string(),
-                serde_json::json!(self.config.max_tokens_per_turn),
-            );
-            meta_map.insert(
-                "session_id".to_string(),
-                serde_json::json!(session_id.to_string()),
-            );
-            return Ok(PromptResponse::new(StopReason::MaxTokens).meta(meta_map));
-        }
-
-        // Update session with incremented counters
-        self.session_manager
-            .update_session(&session_id, |session| {
-                session.turn_request_count = updated_session.turn_request_count;
-                session.turn_token_count = updated_session.turn_token_count;
-            })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
-
-        // Check if streaming is supported and requested
+        // Execute prompt (streaming or non-streaming)
         let response = if self.should_stream(&session, &request) {
             self.handle_streaming_prompt(&session_id, &request, &updated_session)
                 .await?
@@ -849,8 +252,7 @@ impl Agent for ClaudeAgent {
                 .await?
         };
 
-        // Clear cancellation state after turn completes successfully
-        // This prepares for the next turn
+        // Reset cancellation for next turn
         self.cancellation_manager
             .reset_for_new_turn(&session_id.to_string())
             .await;
@@ -945,453 +347,18 @@ impl Agent for ClaudeAgent {
         self.log_request("ext_method", &request);
         tracing::info!("Extension method called: {}", request.method);
 
-        // Handle fs/read_text_file extension method
-        if request.method == "fs/read_text_file".into() {
-            // Validate client capabilities for file system read operations
-            {
-                let client_caps = self.client_capabilities.read().await;
-                match &*client_caps {
-                    Some(caps) if caps.fs.read_text_file => {
-                        tracing::debug!("File system read capability validated");
-                    }
-                    Some(_) => {
-                        tracing::error!("fs/read_text_file capability not declared by client");
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                    None => {
-                        tracing::error!(
-                            "No client capabilities available for fs/read_text_file validation"
-                        );
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                }
-            }
-
-            // Parse the request parameters from RawValue
-            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-                .map_err(|e| {
-                    tracing::error!("Failed to parse fs/read_text_file parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            let params: ReadTextFileParams = serde_json::from_value(params_value).map_err(|e| {
-                tracing::error!("Failed to deserialize fs/read_text_file parameters: {}", e);
-                agent_client_protocol::Error::invalid_params()
-            })?;
-
-            // Handle the file reading request
-            let response = self.handle_read_text_file(params).await?;
-
-            // Convert response to RawValue
-            let response_json = serde_json::to_value(response)
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            let raw_value = RawValue::from_string(response_json.to_string())
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            return Ok(ExtResponse::new(Arc::from(raw_value)));
+        let method_str: &str = request.method.as_ref();
+        match method_str {
+            "fs/read_text_file" => self.handle_ext_read_text_file(&request).await,
+            "fs/write_text_file" => self.handle_ext_write_text_file(&request).await,
+            "terminal/output" => self.handle_ext_terminal_output(&request).await,
+            "terminal/release" => self.handle_ext_terminal_release(&request).await,
+            "terminal/wait_for_exit" => self.handle_ext_terminal_wait_for_exit(&request).await,
+            "terminal/kill" => self.handle_ext_terminal_kill(&request).await,
+            "terminal/create" => self.handle_ext_terminal_create(&request).await,
+            "editor/update_buffers" => self.handle_ext_editor_update_buffers(&request).await,
+            _ => self.handle_ext_unknown(&request),
         }
-
-        // Handle fs/write_text_file extension method
-        if request.method == "fs/write_text_file".into() {
-            // Validate client capabilities for file system write operations
-            {
-                let client_caps = self.client_capabilities.read().await;
-                match &*client_caps {
-                    Some(caps) if caps.fs.write_text_file => {
-                        tracing::debug!("File system write capability validated");
-                    }
-                    Some(_) => {
-                        tracing::error!("fs/write_text_file capability not declared by client");
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                    None => {
-                        tracing::error!(
-                            "No client capabilities available for fs/write_text_file validation"
-                        );
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                }
-            }
-
-            // Parse the request parameters from RawValue
-            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-                .map_err(|e| {
-                    tracing::error!("Failed to parse fs/write_text_file parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            let params: WriteTextFileParams =
-                serde_json::from_value(params_value).map_err(|e| {
-                    tracing::error!("Failed to deserialize fs/write_text_file parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Handle the file writing request
-            let response = self.handle_write_text_file(params).await?;
-
-            // Convert response to RawValue
-            let response_json = serde_json::to_value(response)
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            let raw_value = RawValue::from_string(response_json.to_string())
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            return Ok(ExtResponse::new(Arc::from(raw_value)));
-        }
-
-        // Handle terminal/output extension method
-        if request.method == "terminal/output".into() {
-            // Validate client capabilities for terminal operations
-            {
-                let client_caps = self.client_capabilities.read().await;
-                match &*client_caps {
-                    Some(caps) if caps.terminal => {
-                        tracing::debug!("Terminal capability validated");
-                    }
-                    Some(_) => {
-                        tracing::error!("terminal/output capability not declared by client");
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                    None => {
-                        tracing::error!(
-                            "No client capabilities available for terminal/output validation"
-                        );
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                }
-            }
-
-            // Parse the request parameters from RawValue
-            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-                .map_err(|e| {
-                    tracing::error!("Failed to parse terminal/output parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            let params: crate::terminal_manager::TerminalOutputParams =
-                serde_json::from_value(params_value).map_err(|e| {
-                    tracing::error!("Failed to deserialize terminal/output parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Handle the terminal output request
-            let response = self.handle_terminal_output(params).await?;
-
-            // Convert response to RawValue
-            let response_json = serde_json::to_value(response)
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            let raw_value = RawValue::from_string(response_json.to_string())
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            return Ok(ExtResponse::new(Arc::from(raw_value)));
-        }
-
-        // Handle terminal/release extension method
-        if request.method == "terminal/release".into() {
-            // Validate client capabilities for terminal operations
-            {
-                let client_caps = self.client_capabilities.read().await;
-                match &*client_caps {
-                    Some(caps) if caps.terminal => {
-                        tracing::debug!("Terminal capability validated");
-                    }
-                    Some(_) => {
-                        tracing::error!("terminal/release capability not declared by client");
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                    None => {
-                        tracing::error!(
-                            "No client capabilities available for terminal/release validation"
-                        );
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                }
-            }
-
-            // Parse the request parameters from RawValue
-            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-                .map_err(|e| {
-                    tracing::error!("Failed to parse terminal/release parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            let params: crate::terminal_manager::TerminalReleaseParams =
-                serde_json::from_value(params_value).map_err(|e| {
-                    tracing::error!("Failed to deserialize terminal/release parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Handle the terminal release request
-            let response = self.handle_terminal_release(params).await?;
-
-            // Convert response to RawValue (should be null per ACP spec)
-            let response_json = serde_json::to_value(response)
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            let raw_value = RawValue::from_string(response_json.to_string())
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            return Ok(ExtResponse::new(Arc::from(raw_value)));
-        }
-
-        // Handle terminal/wait_for_exit extension method
-        if request.method == "terminal/wait_for_exit".into() {
-            // Validate terminal capability
-            {
-                let client_caps = self.client_capabilities.read().await;
-                match &*client_caps {
-                    Some(caps) if caps.terminal => {
-                        tracing::debug!("Terminal capability validated for wait_for_exit");
-                    }
-                    Some(_) => {
-                        tracing::error!("terminal/wait_for_exit capability not declared by client");
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                    None => {
-                        tracing::error!(
-                            "No client capabilities available for terminal/wait_for_exit validation"
-                        );
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                }
-            }
-
-            // Parse and validate parameters
-            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-                .map_err(|e| {
-                    tracing::error!("Failed to parse terminal/wait_for_exit parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            let params: crate::terminal_manager::TerminalOutputParams =
-                serde_json::from_value(params_value).map_err(|e| {
-                    tracing::error!(
-                        "Failed to deserialize terminal/wait_for_exit parameters: {}",
-                        e
-                    );
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Handle the wait for exit request
-            let response = self.handle_terminal_wait_for_exit(params).await?;
-
-            // Convert response to RawValue
-            let response_json = serde_json::to_value(response)
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            let raw_value = RawValue::from_string(response_json.to_string())
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            return Ok(ExtResponse::new(Arc::from(raw_value)));
-        }
-
-        // Handle terminal/kill extension method
-        if request.method == "terminal/kill".into() {
-            // Validate terminal capability
-            {
-                let client_caps = self.client_capabilities.read().await;
-                match &*client_caps {
-                    Some(caps) if caps.terminal => {
-                        tracing::debug!("Terminal capability validated for kill");
-                    }
-                    Some(_) => {
-                        tracing::error!("terminal/kill capability not declared by client");
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                    None => {
-                        tracing::error!(
-                            "No client capabilities available for terminal/kill validation"
-                        );
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                }
-            }
-
-            // Parse and validate parameters
-            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-                .map_err(|e| {
-                    tracing::error!("Failed to parse terminal/kill parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            let params: crate::terminal_manager::TerminalOutputParams =
-                serde_json::from_value(params_value).map_err(|e| {
-                    tracing::error!("Failed to deserialize terminal/kill parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Handle the kill request
-            self.handle_terminal_kill(params).await?;
-
-            // Return null result per ACP specification
-            let response_json = serde_json::Value::Null;
-            let raw_value = RawValue::from_string(response_json.to_string())
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            return Ok(ExtResponse::new(Arc::from(raw_value)));
-        }
-
-        // Handle terminal/create extension method
-        if request.method == "terminal/create".into() {
-            // Validate terminal capability
-            {
-                let client_caps = self.client_capabilities.read().await;
-                match &*client_caps {
-                    Some(caps) if caps.terminal => {
-                        tracing::debug!("Terminal capability validated for create");
-                    }
-                    Some(_) => {
-                        tracing::error!("terminal/create capability not declared by client");
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                    None => {
-                        tracing::error!(
-                            "No client capabilities available for terminal/create validation"
-                        );
-                        return Err(agent_client_protocol::Error::invalid_params());
-                    }
-                }
-            }
-
-            // Parse and validate parameters
-            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-                .map_err(|e| {
-                    tracing::error!("Failed to parse terminal/create parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            let params: crate::terminal_manager::TerminalCreateParams =
-                serde_json::from_value(params_value).map_err(|e| {
-                    tracing::error!("Failed to deserialize terminal/create parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Handle the terminal create request
-            let response = self.handle_terminal_create(params).await?;
-
-            // Convert response to RawValue
-            let response_json = serde_json::to_value(response)
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            let raw_value = RawValue::from_string(response_json.to_string())
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            return Ok(ExtResponse::new(Arc::from(raw_value)));
-        }
-
-        // Handle editor/update_buffers extension method
-        //
-        // This extension method allows clients to push editor buffer state to the agent,
-        // enabling the agent to access unsaved file content when executing tools that read files.
-        //
-        // ## Protocol Integration
-        //
-        // This implements the ACP (Agent-Client Protocol) requirement for editor state management.
-        // Clients should proactively push editor state updates when buffers change, allowing the
-        // agent to work with current content rather than stale disk versions.
-        //
-        // ## Parameters
-        //
-        // Expects an `EditorBufferResponse` containing:
-        // - `buffers`: HashMap of absolute file paths to EditorBuffer objects with content and metadata
-        // - `unavailable_paths`: List of paths that don't have active editor buffers
-        //
-        // ## Returns
-        //
-        // Returns null on success per ACP specification for notifications.
-        //
-        // ## Client Usage Example
-        //
-        // ```typescript
-        // await agent.ext_method({
-        //   method: "editor/update_buffers",
-        //   params: {
-        //     buffers: {
-        //       "/path/to/file.rs": {
-        //         path: "/path/to/file.rs",
-        //         content: "fn main() { ... }",
-        //         modified: true,
-        //         last_modified: { secs_since_epoch: 1234567890, nanos_since_epoch: 0 },
-        //         encoding: "UTF-8"
-        //       }
-        //     },
-        //     unavailable_paths: []
-        //   }
-        // });
-        // ```
-        if request.method == "editor/update_buffers".into() {
-            // Validate client capabilities for editor state operations
-            {
-                let client_caps = self.client_capabilities.read().await;
-                match &*client_caps {
-                    Some(caps) if crate::editor_state::supports_editor_state(caps) => {
-                        tracing::debug!("Editor state capability declared and validated");
-                    }
-                    Some(_) => {
-                        tracing::error!("editor/update_buffers capability not declared by client");
-                        return Err(agent_client_protocol::Error::new(
-                            -32602,
-                            "Editor state capability not declared by client. This feature requires client to support editor buffer synchronization.".to_string(),
-                        ));
-                    }
-                    None => {
-                        tracing::error!(
-                            "No client capabilities available for editor/update_buffers validation"
-                        );
-                        return Err(agent_client_protocol::Error::new(
-                            -32602,
-                            "Client capabilities not initialized. Cannot perform editor operations without capability declaration.".to_string(),
-                        ));
-                    }
-                }
-            }
-
-            // Parse the request parameters from RawValue
-            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-                .map_err(|e| {
-                    tracing::error!("Failed to parse editor/update_buffers parameters: {}", e);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            let response: crate::editor_state::EditorBufferResponse =
-                serde_json::from_value(params_value).map_err(|e| {
-                    tracing::error!(
-                        "Failed to deserialize editor/update_buffers parameters: {}",
-                        e
-                    );
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Update the editor state manager cache
-            tracing::info!(
-                "Updating editor buffers cache with {} buffers",
-                response.buffers.len()
-            );
-            self.editor_state_manager
-                .update_buffers_from_response(response)
-                .await;
-
-            // Return success with null result
-            let response_json = serde_json::Value::Null;
-            let raw_value = RawValue::from_string(response_json.to_string())
-                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-            return Ok(ExtResponse::new(Arc::from(raw_value)));
-        }
-
-        // Return a structured response indicating no other extensions are implemented
-        // This maintains ACP compliance while clearly communicating capability limitations
-        let response = serde_json::json!({
-            "method": request.method,
-            "result": "Extension method not implemented"
-        });
-
-        let raw_value = RawValue::from_string(response.to_string())
-            .map_err(|_e| agent_client_protocol::Error::internal_error())?;
-
-        Ok(ExtResponse::new(Arc::from(raw_value)))
     }
 
     async fn ext_notification(
@@ -1403,5 +370,236 @@ impl Agent for ClaudeAgent {
 
         // Handle extension notifications
         Ok(())
+    }
+}
+
+/// Extension method helpers for ClaudeAgent.
+impl ClaudeAgent {
+    /// Handle fs/read_text_file extension method.
+    async fn handle_ext_read_text_file(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.validate_fs_read_capability().await?;
+        let params: ReadTextFileParams = self.parse_ext_params(request, "fs/read_text_file")?;
+        let response = self.handle_read_text_file(params).await?;
+        self.to_ext_response(response)
+    }
+
+    /// Handle fs/write_text_file extension method.
+    async fn handle_ext_write_text_file(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.validate_fs_write_capability().await?;
+        let params: WriteTextFileParams = self.parse_ext_params(request, "fs/write_text_file")?;
+        let response = self.handle_write_text_file(params).await?;
+        self.to_ext_response(response)
+    }
+
+    /// Handle terminal/output extension method.
+    async fn handle_ext_terminal_output(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.validate_ext_terminal_capability("terminal/output").await?;
+        let params: crate::terminal_manager::TerminalOutputParams =
+            self.parse_ext_params(request, "terminal/output")?;
+        let response = self.handle_terminal_output(params).await?;
+        self.to_ext_response(response)
+    }
+
+    /// Handle terminal/release extension method.
+    async fn handle_ext_terminal_release(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.validate_ext_terminal_capability("terminal/release").await?;
+        let params: crate::terminal_manager::TerminalReleaseParams =
+            self.parse_ext_params(request, "terminal/release")?;
+        let response = self.handle_terminal_release(params).await?;
+        self.to_ext_response(response)
+    }
+
+    /// Handle terminal/wait_for_exit extension method.
+    async fn handle_ext_terminal_wait_for_exit(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.validate_ext_terminal_capability("terminal/wait_for_exit").await?;
+        let params: crate::terminal_manager::TerminalOutputParams =
+            self.parse_ext_params(request, "terminal/wait_for_exit")?;
+        let response = self.handle_terminal_wait_for_exit(params).await?;
+        self.to_ext_response(response)
+    }
+
+    /// Handle terminal/kill extension method.
+    async fn handle_ext_terminal_kill(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.validate_ext_terminal_capability("terminal/kill").await?;
+        let params: crate::terminal_manager::TerminalOutputParams =
+            self.parse_ext_params(request, "terminal/kill")?;
+        self.handle_terminal_kill(params).await?;
+        self.to_ext_response(serde_json::Value::Null)
+    }
+
+    /// Handle terminal/create extension method.
+    async fn handle_ext_terminal_create(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.validate_ext_terminal_capability("terminal/create").await?;
+        let params: crate::terminal_manager::TerminalCreateParams =
+            self.parse_ext_params(request, "terminal/create")?;
+        let response = self.handle_terminal_create(params).await?;
+        self.to_ext_response(response)
+    }
+
+    /// Handle editor/update_buffers extension method.
+    async fn handle_ext_editor_update_buffers(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.validate_editor_capability().await?;
+        let response: crate::editor_state::EditorBufferResponse =
+            self.parse_ext_params(request, "editor/update_buffers")?;
+        tracing::info!(
+            "Updating editor buffers cache with {} buffers",
+            response.buffers.len()
+        );
+        self.editor_state_manager
+            .update_buffers_from_response(response)
+            .await;
+        self.to_ext_response(serde_json::Value::Null)
+    }
+
+    /// Handle unknown extension method.
+    fn handle_ext_unknown(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        let response = serde_json::json!({
+            "method": request.method,
+            "result": "Extension method not implemented"
+        });
+        let raw_value = RawValue::from_string(response.to_string())
+            .map_err(|_e| agent_client_protocol::Error::internal_error())?;
+        Ok(ExtResponse::new(Arc::from(raw_value)))
+    }
+
+    /// Validate file system read capability.
+    async fn validate_fs_read_capability(&self) -> Result<(), agent_client_protocol::Error> {
+        let client_caps = self.client_capabilities.read().await;
+        match &*client_caps {
+            Some(caps) if caps.fs.read_text_file => {
+                tracing::debug!("File system read capability validated");
+                Ok(())
+            }
+            Some(_) => {
+                tracing::error!("fs/read_text_file capability not declared by client");
+                Err(agent_client_protocol::Error::invalid_params())
+            }
+            None => {
+                tracing::error!("No client capabilities for fs/read_text_file validation");
+                Err(agent_client_protocol::Error::invalid_params())
+            }
+        }
+    }
+
+    /// Validate file system write capability.
+    async fn validate_fs_write_capability(&self) -> Result<(), agent_client_protocol::Error> {
+        let client_caps = self.client_capabilities.read().await;
+        match &*client_caps {
+            Some(caps) if caps.fs.write_text_file => {
+                tracing::debug!("File system write capability validated");
+                Ok(())
+            }
+            Some(_) => {
+                tracing::error!("fs/write_text_file capability not declared by client");
+                Err(agent_client_protocol::Error::invalid_params())
+            }
+            None => {
+                tracing::error!("No client capabilities for fs/write_text_file validation");
+                Err(agent_client_protocol::Error::invalid_params())
+            }
+        }
+    }
+
+    /// Validate terminal capability.
+    async fn validate_ext_terminal_capability(
+        &self,
+        method: &str,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let client_caps = self.client_capabilities.read().await;
+        match &*client_caps {
+            Some(caps) if caps.terminal => {
+                tracing::debug!("Terminal capability validated for {}", method);
+                Ok(())
+            }
+            Some(_) => {
+                tracing::error!("{} capability not declared by client", method);
+                Err(agent_client_protocol::Error::invalid_params())
+            }
+            None => {
+                tracing::error!("No client capabilities for {} validation", method);
+                Err(agent_client_protocol::Error::invalid_params())
+            }
+        }
+    }
+
+    /// Validate editor state capability.
+    async fn validate_editor_capability(&self) -> Result<(), agent_client_protocol::Error> {
+        let client_caps = self.client_capabilities.read().await;
+        match &*client_caps {
+            Some(caps) if crate::editor_state::supports_editor_state(caps) => {
+                tracing::debug!("Editor state capability declared and validated");
+                Ok(())
+            }
+            Some(_) => {
+                tracing::error!("editor/update_buffers capability not declared by client");
+                Err(agent_client_protocol::Error::new(
+                    -32602,
+                    "Editor state capability not declared by client.".to_string(),
+                ))
+            }
+            None => {
+                tracing::error!("No client capabilities for editor/update_buffers validation");
+                Err(agent_client_protocol::Error::new(
+                    -32602,
+                    "Client capabilities not initialized.".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Parse extension method parameters.
+    fn parse_ext_params<T: serde::de::DeserializeOwned>(
+        &self,
+        request: &ExtRequest,
+        method: &str,
+    ) -> Result<T, agent_client_protocol::Error> {
+        let params_value: serde_json::Value = serde_json::from_str(request.params.get())
+            .map_err(|e| {
+                tracing::error!("Failed to parse {} parameters: {}", method, e);
+                agent_client_protocol::Error::invalid_params()
+            })?;
+        serde_json::from_value(params_value).map_err(|e| {
+            tracing::error!("Failed to deserialize {} parameters: {}", method, e);
+            agent_client_protocol::Error::invalid_params()
+        })
+    }
+
+    /// Convert response to ExtResponse.
+    fn to_ext_response<T: serde::Serialize>(
+        &self,
+        response: T,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        let response_json = serde_json::to_value(response)
+            .map_err(|_e| agent_client_protocol::Error::internal_error())?;
+        let raw_value = RawValue::from_string(response_json.to_string())
+            .map_err(|_e| agent_client_protocol::Error::internal_error())?;
+        Ok(ExtResponse::new(Arc::from(raw_value)))
     }
 }

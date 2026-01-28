@@ -20,6 +20,9 @@ parameters:
   - name: hook_type
     description: The type of hook event (PreToolUse, PostToolUse, etc.)
     required: true
+  - name: changed_files
+    description: List of files that changed during this turn (optional, typically for Stop hooks)
+    required: false
 ---
 
 You are validating a {{ hook_type }} hook event against the following validator:
@@ -33,6 +36,17 @@ You are validating a {{ hook_type }} hook event against the following validator:
 ```json
 {{ hook_context }}
 ```
+
+{% if changed_files %}
+## Files Changed This Turn
+
+The following files were modified during this turn:
+{% for file in changed_files %}
+- {{ file }}
+{% endfor %}
+
+When evaluating code quality validators, focus your analysis on these changed files.
+{% endif %}
 
 Analyze this hook event against the validator instructions above.
 

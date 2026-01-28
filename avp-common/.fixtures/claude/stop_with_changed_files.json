@@ -1,0 +1,80 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": { "readTextFile": false, "writeTextFile": false },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": { "streaming": true },
+          "loadSession": true,
+          "mcpCapabilities": { "http": true, "sse": false },
+          "promptCapabilities": {
+            "_meta": { "streaming": true },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent (Playback)",
+          "version": "0.1.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/tmp",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "test-session-changed-files"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "validator prompt",
+            "type": "text"
+          }
+        ],
+        "sessionId": "test-session-changed-files"
+      },
+      "response": {
+        "_meta": {
+          "claude_response": "{\"status\": \"passed\", \"message\": \"Analyzed the changed files. All functions have acceptable cognitive complexity scores below the threshold.\"}",
+          "processed": true,
+          "session_messages": 3,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "test-session-changed-files",
+          "update": {
+            "content": {
+              "text": "{\"status\": \"passed\", \"message\": \"Analyzed the changed files. All functions have acceptable cognitive complexity scores below the threshold.\"}",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

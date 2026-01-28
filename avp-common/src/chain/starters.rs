@@ -1,12 +1,14 @@
 //! Chain starters that determine initial chain behavior.
+//! Starters run before any chain links and control whether the chain proceeds.
 
 use std::marker::PhantomData;
 
 use crate::error::ChainError;
-use crate::types::HookOutput;
 
 use super::context::ChainContext;
 use super::link::HookInputType;
+use super::output::ChainOutput;
+use super::VALIDATOR_BLOCK_EXIT_CODE;
 
 /// Result from a chain starter.
 #[derive(Debug)]
@@ -15,7 +17,7 @@ pub enum StarterResult {
     Continue,
 
     /// Stop immediately with this output.
-    Stop(HookOutput),
+    Stop(ChainOutput),
 }
 
 /// A starter determines the initial behavior of a chain.
@@ -97,14 +99,16 @@ impl<I: HookInputType> BlockingErrorStarter<I> {
 
 impl<I: HookInputType> ChainStarter<I> for BlockingErrorStarter<I> {
     fn start(&self, _input: &I, ctx: &mut ChainContext) -> Result<StarterResult, ChainError> {
-        ctx.set_exit_code(2);
-        Ok(StarterResult::Stop(HookOutput::blocking_error(
-            &self.reason,
-        )))
+        ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
+        Ok(StarterResult::Stop(ChainOutput {
+            continue_execution: false,
+            stop_reason: Some(self.reason.clone()),
+            ..Default::default()
+        }))
     }
 
     fn exit_code(&self) -> i32 {
-        2
+        VALIDATOR_BLOCK_EXIT_CODE
     }
 
     fn name(&self) -> &'static str {
@@ -156,10 +160,12 @@ where
             ctx.set_exit_code(0);
             Ok(StarterResult::Continue)
         } else {
-            ctx.set_exit_code(2);
-            Ok(StarterResult::Stop(HookOutput::blocking_error(
-                &self.block_reason,
-            )))
+            ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
+            Ok(StarterResult::Stop(ChainOutput {
+                continue_execution: false,
+                stop_reason: Some(self.block_reason.clone()),
+                ..Default::default()
+            }))
         }
     }
 
@@ -169,6 +175,61 @@ where
 
     fn name(&self) -> &'static str {
         "ConditionalStarter"
+    }
+}
+
+/// A starter that checks for validator context and short-circuits if detected.
+///
+/// When AVP spawns validator agents, those agents have AVP_VALIDATOR_CONTEXT=1 set.
+/// This prevents infinite recursion where validator agents' hooks trigger more validators.
+///
+/// **IMPORTANT: ALL hooks are skipped when in validator context.**
+///
+/// This includes SessionStart, PreToolUse, PostToolUse, Stop, and all other hooks.
+/// The reason is simple: validator subagents should not trigger any AVP processing
+/// at all - no file tracking, no validators, no cleanup. They are ephemeral agents
+/// that exist solely to evaluate code quality, and their hooks must pass through
+/// silently to prevent infinite recursion loops.
+#[derive(Debug, Default, Clone)]
+pub struct ValidatorContextStarter<I: HookInputType> {
+    _phantom: PhantomData<I>,
+}
+
+impl<I: HookInputType> ValidatorContextStarter<I> {
+    /// Create a new validator context starter.
+    pub fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Check if we're running inside a validator context.
+    fn in_validator_context() -> bool {
+        std::env::var("AVP_VALIDATOR_CONTEXT").is_ok()
+    }
+}
+
+impl<I: HookInputType> ChainStarter<I> for ValidatorContextStarter<I> {
+    fn start(&self, _input: &I, ctx: &mut ChainContext) -> Result<StarterResult, ChainError> {
+        if Self::in_validator_context() {
+            tracing::debug!(
+                "ValidatorContextStarter: Skipping chain - running inside validator context"
+            );
+            ctx.set_exit_code(0);
+            // Return pass-through output - allow the hook to continue
+            Ok(StarterResult::Stop(ChainOutput::success()))
+        } else {
+            ctx.set_exit_code(0);
+            Ok(StarterResult::Continue)
+        }
+    }
+
+    fn exit_code(&self) -> i32 {
+        0
+    }
+
+    fn name(&self) -> &'static str {
+        "ValidatorContextStarter"
     }
 }
 
@@ -217,7 +278,7 @@ mod tests {
             }
             _ => panic!("Expected Stop"),
         }
-        assert_eq!(ctx.exit_code(), 2);
+        assert_eq!(ctx.exit_code(), VALIDATOR_BLOCK_EXIT_CODE);
     }
 
     #[test]

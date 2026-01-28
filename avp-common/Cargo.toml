@@ -27,6 +27,10 @@ tracing = { workspace = true }
 # File system traversal
 walkdir = { workspace = true }
 
+# File hashing and locking
+sha2 = { workspace = true }
+fs2 = { workspace = true }
+
 # Git root finding and directory management
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }

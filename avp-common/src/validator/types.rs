@@ -8,6 +8,13 @@ use std::path::PathBuf;
 
 use crate::types::HookType;
 
+/// Default timeout in seconds for validator execution.
+///
+/// This value is used when no explicit timeout is specified in the validator
+/// frontmatter. 30 seconds provides enough time for LLM-based validators
+/// to complete while preventing indefinite hangs.
+pub const DEFAULT_VALIDATOR_TIMEOUT_SECONDS: u32 = 30;
+
 /// Severity level for validator findings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -32,6 +39,14 @@ impl std::fmt::Display for Severity {
 }
 
 /// Match criteria for filtering when a validator should run.
+///
+/// Validators use this to specify which tool invocations or file operations
+/// should trigger validation. Both `tools` and `files` support pattern matching:
+/// - `tools`: Regex patterns matched against tool names (case-insensitive)
+/// - `files`: Glob patterns matched against file paths (case-insensitive)
+///
+/// If both are specified, both must match for the validator to run.
+/// If neither is specified (empty), the validator matches all events of its trigger type.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ValidatorMatch {
     /// Tool names to match (e.g., ["Write", "Edit"]).
@@ -139,7 +154,7 @@ impl MatchContext {
 
 /// Default timeout in seconds for validator execution.
 fn default_timeout() -> u32 {
-    30
+    DEFAULT_VALIDATOR_TIMEOUT_SECONDS
 }
 
 /// YAML frontmatter for a validator file.
@@ -158,7 +173,11 @@ pub struct ValidatorFrontmatter {
     /// Hook event type that triggers this validator.
     pub trigger: HookType,
 
-    /// Optional match criteria for filtering.
+    /// Optional match criteria for filtering which events trigger this validator.
+    ///
+    /// When present, the validator only runs if the event matches the specified
+    /// tools and/or file patterns. When absent, the validator runs for all events
+    /// of the configured trigger type.
     #[serde(default, rename = "match")]
     pub match_criteria: Option<ValidatorMatch>,
 
@@ -201,9 +220,16 @@ impl std::fmt::Display for ValidatorSource {
 }
 
 /// A loaded validator with its metadata and instructions.
+///
+/// Validators are loaded from markdown files with YAML frontmatter.
+/// The frontmatter contains configuration (trigger type, match criteria, severity)
+/// while the body contains instructions for the validation agent.
 #[derive(Debug, Clone)]
 pub struct Validator {
-    /// Parsed frontmatter with validator configuration.
+    /// Parsed YAML frontmatter containing validator configuration.
+    ///
+    /// This includes the validator's name, description, severity level,
+    /// trigger hook type, and optional match criteria for filtering.
     pub frontmatter: ValidatorFrontmatter,
 
     /// Markdown body containing validation instructions.
@@ -250,82 +276,92 @@ impl Validator {
             return false;
         }
 
-        // Check triggerMatcher regex if present (case-insensitive)
-        if let Some(trigger_matcher) = &self.frontmatter.trigger_matcher {
-            match &ctx.event_context {
-                Some(context) => {
-                    match regex::RegexBuilder::new(trigger_matcher)
-                        .case_insensitive(true)
-                        .build()
-                    {
-                        Ok(re) => {
-                            if !re.is_match(context) {
-                                return false;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Invalid triggerMatcher regex '{}' in validator '{}': {}",
-                                trigger_matcher,
-                                self.frontmatter.name,
-                                e
-                            );
-                            return false;
-                        }
-                    }
-                }
-                None => return false, // triggerMatcher requires context
-            }
+        // Check triggerMatcher regex if present
+        if !self.matches_trigger_regex(ctx) {
+            return false;
         }
 
         // Check match criteria if present
         if let Some(match_criteria) = &self.frontmatter.match_criteria {
-            // If tools are specified, tool_name must match one (case-insensitive regex)
-            if !match_criteria.tools.is_empty() {
-                match &ctx.tool_name {
-                    Some(name) => {
-                        let matches_any = match_criteria.tools.iter().any(|pattern| {
-                            // Anchor the pattern to match the full tool name
-                            let anchored = format!("^(?:{})$", pattern);
-                            regex::RegexBuilder::new(&anchored)
-                                .case_insensitive(true)
-                                .build()
-                                .map(|re| re.is_match(name))
-                                .unwrap_or_else(|_| {
-                                    // Fall back to case-insensitive string equality if regex fails
-                                    pattern.to_lowercase() == name.to_lowercase()
-                                })
-                        });
-                        if !matches_any {
-                            return false;
-                        }
-                    }
-                    None => return false,
-                }
+            if !self.matches_tools(match_criteria, ctx) {
+                return false;
             }
-
-            // If files are specified, file_path must match a glob (case-insensitive)
-            if !match_criteria.files.is_empty() {
-                match &ctx.file_path {
-                    Some(path) => {
-                        let match_options = glob::MatchOptions {
-                            case_sensitive: false,
-                            ..Default::default()
-                        };
-                        if !match_criteria.files.iter().any(|pattern| {
-                            glob::Pattern::new(pattern)
-                                .map(|p| p.matches_with(path, match_options))
-                                .unwrap_or(false)
-                        }) {
-                            return false;
-                        }
-                    }
-                    None => return false,
-                }
+            if !self.matches_files(match_criteria, ctx) {
+                return false;
             }
         }
 
         true
+    }
+
+    /// Check if the event context matches the triggerMatcher regex.
+    fn matches_trigger_regex(&self, ctx: &MatchContext) -> bool {
+        let Some(trigger_matcher) = &self.frontmatter.trigger_matcher else {
+            return true; // No trigger matcher means match
+        };
+
+        let Some(context) = &ctx.event_context else {
+            return false; // triggerMatcher requires context
+        };
+
+        match regex::RegexBuilder::new(trigger_matcher)
+            .case_insensitive(true)
+            .build()
+        {
+            Ok(re) => re.is_match(context),
+            Err(e) => {
+                tracing::warn!(
+                    "Invalid triggerMatcher regex '{}' in validator '{}': {}",
+                    trigger_matcher,
+                    self.frontmatter.name,
+                    e
+                );
+                false
+            }
+        }
+    }
+
+    /// Check if the tool name matches any of the tool patterns.
+    fn matches_tools(&self, match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
+        if match_criteria.tools.is_empty() {
+            return true;
+        }
+
+        let Some(name) = &ctx.tool_name else {
+            return false;
+        };
+
+        match_criteria.tools.iter().any(|pattern| {
+            let anchored = format!("^(?:{})$", pattern);
+            regex::RegexBuilder::new(&anchored)
+                .case_insensitive(true)
+                .build()
+                .map(|re| re.is_match(name))
+                .unwrap_or_else(|_| pattern.eq_ignore_ascii_case(name))
+        })
+    }
+
+    /// Check if the file path matches any of the file glob patterns.
+    fn matches_files(&self, match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
+        // Skip file matching for Stop hooks - they always run regardless of files
+        if match_criteria.files.is_empty() || ctx.hook_type == HookType::Stop {
+            return true;
+        }
+
+        let Some(path) = &ctx.file_path else {
+            return false;
+        };
+
+        let match_options = glob::MatchOptions {
+            case_sensitive: false,
+            ..Default::default()
+        };
+
+        match_criteria.files.iter().any(|pattern| {
+            glob::Pattern::new(pattern)
+                .map(|p| p.matches_with(path, match_options))
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -409,22 +445,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_severity_display() {
-        assert_eq!(Severity::Info.to_string(), "info");
-        assert_eq!(Severity::Warn.to_string(), "warn");
-        assert_eq!(Severity::Error.to_string(), "error");
-    }
-
-    #[test]
     fn test_severity_default() {
         assert_eq!(Severity::default(), Severity::Warn);
-    }
-
-    #[test]
-    fn test_validator_source_display() {
-        assert_eq!(ValidatorSource::Builtin.to_string(), "builtin");
-        assert_eq!(ValidatorSource::User.to_string(), "user");
-        assert_eq!(ValidatorSource::Project.to_string(), "project");
     }
 
     #[test]

@@ -45,6 +45,23 @@ pub enum AvpError {
     /// ACP agent error during validator execution.
     #[error("Agent error: {0}")]
     Agent(String),
+
+    /// File is a partial template, not a validator.
+    ///
+    /// This is not a true error - it indicates the file should be skipped
+    /// during validator loading because it's a template partial.
+    #[error("'{0}' is a partial, not a validator")]
+    Partial(String),
+}
+
+impl AvpError {
+    /// Check if this error indicates the file is a partial template.
+    ///
+    /// Partials are template includes, not validators, and should be
+    /// silently skipped during loading.
+    pub fn is_partial(&self) -> bool {
+        matches!(self, AvpError::Partial(_))
+    }
 }
 
 /// Validation errors for hook inputs.

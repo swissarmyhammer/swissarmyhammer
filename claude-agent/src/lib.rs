@@ -61,6 +61,7 @@ pub mod tool_types;
 pub mod tools;
 pub mod url_validation;
 
+// Re-exports for convenient access to main types
 pub use agent::{ClaudeAgent, RawMessageManager};
 pub use claude_process::SpawnConfig;
 pub use config::{AgentConfig, McpServerConfig};
@@ -79,6 +80,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use typed_builder::TypedBuilder;
+
+/// Delay in milliseconds to allow notification collection to complete.
+///
+/// Notifications may flow through multiple forwarding hops, so we need
+/// more time than just the prompt execution itself.
+const NOTIFICATION_COLLECTION_DELAY_MS: u64 = 500;
 
 /// Collected response from executing a prompt via streaming.
 ///
@@ -166,71 +173,165 @@ pub async fn execute_prompt(
 /// making it suitable for use with PlaybackAgent in tests.
 pub async fn execute_prompt_with_agent<A: Agent + ?Sized>(
     agent: &A,
-    mut notifications: broadcast::Receiver<SessionNotification>,
+    notifications: broadcast::Receiver<SessionNotification>,
     prompt: impl Into<String>,
 ) -> Result<CollectedResponse> {
     let prompt_text = prompt.into();
 
-    // Initialize the agent first (required by ACP protocol)
+    initialize_agent(agent).await?;
+    let session_id = create_session(agent).await?;
+    let prompt_request = build_prompt_request(&session_id, prompt_text);
+
+    let (collector, collected_text, notification_count, _matched_count) =
+        spawn_notification_collector(notifications, session_id);
+
+    let prompt_response = agent
+        .prompt(prompt_request)
+        .await
+        .map_err(|e| AgentError::Internal(format!("Failed to execute prompt: {}", e)))?;
+
+    let content =
+        collect_response_content(collector, collected_text, notification_count, &prompt_response)
+            .await;
+
+    Ok(CollectedResponse {
+        content,
+        stop_reason: prompt_response.stop_reason,
+    })
+}
+
+/// Initialize the agent (required by ACP protocol).
+async fn initialize_agent<A: Agent + ?Sized>(agent: &A) -> Result<()> {
     let init_request = InitializeRequest::new(1.into());
     agent
         .initialize(init_request)
         .await
         .map_err(|e| AgentError::Internal(format!("Failed to initialize agent: {}", e)))?;
+    Ok(())
+}
 
-    // Create a new session
+/// Create a new session with the agent.
+async fn create_session<A: Agent + ?Sized>(
+    agent: &A,
+) -> Result<agent_client_protocol::SessionId> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
     let session_request = NewSessionRequest::new(cwd);
     let session_response = agent
         .new_session(session_request)
         .await
         .map_err(|e| AgentError::Internal(format!("Failed to create session: {}", e)))?;
+    Ok(session_response.session_id)
+}
 
-    let session_id = session_response.session_id;
-
-    // Build the prompt request
-    let prompt_request = PromptRequest::new(
+/// Build a prompt request for the given session and text.
+fn build_prompt_request(
+    session_id: &agent_client_protocol::SessionId,
+    prompt_text: String,
+) -> PromptRequest {
+    PromptRequest::new(
         session_id.clone(),
         vec![ContentBlock::Text(TextContent::new(prompt_text))],
-    );
+    )
+}
 
-    // Spawn a task to collect notifications
+/// Extract text content from a notification if it matches our session.
+async fn process_notification(
+    notification: &SessionNotification,
+    session_id: &agent_client_protocol::SessionId,
+    collected_text: &tokio::sync::Mutex<String>,
+    matched_count: &std::sync::atomic::AtomicUsize,
+) {
+    if notification.session_id != *session_id {
+        return;
+    }
+
+    matched_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    if let SessionUpdate::AgentMessageChunk(chunk) = &notification.update {
+        if let ContentBlock::Text(text) = &chunk.content {
+            let mut guard = collected_text.lock().await;
+            guard.push_str(&text.text);
+            tracing::trace!(
+                session = %session_id,
+                chunk_len = text.text.len(),
+                total_len = guard.len(),
+                "Collected text chunk"
+            );
+        }
+    }
+}
+
+/// Spawn a task to collect text from session notifications.
+fn spawn_notification_collector(
+    mut notifications: broadcast::Receiver<SessionNotification>,
+    session_id: agent_client_protocol::SessionId,
+) -> (
+    tokio::task::JoinHandle<()>,
+    Arc<tokio::sync::Mutex<String>>,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
     let collected_text = Arc::new(tokio::sync::Mutex::new(String::new()));
     let collected_text_clone = Arc::clone(&collected_text);
-    let target_session_id = session_id.clone();
+    let notification_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let notification_count_clone = Arc::clone(&notification_count);
+    let matched_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let matched_count_clone = Arc::clone(&matched_count);
+
+    tracing::debug!(session = %session_id, "Starting notification collector");
 
     let collector = tokio::spawn(async move {
-        while let Ok(notification) = notifications.recv().await {
-            // Check if notification is for our session
-            if notification.session_id != target_session_id {
-                continue;
-            }
-
-            // Extract text from AgentMessageChunk updates
-            if let SessionUpdate::AgentMessageChunk(content_chunk) = &notification.update {
-                if let ContentBlock::Text(text_content) = &content_chunk.content {
-                    let mut guard = collected_text_clone.lock().await;
-                    guard.push_str(&text_content.text);
+        loop {
+            match notifications.recv().await {
+                Ok(notification) => {
+                    notification_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    process_notification(
+                        &notification,
+                        &session_id,
+                        &collected_text_clone,
+                        &matched_count_clone,
+                    )
+                    .await;
                 }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "Notification collector lagged");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     });
 
-    // Send the prompt
-    let prompt_response = agent
-        .prompt(prompt_request)
-        .await
-        .map_err(|e| AgentError::Internal(format!("Failed to execute prompt: {}", e)))?;
+    (collector, collected_text, notification_count, matched_count)
+}
 
-    // Give the collector a moment to finish, then abort if still running
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+/// Collect the response content after prompt execution.
+async fn collect_response_content(
+    collector: tokio::task::JoinHandle<()>,
+    collected_text: Arc<tokio::sync::Mutex<String>>,
+    notification_count: Arc<std::sync::atomic::AtomicUsize>,
+    prompt_response: &agent_client_protocol::PromptResponse,
+) -> String {
+    tokio::time::sleep(std::time::Duration::from_millis(NOTIFICATION_COLLECTION_DELAY_MS)).await;
     collector.abort();
 
-    // Get the collected text
     let content = collected_text.lock().await.clone();
+    let total_notifications = notification_count.load(std::sync::atomic::Ordering::Relaxed);
 
-    Ok(CollectedResponse {
-        content,
-        stop_reason: prompt_response.stop_reason,
-    })
+    if content.is_empty() {
+        tracing::error!(
+            stop_reason = ?prompt_response.stop_reason,
+            total_notifications = total_notifications,
+            content_length = content.len(),
+            "execute_prompt_with_agent received empty content"
+        );
+    } else {
+        tracing::debug!(
+            stop_reason = ?prompt_response.stop_reason,
+            total_notifications = total_notifications,
+            content_length = content.len(),
+            "execute_prompt_with_agent collected content"
+        );
+    }
+
+    content
 }

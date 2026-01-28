@@ -37,17 +37,34 @@ impl crate::agent::ClaudeAgent {
     ) -> Result<PromptResponse, agent_client_protocol::Error> {
         tracing::info!("Handling streaming prompt for session: {}", session_id);
 
-        // Validate content blocks against prompt capabilities before processing
+        self.validate_streaming_content(session_id, request)?;
+        let prompt_text = self.process_streaming_content(session_id, request)?;
+
+        if let Some(response) = self.check_turn_request_limit_streaming(session_id, session)? {
+            return Ok(response);
+        }
+
+        let context: crate::claude::SessionContext = session.into();
+        let mut stream = self.create_streaming_query(&prompt_text, &context).await?;
+
+        self.process_stream_chunks(session_id, &mut stream).await
+    }
+
+    /// Validate content blocks for streaming prompt.
+    fn validate_streaming_content(
+        &self,
+        session_id: &crate::session::SessionId,
+        request: &PromptRequest,
+    ) -> Result<(), agent_client_protocol::Error> {
         let content_validator =
             ContentCapabilityValidator::new(self.capabilities.prompt_capabilities.clone());
+
         if let Err(capability_error) = content_validator.validate_content_blocks(&request.prompt) {
             tracing::warn!(
                 "Content capability validation failed for session {}: {}",
                 session_id,
                 capability_error
             );
-
-            // Convert to ACP-compliant error response
             let acp_error_data = capability_error.to_acp_error();
             return Err(agent_client_protocol::Error::new(
                 acp_error_data["code"].as_i64().unwrap_or(-32602) as i32,
@@ -58,8 +75,15 @@ impl crate::agent::ClaudeAgent {
             )
             .data(acp_error_data["data"].clone()));
         }
+        Ok(())
+    }
 
-        // Process all content blocks using the comprehensive processor
+    /// Process content blocks and extract prompt text.
+    fn process_streaming_content(
+        &self,
+        session_id: &crate::session::SessionId,
+        request: &PromptRequest,
+    ) -> Result<String, agent_client_protocol::Error> {
         let content_summary = self
             .content_block_processor
             .process_content_blocks(&request.prompt)
@@ -68,22 +92,25 @@ impl crate::agent::ClaudeAgent {
                 agent_client_protocol::Error::invalid_params()
             })?;
 
-        let prompt_text = content_summary.combined_text;
-        let has_binary_content = content_summary.has_binary_content;
-
-        if has_binary_content {
+        if content_summary.has_binary_content {
             tracing::info!(
                 "Processing prompt with binary content for session: {}",
                 session_id
             );
         }
 
-        // ACP Compliance: Check turn request limit before making LM request
-        // This mirrors the non-streaming path check (see handle_prompt around line 2833).
-        // Currently each prompt() call is a new turn with only one LM request, but
-        // when tool call loops are implemented, this will prevent infinite loops.
+        Ok(content_summary.combined_text)
+    }
+
+    /// Check turn request limit for streaming path.
+    fn check_turn_request_limit_streaming(
+        &self,
+        session_id: &crate::session::SessionId,
+        session: &crate::session::Session,
+    ) -> Result<Option<PromptResponse>, agent_client_protocol::Error> {
         let mut updated_session = session.clone();
         let current_requests = updated_session.increment_turn_requests();
+
         if current_requests > self.config.max_turn_requests {
             tracing::info!(
                 "Turn request limit exceeded ({} > {}) for session: {} (streaming path)",
@@ -91,131 +118,201 @@ impl crate::agent::ClaudeAgent {
                 self.config.max_turn_requests,
                 session_id
             );
-            let mut meta_map = serde_json::Map::new();
-            meta_map.insert(
-                "turn_requests".to_string(),
-                serde_json::json!(current_requests),
-            );
-            meta_map.insert(
-                "max_turn_requests".to_string(),
-                serde_json::json!(self.config.max_turn_requests),
-            );
-            meta_map.insert(
-                "session_id".to_string(),
-                serde_json::json!(session_id.to_string()),
-            );
-            meta_map.insert("streaming".to_string(), serde_json::json!(true));
-
-            return Ok(PromptResponse::new(StopReason::MaxTurnRequests).meta(meta_map));
+            return Ok(Some(
+                PromptResponse::new(StopReason::MaxTurnRequests).meta(
+                    self.build_turn_limit_meta(session_id, current_requests, true),
+                ),
+            ));
         }
 
-        // Update session with incremented turn request counter
         self.session_manager
             .update_session(session_id, |s| {
                 s.turn_request_count = updated_session.turn_request_count;
             })
             .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
-        let context: crate::claude::SessionContext = session.into();
+        Ok(None)
+    }
 
-        // Mode handling happens in set_session_mode, not here
-        // Just send the prompt to the existing Claude process
-        let mut stream = self
-            .claude_client
-            .query_stream_with_context(&prompt_text, &context)
+    /// Build metadata for turn limit exceeded response.
+    fn build_turn_limit_meta(
+        &self,
+        session_id: &crate::session::SessionId,
+        current_requests: u64,
+        streaming: bool,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert(
+            "turn_requests".to_string(),
+            serde_json::json!(current_requests),
+        );
+        meta_map.insert(
+            "max_turn_requests".to_string(),
+            serde_json::json!(self.config.max_turn_requests),
+        );
+        meta_map.insert(
+            "session_id".to_string(),
+            serde_json::json!(session_id.to_string()),
+        );
+        meta_map.insert("streaming".to_string(), serde_json::json!(streaming));
+        meta_map
+    }
+
+    /// Create a streaming query to the Claude process.
+    async fn create_streaming_query(
+        &self,
+        prompt_text: &str,
+        context: &crate::claude::SessionContext,
+    ) -> Result<
+        std::pin::Pin<Box<dyn futures::Stream<Item = crate::claude::MessageChunk> + Send>>,
+        agent_client_protocol::Error,
+    > {
+        self.claude_client
+            .query_stream_with_context(prompt_text, context)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create streaming query: {}", e);
                 agent_client_protocol::Error::internal_error()
-            })?;
+            })
+    }
 
+    /// Process stream chunks and build response.
+    async fn process_stream_chunks(
+        &self,
+        session_id: &crate::session::SessionId,
+        stream: &mut std::pin::Pin<
+            Box<dyn futures::Stream<Item = crate::claude::MessageChunk> + Send>,
+        >,
+    ) -> Result<PromptResponse, agent_client_protocol::Error> {
         let session_id_str = session_id.to_string();
         let mut claude_stop_reason: Option<String> = None;
         let mut accumulated_content = String::new();
 
         while let Some(chunk) = stream.next().await {
-            // Check for cancellation
-            if self
-                .cancellation_manager
-                .is_cancelled(&session_id_str)
+            if let Some(response) = self
+                .check_streaming_cancellation(session_id, &session_id_str)
                 .await
             {
-                tracing::info!("Streaming cancelled for session {}", session_id);
-
-                // CRITICAL: Reset cancellation state for next turn
-                self.cancellation_manager
-                    .reset_for_new_turn(&session_id_str)
-                    .await;
-
-                let mut meta_map = serde_json::Map::new();
-                meta_map.insert(
-                    "cancelled_during_streaming".to_string(),
-                    serde_json::json!(true),
-                );
-                return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
+                return Ok(response);
             }
 
-            // Capture stop_reason
             if let Some(reason) = &chunk.stop_reason {
                 claude_stop_reason = Some(reason.clone());
             }
 
-            // Skip empty chunks
             if chunk.content.is_empty() && chunk.tool_call.is_none() {
                 continue;
             }
 
-            // Process this chunk
-            if let Some(tool_call_info) = &chunk.tool_call {
-                self.handle_streaming_tool_call(
-                    session_id,
-                    &session_id_str,
-                    tool_call_info,
-                    &mut accumulated_content,
-                )
-                .await?;
-            } else if !chunk.content.is_empty() {
-                // Accumulate content for logging
-                accumulated_content.push_str(&chunk.content);
-
-                // Create SessionUpdate for this chunk
-                let update =
-                    SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                        ContentBlock::Text(TextContent::new(chunk.content.clone())),
-                    ));
-
-                // Store in session
-                let chunk_message = crate::session::Message::from_update(update.clone());
-
-                self.session_manager
-                    .update_session(session_id, |session| {
-                        session.add_message(chunk_message);
-                    })
-                    .map_err(|_| agent_client_protocol::Error::internal_error())?;
-
-                // Send chunk notification
-                // Note: This may send redundantly with claude.rs notification_sender,
-                // but the tracing layer handles deduplication for display purposes.
-                let notification =
-                    SessionNotification::new(SessionId::new(session_id_str.clone()), update);
-
-                if let Err(e) = self.send_session_update(notification).await {
-                    tracing::error!(
-                        "Failed to send message chunk notification for session {}: {}",
-                        session_id,
-                        e
-                    );
-                }
-            }
+            self.process_single_chunk(
+                session_id,
+                &session_id_str,
+                &chunk,
+                &mut accumulated_content,
+            )
+            .await?;
         }
 
-        // Check cancellation one final time
+        self.build_streaming_response(&session_id_str, claude_stop_reason)
+            .await
+    }
+
+    /// Check for cancellation during streaming.
+    async fn check_streaming_cancellation(
+        &self,
+        session_id: &crate::session::SessionId,
+        session_id_str: &str,
+    ) -> Option<PromptResponse> {
         if self
             .cancellation_manager
-            .is_cancelled(&session_id_str)
+            .is_cancelled(session_id_str)
             .await
         {
-            tracing::info!("Session {} cancelled after streaming", session_id);
+            tracing::info!("Streaming cancelled for session {}", session_id);
+            self.cancellation_manager
+                .reset_for_new_turn(session_id_str)
+                .await;
+
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert(
+                "cancelled_during_streaming".to_string(),
+                serde_json::json!(true),
+            );
+            return Some(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
+        }
+        None
+    }
+
+    /// Process a single stream chunk.
+    async fn process_single_chunk(
+        &self,
+        session_id: &crate::session::SessionId,
+        session_id_str: &str,
+        chunk: &crate::claude::MessageChunk,
+        accumulated_content: &mut String,
+    ) -> Result<(), agent_client_protocol::Error> {
+        if let Some(tool_call_info) = &chunk.tool_call {
+            self.handle_streaming_tool_call(
+                session_id,
+                session_id_str,
+                tool_call_info,
+                accumulated_content,
+            )
+            .await?;
+        } else if !chunk.content.is_empty() {
+            self.handle_streaming_text_chunk(session_id, session_id_str, chunk, accumulated_content)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Handle a text chunk during streaming.
+    async fn handle_streaming_text_chunk(
+        &self,
+        session_id: &crate::session::SessionId,
+        session_id_str: &str,
+        chunk: &crate::claude::MessageChunk,
+        accumulated_content: &mut String,
+    ) -> Result<(), agent_client_protocol::Error> {
+        accumulated_content.push_str(&chunk.content);
+
+        let update = SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+            ContentBlock::Text(TextContent::new(chunk.content.clone())),
+        ));
+
+        let chunk_message = crate::session::Message::from_update(update.clone());
+
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.add_message(chunk_message);
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+        let notification =
+            SessionNotification::new(SessionId::new(session_id_str.to_string()), update);
+
+        if let Err(e) = self.send_session_update(notification).await {
+            tracing::error!(
+                "Failed to send message chunk notification for session {}: {}",
+                session_id,
+                e
+            );
+        }
+        Ok(())
+    }
+
+    /// Build final streaming response with stop reason.
+    async fn build_streaming_response(
+        &self,
+        session_id_str: &str,
+        claude_stop_reason: Option<String>,
+    ) -> Result<PromptResponse, agent_client_protocol::Error> {
+        if self
+            .cancellation_manager
+            .is_cancelled(session_id_str)
+            .await
+        {
+            tracing::info!("Session {} cancelled after streaming", session_id_str);
             let mut meta_map = serde_json::Map::new();
             meta_map.insert(
                 "cancelled_after_streaming".to_string(),
@@ -224,22 +321,22 @@ impl crate::agent::ClaudeAgent {
             return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
         }
 
-        // Tool completions are emitted by protocol_translator when it detects
-        // tool_result messages in Claude's stream
+        let stop_reason = Self::map_claude_stop_reason(claude_stop_reason);
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("streaming".to_string(), serde_json::json!(true));
+        Ok(PromptResponse::new(stop_reason).meta(meta_map))
+    }
 
-        // Map Claude's stop_reason to ACP StopReason
-        let stop_reason = match claude_stop_reason.as_deref() {
+    /// Map Claude's stop_reason to ACP StopReason.
+    fn map_claude_stop_reason(claude_stop_reason: Option<String>) -> StopReason {
+        match claude_stop_reason.as_deref() {
             Some("max_tokens") => StopReason::MaxTokens,
             Some("end_turn") | None => StopReason::EndTurn,
             Some(other) => {
                 tracing::debug!("Unknown stop_reason '{}', defaulting to EndTurn", other);
                 StopReason::EndTurn
             }
-        };
-
-        let mut meta_map = serde_json::Map::new();
-        meta_map.insert("streaming".to_string(), serde_json::json!(true));
-        Ok(PromptResponse::new(stop_reason).meta(meta_map))
+        }
     }
 
     /// Handle a tool call during streaming

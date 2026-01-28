@@ -4,6 +4,8 @@ description: "Check if all tests and type checks are passing."
 ---
 
 {% include "_partials/detected-projects" %}
+{% include "_partials/test-driven-development" %}
+
 
 ## Goal
 

@@ -7,53 +7,19 @@
 //! 4. Produces Claude Code compatible output format
 //! 5. Executes via PlaybackAgent for deterministic testing
 
-use agent_client_protocol_extras::PlaybackAgent;
+mod test_helpers;
+
+use agent_client_protocol::StopReason;
 use avp_common::{
     context::AvpContext,
     strategy::ClaudeCodeHookStrategy,
     types::HookType,
     validator::{parse_validator_response, ExecutedValidator, ValidatorLoader, ValidatorResult},
 };
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tempfile::TempDir;
-
-/// Create a test context in a temporary git repository.
-fn create_test_context() -> (TempDir, AvpContext) {
-    let temp = TempDir::new().unwrap();
-    fs::create_dir_all(temp.path().join(".git")).unwrap();
-
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = AvpContext::init().unwrap();
-
-    std::env::set_current_dir(&original_dir).unwrap();
-
-    (temp, context)
-}
-
-/// Build a PostToolUse input for a Write operation.
-fn build_post_tool_use_write_input(file_path: &str, content: &str) -> serde_json::Value {
-    serde_json::json!({
-        "session_id": "test-session",
-        "transcript_path": "/tmp/test-transcript.jsonl",
-        "cwd": "/tmp",
-        "permission_mode": "default",
-        "hook_event_name": "PostToolUse",
-        "tool_name": "Write",
-        "tool_input": {
-            "file_path": file_path,
-            "content": content
-        },
-        "tool_response": {
-            "filePath": file_path,
-            "success": true
-        },
-        "tool_use_id": "toolu_test123"
-    })
-}
+use test_helpers::{
+    assert_message_contains, assert_validator_failed, assert_validator_passed,
+    create_context_with_playback, create_test_context, HookInputBuilder,
+};
 
 /// Code sample containing hardcoded secrets (should trigger validator failure).
 const CODE_WITH_SECRETS: &str = r#"
@@ -79,27 +45,6 @@ const config = {
 
 export default config;
 "#;
-
-/// Get the path to test fixtures directory.
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".fixtures/claude")
-}
-
-/// Create an AvpContext with a PlaybackAgent for testing.
-fn create_context_with_playback(temp: &TempDir, fixture_name: &str) -> AvpContext {
-    let fixture_path = fixtures_dir().join(fixture_name);
-    let agent = PlaybackAgent::new(fixture_path, "claude");
-    let notification_rx = agent.subscribe_notifications();
-
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = AvpContext::with_agent(Arc::new(agent), notification_rx)
-        .expect("Should create context with playback agent");
-
-    std::env::set_current_dir(&original_dir).unwrap();
-    context
-}
 
 // ============================================================================
 // Validator Loading Tests
@@ -134,7 +79,7 @@ fn test_no_secrets_validator_matches_post_tool_use_write() {
     let strategy = ClaudeCodeHookStrategy::new(context);
     std::env::remove_var("AVP_SKIP_AGENT");
 
-    let input = build_post_tool_use_write_input("config.ts", CODE_WITH_SECRETS);
+    let input = HookInputBuilder::post_tool_use_write("config.ts", CODE_WITH_SECRETS);
     let matching = strategy.matching_validators(HookType::PostToolUse, &input);
 
     let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
@@ -154,7 +99,7 @@ fn test_no_secrets_validator_does_not_match_non_code_files() {
     let strategy = ClaudeCodeHookStrategy::new(context);
     std::env::remove_var("AVP_SKIP_AGENT");
 
-    let input = build_post_tool_use_write_input("readme.md", "# README\nThis is documentation.");
+    let input = HookInputBuilder::post_tool_use_write("readme.md", "# README\nThis is documentation.");
     let matching = strategy.matching_validators(HookType::PostToolUse, &input);
 
     let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
@@ -209,7 +154,7 @@ fn test_parse_validator_response_failed_with_secrets() {
     // Simulated Claude response when secrets are detected
     let response = r#"{"status": "failed", "message": "Found 3 potential secrets - Line 4: Possible API key 'sk-proj-...' in variable 'apiKey'; Line 5: AWS access key detected; Line 6: Hardcoded password"}"#;
 
-    let result = parse_validator_response(response);
+    let result = parse_validator_response(response, &StopReason::EndTurn);
 
     assert!(!result.passed(), "Should fail when secrets detected");
     assert!(
@@ -226,7 +171,7 @@ fn test_parse_validator_response_passed_clean_code() {
     // Simulated Claude response when code is clean
     let response = r#"{"status": "passed", "message": "No hardcoded secrets detected. All sensitive values are properly retrieved from environment variables."}"#;
 
-    let result = parse_validator_response(response);
+    let result = parse_validator_response(response, &StopReason::EndTurn);
 
     assert!(result.passed(), "Should pass when no secrets found");
     assert!(
@@ -247,7 +192,7 @@ fn test_parse_validator_response_with_markdown_wrapper() {
 
 The code contains secrets."#;
 
-    let result = parse_validator_response(response);
+    let result = parse_validator_response(response, &StopReason::EndTurn);
 
     assert!(!result.passed(), "Should fail when secrets detected");
     assert!(
@@ -263,7 +208,7 @@ fn test_parse_validator_response_handles_malformed_duplicates() {
     let response = r#"```json
 {"status": "passed", "message": "passed", "message": "No secrets detected"}"#;
 
-    let result = parse_validator_response(response);
+    let result = parse_validator_response(response, &StopReason::EndTurn);
 
     // Should still detect the status: passed
     assert!(
@@ -370,24 +315,16 @@ async fn test_no_secrets_validator_detects_secrets_playback() {
     let validator = loader.get("no-secrets").unwrap();
 
     // Build input with secrets
-    let input = build_post_tool_use_write_input("config.ts", CODE_WITH_SECRETS);
+    let input = HookInputBuilder::post_tool_use_write("config.ts", CODE_WITH_SECRETS);
 
     // Execute the validator
     let (result, _rate_limited) = runner
-        .execute_validator(validator, HookType::PostToolUse, &input)
+        .execute_validator(validator, HookType::PostToolUse, &input, None)
         .await;
 
     // The validator should FAIL (secrets detected)
-    assert!(
-        !result.result.passed(),
-        "Validator should fail when secrets are present. Got result: {:?}",
-        result
-    );
-    assert!(
-        result.result.message().contains("secret") || result.result.message().contains("API"),
-        "Message should describe the secrets found: {}",
-        result.result.message()
-    );
+    assert_validator_failed(&result, "when secrets are present");
+    assert_message_contains(&result, &["secret", "API"]);
 }
 
 /// Integration test using PlaybackAgent to verify validator passes clean code.
@@ -411,25 +348,16 @@ async fn test_no_secrets_validator_passes_clean_code_playback() {
     let validator = loader.get("no-secrets").unwrap();
 
     // Build input with clean code
-    let input = build_post_tool_use_write_input("config.ts", CODE_WITHOUT_SECRETS);
+    let input = HookInputBuilder::post_tool_use_write("config.ts", CODE_WITHOUT_SECRETS);
 
     // Execute the validator
     let (result, _rate_limited) = runner
-        .execute_validator(validator, HookType::PostToolUse, &input)
+        .execute_validator(validator, HookType::PostToolUse, &input, None)
         .await;
 
     // The validator should PASS (no secrets)
-    assert!(
-        result.result.passed(),
-        "Validator should pass when code uses environment variables. Got result: {:?}",
-        result
-    );
-    assert!(
-        result.result.message().contains("No hardcoded secrets")
-            || result.result.message().contains("environment"),
-        "Message should confirm clean code: {}",
-        result.result.message()
-    );
+    assert_validator_passed(&result, "when code uses environment variables");
+    assert_message_contains(&result, &["No hardcoded secrets", "environment"]);
 }
 
 // ============================================================================
@@ -464,19 +392,15 @@ async fn test_no_secrets_validator_detects_secrets_live() {
     let validator = loader.get("no-secrets").unwrap();
 
     // Build input with secrets
-    let input = build_post_tool_use_write_input("config.ts", CODE_WITH_SECRETS);
+    let input = HookInputBuilder::post_tool_use_write("config.ts", CODE_WITH_SECRETS);
 
     // Execute the validator
     let (result, _rate_limited) = runner
-        .execute_validator(validator, HookType::PostToolUse, &input)
+        .execute_validator(validator, HookType::PostToolUse, &input, None)
         .await;
 
     // The validator should FAIL
-    assert!(
-        !result.result.passed(),
-        "Validator should fail when secrets are present. Got: {:?}",
-        result
-    );
+    assert_validator_failed(&result, "when secrets are present");
 }
 
 /// Integration test that verifies clean code passes validation.
@@ -505,15 +429,11 @@ async fn test_no_secrets_validator_passes_clean_code_live() {
     avp_common::load_builtins(&mut loader);
     let validator = loader.get("no-secrets").unwrap();
 
-    let input = build_post_tool_use_write_input("config.ts", CODE_WITHOUT_SECRETS);
+    let input = HookInputBuilder::post_tool_use_write("config.ts", CODE_WITHOUT_SECRETS);
 
     let (result, _rate_limited) = runner
-        .execute_validator(validator, HookType::PostToolUse, &input)
+        .execute_validator(validator, HookType::PostToolUse, &input, None)
         .await;
 
-    assert!(
-        result.result.passed(),
-        "Validator should pass when code uses environment variables. Got: {:?}",
-        result
-    );
+    assert_validator_passed(&result, "when code uses environment variables");
 }

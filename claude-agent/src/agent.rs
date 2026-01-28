@@ -25,8 +25,9 @@ use crate::{
     tools::ToolCallHandler,
 };
 use agent_client_protocol::{
-    AgentCapabilities, ContentBlock, PromptRequest, PromptResponse, SessionId, SessionNotification,
-    SessionUpdate, StopReason, TextContent,
+    AgentCapabilities, ContentBlock, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
+    NewSessionResponse, PromptRequest, PromptResponse, SessionId, SessionNotification,
+    SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent,
 };
 use agent_client_protocol_extras::AgentWithFixture;
 use std::sync::Arc;
@@ -146,82 +147,153 @@ impl ClaudeAgent {
         config: AgentConfig,
         raw_message_manager: Option<RawMessageManager>,
     ) -> crate::Result<(Self, broadcast::Receiver<SessionNotification>)> {
-        // Validate configuration including MCP servers
         config.validate()?;
 
         let session_manager = Arc::new(SessionManager::new());
-
         let (notification_sender, notification_receiver) =
             NotificationSender::new(config.notification_buffer_size);
 
-        // Create permission policy engine with file-based storage (needed for ProtocolTranslator)
+        let permission_engine = Self::create_permission_engine();
+        let protocol_translator = Arc::new(ProtocolTranslator::new(permission_engine.clone()));
+
+        let (claude_client, raw_message_manager) = Self::create_claude_client(
+            &config,
+            protocol_translator,
+            &notification_sender,
+            raw_message_manager,
+        )?;
+
+        let mcp_manager = Arc::new(crate::mcp::McpServerManager::new());
+        let tool_handler = Self::create_tool_handler(
+            &config,
+            &mcp_manager,
+            &session_manager,
+            &permission_engine,
+            &notification_sender,
+        )
+        .await;
+
+        let capabilities = Self::build_agent_capabilities(&tool_handler).await;
+        let (cancellation_manager, _) = CancellationManager::new(config.cancellation_buffer_size);
+        let path_validator = Self::create_path_validator(&config);
+
+        let agent = Self::build_agent_instance(
+            session_manager,
+            claude_client,
+            tool_handler,
+            mcp_manager,
+            config,
+            capabilities,
+            notification_sender,
+            cancellation_manager,
+            permission_engine,
+            raw_message_manager,
+            path_validator,
+        );
+
+        Ok((agent, notification_receiver))
+    }
+
+    /// Create the permission policy engine with file-based storage.
+    fn create_permission_engine() -> Arc<PermissionPolicyEngine> {
         let storage_path = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
             .join(".claude-agent")
             .join("permissions");
         let storage = FilePermissionStorage::new(storage_path);
-        let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
+        Arc::new(PermissionPolicyEngine::new(Box::new(storage)))
+    }
 
-        // Create protocol translator with permission engine
-        let protocol_translator = Arc::new(ProtocolTranslator::new(permission_engine.clone()));
-
+    /// Create and configure the Claude client with optional raw message manager.
+    fn create_claude_client(
+        config: &AgentConfig,
+        protocol_translator: Arc<ProtocolTranslator>,
+        notification_sender: &NotificationSender,
+        raw_message_manager: Option<RawMessageManager>,
+    ) -> crate::Result<(Arc<ClaudeClient>, Option<RawMessageManager>)> {
         let mut claude_client = ClaudeClient::new_with_config(&config.claude, protocol_translator)?;
         claude_client.set_notification_sender(Arc::new(notification_sender.clone()));
 
-        // Use provided RawMessageManager or create a new one
-        let raw_message_manager = if let Some(manager) = raw_message_manager {
-            tracing::debug!("Using shared RawMessageManager from parent agent");
-            Some(manager)
-        } else {
-            // Create raw message manager for recording JSON-RPC messages across all agents
-            let raw_json_path = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join(".acp")
-                .join("transcript_raw.jsonl");
-            if let Some(parent) = raw_json_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            match RawMessageManager::new(raw_json_path.clone()) {
-                Ok(manager) => {
-                    tracing::info!(
-                        "Raw ACP JSON-RPC messages recording to {}",
-                        raw_json_path.display()
-                    );
-                    Some(manager)
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create raw message manager: {}", e);
-                    None
-                }
-            }
-        };
-
+        let raw_message_manager = Self::resolve_raw_message_manager(raw_message_manager);
         if let Some(ref manager) = raw_message_manager {
             claude_client.set_raw_message_manager(manager.clone());
         }
 
-        let claude_client = Arc::new(claude_client);
+        Ok((Arc::new(claude_client), raw_message_manager))
+    }
 
-        // Create MCP manager but don't connect yet
-        // Claude CLI will connect to MCP servers itself via --mcp-config
-        // We only use mcp_manager for listing available tools/prompts
-        let mcp_manager = Arc::new(crate::mcp::McpServerManager::new());
+    /// Resolve the raw message manager - use provided or create new.
+    fn resolve_raw_message_manager(
+        raw_message_manager: Option<RawMessageManager>,
+    ) -> Option<RawMessageManager> {
+        if let Some(manager) = raw_message_manager {
+            tracing::debug!("Using shared RawMessageManager from parent agent");
+            return Some(manager);
+        }
 
-        // Create tool handler with MCP support
+        Self::create_new_raw_message_manager()
+    }
+
+    /// Create a new raw message manager for recording JSON-RPC messages.
+    fn create_new_raw_message_manager() -> Option<RawMessageManager> {
+        let raw_json_path = Self::get_raw_message_path();
+        Self::ensure_parent_dir_exists(&raw_json_path);
+
+        RawMessageManager::new(raw_json_path.clone())
+            .inspect(|_| {
+                tracing::info!(
+                    "Raw ACP JSON-RPC messages recording to {}",
+                    raw_json_path.display()
+                );
+            })
+            .inspect_err(|e| {
+                tracing::warn!("Failed to create raw message manager: {}", e);
+            })
+            .ok()
+    }
+
+    /// Get the path for raw message recording.
+    fn get_raw_message_path() -> std::path::PathBuf {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".acp")
+            .join("transcript_raw.jsonl")
+    }
+
+    /// Ensure the parent directory exists.
+    fn ensure_parent_dir_exists(path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+
+    /// Create the tool handler with MCP support.
+    async fn create_tool_handler(
+        config: &AgentConfig,
+        mcp_manager: &Arc<crate::mcp::McpServerManager>,
+        session_manager: &Arc<SessionManager>,
+        permission_engine: &Arc<PermissionPolicyEngine>,
+        notification_sender: &NotificationSender,
+    ) -> Arc<RwLock<ToolCallHandler>> {
         let tool_handler = Arc::new(RwLock::new(ToolCallHandler::new_with_mcp_manager(
             config.security.to_tool_permissions(),
-            Arc::clone(&mcp_manager),
-            Arc::clone(&session_manager),
-            Arc::clone(&permission_engine),
+            Arc::clone(mcp_manager),
+            Arc::clone(session_manager),
+            Arc::clone(permission_engine),
         )));
 
-        // Set notification sender for tool call updates
         {
             let mut handler = tool_handler.write().await;
             handler.set_notification_sender(notification_sender.clone());
         }
 
-        // Get all available tools for capabilities
+        tool_handler
+    }
+
+    /// Build agent capabilities based on available tools.
+    async fn build_agent_capabilities(
+        tool_handler: &Arc<RwLock<ToolCallHandler>>,
+    ) -> AgentCapabilities {
         let available_tools = {
             let handler = tool_handler.read().await;
             handler.list_all_available_tools().await
@@ -236,8 +308,6 @@ impl ClaudeAgent {
             .image(true)
             .meta(meta_map);
 
-        // We only support HTTP MCP connections, not SSE (which is deprecated in MCP spec).
-        // This is an architectural decision for simplicity and modern standards.
         let mcp_capabilities = agent_client_protocol::McpCapabilities::new()
             .http(true)
             .sse(false);
@@ -246,65 +316,68 @@ impl ClaudeAgent {
         agent_meta_map.insert("tools".to_string(), serde_json::json!(available_tools));
         agent_meta_map.insert("streaming".to_string(), serde_json::json!(true));
 
-        let capabilities = AgentCapabilities::new()
+        AgentCapabilities::new()
             .load_session(true)
             .prompt_capabilities(prompt_capabilities)
             .mcp_capabilities(mcp_capabilities)
-            .meta(agent_meta_map);
+            .meta(agent_meta_map)
+    }
 
-        // Create cancellation manager for session cancellation support
-        let (cancellation_manager, _cancellation_receiver) =
-            CancellationManager::new(config.cancellation_buffer_size);
+    /// Create path validator from configuration.
+    fn create_path_validator(config: &AgentConfig) -> Arc<PathValidator> {
+        let blocked_paths: Vec<std::path::PathBuf> = config
+            .security
+            .forbidden_paths
+            .iter()
+            .map(|p| {
+                let path = std::path::PathBuf::from(p);
+                if !path.is_absolute() {
+                    tracing::error!(
+                        security_event = "invalid_forbidden_path",
+                        path = %p,
+                        "Forbidden path must be absolute"
+                    );
+                    panic!(
+                        "Configuration error: Forbidden path must be absolute: {}",
+                        p
+                    );
+                }
+                path
+            })
+            .collect();
 
-        // Initialize plan generation system for ACP plan reporting
-        // Initialize base64 processor with default size limits
+        if blocked_paths.is_empty() {
+            Arc::new(PathValidator::new())
+        } else {
+            Arc::new(PathValidator::with_blocked_paths(blocked_paths))
+        }
+    }
+
+    /// Build the final agent instance with all components.
+    #[allow(clippy::too_many_arguments)]
+    fn build_agent_instance(
+        session_manager: Arc<SessionManager>,
+        claude_client: Arc<ClaudeClient>,
+        tool_handler: Arc<RwLock<ToolCallHandler>>,
+        mcp_manager: Arc<crate::mcp::McpServerManager>,
+        config: AgentConfig,
+        capabilities: AgentCapabilities,
+        notification_sender: NotificationSender,
+        cancellation_manager: CancellationManager,
+        permission_engine: Arc<PermissionPolicyEngine>,
+        raw_message_manager: Option<RawMessageManager>,
+        path_validator: Arc<PathValidator>,
+    ) -> Self {
         let base64_processor = Arc::new(Base64Processor::default());
-
-        // Initialize content block processor with base64 processor
         let content_block_processor = Arc::new(ContentBlockProcessor::new(
             (*base64_processor).clone(),
             sizes::content::MAX_RESOURCE_MODERATE,
             true,
         ));
-
-        // Initialize editor state manager for ACP editor integration
         let editor_state_manager = Arc::new(crate::editor_state::EditorStateManager::new());
-
-        // Initialize path validator with configuration-based blocked paths
-        let path_validator = {
-            // Validate that all blocked paths are absolute during initialization
-            let blocked_paths: Vec<std::path::PathBuf> = config
-                .security
-                .forbidden_paths
-                .iter()
-                .map(|p| {
-                    let path = std::path::PathBuf::from(p);
-                    if !path.is_absolute() {
-                        tracing::error!(
-                            security_event = "invalid_forbidden_path",
-                            path = %p,
-                            "Forbidden path must be absolute"
-                        );
-                        panic!(
-                            "Configuration error: Forbidden path must be absolute: {}",
-                            p
-                        );
-                    }
-                    path
-                })
-                .collect();
-
-            if blocked_paths.is_empty() {
-                Arc::new(PathValidator::new())
-            } else {
-                Arc::new(PathValidator::with_blocked_paths(blocked_paths))
-            }
-        };
-
-        // Initialize size validator with moderate limits for file operations
         let size_validator = Arc::new(SizeValidator::new(SizeLimits::default()));
 
-        let agent = Self {
+        Self {
             session_manager,
             claude_client,
             tool_handler,
@@ -319,16 +392,14 @@ impl ClaudeAgent {
             content_block_processor,
             editor_state_manager,
             raw_message_manager,
-            client: None, // Client connection set later via set_client()
+            client: None,
             permission_storage: Arc::new(permission_storage::PermissionStorage::new()),
             plan_manager: Arc::new(RwLock::new(crate::plan::PlanManager::new())),
             available_agents: Arc::new(RwLock::new(None)),
             sah_modes: Arc::new(RwLock::new(std::collections::HashMap::new())),
             path_validator,
             size_validator,
-        };
-
-        Ok((agent, notification_receiver))
+        }
     }
 
     /// Set the client connection for bidirectional communication
@@ -345,66 +416,78 @@ impl ClaudeAgent {
     /// Also loads SwissArmyHammer modes from ModeRegistry and merges them.
     /// These are used to provide ACP session modes functionality.
     pub async fn set_available_agents(&self, mut agents: Vec<(String, String, Option<String>)>) {
-        // Load SwissArmyHammer modes from ModeRegistry
-        let mut registry = swissarmyhammer_modes::ModeRegistry::new();
-        match registry.load_all() {
-            Ok(sah_mode_list) => {
-                // Create PromptLibrary once to resolve prompt references
-                let prompt_library = swissarmyhammer_prompts::PromptLibrary::new();
-                let template_context = swissarmyhammer_config::TemplateContext::new();
-
-                let mut sah_modes = self.sah_modes.write().await;
-                for mode in sah_mode_list {
-                    // Resolve the system prompt - either from prompt reference or embedded content
-                    let system_prompt = if let Some(prompt_path) = mode.prompt() {
-                        // Mode references a prompt file, render it
-                        match prompt_library.render(prompt_path, &template_context) {
-                            Ok(rendered) => {
-                                tracing::debug!(
-                                    "Rendered prompt '{}' for mode '{}' ({} chars)",
-                                    prompt_path,
-                                    mode.id(),
-                                    rendered.len()
-                                );
-                                rendered
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to render prompt '{}' for mode '{}': {}",
-                                    prompt_path,
-                                    mode.id(),
-                                    e
-                                );
-                                // Fall back to embedded system_prompt (may be empty)
-                                mode.system_prompt().to_string()
-                            }
-                        }
-                    } else {
-                        // Mode has embedded system prompt
-                        mode.system_prompt().to_string()
-                    };
-
-                    sah_modes.insert(mode.id().to_string(), system_prompt);
-
-                    // Add to available agents list
-                    agents.push((
-                        mode.id().to_string(),
-                        mode.name().to_string(),
-                        Some(mode.description().to_string()),
-                    ));
-                }
-                tracing::info!(
-                    "Loaded {} SwissArmyHammer modes from ModeRegistry",
-                    sah_modes.len()
-                );
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load SwissArmyHammer modes from registry: {}", e);
-            }
-        }
+        let sah_mode_agents = self.load_sah_modes().await;
+        agents.extend(sah_mode_agents);
 
         let mut available_agents = self.available_agents.write().await;
         *available_agents = Some(agents);
+    }
+
+    /// Load SwissArmyHammer modes from ModeRegistry.
+    ///
+    /// Returns a list of agent tuples (id, name, description) for each loaded mode.
+    /// Also stores the resolved system prompts in self.sah_modes.
+    async fn load_sah_modes(&self) -> Vec<(String, String, Option<String>)> {
+        let mut registry = swissarmyhammer_modes::ModeRegistry::new();
+        let sah_mode_list = match registry.load_all() {
+            Ok(modes) => modes,
+            Err(e) => {
+                tracing::warn!("Failed to load SwissArmyHammer modes from registry: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let prompt_library = swissarmyhammer_prompts::PromptLibrary::new();
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let mut agents = Vec::new();
+        let mut sah_modes = self.sah_modes.write().await;
+
+        for mode in sah_mode_list {
+            let system_prompt = Self::resolve_mode_system_prompt(&mode, &prompt_library, &template_context);
+            sah_modes.insert(mode.id().to_string(), system_prompt);
+            agents.push((
+                mode.id().to_string(),
+                mode.name().to_string(),
+                Some(mode.description().to_string()),
+            ));
+        }
+
+        tracing::info!("Loaded {} SwissArmyHammer modes from ModeRegistry", sah_modes.len());
+        agents
+    }
+
+    /// Resolve the system prompt for a mode.
+    ///
+    /// If the mode references a prompt file, render it. Otherwise use embedded content.
+    fn resolve_mode_system_prompt(
+        mode: &swissarmyhammer_modes::Mode,
+        prompt_library: &swissarmyhammer_prompts::PromptLibrary,
+        template_context: &swissarmyhammer_config::TemplateContext,
+    ) -> String {
+        let Some(prompt_path) = mode.prompt() else {
+            return mode.system_prompt().to_string();
+        };
+
+        match prompt_library.render(prompt_path, template_context) {
+            Ok(rendered) => {
+                tracing::debug!(
+                    "Rendered prompt '{}' for mode '{}' ({} chars)",
+                    prompt_path,
+                    mode.id(),
+                    rendered.len()
+                );
+                rendered
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to render prompt '{}' for mode '{}': {}",
+                    prompt_path,
+                    mode.id(),
+                    e
+                );
+                mode.system_prompt().to_string()
+            }
+        }
     }
 
     /// Get the system prompt for a SwissArmyHammer mode
@@ -1039,6 +1122,799 @@ impl ClaudeAgent {
         tracing::info!("Tool handler shutdown complete");
         Ok(())
     }
+
+    // =========================================================================
+    // new_session helper methods
+    // =========================================================================
+
+    /// Validate MCP transport requirements for new session.
+    pub(crate) fn validate_new_session_mcp_config(
+        &self,
+        request: &NewSessionRequest,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let internal_mcp_servers: Vec<crate::config::McpServerConfig> = request
+            .mcp_servers
+            .iter()
+            .filter_map(|server| self.convert_acp_to_internal_mcp_config(server))
+            .collect();
+
+        if let Err(validation_error) =
+            crate::capability_validation::CapabilityRequirementChecker::check_new_session_requirements(
+                &self.capabilities,
+                &internal_mcp_servers,
+            )
+        {
+            tracing::error!(
+                "Session creation failed: Transport validation error - {}",
+                validation_error
+            );
+            return Err(self.convert_session_setup_error_to_acp_error(validation_error));
+        }
+        Ok(())
+    }
+
+    /// Create session and register RawMessageManager.
+    pub(crate) async fn create_new_session_internal(
+        &self,
+        request: &NewSessionRequest,
+    ) -> Result<crate::session::SessionId, agent_client_protocol::Error> {
+        let client_caps = {
+            let guard = self.client_capabilities.read().await;
+            guard.clone()
+        };
+
+        let session_id = self
+            .session_manager
+            .create_session(request.cwd.clone(), client_caps)
+            .map_err(|_e| agent_client_protocol::Error::internal_error())?;
+
+        // Register RawMessageManager for this session so subagents can find it
+        if let Some(ref manager) = self.raw_message_manager {
+            RawMessageManager::register(session_id.to_string(), manager.clone());
+            tracing::debug!("Registered RawMessageManager for session {}", session_id);
+        }
+
+        // Store MCP servers in the session if provided
+        if !request.mcp_servers.is_empty() {
+            self.store_mcp_servers_in_session(&session_id, &request.mcp_servers)?;
+        }
+
+        tracing::info!("Created session: {}", session_id);
+        Ok(session_id)
+    }
+
+    /// Store MCP server configs in session.
+    pub(crate) fn store_mcp_servers_in_session(
+        &self,
+        session_id: &crate::session::SessionId,
+        mcp_servers: &[agent_client_protocol::McpServer],
+    ) -> Result<(), agent_client_protocol::Error> {
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.mcp_servers = mcp_servers
+                    .iter()
+                    .map(|server| {
+                        serde_json::to_string(server).unwrap_or_else(|_| format!("{:?}", server))
+                    })
+                    .collect();
+            })
+            .map_err(|_e| agent_client_protocol::Error::internal_error())
+    }
+
+    /// Spawn Claude process and handle init response for new session.
+    pub(crate) async fn spawn_claude_for_new_session(
+        &self,
+        session_id: &crate::session::SessionId,
+        protocol_session_id: &SessionId,
+        request: &NewSessionRequest,
+    ) {
+        use crate::claude_process::SpawnConfig;
+
+        tracing::info!("Spawning Claude process for session: {}", session_id);
+        let spawn_config = SpawnConfig::builder()
+            .session_id(*session_id)
+            .acp_session_id(protocol_session_id.clone())
+            .cwd(request.cwd.clone())
+            .mcp_servers(self.config.mcp_servers.clone())
+            .ephemeral(self.config.claude.ephemeral)
+            .build();
+
+        match self
+            .claude_client
+            .spawn_process_and_consume_init(spawn_config)
+            .await
+        {
+            Ok((Some(agents), current_agent)) => {
+                self.handle_claude_init_with_agents(session_id, agents, current_agent)
+                    .await;
+            }
+            Ok((None, _)) => {
+                tracing::debug!("No available agents in Claude CLI init message");
+                self.set_available_agents(vec![]).await;
+            }
+            Err(e) => {
+                tracing::error!("Failed to spawn Claude process and read init: {}", e);
+                self.set_available_agents(vec![]).await;
+            }
+        }
+    }
+
+    /// Handle Claude init response that includes available agents.
+    pub(crate) async fn handle_claude_init_with_agents(
+        &self,
+        session_id: &crate::session::SessionId,
+        agents: Vec<(String, String, Option<String>)>,
+        current_agent: Option<String>,
+    ) {
+        tracing::info!(
+            "Storing {} available agents from Claude CLI init",
+            agents.len()
+        );
+        self.set_available_agents(agents).await;
+
+        if let Some(mode) = current_agent {
+            tracing::info!("Setting initial mode from Claude CLI: {}", mode);
+            self.session_manager
+                .update_session(session_id, |session| {
+                    session.current_mode = Some(mode.clone());
+                })
+                .map_err(|_| {
+                    tracing::warn!("Failed to set initial mode");
+                })
+                .ok();
+        } else {
+            tracing::debug!(
+                "No current_agent in init - session starts without mode (no --agent flag)"
+            );
+        }
+    }
+
+    /// Send initial available commands after session creation.
+    pub(crate) async fn send_initial_session_commands(
+        &self,
+        session_id: &crate::session::SessionId,
+        protocol_session_id: &SessionId,
+    ) {
+        let initial_commands = self
+            .get_available_commands_for_session(protocol_session_id)
+            .await;
+        if let Err(e) = self
+            .update_session_available_commands(protocol_session_id, initial_commands)
+            .await
+        {
+            tracing::warn!(
+                "Failed to send initial available commands for session {}: {}",
+                session_id,
+                e
+            );
+        }
+    }
+
+    /// Build new session response with modes if applicable.
+    pub(crate) async fn build_new_session_response(
+        &self,
+        session_id: &crate::session::SessionId,
+        protocol_session_id: &SessionId,
+    ) -> NewSessionResponse {
+        let mut response = NewSessionResponse::new(protocol_session_id.clone());
+
+        if let Some(available_modes) = self.get_available_modes().await {
+            if let Some(current_mode_id) = self.get_session_mode(session_id).await {
+                let mode_state = agent_client_protocol::SessionModeState::new(
+                    agent_client_protocol::SessionModeId::new(current_mode_id.as_str()),
+                    available_modes,
+                );
+                response = response.modes(mode_state);
+                tracing::info!("Session created with mode: {}", current_mode_id);
+            } else {
+                tracing::debug!(
+                    "Session created without mode (available modes: {}, will not use --agent flag)",
+                    available_modes.len()
+                );
+            }
+        }
+
+        response
+    }
+
+    // =========================================================================
+    // load_session helper methods
+    // =========================================================================
+
+    /// Validate MCP transport requirements for load session.
+    pub(crate) fn validate_load_session_mcp_config(
+        &self,
+        request: &LoadSessionRequest,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let internal_mcp_servers: Vec<crate::config::McpServerConfig> = request
+            .mcp_servers
+            .iter()
+            .filter_map(|server| self.convert_acp_to_internal_mcp_config(server))
+            .collect();
+
+        if let Err(validation_error) =
+            crate::capability_validation::CapabilityRequirementChecker::check_load_session_requirements(
+                &self.capabilities,
+                &internal_mcp_servers,
+            )
+        {
+            tracing::error!(
+                "Session loading failed: Transport/capability validation error - {}",
+                validation_error
+            );
+            return Err(self.convert_session_setup_error_to_acp_error(validation_error));
+        }
+        Ok(())
+    }
+
+    /// Handle found session: replay history and build response.
+    pub(crate) async fn handle_session_found(&self, session: &crate::session::Session) -> LoadSessionResponse {
+        tracing::info!(
+            "Loaded session: {} with {} historical messages",
+            session.id,
+            session.context.len()
+        );
+
+        // Replay historical messages
+        self.replay_session_history(session).await;
+
+        // Build response metadata
+        self.build_load_session_response(session)
+    }
+
+    /// Replay session history via notifications.
+    pub(crate) async fn replay_session_history(&self, session: &crate::session::Session) {
+        if session.context.is_empty() {
+            return;
+        }
+
+        tracing::info!(
+            "Replaying {} historical messages for session {}",
+            session.context.len(),
+            session.id
+        );
+
+        for message in &session.context {
+            let notification = self.build_history_notification(session, message);
+            if let Err(e) = self.notification_sender.send_update(notification).await {
+                tracing::error!("Failed to send historical message notification: {}", e);
+            }
+        }
+
+        tracing::info!(
+            "Completed queueing {} history notifications for session {}",
+            session.context.len(),
+            session.id
+        );
+    }
+
+    /// Build notification for historical message replay.
+    pub(crate) fn build_history_notification(
+        &self,
+        session: &crate::session::Session,
+        message: &crate::session::Message,
+    ) -> SessionNotification {
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert(
+            "timestamp".to_string(),
+            serde_json::json!(message
+                .timestamp
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
+        );
+        meta_map.insert(
+            "message_type".to_string(),
+            serde_json::json!("historical_replay"),
+        );
+
+        SessionNotification::new(SessionId::new(session.id.to_string()), message.update.clone())
+            .meta(meta_map)
+    }
+
+    /// Build load session response with metadata.
+    pub(crate) fn build_load_session_response(&self, session: &crate::session::Session) -> LoadSessionResponse {
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert(
+            "session_id".to_string(),
+            serde_json::json!(session.id.to_string()),
+        );
+        meta_map.insert(
+            "created_at".to_string(),
+            serde_json::json!(session
+                .created_at
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
+        );
+        meta_map.insert(
+            "message_count".to_string(),
+            serde_json::json!(session.context.len()),
+        );
+        meta_map.insert(
+            "history_replayed".to_string(),
+            serde_json::json!(session.context.len()),
+        );
+
+        LoadSessionResponse::new().meta(meta_map)
+    }
+
+    /// Create session not found error.
+    pub(crate) fn session_not_found_error(
+        &self,
+        session_id: &SessionId,
+    ) -> agent_client_protocol::Error {
+        tracing::warn!("Session not found: {}", session_id);
+        agent_client_protocol::Error::new(
+            -32602,
+            "Session not found: sessionId does not exist or has expired".to_string(),
+        )
+        .data(serde_json::json!({
+            "sessionId": session_id,
+            "error": "session_not_found"
+        }))
+    }
+
+    // =========================================================================
+    // set_session_mode helper methods
+    // =========================================================================
+
+    /// Parse session ID for mode change request.
+    pub(crate) fn parse_mode_session_id(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::session::SessionId, agent_client_protocol::Error> {
+        crate::session::SessionId::parse(&session_id.0)
+            .map_err(|_| agent_client_protocol::Error::invalid_request())
+    }
+
+    /// Validate that the requested mode exists in available modes.
+    pub(crate) async fn validate_mode_exists(
+        &self,
+        mode_id: &str,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let available_agents = self.available_agents.read().await;
+        match available_agents.as_ref() {
+            Some(agents) => {
+                let mode_exists = agents.iter().any(|(id, _, _)| id == mode_id);
+                if !mode_exists {
+                    tracing::error!(
+                        "Invalid mode '{}' requested. Available modes: {:?}",
+                        mode_id,
+                        agents
+                            .iter()
+                            .map(|(id, name, _)| format!("{}:{}", id, name))
+                            .collect::<Vec<_>>()
+                    );
+                    return Err(agent_client_protocol::Error::invalid_params());
+                }
+                Ok(())
+            }
+            None => {
+                tracing::warn!("set_session_mode called but no available modes configured");
+                Err(agent_client_protocol::Error::invalid_params())
+            }
+        }
+    }
+
+    /// Check if mode changed and update session with new mode.
+    pub(crate) async fn check_and_update_session_mode(
+        &self,
+        session_id: &crate::session::SessionId,
+        mode_id: &str,
+    ) -> Result<bool, agent_client_protocol::Error> {
+        let current_mode = self
+            .session_manager
+            .get_session(session_id)
+            .map_err(|_| agent_client_protocol::Error::internal_error())?
+            .map(|session| session.current_mode.clone())
+            .unwrap_or(None);
+
+        let mode_changed = current_mode != Some(mode_id.to_string());
+
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.current_mode = Some(mode_id.to_string());
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+        tracing::info!("Session mode set to: {}", mode_id);
+        Ok(mode_changed)
+    }
+
+    /// Handle process replacement when mode changes.
+    pub(crate) async fn handle_mode_change_process(
+        &self,
+        session_id: &crate::session::SessionId,
+        mode_id: &str,
+        request: &SetSessionModeRequest,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let session = self
+            .session_manager
+            .get_session(session_id)
+            .map_err(|_| agent_client_protocol::Error::internal_error())?
+            .ok_or_else(agent_client_protocol::Error::internal_error)?;
+        let cwd = session.cwd.clone();
+
+        // Terminate existing process
+        self.terminate_existing_process(session_id, mode_id).await;
+
+        // Spawn new process with mode
+        let protocol_session_id = SessionId::new(session_id.to_string());
+        let spawn_config = self
+            .build_mode_spawn_config(session_id, &protocol_session_id, &cwd, mode_id)
+            .await;
+
+        if let Err(e) = self
+            .claude_client
+            .spawn_process_and_consume_init(spawn_config)
+            .await
+        {
+            tracing::error!("Failed to spawn new Claude process for mode change: {}", e);
+            return Err(agent_client_protocol::Error::internal_error());
+        }
+
+        // Send mode update notification
+        self.send_mode_update_notification(session_id, request)
+            .await?;
+        Ok(())
+    }
+
+    /// Terminate existing Claude process for session.
+    pub(crate) async fn terminate_existing_process(
+        &self,
+        session_id: &crate::session::SessionId,
+        mode_id: &str,
+    ) {
+        tracing::info!(
+            "Mode changed for session {}, terminating process and spawning new one with mode '{}'",
+            session_id,
+            mode_id
+        );
+
+        if let Err(e) = self.claude_client.terminate_session(session_id).await {
+            tracing::warn!(
+                "Failed to terminate Claude process for session {}: {}",
+                session_id,
+                e
+            );
+        }
+    }
+
+    /// Build spawn config for mode change.
+    pub(crate) async fn build_mode_spawn_config(
+        &self,
+        session_id: &crate::session::SessionId,
+        protocol_session_id: &SessionId,
+        cwd: &std::path::PathBuf,
+        mode_id: &str,
+    ) -> crate::claude_process::SpawnConfig {
+        use crate::claude_process::SpawnConfig;
+
+        let (agent_mode, system_prompt) =
+            if let Some(prompt) = self.get_sah_mode_system_prompt(mode_id).await {
+                tracing::info!(
+                    "Spawning new Claude process with --system-prompt ({} chars) for SAH mode '{}'",
+                    prompt.len(),
+                    mode_id
+                );
+                (None, Some(prompt))
+            } else {
+                tracing::info!(
+                    "Spawning new Claude process with --agent '{}' for Claude CLI mode",
+                    mode_id
+                );
+                (Some(mode_id.to_string()), None)
+            };
+
+        SpawnConfig::builder()
+            .session_id(*session_id)
+            .acp_session_id(protocol_session_id.clone())
+            .cwd(cwd.clone())
+            .mcp_servers(self.config.mcp_servers.clone())
+            .agent_mode(agent_mode)
+            .system_prompt(system_prompt)
+            .ephemeral(self.config.claude.ephemeral)
+            .build()
+    }
+
+    /// Send mode update notification and store in session context.
+    pub(crate) async fn send_mode_update_notification(
+        &self,
+        session_id: &crate::session::SessionId,
+        request: &SetSessionModeRequest,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let current_mode_update =
+            agent_client_protocol::CurrentModeUpdate::new(request.mode_id.clone());
+        let update = SessionUpdate::CurrentModeUpdate(current_mode_update);
+
+        let mode_message = crate::session::Message::from_update(update.clone());
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.add_message(mode_message);
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+        if let Err(e) = self
+            .send_session_update(SessionNotification::new(request.session_id.clone(), update))
+            .await
+        {
+            tracing::warn!("Failed to send current mode update notification: {}", e);
+        }
+        Ok(())
+    }
+
+    /// Build response for set_session_mode.
+    pub(crate) fn build_set_mode_response(&self, mode_changed: bool) -> SetSessionModeResponse {
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("mode_set".to_string(), serde_json::json!(true));
+        meta_map.insert(
+            "message".to_string(),
+            serde_json::json!("Session mode updated"),
+        );
+        meta_map.insert("mode_changed".to_string(), serde_json::json!(mode_changed));
+        if mode_changed {
+            meta_map.insert(
+                "process_action".to_string(),
+                serde_json::json!("process_replaced"),
+            );
+        }
+
+        SetSessionModeResponse::new().meta(meta_map)
+    }
+
+    // =========================================================================
+    // prompt helper methods
+    // =========================================================================
+
+    /// Log debug info about prompt request.
+    pub(crate) fn log_prompt_debug(&self, request: &PromptRequest) {
+        use swissarmyhammer_common::Pretty;
+
+        tracing::debug!("📨 PROMPT REQUEST DEBUG:");
+        tracing::debug!("  Session: {}", request.session_id);
+        tracing::debug!("  Content blocks: {}", request.prompt.len());
+        for (i, block) in request.prompt.iter().enumerate() {
+            match block {
+                agent_client_protocol::ContentBlock::Text(text) => {
+                    tracing::debug!("  Block {}: TEXT ({} chars)", i + 1, text.text.len());
+                    tracing::debug!("  Text content: {}", text.text);
+                }
+                _ => {
+                    tracing::debug!("  Block {}: {}", i + 1, Pretty(block));
+                }
+            }
+        }
+    }
+
+    /// Send user message chunks for conversation transparency.
+    pub(crate) async fn send_user_message_chunks(&self, request: &PromptRequest) {
+        for content_block in &request.prompt {
+            let content_chunk = agent_client_protocol::ContentChunk::new(content_block.clone());
+            let notification = SessionNotification::new(
+                request.session_id.clone(),
+                SessionUpdate::UserMessageChunk(content_chunk),
+            );
+
+            if let Err(e) = self.send_session_update(notification).await {
+                tracing::warn!(
+                    "Failed to send user message chunk for session {}: {}",
+                    request.session_id,
+                    e
+                );
+            }
+        }
+    }
+
+    /// Check if session was cancelled before processing.
+    pub(crate) async fn check_cancelled_before_processing(
+        &self,
+        session_id: &crate::session::SessionId,
+    ) -> Option<PromptResponse> {
+        if !self
+            .cancellation_manager
+            .is_cancelled(&session_id.to_string())
+            .await
+        {
+            return None;
+        }
+
+        tracing::info!(
+            "Session {} is cancelled, returning cancelled response",
+            session_id
+        );
+
+        self.cancellation_manager
+            .reset_for_new_turn(&session_id.to_string())
+            .await;
+
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert(
+            "cancelled_before_processing".to_string(),
+            serde_json::json!(true),
+        );
+        meta_map.insert(
+            "session_id".to_string(),
+            serde_json::json!(session_id.to_string()),
+        );
+        Some(PromptResponse::new(StopReason::Cancelled).meta(meta_map))
+    }
+
+    /// Extract text content from prompt request.
+    pub(crate) fn extract_prompt_text(&self, request: &PromptRequest) -> String {
+        let mut prompt_text = String::new();
+        let mut has_binary_content = false;
+
+        for content_block in &request.prompt {
+            match content_block {
+                ContentBlock::Text(text_content) => {
+                    prompt_text.push_str(&text_content.text);
+                }
+                ContentBlock::Image(image_content) => {
+                    prompt_text.push_str(&format!(
+                        "\n[Image content: {} ({})]",
+                        image_content.mime_type,
+                        image_content.uri.as_deref().unwrap_or("embedded data")
+                    ));
+                    has_binary_content = true;
+                }
+                ContentBlock::Audio(audio_content) => {
+                    prompt_text.push_str(&format!(
+                        "\n[Audio content: {} (embedded data)]",
+                        audio_content.mime_type
+                    ));
+                    has_binary_content = true;
+                }
+                ContentBlock::Resource(_) => {
+                    prompt_text.push_str("\n[Embedded Resource]");
+                    has_binary_content = true;
+                }
+                ContentBlock::ResourceLink(resource_link) => {
+                    prompt_text.push_str(&format!("\n[Resource Link: {}]", resource_link.uri));
+                }
+                _ => {
+                    tracing::warn!("Unknown content block type, skipping");
+                }
+            }
+        }
+
+        if has_binary_content {
+            tracing::info!("Processing prompt with binary content for plan analysis");
+        }
+
+        prompt_text
+    }
+
+    /// Get and validate session exists.
+    pub(crate) fn get_validated_session(
+        &self,
+        session_id: &crate::session::SessionId,
+    ) -> Result<crate::session::Session, agent_client_protocol::Error> {
+        self.session_manager
+            .get_session(session_id)
+            .map_err(|_| agent_client_protocol::Error::internal_error())?
+            .ok_or_else(agent_client_protocol::Error::invalid_params)
+    }
+
+    /// Prepare session for new turn: reset counters and add user message.
+    pub(crate) fn prepare_session_for_turn(
+        &self,
+        session_id: &crate::session::SessionId,
+        prompt_text: &str,
+    ) -> Result<(), agent_client_protocol::Error> {
+        // Reset turn counters
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.reset_turn_counters();
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+        // Add user message
+        let user_message =
+            crate::session::Message::new(crate::session::MessageRole::User, prompt_text.to_string());
+
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.add_message(user_message);
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())
+    }
+
+    /// Check turn limits and return early response if exceeded.
+    pub(crate) fn check_turn_limits(
+        &self,
+        session_id: &crate::session::SessionId,
+        prompt_text: &str,
+    ) -> Result<Option<PromptResponse>, agent_client_protocol::Error> {
+        let mut session = self.get_updated_session(session_id)?;
+
+        // Check turn request limit
+        let current_requests = session.increment_turn_requests();
+        if current_requests > self.config.max_turn_requests {
+            return Ok(Some(self.build_max_requests_response(session_id, current_requests)));
+        }
+
+        // Check token limit
+        let estimated_tokens = (prompt_text.len() as u64) / 4;
+        let current_tokens = session.add_turn_tokens(estimated_tokens);
+        if current_tokens > self.config.max_tokens_per_turn {
+            return Ok(Some(self.build_max_tokens_response(session_id, current_tokens)));
+        }
+
+        // Update session with counters
+        self.session_manager
+            .update_session(session_id, |s| {
+                s.turn_request_count = session.turn_request_count;
+                s.turn_token_count = session.turn_token_count;
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+        Ok(None)
+    }
+
+    /// Get updated session after modifications.
+    pub(crate) fn get_updated_session(
+        &self,
+        session_id: &crate::session::SessionId,
+    ) -> Result<crate::session::Session, agent_client_protocol::Error> {
+        self.session_manager
+            .get_session(session_id)
+            .map_err(|_| agent_client_protocol::Error::internal_error())?
+            .ok_or_else(agent_client_protocol::Error::internal_error)
+    }
+
+    /// Build response for max turn requests exceeded.
+    pub(crate) fn build_max_requests_response(
+        &self,
+        session_id: &crate::session::SessionId,
+        current_requests: u64,
+    ) -> PromptResponse {
+        tracing::info!(
+            "Turn request limit exceeded ({} > {}) for session: {}",
+            current_requests,
+            self.config.max_turn_requests,
+            session_id
+        );
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert(
+            "turn_requests".to_string(),
+            serde_json::json!(current_requests),
+        );
+        meta_map.insert(
+            "max_turn_requests".to_string(),
+            serde_json::json!(self.config.max_turn_requests),
+        );
+        meta_map.insert(
+            "session_id".to_string(),
+            serde_json::json!(session_id.to_string()),
+        );
+        PromptResponse::new(StopReason::MaxTurnRequests).meta(meta_map)
+    }
+
+    /// Build response for max tokens exceeded.
+    pub(crate) fn build_max_tokens_response(
+        &self,
+        session_id: &crate::session::SessionId,
+        current_tokens: u64,
+    ) -> PromptResponse {
+        tracing::info!(
+            "Token limit exceeded ({} > {}) for session: {}",
+            current_tokens,
+            self.config.max_tokens_per_turn,
+            session_id
+        );
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("turn_tokens".to_string(), serde_json::json!(current_tokens));
+        meta_map.insert(
+            "max_tokens_per_turn".to_string(),
+            serde_json::json!(self.config.max_tokens_per_turn),
+        );
+        meta_map.insert(
+            "session_id".to_string(),
+            serde_json::json!(session_id.to_string()),
+        );
+        PromptResponse::new(StopReason::MaxTokens).meta(meta_map)
+    }
 }
 
 // Agent trait implementation moved to agent_trait_impl.rs
@@ -1057,19 +1933,37 @@ impl ClaudeAgent {
             request.tool_call.tool_call_id
         );
 
-        // ACP requires comprehensive permission system with user choice:
-        // 1. Multiple permission options: allow/reject with once/always variants
-        // 2. Permission persistence: Remember "always" decisions across sessions
-        // 3. Tool call integration: Block execution until permission granted
-        // 4. Cancellation support: Handle cancelled prompt turns gracefully
-        // 5. Context awareness: Generate appropriate options for different tools
-        //
-        // Advanced permissions provide user control while maintaining security.
-
-        // Parse session ID
         let session_id = self.parse_session_id(&request.session_id)?;
 
-        // Check if session is cancelled
+        if self.is_session_cancelled(&session_id).await {
+            return Ok(Self::cancelled_response());
+        }
+
+        let (tool_name, tool_args) = self
+            .extract_tool_info(&request.tool_call.tool_call_id)
+            .await;
+
+        let policy_result = match self.evaluate_permission_policy(&tool_name, &tool_args).await {
+            Ok(result) => result,
+            Err(_) => return Ok(Self::cancelled_response()),
+        };
+
+        let outcome = self
+            .resolve_permission_outcome(policy_result, &tool_name, &request)
+            .await;
+
+        let response = PermissionResponse { outcome };
+        tracing::info!(
+            "Permission request completed for session: {} with outcome: {:?}",
+            session_id,
+            response.outcome
+        );
+        self.log_response("request_permission", &response);
+        Ok(response)
+    }
+
+    /// Check if a session has been cancelled.
+    async fn is_session_cancelled(&self, session_id: &crate::session::SessionId) -> bool {
         if self
             .cancellation_manager
             .is_cancelled(&session_id.to_string())
@@ -1079,51 +1973,70 @@ impl ClaudeAgent {
                 "Session {} is cancelled, returning cancelled outcome",
                 session_id
             );
-            return Ok(PermissionResponse {
-                outcome: crate::tools::PermissionOutcome::Cancelled,
-            });
+            true
+        } else {
+            false
         }
+    }
 
-        // Extract tool name and arguments from the active tool call
-        let (tool_name, tool_args) = {
-            let tool_handler = self.tool_handler.read().await;
-            let active_calls = tool_handler.get_active_tool_calls().await;
+    /// Create a cancelled permission response.
+    fn cancelled_response() -> PermissionResponse {
+        PermissionResponse {
+            outcome: crate::tools::PermissionOutcome::Cancelled,
+        }
+    }
 
-            match active_calls.get(&request.tool_call.tool_call_id) {
-                Some(report) => {
-                    let name = report.tool_name.clone();
-                    let args = report
-                        .raw_input
-                        .clone()
-                        .unwrap_or_else(|| serde_json::json!({}));
-                    (name, args)
-                }
-                None => {
-                    tracing::warn!(
-                        "Tool call {} not found in active calls, using defaults",
-                        request.tool_call.tool_call_id
-                    );
-                    ("unknown_tool".to_string(), serde_json::json!({}))
-                }
+    /// Extract tool name and arguments from an active tool call.
+    async fn extract_tool_info(&self, tool_call_id: &str) -> (String, serde_json::Value) {
+        let tool_handler = self.tool_handler.read().await;
+        let active_calls = tool_handler.get_active_tool_calls().await;
+
+        match active_calls.get(tool_call_id) {
+            Some(report) => {
+                let name = report.tool_name.clone();
+                let args = report
+                    .raw_input
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                (name, args)
             }
-        };
+            None => {
+                tracing::warn!(
+                    "Tool call {} not found in active calls, using defaults",
+                    tool_call_id
+                );
+                ("unknown_tool".to_string(), serde_json::json!({}))
+            }
+        }
+    }
 
-        // Use permission policy engine to evaluate the tool call
-        let policy_result = match self
+    /// Evaluate the permission policy for a tool call.
+    async fn evaluate_permission_policy(
+        &self,
+        tool_name: &str,
+        tool_args: &serde_json::Value,
+    ) -> Result<PolicyEvaluation, ()> {
+        match self
             .permission_engine
-            .evaluate_tool_call(&tool_name, &tool_args)
+            .evaluate_tool_call(tool_name, tool_args)
             .await
         {
-            Ok(evaluation) => evaluation,
+            Ok(evaluation) => Ok(evaluation),
             Err(e) => {
                 tracing::error!("Permission policy evaluation failed: {}", e);
-                return Ok(PermissionResponse {
-                    outcome: crate::tools::PermissionOutcome::Cancelled,
-                });
+                Err(())
             }
-        };
+        }
+    }
 
-        let selected_outcome = match policy_result {
+    /// Resolve the permission outcome based on policy evaluation.
+    async fn resolve_permission_outcome(
+        &self,
+        policy_result: PolicyEvaluation,
+        tool_name: &str,
+        request: &PermissionRequest,
+    ) -> crate::tools::PermissionOutcome {
+        match policy_result {
             PolicyEvaluation::Allowed => {
                 tracing::info!("Tool '{}' allowed by policy", tool_name);
                 crate::tools::PermissionOutcome::Selected {
@@ -1137,146 +2050,171 @@ impl ClaudeAgent {
                 }
             }
             PolicyEvaluation::RequireUserConsent { options } => {
-                tracing::info!("Tool '{}' requires user consent", tool_name);
+                self.handle_user_consent_required(tool_name, request, options)
+                    .await
+            }
+        }
+    }
 
-                // If options were provided in request, use those; otherwise use policy-generated options
-                let permission_options: Vec<_> = if !request.options.is_empty() {
-                    request.options.clone()
-                } else {
-                    options.clone()
-                };
+    /// Handle the case where user consent is required for a tool call.
+    async fn handle_user_consent_required(
+        &self,
+        tool_name: &str,
+        request: &PermissionRequest,
+        policy_options: Vec<crate::tools::PermissionOption>,
+    ) -> crate::tools::PermissionOutcome {
+        tracing::info!("Tool '{}' requires user consent", tool_name);
 
-                // Check if there's a stored preference for this tool
-                if let Some(stored_kind) = self.permission_storage.get_preference(&tool_name).await
-                {
-                    let option_id = match stored_kind {
-                        crate::tools::PermissionOptionKind::AllowAlways => "allow-always",
-                        crate::tools::PermissionOptionKind::RejectAlways => "reject-always",
-                        _ => {
-                            tracing::warn!(
-                                "Unexpected stored permission kind: {}",
-                                Pretty(&stored_kind)
-                            );
-                            "allow-once"
-                        }
-                    };
+        let permission_options = if !request.options.is_empty() {
+            request.options.clone()
+        } else {
+            policy_options
+        };
 
-                    tracing::info!(
-                        "Using stored permission preference for '{}': {}",
-                        tool_name,
-                        option_id
-                    );
+        if let Some(outcome) = self.check_stored_preference(tool_name).await {
+            return outcome;
+        }
 
-                    return Ok(PermissionResponse {
-                        outcome: crate::tools::PermissionOutcome::Selected {
-                            option_id: option_id.to_string(),
-                        },
-                    });
-                }
+        self.request_client_permission(tool_name, request, &permission_options)
+            .await
+    }
 
-                // Send client/request_permission message via ACP connection
-                if let Some(ref client) = self.client {
-                    // Convert our internal types to ACP protocol types
-                    let acp_options: Vec<agent_client_protocol::PermissionOption> =
-                        permission_options
-                            .iter()
-                            .map(|opt| {
-                                let kind = match opt.kind {
-                                    crate::tools::PermissionOptionKind::AllowOnce => {
-                                        agent_client_protocol::PermissionOptionKind::AllowOnce
-                                    }
-                                    crate::tools::PermissionOptionKind::AllowAlways => {
-                                        agent_client_protocol::PermissionOptionKind::AllowAlways
-                                    }
-                                    crate::tools::PermissionOptionKind::RejectOnce => {
-                                        agent_client_protocol::PermissionOptionKind::RejectOnce
-                                    }
-                                    crate::tools::PermissionOptionKind::RejectAlways => {
-                                        agent_client_protocol::PermissionOptionKind::RejectAlways
-                                    }
-                                };
-                                agent_client_protocol::PermissionOption::new(
-                                    opt.option_id.clone(),
-                                    opt.name.clone(),
-                                    kind,
-                                )
-                            })
-                            .collect();
+    /// Check for a stored permission preference for a tool.
+    async fn check_stored_preference(
+        &self,
+        tool_name: &str,
+    ) -> Option<crate::tools::PermissionOutcome> {
+        let stored_kind = self.permission_storage.get_preference(tool_name).await?;
 
-                    let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
-                        agent_client_protocol::ToolCallId::new(
-                            request.tool_call.tool_call_id.as_str(),
-                        ),
-                        agent_client_protocol::ToolCallUpdateFields::new(),
-                    );
-
-                    let acp_request = agent_client_protocol::RequestPermissionRequest::new(
-                        request.session_id.clone(),
-                        tool_call_update,
-                        acp_options,
-                    );
-
-                    match client.request_permission(acp_request).await {
-                        Ok(response) => {
-                            // Convert ACP response back to our internal type
-                            match response.outcome {
-                                agent_client_protocol::RequestPermissionOutcome::Cancelled => {
-                                    crate::tools::PermissionOutcome::Cancelled
-                                }
-                                agent_client_protocol::RequestPermissionOutcome::Selected(
-                                    selected,
-                                ) => {
-                                    let option_id_str = selected.option_id.to_string();
-
-                                    // Store preference if it's an "always" decision
-                                    if let Some(option) = permission_options
-                                        .iter()
-                                        .find(|opt| opt.option_id == option_id_str)
-                                    {
-                                        self.permission_storage
-                                            .store_preference(&tool_name, option.kind.clone())
-                                            .await;
-                                    }
-
-                                    crate::tools::PermissionOutcome::Selected {
-                                        option_id: option_id_str,
-                                    }
-                                }
-                                _ => {
-                                    tracing::warn!(
-                                        "Unknown permission outcome, treating as cancelled"
-                                    );
-                                    crate::tools::PermissionOutcome::Cancelled
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to request permission from client: {}", e);
-                            crate::tools::PermissionOutcome::Cancelled
-                        }
-                    }
-                } else {
-                    tracing::warn!(
-                        "Permission required for tool '{}' but no client connection available",
-                        tool_name
-                    );
-                    crate::tools::PermissionOutcome::Cancelled
-                }
+        let option_id = match stored_kind {
+            crate::tools::PermissionOptionKind::AllowAlways => "allow-always",
+            crate::tools::PermissionOptionKind::RejectAlways => "reject-always",
+            _ => {
+                tracing::warn!("Unexpected stored permission kind: {}", Pretty(&stored_kind));
+                "allow-once"
             }
         };
 
-        let response = PermissionResponse {
-            outcome: selected_outcome,
-        };
-
         tracing::info!(
-            "Permission request completed for session: {} with outcome: {:?}",
-            session_id,
-            response.outcome
+            "Using stored permission preference for '{}': {}",
+            tool_name,
+            option_id
         );
 
-        self.log_response("request_permission", &response);
-        Ok(response)
+        Some(crate::tools::PermissionOutcome::Selected {
+            option_id: option_id.to_string(),
+        })
+    }
+
+    /// Request permission from the client via ACP.
+    async fn request_client_permission(
+        &self,
+        tool_name: &str,
+        request: &PermissionRequest,
+        permission_options: &[crate::tools::PermissionOption],
+    ) -> crate::tools::PermissionOutcome {
+        let Some(ref client) = self.client else {
+            tracing::warn!(
+                "Permission required for tool '{}' but no client connection available",
+                tool_name
+            );
+            return crate::tools::PermissionOutcome::Cancelled;
+        };
+
+        let acp_options = Self::convert_to_acp_options(permission_options);
+        let acp_request = self.build_acp_permission_request(request, acp_options);
+
+        match client.request_permission(acp_request).await {
+            Ok(response) => {
+                self.process_acp_permission_response(response, tool_name, permission_options)
+                    .await
+            }
+            Err(e) => {
+                tracing::error!("Failed to request permission from client: {}", e);
+                crate::tools::PermissionOutcome::Cancelled
+            }
+        }
+    }
+
+    /// Convert internal permission options to ACP protocol types.
+    fn convert_to_acp_options(
+        options: &[crate::tools::PermissionOption],
+    ) -> Vec<agent_client_protocol::PermissionOption> {
+        options
+            .iter()
+            .map(|opt| {
+                let kind = match opt.kind {
+                    crate::tools::PermissionOptionKind::AllowOnce => {
+                        agent_client_protocol::PermissionOptionKind::AllowOnce
+                    }
+                    crate::tools::PermissionOptionKind::AllowAlways => {
+                        agent_client_protocol::PermissionOptionKind::AllowAlways
+                    }
+                    crate::tools::PermissionOptionKind::RejectOnce => {
+                        agent_client_protocol::PermissionOptionKind::RejectOnce
+                    }
+                    crate::tools::PermissionOptionKind::RejectAlways => {
+                        agent_client_protocol::PermissionOptionKind::RejectAlways
+                    }
+                };
+                agent_client_protocol::PermissionOption::new(
+                    opt.option_id.clone(),
+                    opt.name.clone(),
+                    kind,
+                )
+            })
+            .collect()
+    }
+
+    /// Build an ACP permission request from the internal request.
+    fn build_acp_permission_request(
+        &self,
+        request: &PermissionRequest,
+        acp_options: Vec<agent_client_protocol::PermissionOption>,
+    ) -> agent_client_protocol::RequestPermissionRequest {
+        let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
+            agent_client_protocol::ToolCallId::new(request.tool_call.tool_call_id.as_str()),
+            agent_client_protocol::ToolCallUpdateFields::new(),
+        );
+        agent_client_protocol::RequestPermissionRequest::new(
+            request.session_id.clone(),
+            tool_call_update,
+            acp_options,
+        )
+    }
+
+    /// Process the ACP permission response and store preferences if needed.
+    async fn process_acp_permission_response(
+        &self,
+        response: agent_client_protocol::RequestPermissionResponse,
+        tool_name: &str,
+        permission_options: &[crate::tools::PermissionOption],
+    ) -> crate::tools::PermissionOutcome {
+        match response.outcome {
+            agent_client_protocol::RequestPermissionOutcome::Cancelled => {
+                crate::tools::PermissionOutcome::Cancelled
+            }
+            agent_client_protocol::RequestPermissionOutcome::Selected(selected) => {
+                let option_id_str = selected.option_id.to_string();
+
+                if let Some(option) = permission_options
+                    .iter()
+                    .find(|opt| opt.option_id == option_id_str)
+                {
+                    self.permission_storage
+                        .store_preference(tool_name, option.kind.clone())
+                        .await;
+                }
+
+                crate::tools::PermissionOutcome::Selected {
+                    option_id: option_id_str,
+                }
+            }
+            _ => {
+                tracing::warn!("Unknown permission outcome, treating as cancelled");
+                crate::tools::PermissionOutcome::Cancelled
+            }
+        }
     }
 
     // File operation handlers (handle_read_text_file, handle_write_text_file, etc.)

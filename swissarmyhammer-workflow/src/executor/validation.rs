@@ -55,7 +55,7 @@
 //! ```rust,no_run
 //! # use std::collections::HashMap;
 //! # use serde_json::Value;
-//! # use swissarmyhammer::workflow::{TransitionCondition, ConditionType, WorkflowExecutor};
+//! # use swissarmyhammer_workflow::executor::validation::{TransitionCondition, ConditionType};
 //! # let mut executor = WorkflowExecutor::new();
 //! # let context = HashMap::<String, Value>::new();
 //! // Simple condition evaluation

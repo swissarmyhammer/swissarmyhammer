@@ -9,13 +9,16 @@ use crate::error::ValidationError;
 /// Context passed through the chain for state sharing between links.
 #[derive(Debug, Default)]
 pub struct ChainContext {
-    /// Arbitrary state storage for passing data between links.
+    /// Key-value store for passing arbitrary typed data between chain links.
+    /// Links can use `set()` and `get()` to share state during processing.
     state: HashMap<String, serde_json::Value>,
 
-    /// Accumulated validation errors.
+    /// Validation errors accumulated during chain processing.
+    /// Links can add errors via `add_validation_error()`.
     validation_errors: Vec<ValidationError>,
 
-    /// Exit code to use (can be modified by links).
+    /// Process exit code, defaulting to 0. Links can modify this via `set_exit_code()`
+    /// to signal specific outcomes (e.g., validator blocking uses exit code 2).
     exit_code: i32,
 }
 
@@ -107,10 +110,12 @@ mod tests {
 
     #[test]
     fn test_context_exit_code() {
+        use crate::chain::VALIDATOR_BLOCK_EXIT_CODE;
+
         let mut ctx = ChainContext::new();
         assert_eq!(ctx.exit_code(), 0);
 
-        ctx.set_exit_code(2);
-        assert_eq!(ctx.exit_code(), 2);
+        ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
+        assert_eq!(ctx.exit_code(), VALIDATOR_BLOCK_EXIT_CODE);
     }
 }

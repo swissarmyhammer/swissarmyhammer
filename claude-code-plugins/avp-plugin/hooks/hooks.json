@@ -65,7 +65,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "avp"
+            "command": "avp",
+            "timeout": 1200
           }
         ]
       }

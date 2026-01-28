@@ -8,6 +8,5 @@
   },
   "repository": "https://github.com/wballard/swissarmyhammer",
   "license": "MIT OR Apache-2.0",
-  "keywords": ["hooks", "validation", "avp", "agent-validator-protocol"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["hooks", "validation", "avp", "agent-validator-protocol"]
 }

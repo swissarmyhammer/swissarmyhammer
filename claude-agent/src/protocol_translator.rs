@@ -58,89 +58,95 @@ impl ProtocolTranslator {
     /// # Errors
     /// Returns error if content contains unsupported types (audio, resources), or if serialization fails
     pub fn acp_to_stream_json(&self, content: Vec<ContentBlock>) -> Result<String> {
-        // Check if all content is text-only for simple format
-        let all_text = content
-            .iter()
-            .all(|block| matches!(block, ContentBlock::Text(_)));
-
-        if all_text && content.len() == 1 {
-            // Use simple string format for single text block (backward compatible)
+        if Self::is_single_text_block(&content) {
             if let ContentBlock::Text(text_content) = &content[0] {
-                let message = StreamJsonUserMessage {
-                    r#type: "user".to_string(),
-                    message: UserMessage {
-                        role: "user".to_string(),
-                        content: UserMessageContent::String(text_content.text.clone()),
-                    },
-                };
-                return serde_json::to_string(&message).map_err(|e| {
-                    AgentError::Internal(format!("Failed to serialize stream-json message: {}", e))
-                });
+                return self.serialize_simple_text_message(&text_content.text);
             }
         }
 
-        // Use content array format for complex content
-        let mut content_items = Vec::new();
+        let content_items = self.convert_content_blocks_to_items(content)?;
+        self.serialize_array_message(content_items)
+    }
+
+    /// Check if content is a single text block (for simple format).
+    fn is_single_text_block(content: &[ContentBlock]) -> bool {
+        content.len() == 1 && matches!(content.first(), Some(ContentBlock::Text(_)))
+    }
+
+    /// Serialize a simple text message to stream-json.
+    fn serialize_simple_text_message(&self, text: &str) -> Result<String> {
+        let message = StreamJsonUserMessage {
+            r#type: "user".to_string(),
+            message: UserMessage {
+                role: "user".to_string(),
+                content: UserMessageContent::String(text.to_string()),
+            },
+        };
+        serde_json::to_string(&message).map_err(|e| {
+            AgentError::Internal(format!("Failed to serialize stream-json message: {}", e))
+        })
+    }
+
+    /// Convert content blocks to user content items.
+    fn convert_content_blocks_to_items(
+        &self,
+        content: Vec<ContentBlock>,
+    ) -> Result<Vec<UserContentItem>> {
+        let mut items = Vec::new();
         for block in content {
-            match block {
-                ContentBlock::Text(text_content) => {
-                    content_items.push(UserContentItem::Text {
-                        text: text_content.text,
-                    });
-                }
-                ContentBlock::Image(image_content) => {
-                    content_items.push(UserContentItem::Image {
-                        source: ImageSource {
-                            source_type: "base64".to_string(),
-                            media_type: image_content.mime_type,
-                            data: image_content.data,
-                        },
-                    });
-                }
-                ContentBlock::Audio(_) => {
-                    return Err(AgentError::Internal(
-                        "Audio content blocks are not yet supported".to_string(),
-                    ));
-                }
-                ContentBlock::Resource(resource_content) => {
-                    // EmbeddedResource contains either text or blob content
-                    // For now, we'll extract text content and convert to a text block
-                    // TODO: Support proper document block format when Claude CLI supports it
-                    use agent_client_protocol::EmbeddedResourceResource;
-
-                    let text_content = match &resource_content.resource {
-                        EmbeddedResourceResource::TextResourceContents(text_resource) => {
-                            format!("Resource ({}): {}", text_resource.uri, text_resource.text)
-                        }
-                        EmbeddedResourceResource::BlobResourceContents(blob_resource) => {
-                            format!(
-                                "Resource ({}): [binary data, {} bytes]",
-                                blob_resource.uri,
-                                blob_resource.blob.len()
-                            )
-                        }
-                        _ => {
-                            // Unknown or unsupported resource type
-                            "Resource: [unsupported type]".to_string()
-                        }
-                    };
-
-                    content_items.push(UserContentItem::Text { text: text_content });
-                }
-                ContentBlock::ResourceLink(resource_link) => {
-                    content_items.push(UserContentItem::ResourceLink {
-                        uri: resource_link.uri.clone(),
-                        name: resource_link.name.clone(),
-                    });
-                }
-                _ => {
-                    return Err(AgentError::Internal(
-                        "Unknown content block type".to_string(),
-                    ));
-                }
-            }
+            items.push(self.convert_block_to_item(block)?);
         }
+        Ok(items)
+    }
 
+    /// Convert a single content block to a user content item.
+    fn convert_block_to_item(&self, block: ContentBlock) -> Result<UserContentItem> {
+        match block {
+            ContentBlock::Text(text) => Ok(UserContentItem::Text { text: text.text }),
+            ContentBlock::Image(img) => Ok(UserContentItem::Image {
+                source: ImageSource {
+                    source_type: "base64".to_string(),
+                    media_type: img.mime_type,
+                    data: img.data,
+                },
+            }),
+            ContentBlock::Audio(_) => Err(AgentError::Internal(
+                "Audio content blocks are not yet supported".to_string(),
+            )),
+            ContentBlock::Resource(res) => Ok(self.convert_resource_to_text_item(&res)),
+            ContentBlock::ResourceLink(link) => Ok(UserContentItem::ResourceLink {
+                uri: link.uri.clone(),
+                name: link.name.clone(),
+            }),
+            _ => Err(AgentError::Internal("Unknown content block type".to_string())),
+        }
+    }
+
+    /// Convert a resource content block to a text item.
+    fn convert_resource_to_text_item(
+        &self,
+        resource: &agent_client_protocol::EmbeddedResource,
+    ) -> UserContentItem {
+        use agent_client_protocol::EmbeddedResourceResource;
+
+        let text = match &resource.resource {
+            EmbeddedResourceResource::TextResourceContents(text_res) => {
+                format!("Resource ({}): {}", text_res.uri, text_res.text)
+            }
+            EmbeddedResourceResource::BlobResourceContents(blob_res) => {
+                format!(
+                    "Resource ({}): [binary data, {} bytes]",
+                    blob_res.uri,
+                    blob_res.blob.len()
+                )
+            }
+            _ => "Resource: [unsupported type]".to_string(),
+        };
+        UserContentItem::Text { text }
+    }
+
+    /// Serialize array message to stream-json.
+    fn serialize_array_message(&self, content_items: Vec<UserContentItem>) -> Result<String> {
         let message = StreamJsonUserMessage {
             r#type: "user".to_string(),
             message: UserMessage {
@@ -148,7 +154,6 @@ impl ProtocolTranslator {
                 content: UserMessageContent::Array(content_items),
             },
         };
-
         serde_json::to_string(&message).map_err(|e| {
             AgentError::Internal(format!("Failed to serialize stream-json message: {}", e))
         })
@@ -174,543 +179,535 @@ impl ProtocolTranslator {
         line: &str,
         session_id: &SessionId,
     ) -> Result<Option<SessionNotification>> {
-        // Parse the JSON line
         let parsed: JsonValue = serde_json::from_str(line).map_err(|e| {
-            let truncated_line: String = line.chars().take(100).collect();
-            AgentError::Internal(format!(
-                "Malformed JSON: {}. Line: {}...",
-                e, truncated_line
-            ))
+            AgentError::Internal(format!("Malformed JSON: {}. Line: {}", e, line))
         })?;
 
-        // Check the message type
         let msg_type = parsed.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
             AgentError::Internal("Missing 'type' field in stream-json".to_string())
         })?;
 
         match msg_type {
-            "assistant" => {
-                // Extract content array directly from JSON to avoid cloning entire message
-                let content_array = parsed
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_array())
-                    .ok_or_else(|| {
-                        AgentError::Internal(
-                            "Missing content array in assistant message".to_string(),
-                        )
-                    })?;
-
-                // Check first content item
-                if let Some(first_item) = content_array.first() {
-                    let item_type = first_item.get("type").and_then(|t| t.as_str());
-
-                    match item_type {
-                        Some("tool_use") => {
-                            let id =
-                                first_item
-                                    .get("id")
-                                    .and_then(|i| i.as_str())
-                                    .ok_or_else(|| {
-                                        AgentError::Internal("Missing id in tool_use".to_string())
-                                    })?;
-                            let name = first_item.get("name").and_then(|n| n.as_str()).ok_or_else(
-                                || AgentError::Internal("Missing name in tool_use".to_string()),
-                            )?;
-                            let input = first_item.get("input").ok_or_else(|| {
-                                AgentError::Internal("Missing input in tool_use".to_string())
-                            })?;
-                            // Found tool_use - emit ToolCall event
-                            tracing::debug!("🔧 ASSISTANT tool_use: {} ({})", name, id);
-
-                            use agent_client_protocol::{ToolCall, ToolCallId, ToolCallStatus};
-
-                            // Evaluate tool call permissions
-                            let policy_evaluation = self
-                                .permission_engine
-                                .evaluate_tool_call(name, input)
-                                .await?;
-
-                            use crate::permissions::PolicyEvaluation;
-
-                            // Determine status and metadata based on policy evaluation
-                            let (status, meta) = match policy_evaluation {
-                                PolicyEvaluation::Allowed => {
-                                    tracing::debug!("Tool call '{}' allowed by policy", name);
-                                    (ToolCallStatus::Pending, None)
-                                }
-                                PolicyEvaluation::Denied { reason } => {
-                                    tracing::warn!(
-                                        "Tool call '{}' denied by policy: {}",
-                                        name,
-                                        reason
-                                    );
-                                    let mut map = serde_json::Map::new();
-                                    map.insert(
-                                        "permission_denied".to_string(),
-                                        serde_json::json!(true),
-                                    );
-                                    map.insert("reason".to_string(), serde_json::json!(reason));
-                                    (ToolCallStatus::Failed, Some(map))
-                                }
-                                PolicyEvaluation::RequireUserConsent { options } => {
-                                    tracing::debug!("Tool call '{}' requires user consent", name);
-                                    let mut map = serde_json::Map::new();
-                                    map.insert(
-                                        "requires_permission".to_string(),
-                                        serde_json::json!(true),
-                                    );
-                                    map.insert(
-                                        "permission_options".to_string(),
-                                        serde_json::json!(options),
-                                    );
-                                    (ToolCallStatus::Pending, Some(map))
-                                }
-                            };
-
-                            let tool_call = ToolCall::new(ToolCallId::new(id), name)
-                                .kind(Self::infer_tool_kind(name))
-                                .status(status)
-                                .raw_input(Some(input.clone()));
-
-                            let tool_call = if let Some(meta_map) = meta {
-                                tool_call.meta(meta_map)
-                            } else {
-                                tool_call
-                            };
-
-                            return Ok(Some(SessionNotification::new(
-                                session_id.clone(),
-                                SessionUpdate::ToolCall(tool_call),
-                            )));
-                        }
-                        Some("text") => {
-                            let text = first_item.get("text").and_then(|t| t.as_str()).ok_or_else(
-                                || AgentError::Internal("Missing text in text content".to_string()),
-                            )?;
-
-                            // Text content - emit as AgentMessageChunk
-                            // Note: This may duplicate stream_event chunks when --include-partial-messages is used
-                            // Higher-level code (in claude.rs) must filter duplicates based on streaming state
-                            tracing::debug!("📨 ASSISTANT text: {} chars", text.len());
-                            let text_content = TextContent::new(text.to_string());
-                            let content_block = ContentBlock::Text(text_content);
-                            let content_chunk =
-                                agent_client_protocol::ContentChunk::new(content_block);
-                            return Ok(Some(SessionNotification::new(
-                                session_id.clone(),
-                                SessionUpdate::AgentMessageChunk(content_chunk),
-                            )));
-                        }
-                        _ => {
-                            // Unknown or missing content type
-                        }
-                    }
-                }
-
-                // No content or empty content
-                Ok(None)
-            }
-            "user" => {
-                tracing::debug!("📥 USER message received, checking for tool_result");
-
-                // Check if this is a tool_result message (Claude reporting tool completion)
-                if let Some(message) = parsed.get("message") {
-                    tracing::debug!("  Has message field");
-                    if let Some(content_array) = message.get("content").and_then(|c| c.as_array()) {
-                        tracing::debug!("  Has content array with {} items", content_array.len());
-                        for content_item in content_array {
-                            tracing::debug!(
-                                "    Content item type: {:?}",
-                                content_item.get("type")
-                            );
-                            if content_item.get("type").and_then(|t| t.as_str())
-                                == Some("tool_result")
-                            {
-                                // This is a tool completion!
-                                tracing::trace!("🎯 TOOL_RESULT detected!");
-                                if let Some(tool_use_id) =
-                                    content_item.get("tool_use_id").and_then(|id| id.as_str())
-                                {
-                                    tracing::trace!("🎯 TOOL_RESULT for tool_id: {}", tool_use_id);
-
-                                    // Extract content from tool_result
-                                    // The content field can be either a string or an array of content blocks
-                                    let tool_content = if let Some(content_value) =
-                                        content_item.get("content")
-                                    {
-                                        if let Some(content_str) = content_value.as_str() {
-                                            // Simple string content (legacy format)
-                                            Some(vec![
-                                                agent_client_protocol::ToolCallContent::Content(
-                                                    agent_client_protocol::Content::new(
-                                                        ContentBlock::Text(TextContent::new(
-                                                            content_str.to_string(),
-                                                        )),
-                                                    ),
-                                                ),
-                                            ])
-                                        } else if let Some(content_array) = content_value.as_array()
-                                        {
-                                            // Array of content blocks (current format)
-                                            let mut result = Vec::new();
-                                            for item in content_array {
-                                                if let Some(item_type) =
-                                                    item.get("type").and_then(|t| t.as_str())
-                                                {
-                                                    match item_type {
-                                                        "text" => {
-                                                            if let Some(text) = item
-                                                                .get("text")
-                                                                .and_then(|t| t.as_str())
-                                                            {
-                                                                result.push(
-                                                                    agent_client_protocol::ToolCallContent::Content(
-                                                                        agent_client_protocol::Content::new(
-                                                                            ContentBlock::Text(TextContent::new(text.to_string()))
-                                                                        )
-                                                                    ),
-                                                                );
-                                                            }
-                                                        }
-                                                        _ => {
-                                                            tracing::debug!("Unknown tool_result content type: {}", item_type);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            if !result.is_empty() {
-                                                Some(result)
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    };
-
-                                    // Emit ToolCallUpdate(Completed) with content
-                                    use agent_client_protocol::{
-                                        ToolCallId, ToolCallStatus, ToolCallUpdate,
-                                        ToolCallUpdateFields,
-                                    };
-
-                                    let mut fields = ToolCallUpdateFields::new()
-                                        .status(ToolCallStatus::Completed);
-                                    if let Some(content) = tool_content {
-                                        fields = fields.content(content);
-                                    }
-                                    let tool_call_update =
-                                        ToolCallUpdate::new(ToolCallId::new(tool_use_id), fields);
-                                    return Ok(Some(SessionNotification::new(
-                                        session_id.clone(),
-                                        SessionUpdate::ToolCallUpdate(tool_call_update),
-                                    )));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // User messages from keepalive pings should be filtered.
-                // We send empty user messages periodically to force the claude CLI to flush
-                // its stdout buffer (solving a buffering bug), but these should not be
-                // forwarded to clients.
-                tracing::debug!("Received user message (keepalive ping or already processed tool_result, filtered)");
-                Ok(None)
-            }
-            "system" => {
-                // Check for init subtype with slash_commands
-                if let Some(subtype) = parsed.get("subtype").and_then(|v| v.as_str()) {
-                    if subtype == "init" {
-                        tracing::debug!("Received system init message");
-
-                        // Extract current_agent if present
-                        let current_agent = parsed
-                            .get("current_agent")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-
-                        // Extract agents array for mode support
-                        // Claude CLI provides "agents": ["general-purpose", "Explore", "Plan", ...]
-                        let available_agents =
-                            parsed
-                                .get("agents")
-                                .and_then(|v| v.as_array())
-                                .map(|agents| {
-                                    agents
-                                        .iter()
-                                        .filter_map(|agent| {
-                                            let id = agent.as_str()?;
-                                            // Create human-readable name from ID
-                                            // e.g., "general-purpose" -> "General Purpose"
-                                            let name = id
-                                                .split('-')
-                                                .map(|word| {
-                                                    let mut chars = word.chars();
-                                                    match chars.next() {
-                                                        None => String::new(),
-                                                        Some(first) => {
-                                                            first.to_uppercase().collect::<String>()
-                                                                + chars.as_str()
-                                                        }
-                                                    }
-                                                })
-                                                .collect::<Vec<_>>()
-                                                .join(" ");
-
-                                            Some((id.to_string(), name, None::<String>))
-                                        })
-                                        .collect::<Vec<_>>()
-                                });
-
-                        if let Some(agents) = &available_agents {
-                            tracing::info!(
-                                "Claude CLI provided {} agents: {:?}",
-                                agents.len(),
-                                agents
-                                    .iter()
-                                    .map(|(id, name, _)| format!("{}:{}", id, name))
-                                    .collect::<Vec<_>>()
-                            );
-                        }
-
-                        // Extract slash_commands array
-                        if let Some(slash_commands) =
-                            parsed.get("slash_commands").and_then(|v| v.as_array())
-                        {
-                            let command_names: Vec<String> = slash_commands
-                                .iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                .collect();
-
-                            tracing::info!(
-                                "Claude CLI provided {} slash commands: {:?}",
-                                command_names.len(),
-                                command_names
-                            );
-
-                            // Convert to AvailableCommands
-                            let available_commands: Vec<agent_client_protocol::AvailableCommand> =
-                                command_names
-                                    .into_iter()
-                                    .map(|cmd_name| {
-                                        let (category, description) = if cmd_name
-                                            .starts_with("mcp__sah__")
-                                        {
-                                            (
-                                                "mcp_prompt",
-                                                format!(
-                                                    "SAH: {}",
-                                                    cmd_name.strip_prefix("mcp__sah__").unwrap()
-                                                ),
-                                            )
-                                        } else if cmd_name.starts_with("mcp__") {
-                                            ("mcp_prompt", format!("MCP: {}", cmd_name))
-                                        } else {
-                                            ("claude_builtin", format!("Claude: {}", cmd_name))
-                                        };
-
-                                        {
-                                            let mut meta_map = serde_json::Map::new();
-                                            meta_map.insert(
-                                                "source".to_string(),
-                                                serde_json::json!("claude_cli"),
-                                            );
-                                            meta_map.insert(
-                                                "category".to_string(),
-                                                serde_json::json!(category),
-                                            );
-                                            agent_client_protocol::AvailableCommand::new(
-                                                cmd_name,
-                                                description,
-                                            )
-                                            .meta(meta_map)
-                                        }
-                                    })
-                                    .collect();
-
-                            // Store available_agents in session-level state if present
-                            // Note: These will be retrieved by the agent during new_session
-                            // to include in the NewSessionResponse
-
-                            // Return AvailableCommandsUpdate notification
-                            let commands_update =
-                                agent_client_protocol::AvailableCommandsUpdate::new(
-                                    available_commands,
-                                );
-                            let mut meta_map = serde_json::Map::new();
-                            meta_map
-                                .insert("source".to_string(), serde_json::json!("claude_cli_init"));
-
-                            // Add available_agents to metadata if present
-                            if let Some(agents) = available_agents {
-                                meta_map.insert(
-                                    "available_agents".to_string(),
-                                    serde_json::json!(agents),
-                                );
-                            }
-
-                            // Add current_agent to metadata if present
-                            if let Some(current) = current_agent {
-                                meta_map.insert(
-                                    "current_agent".to_string(),
-                                    serde_json::json!(current),
-                                );
-                            }
-
-                            return Ok(Some(
-                                SessionNotification::new(
-                                    session_id.clone(),
-                                    SessionUpdate::AvailableCommandsUpdate(commands_update),
-                                )
-                                .meta(meta_map),
-                            ));
-                        }
-                    }
-                }
-
-                // Other system messages are still metadata only
-                tracing::debug!("Received system message (metadata only)");
-                Ok(None)
-            }
+            "assistant" => self.handle_assistant_message(&parsed, session_id).await,
+            "user" => self.handle_user_message(&parsed, session_id),
+            "system" => self.handle_system_message(&parsed, session_id),
             "result" => {
-                // Result messages are metadata only, don't notify
                 tracing::debug!("Received result message (metadata only)");
                 Ok(None)
             }
-            "stream_event" => {
-                // Stream events contain partial message chunks (when --include-partial-messages is used)
-                // Handle both content_block_delta (for text) and content_block_start (for tool_use)
-                if let Some(event) = parsed.get("event") {
-                    if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
-                        match event_type {
-                            "content_block_delta" => {
-                                // Check for text delta first
-                                if let Some(text) = event
-                                    .get("delta")
-                                    .and_then(|d| d.get("text"))
-                                    .and_then(|t| t.as_str())
-                                {
-                                    // Extract content block index for positional buffering
-                                    let content_block_index =
-                                        event.get("index").and_then(|i| i.as_u64());
-
-                                    tracing::trace!(
-                                        "📨 STREAM_EVENT chunk: index={:?}, {} chars: '{}'",
-                                        content_block_index,
-                                        text.len(),
-                                        text.chars().take(50).collect::<String>()
-                                    );
-                                    let text_content = TextContent::new(text.to_string());
-                                    let content_block = ContentBlock::Text(text_content);
-                                    let content_chunk =
-                                        agent_client_protocol::ContentChunk::new(content_block);
-
-                                    // Include content block index in notification meta
-                                    // for positional buffer handling in tracing/display
-                                    let mut notification = SessionNotification::new(
-                                        session_id.clone(),
-                                        SessionUpdate::AgentMessageChunk(content_chunk),
-                                    );
-                                    if let Some(idx) = content_block_index {
-                                        let mut meta = serde_json::Map::new();
-                                        meta.insert(
-                                            "content_block_index".to_string(),
-                                            serde_json::json!(idx),
-                                        );
-                                        meta.insert(
-                                            "source".to_string(),
-                                            serde_json::json!("stream_event"),
-                                        );
-                                        notification = notification.meta(meta);
-                                    }
-                                    return Ok(Some(notification));
-                                }
-
-                                // Check for input_json_delta (tool call input chunks)
-                                if let Some(delta) = event.get("delta") {
-                                    if let Some(input_json_delta) =
-                                        delta.get("input_json_delta").and_then(|d| d.as_str())
-                                    {
-                                        // Get the tool call index to map to tool_use_id
-                                        // Note: The index field tells us which content block this delta belongs to
-                                        if let Some(index) =
-                                            event.get("index").and_then(|i| i.as_u64())
-                                        {
-                                            tracing::trace!(
-                                                "🔧 STREAM_EVENT input_json_delta: index={}, {} chars",
-                                                index,
-                                                input_json_delta.len()
-                                            );
-
-                                            // We need to track the tool_use_id for this index
-                                            // For now, we'll just log this - we need to maintain state
-                                            // to map content block indices to tool_use_ids
-                                            // This will be handled by accumulating chunks in claude.rs
-                                            tracing::debug!(
-                                                "Tool input chunk received for content block {}: '{}'",
-                                                index,
-                                                input_json_delta
-                                            );
-
-                                            // Return None for now - we'll handle accumulation at a higher level
-                                            // The full tool call will come in the assistant message
-                                            return Ok(None);
-                                        }
-                                    }
-                                }
-                            }
-                            "content_block_start" => {
-                                // Check if this is a tool_use content block
-                                if let Some(content_block) = event.get("content_block") {
-                                    if let Some(block_type) =
-                                        content_block.get("type").and_then(|t| t.as_str())
-                                    {
-                                        if block_type == "tool_use" {
-                                            // Extract tool call information from content_block_start
-                                            let id = content_block
-                                                .get("id")
-                                                .and_then(|i| i.as_str())
-                                                .unwrap_or("");
-                                            let name = content_block
-                                                .get("name")
-                                                .and_then(|n| n.as_str())
-                                                .unwrap_or("");
-
-                                            tracing::debug!(
-                                                "🔧 STREAM_EVENT tool_use start: {} ({})",
-                                                name,
-                                                id
-                                            );
-
-                                            // Note: At content_block_start, the input is empty {}
-                                            // We'll get the actual input via content_block_delta events with input_json_delta
-                                            // For now, we emit the tool call with empty input and rely on the assistant message
-                                            // to provide the complete tool call with full input.
-
-                                            // Actually, let's NOT emit here - we'll let the assistant message handle it
-                                            // since it has the complete input. This avoids duplicate tool calls.
-                                            return Ok(None);
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                // Ignore other stream_event types (message_start, message_stop, etc.)
-                tracing::trace!("Received stream_event (ignored)");
-                Ok(None)
-            }
+            "stream_event" => self.handle_stream_event(&parsed, session_id),
             _ => {
                 tracing::warn!("Unknown stream-json message type: {}", msg_type);
                 Ok(None)
             }
         }
+    }
+
+    /// Handle assistant message type.
+    async fn handle_assistant_message(
+        &self,
+        parsed: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        let content_array = parsed
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .ok_or_else(|| {
+                AgentError::Internal("Missing content array in assistant message".to_string())
+            })?;
+
+        if let Some(first_item) = content_array.first() {
+            let item_type = first_item.get("type").and_then(|t| t.as_str());
+
+            match item_type {
+                Some("tool_use") => {
+                    return self.handle_tool_use(first_item, session_id).await;
+                }
+                Some("text") => {
+                    return self.handle_assistant_text(first_item, session_id);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Handle tool_use content in assistant message.
+    async fn handle_tool_use(
+        &self,
+        item: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        use agent_client_protocol::{ToolCall, ToolCallId};
+
+        let id = item.get("id").and_then(|i| i.as_str()).ok_or_else(|| {
+            AgentError::Internal("Missing id in tool_use".to_string())
+        })?;
+        let name = item.get("name").and_then(|n| n.as_str()).ok_or_else(|| {
+            AgentError::Internal("Missing name in tool_use".to_string())
+        })?;
+        let input = item.get("input").ok_or_else(|| {
+            AgentError::Internal("Missing input in tool_use".to_string())
+        })?;
+
+        tracing::debug!("🔧 ASSISTANT tool_use: {} ({})", name, id);
+
+        let policy_evaluation = self.permission_engine.evaluate_tool_call(name, input).await?;
+        let (status, meta) = self.evaluate_tool_policy(name, policy_evaluation);
+
+        let tool_call = ToolCall::new(ToolCallId::new(id), name)
+            .kind(Self::infer_tool_kind(name))
+            .status(status)
+            .raw_input(Some(input.clone()));
+
+        let tool_call = if let Some(meta_map) = meta {
+            tool_call.meta(meta_map)
+        } else {
+            tool_call
+        };
+
+        Ok(Some(SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::ToolCall(tool_call),
+        )))
+    }
+
+    /// Evaluate tool call policy and return status and metadata.
+    fn evaluate_tool_policy(
+        &self,
+        name: &str,
+        policy_evaluation: crate::permissions::PolicyEvaluation,
+    ) -> (agent_client_protocol::ToolCallStatus, Option<serde_json::Map<String, JsonValue>>) {
+        use agent_client_protocol::ToolCallStatus;
+        use crate::permissions::PolicyEvaluation;
+
+        match policy_evaluation {
+            PolicyEvaluation::Allowed => {
+                tracing::debug!("Tool call '{}' allowed by policy", name);
+                (ToolCallStatus::Pending, None)
+            }
+            PolicyEvaluation::Denied { reason } => {
+                tracing::warn!("Tool call '{}' denied by policy: {}", name, reason);
+                let mut map = serde_json::Map::new();
+                map.insert("permission_denied".to_string(), serde_json::json!(true));
+                map.insert("reason".to_string(), serde_json::json!(reason));
+                (ToolCallStatus::Failed, Some(map))
+            }
+            PolicyEvaluation::RequireUserConsent { options } => {
+                tracing::debug!("Tool call '{}' requires user consent", name);
+                let mut map = serde_json::Map::new();
+                map.insert("requires_permission".to_string(), serde_json::json!(true));
+                map.insert("permission_options".to_string(), serde_json::json!(options));
+                (ToolCallStatus::Pending, Some(map))
+            }
+        }
+    }
+
+    /// Handle text content in assistant message.
+    fn handle_assistant_text(
+        &self,
+        item: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        let text = item.get("text").and_then(|t| t.as_str()).ok_or_else(|| {
+            AgentError::Internal("Missing text in text content".to_string())
+        })?;
+
+        tracing::debug!("📨 ASSISTANT text: {} chars", text.len());
+        let text_content = TextContent::new(text.to_string());
+        let content_block = ContentBlock::Text(text_content);
+        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+
+        Ok(Some(SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::AgentMessageChunk(content_chunk),
+        )))
+    }
+
+    /// Handle user message type.
+    fn handle_user_message(
+        &self,
+        parsed: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        tracing::debug!("📥 USER message received, checking for tool_result");
+
+        if let Some(message) = parsed.get("message") {
+            if let Some(content_array) = message.get("content").and_then(|c| c.as_array()) {
+                for content_item in content_array {
+                    if let Some(notification) =
+                        self.try_handle_tool_result(content_item, session_id)?
+                    {
+                        return Ok(Some(notification));
+                    }
+                }
+            }
+        }
+
+        tracing::debug!("Received user message (keepalive ping or filtered)");
+        Ok(None)
+    }
+
+    /// Try to handle a tool_result content item.
+    fn try_handle_tool_result(
+        &self,
+        content_item: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        if content_item.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+            return Ok(None);
+        }
+
+        let tool_use_id = match content_item.get("tool_use_id").and_then(|id| id.as_str()) {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        tracing::trace!("🎯 TOOL_RESULT for tool_id: {}", tool_use_id);
+
+        let tool_content = self.extract_tool_result_content(content_item);
+
+        use agent_client_protocol::{ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
+
+        let mut fields = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        if let Some(content) = tool_content {
+            fields = fields.content(content);
+        }
+
+        let tool_call_update = ToolCallUpdate::new(ToolCallId::new(tool_use_id), fields);
+        Ok(Some(SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::ToolCallUpdate(tool_call_update),
+        )))
+    }
+
+    /// Extract content from tool_result (string or array format).
+    fn extract_tool_result_content(
+        &self,
+        content_item: &JsonValue,
+    ) -> Option<Vec<agent_client_protocol::ToolCallContent>> {
+        let content_value = content_item.get("content")?;
+
+        if let Some(content_str) = content_value.as_str() {
+            return Some(vec![agent_client_protocol::ToolCallContent::Content(
+                agent_client_protocol::Content::new(ContentBlock::Text(TextContent::new(
+                    content_str.to_string(),
+                ))),
+            )]);
+        }
+
+        if let Some(content_array) = content_value.as_array() {
+            let result: Vec<_> = content_array
+                .iter()
+                .filter_map(|item| self.parse_tool_content_item(item))
+                .collect();
+
+            if !result.is_empty() {
+                return Some(result);
+            }
+        }
+
+        None
+    }
+
+    /// Parse a single tool content item.
+    fn parse_tool_content_item(
+        &self,
+        item: &JsonValue,
+    ) -> Option<agent_client_protocol::ToolCallContent> {
+        let item_type = item.get("type").and_then(|t| t.as_str())?;
+
+        match item_type {
+            "text" => {
+                let text = item.get("text").and_then(|t| t.as_str())?;
+                Some(agent_client_protocol::ToolCallContent::Content(
+                    agent_client_protocol::Content::new(ContentBlock::Text(TextContent::new(
+                        text.to_string(),
+                    ))),
+                ))
+            }
+            _ => {
+                tracing::debug!("Unknown tool_result content type: {}", item_type);
+                None
+            }
+        }
+    }
+
+    /// Handle system message type.
+    fn handle_system_message(
+        &self,
+        parsed: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        let subtype = parsed.get("subtype").and_then(|v| v.as_str());
+
+        if subtype == Some("init") {
+            return self.handle_system_init(parsed, session_id);
+        }
+
+        tracing::debug!("Received system message (metadata only)");
+        Ok(None)
+    }
+
+    /// Handle system init message with slash_commands and agents.
+    fn handle_system_init(
+        &self,
+        parsed: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        tracing::debug!("Received system init message");
+
+        let current_agent = parsed
+            .get("current_agent")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let available_agents = self.extract_available_agents(parsed);
+
+        if let Some(agents) = &available_agents {
+            tracing::info!(
+                "Claude CLI provided {} agents: {:?}",
+                agents.len(),
+                agents.iter().map(|(id, name, _)| format!("{}:{}", id, name)).collect::<Vec<_>>()
+            );
+        }
+
+        let slash_commands = parsed.get("slash_commands").and_then(|v| v.as_array());
+        if let Some(commands) = slash_commands {
+            return self.build_commands_notification(
+                commands,
+                available_agents,
+                current_agent,
+                session_id,
+            );
+        }
+
+        Ok(None)
+    }
+
+    /// Extract available agents from parsed JSON.
+    fn extract_available_agents(
+        &self,
+        parsed: &JsonValue,
+    ) -> Option<Vec<(String, String, Option<String>)>> {
+        parsed.get("agents").and_then(|v| v.as_array()).map(|agents| {
+            agents
+                .iter()
+                .filter_map(|agent| {
+                    let id = agent.as_str()?;
+                    let name = Self::format_agent_name(id);
+                    Some((id.to_string(), name, None::<String>))
+                })
+                .collect()
+        })
+    }
+
+    /// Format agent ID as human-readable name.
+    fn format_agent_name(id: &str) -> String {
+        id.split('-')
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Build AvailableCommandsUpdate notification.
+    fn build_commands_notification(
+        &self,
+        slash_commands: &[JsonValue],
+        available_agents: Option<Vec<(String, String, Option<String>)>>,
+        current_agent: Option<String>,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        let command_names: Vec<String> = slash_commands
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+
+        tracing::info!(
+            "Claude CLI provided {} slash commands: {:?}",
+            command_names.len(),
+            command_names
+        );
+
+        let available_commands = self.convert_commands_to_acp(command_names);
+        let commands_update = agent_client_protocol::AvailableCommandsUpdate::new(available_commands);
+
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("source".to_string(), serde_json::json!("claude_cli_init"));
+
+        if let Some(agents) = available_agents {
+            meta_map.insert("available_agents".to_string(), serde_json::json!(agents));
+        }
+
+        if let Some(current) = current_agent {
+            meta_map.insert("current_agent".to_string(), serde_json::json!(current));
+        }
+
+        Ok(Some(
+            SessionNotification::new(
+                session_id.clone(),
+                SessionUpdate::AvailableCommandsUpdate(commands_update),
+            )
+            .meta(meta_map),
+        ))
+    }
+
+    /// Convert command names to ACP AvailableCommand format.
+    fn convert_commands_to_acp(
+        &self,
+        command_names: Vec<String>,
+    ) -> Vec<agent_client_protocol::AvailableCommand> {
+        command_names
+            .into_iter()
+            .map(|cmd_name| {
+                let (category, description) = Self::categorize_command(&cmd_name);
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert("source".to_string(), serde_json::json!("claude_cli"));
+                meta_map.insert("category".to_string(), serde_json::json!(category));
+                agent_client_protocol::AvailableCommand::new(cmd_name, description).meta(meta_map)
+            })
+            .collect()
+    }
+
+    /// Categorize a command by name prefix.
+    fn categorize_command(cmd_name: &str) -> (&'static str, String) {
+        if cmd_name.starts_with("mcp__sah__") {
+            (
+                "mcp_prompt",
+                format!("SAH: {}", cmd_name.strip_prefix("mcp__sah__").unwrap()),
+            )
+        } else if cmd_name.starts_with("mcp__") {
+            ("mcp_prompt", format!("MCP: {}", cmd_name))
+        } else {
+            ("claude_builtin", format!("Claude: {}", cmd_name))
+        }
+    }
+
+    /// Handle stream_event message type.
+    fn handle_stream_event(
+        &self,
+        parsed: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        let event = match parsed.get("event") {
+            Some(e) => e,
+            None => {
+                tracing::trace!("Received stream_event (no event field)");
+                return Ok(None);
+            }
+        };
+
+        let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        match event_type {
+            "content_block_delta" => self.handle_content_block_delta(event, session_id),
+            "content_block_start" => self.handle_content_block_start(event),
+            _ => {
+                tracing::trace!("Received stream_event (ignored)");
+                Ok(None)
+            }
+        }
+    }
+
+    /// Handle content_block_delta stream event.
+    fn handle_content_block_delta(
+        &self,
+        event: &JsonValue,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        // Check for text delta
+        if let Some(text) = event
+            .get("delta")
+            .and_then(|d| d.get("text"))
+            .and_then(|t| t.as_str())
+        {
+            return self.handle_text_delta(event, text, session_id);
+        }
+
+        // Check for input_json_delta
+        if let Some(delta) = event.get("delta") {
+            if let Some(input_json_delta) = delta.get("input_json_delta").and_then(|d| d.as_str()) {
+                return self.handle_input_json_delta(event, input_json_delta);
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Handle text delta in stream event.
+    fn handle_text_delta(
+        &self,
+        event: &JsonValue,
+        text: &str,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        let content_block_index = event.get("index").and_then(|i| i.as_u64());
+
+        tracing::trace!(
+            "📨 STREAM_EVENT chunk: index={:?}, {} chars: '{}'",
+            content_block_index,
+            text.len(),
+            text
+        );
+
+        let text_content = TextContent::new(text.to_string());
+        let content_block = ContentBlock::Text(text_content);
+        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+
+        let mut notification = SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::AgentMessageChunk(content_chunk),
+        );
+
+        if let Some(idx) = content_block_index {
+            let mut meta = serde_json::Map::new();
+            meta.insert("content_block_index".to_string(), serde_json::json!(idx));
+            meta.insert("source".to_string(), serde_json::json!("stream_event"));
+            notification = notification.meta(meta);
+        }
+
+        Ok(Some(notification))
+    }
+
+    /// Handle input_json_delta in stream event.
+    fn handle_input_json_delta(
+        &self,
+        event: &JsonValue,
+        input_json_delta: &str,
+    ) -> Result<Option<SessionNotification>> {
+        if let Some(index) = event.get("index").and_then(|i| i.as_u64()) {
+            tracing::trace!(
+                "🔧 STREAM_EVENT input_json_delta: index={}, {} chars",
+                index,
+                input_json_delta.len()
+            );
+            tracing::debug!(
+                "Tool input chunk received for content block {}: '{}'",
+                index,
+                input_json_delta
+            );
+        }
+        Ok(None)
+    }
+
+    /// Handle content_block_start stream event.
+    fn handle_content_block_start(&self, event: &JsonValue) -> Result<Option<SessionNotification>> {
+        if let Some(content_block) = event.get("content_block") {
+            if content_block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                let id = content_block.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                let name = content_block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                tracing::debug!("🔧 STREAM_EVENT tool_use start: {} ({})", name, id);
+            }
+        }
+        Ok(None)
     }
 
     /// Infer ToolKind from tool name

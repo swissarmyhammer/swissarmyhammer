@@ -45,7 +45,6 @@ Examine the file content for these problematic patterns:
    - Tests that don't actually test anything meaningful
 
 4. **Test Deletion**:
-   - Removing existing tests without replacement
    - Emptying test bodies while keeping the test shell
 
 5. **Flaky Test "Fixes"**:
@@ -59,6 +58,7 @@ Examine the file content for these problematic patterns:
 - Platform-specific skips with clear conditions (e.g., `skipIf(process.platform === 'win32')`)
 - Tests in a dedicated "pending" or "wip" file clearly marked as work-in-progress
 - Legitimate mocking of external dependencies (databases, APIs, file systems)
+- Tests can be deleted entirely if they are no longer relevant or valid
 
 ## Response Format
 

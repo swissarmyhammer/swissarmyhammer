@@ -21,6 +21,7 @@ Write tests first, then implementation. This ensures code is testable and requir
 - Run tests frequently - after every small change
 - Don't write new code without a failing test first
 - If you find a bug, write a test that catches it before fixing
+- All tests must pass, there is no such thing as a 'pre existing failure'. If a test is failing, assume you broke it -- because you did and just do not realize it.
 
 ### Test Structure
 

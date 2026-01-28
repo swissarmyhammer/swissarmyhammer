@@ -6,68 +6,14 @@
 //! 3. Blocks sed and awk commands
 //! 4. Executes via PlaybackAgent for deterministic testing
 
-use agent_client_protocol_extras::PlaybackAgent;
+mod test_helpers;
+
 use avp_common::{
-    context::AvpContext,
     strategy::ClaudeCodeHookStrategy,
     types::HookType,
     validator::{ValidatorLoader, ValidatorRunner},
 };
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tempfile::TempDir;
-
-/// Create a test context in a temporary git repository.
-fn create_test_context() -> (TempDir, AvpContext) {
-    let temp = TempDir::new().unwrap();
-    fs::create_dir_all(temp.path().join(".git")).unwrap();
-
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = AvpContext::init().unwrap();
-
-    std::env::set_current_dir(&original_dir).unwrap();
-
-    (temp, context)
-}
-
-/// Build a PreToolUse input for a Bash command.
-fn build_pre_tool_use_bash_input(command: &str) -> serde_json::Value {
-    serde_json::json!({
-        "session_id": "test-session",
-        "transcript_path": "/tmp/test-transcript.jsonl",
-        "cwd": "/tmp",
-        "permission_mode": "default",
-        "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
-        "tool_input": {
-            "command": command
-        }
-    })
-}
-
-/// Get the path to test fixtures directory.
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".fixtures/claude")
-}
-
-/// Create an AvpContext with a PlaybackAgent for testing.
-fn create_context_with_playback(temp: &TempDir, fixture_name: &str) -> AvpContext {
-    let fixture_path = fixtures_dir().join(fixture_name);
-    let agent = PlaybackAgent::new(fixture_path, "claude");
-    let notification_rx = agent.subscribe_notifications();
-
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = AvpContext::with_agent(Arc::new(agent), notification_rx)
-        .expect("Should create context with playback agent");
-
-    std::env::set_current_dir(&original_dir).unwrap();
-    context
-}
+use test_helpers::{create_context_with_playback, create_test_context, HookInputBuilder};
 
 // ============================================================================
 // Validator Loading Tests
@@ -105,7 +51,7 @@ fn test_safe_commands_validator_matches_bash() {
     let strategy = ClaudeCodeHookStrategy::new(context);
     std::env::remove_var("AVP_SKIP_AGENT");
 
-    let input = build_pre_tool_use_bash_input("sed -i 's/foo/bar/g' file.txt");
+    let input = HookInputBuilder::pre_tool_use_bash("sed -i 's/foo/bar/g' file.txt");
     let matching = strategy.matching_validators(HookType::PreToolUse, &input);
 
     let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
@@ -171,11 +117,11 @@ async fn test_safe_commands_validator_blocks_sed_playback() {
     let validator = loader.get("safe-commands").unwrap();
 
     // Build input with sed command
-    let input = build_pre_tool_use_bash_input("sed -i 's/foo/bar/g' file.txt");
+    let input = HookInputBuilder::pre_tool_use_bash("sed -i 's/foo/bar/g' file.txt");
 
     // Execute the validator
     let (result, _rate_limited) = runner
-        .execute_validator(validator, HookType::PreToolUse, &input)
+        .execute_validator(validator, HookType::PreToolUse, &input, None)
         .await;
 
     // The validator should FAIL (sed blocked)
@@ -210,11 +156,11 @@ async fn test_safe_commands_validator_blocks_awk_playback() {
     let validator = loader.get("safe-commands").unwrap();
 
     // Build input with awk command
-    let input = build_pre_tool_use_bash_input("awk '{print $1}' file.txt");
+    let input = HookInputBuilder::pre_tool_use_bash("awk '{print $1}' file.txt");
 
     // Execute the validator
     let (result, _rate_limited) = runner
-        .execute_validator(validator, HookType::PreToolUse, &input)
+        .execute_validator(validator, HookType::PreToolUse, &input, None)
         .await;
 
     // The validator should FAIL (awk blocked)

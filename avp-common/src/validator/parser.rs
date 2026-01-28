@@ -27,6 +27,12 @@ use crate::error::AvpError;
 
 use super::types::{Validator, ValidatorFrontmatter, ValidatorSource};
 
+/// Length of the YAML frontmatter opening delimiter "---".
+const YAML_DELIMITER_LEN: usize = 3;
+
+/// Length of the closing YAML delimiter "\n---" (newline + delimiter).
+const YAML_CLOSING_DELIMITER_LEN: usize = 4;
+
 /// Parse a validator from markdown content with YAML frontmatter.
 ///
 /// # Format
@@ -104,6 +110,14 @@ fn parse_validator_internal<C: DirectoryConfig>(
     source: ValidatorSource,
     expander: Option<&YamlExpander<C>>,
 ) -> Result<Validator, AvpError> {
+    // Skip partials - they're template includes, not validators
+    // Identified by _partials/ in path or {% partial %} marker in content
+    if path.to_string_lossy().contains("_partials/")
+        || content.trim_start().starts_with("{% partial %}")
+    {
+        return Err(AvpError::Partial(path.display().to_string()));
+    }
+
     // Split on frontmatter delimiters
     let (frontmatter_str, body) = extract_frontmatter(content, &path)?;
 
@@ -152,14 +166,14 @@ fn extract_frontmatter<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'
     }
 
     // Find the closing ---
-    let rest = &content[3..];
+    let rest = &content[YAML_DELIMITER_LEN..];
     let end_idx = rest.find("\n---").ok_or_else(|| AvpError::Validator {
         validator: path.display().to_string(),
         message: "missing closing frontmatter delimiter (---)".to_string(),
     })?;
 
     let frontmatter = &rest[..end_idx].trim();
-    let body = &rest[end_idx + 4..].trim();
+    let body = &rest[end_idx + YAML_CLOSING_DELIMITER_LEN..].trim();
 
     Ok((frontmatter, body))
 }

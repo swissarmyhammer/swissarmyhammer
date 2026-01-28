@@ -42,6 +42,7 @@ Examine the file content for any of these patterns:
 - Configuration file placeholders: `<YOUR_API_KEY>`, `${API_KEY}`, `{{secret}}`
 - Test files with obviously fake values: `test_api_key`, `dummy_password`, `xxx`, `yyy`
 - Documentation examples with placeholders
+- Tests that are testing secret detection functionality -- these are not real secrets
 
 ## Response Format
 

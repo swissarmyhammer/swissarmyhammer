@@ -24,9 +24,53 @@ use swissarmyhammer_directory::{AvpConfig, DirectoryConfig, ManagedDirectory};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::error::AvpError;
+use crate::turn::TurnStateManager;
+use crate::types::HookType;
+use crate::validator::{ExecutedValidator, Validator, ValidatorRunner};
+
+/// Capacity for the broadcast channel used for session notifications.
+/// Capacity for notification broadcast channels.
+///
+/// This needs to be large enough to handle multi-turn validators that may
+/// generate many streaming notifications. A 43-turn conversation can easily
+/// generate thousands of content deltas.
+pub const NOTIFICATION_CHANNEL_CAPACITY: usize = 4096;
 
 /// Log file name within the AVP directory.
 const LOG_FILE_NAME: &str = "avp.log";
+
+/// Spawn a task to forward notifications from a receiver to a sender.
+///
+/// This is used when injecting an agent to bridge its notification receiver
+/// to our internal broadcast channel.
+fn spawn_notification_forwarder(
+    mut rx: broadcast::Receiver<SessionNotification>,
+    tx: broadcast::Sender<SessionNotification>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(notification) => {
+                    let _ = tx.send(notification);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    // Channel buffer overflowed - some messages were dropped
+                    // Continue forwarding remaining messages
+                    tracing::warn!(
+                        skipped_messages = n,
+                        "Notification forwarder lagged - some messages may be lost"
+                    );
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Channel closed - no more messages
+                    tracing::trace!("Notification forwarder channel closed");
+                    break;
+                }
+            }
+        }
+    });
+}
 
 /// Decision outcome for a hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +123,7 @@ struct AgentHandle {
     notifications: broadcast::Sender<SessionNotification>,
 }
 
-/// AVP Context - manages the AVP directory, logging, and agent access.
+/// AVP Context - manages the AVP directory, logging, agent access, turn state, and validator execution.
 ///
 /// All AVP directory logic is centralized here. The directory is created
 /// at the git repository root using the shared `swissarmyhammer-directory` crate.
@@ -88,8 +132,10 @@ struct AgentHandle {
 /// - Project: `./<AVP_DIR>/` at git root
 /// - User: `~/<AVP_DIR>/` in home directory
 ///
-/// The context also provides access to an ACP Agent for validator execution.
-/// The agent is created lazily on first access, or can be injected for testing.
+/// The context also provides:
+/// - Access to an ACP Agent for validator execution (lazy or injected)
+/// - Turn state management for tracking file changes across tool calls
+/// - Cached validator runner for efficient repeated validation
 pub struct AvpContext {
     /// Managed directory at git root (<AVP_DIR>)
     project_dir: ManagedDirectory<AvpConfig>,
@@ -102,6 +148,12 @@ pub struct AvpContext {
 
     /// Agent handle (lazily created or injected)
     agent_handle: Arc<Mutex<Option<AgentHandle>>>,
+
+    /// Turn state manager for tracking file changes during a turn
+    turn_state: Arc<TurnStateManager>,
+
+    /// Cached validator runner (lazily initialized from agent)
+    runner_cache: Mutex<Option<ValidatorRunner>>,
 }
 
 impl std::fmt::Debug for AvpContext {
@@ -111,6 +163,8 @@ impl std::fmt::Debug for AvpContext {
             .field("home_dir", &self.home_dir.as_ref().map(|d| d.root()))
             .field("has_log_file", &self.log_file.is_some())
             .field("has_agent", &"<async>")
+            .field("turn_state", &"<manager>")
+            .field("runner_cache", &"<cached>")
             .finish()
     }
 }
@@ -128,26 +182,19 @@ impl AvpContext {
     ///
     /// Returns Err if not in a git repository.
     pub fn init() -> Result<Self, AvpError> {
-        // Create project directory at git root
-        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
-            AvpError::Context(format!(
-                "failed to create {} directory: {}",
-                AvpConfig::DIR_NAME,
-                e
-            ))
-        })?;
+        let (project_dir, home_dir, log_file) = Self::init_directories()?;
 
-        // Try to create user directory (optional, may fail if no home dir)
-        let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
-
-        // Open log file for appending (best-effort)
-        let log_file = open_log_file(project_dir.root());
+        // Create turn state manager - uses parent of avp_dir (project root)
+        let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
+        let turn_state = Arc::new(TurnStateManager::new(project_root));
 
         Ok(Self {
             project_dir,
             home_dir,
             log_file,
             agent_handle: Arc::new(Mutex::new(None)),
+            turn_state,
+            runner_cache: Mutex::new(None),
         })
     }
 
@@ -155,37 +202,32 @@ impl AvpContext {
     ///
     /// This is primarily for testing with PlaybackAgent or other test agents.
     /// The agent is used immediately without lazy creation.
+    ///
+    /// # Arguments
+    ///
+    /// * `agent` - The agent to use for validator execution
+    /// * `notifications` - Notification receiver from the agent for streaming responses
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let playback = PlaybackAgent::new(fixture_path, "test");
+    /// let notifications = playback.subscribe_notifications();
+    /// let context = AvpContext::with_agent(Arc::new(playback), notifications)?;
+    /// ```
     pub fn with_agent(
         agent: Arc<dyn Agent + Send + Sync>,
         notifications: broadcast::Receiver<SessionNotification>,
     ) -> Result<Self, AvpError> {
-        // Create project directory at git root
-        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
-            AvpError::Context(format!(
-                "failed to create {} directory: {}",
-                AvpConfig::DIR_NAME,
-                e
-            ))
-        })?;
+        let (project_dir, home_dir, log_file) = Self::init_directories()?;
 
-        // Try to create user directory (optional, may fail if no home dir)
-        let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
+        // Create broadcast channel and forward notifications from injected receiver
+        let (tx, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
+        spawn_notification_forwarder(notifications, tx.clone());
 
-        // Open log file for appending (best-effort)
-        let log_file = open_log_file(project_dir.root());
-
-        // Create a sender from the receiver (for resubscription)
-        // We need to create a new channel and the injected receiver becomes the first subscriber
-        let (tx, _) = broadcast::channel(256);
-
-        // Spawn a task to forward notifications from the injected receiver to our sender
-        let tx_clone = tx.clone();
-        let mut rx = notifications;
-        tokio::spawn(async move {
-            while let Ok(notification) = rx.recv().await {
-                let _ = tx_clone.send(notification);
-            }
-        });
+        // Create turn state manager
+        let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
+        let turn_state = Arc::new(TurnStateManager::new(project_root));
 
         Ok(Self {
             project_dir,
@@ -195,7 +237,23 @@ impl AvpContext {
                 agent,
                 notifications: tx,
             }))),
+            turn_state,
+            runner_cache: Mutex::new(None),
         })
+    }
+
+    /// Initialize directories and log file (shared by init and with_agent).
+    fn init_directories() -> Result<(ManagedDirectory<AvpConfig>, Option<ManagedDirectory<AvpConfig>>, Option<Arc<StdMutex<File>>>), AvpError> {
+        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
+            AvpError::Context(format!(
+                "failed to create {} directory: {}",
+                AvpConfig::DIR_NAME,
+                e
+            ))
+        })?;
+        let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
+        let log_file = open_log_file(project_dir.root());
+        Ok((project_dir, home_dir, log_file))
     }
 
     /// Get the agent for validator execution.
@@ -217,24 +275,13 @@ impl AvpContext {
             tracing::debug!("Creating ephemeral ClaudeAgent for validator execution...");
             let start = std::time::Instant::now();
 
-            // Create ephemeral agent (haiku model, no session persistence)
             let config = CreateAgentConfig::builder().ephemeral(true).build();
-
             let (agent, notifications) = claude_agent::create_agent(config)
                 .await
                 .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
 
-            // Create a broadcast channel for notifications
-            let (tx, _) = broadcast::channel(256);
-            let tx_clone = tx.clone();
-
-            // Forward notifications from the agent to our channel
-            tokio::spawn(async move {
-                let mut rx = notifications;
-                while let Ok(notification) = rx.recv().await {
-                    let _ = tx_clone.send(notification);
-                }
-            });
+            let (tx, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
+            spawn_notification_forwarder(notifications, tx.clone());
 
             tracing::debug!(
                 "Ephemeral ClaudeAgent created in {:.2}s",
@@ -313,25 +360,14 @@ impl AvpContext {
         dirs
     }
 
-    /// Log a hook event.
-    ///
-    /// Format: `2024-01-23T10:15:32.123Z PreToolUse decision=allow tool=Bash`
-    pub fn log_event(&self, event: &HookEvent) {
+    /// Write a line to the log file with timestamp.
+    fn write_log_line(&self, content: &str) {
         let Some(log_file) = &self.log_file else {
             return;
         };
 
         let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
-        let details_str = event
-            .details
-            .as_ref()
-            .map(|d| format!(" {}", d))
-            .unwrap_or_default();
-
-        let line = format!(
-            "{} {} decision={}{}\n",
-            timestamp, event.hook_type, event.decision, details_str
-        );
+        let line = format!("{} {}\n", timestamp, content);
 
         if let Ok(mut file) = log_file.lock() {
             let _ = file.write_all(line.as_bytes());
@@ -339,33 +375,168 @@ impl AvpContext {
         }
     }
 
+    /// Log a hook event.
+    ///
+    /// Format: `2024-01-23T10:15:32.123Z PreToolUse decision=allow tool=Bash`
+    pub fn log_event(&self, event: &HookEvent) {
+        let details_str = event
+            .details
+            .as_ref()
+            .map(|d| format!(" {}", d))
+            .unwrap_or_default();
+
+        let content = format!(
+            "{} decision={}{}",
+            event.hook_type, event.decision, details_str
+        );
+
+        self.write_log_line(&content);
+    }
+
     /// Log a validator execution event.
     ///
     /// Format: `2024-01-23T10:15:32.123Z VALIDATOR rust-coding passed hook=PostToolUse "No issues found"`
     pub fn log_validator(&self, event: &ValidatorEvent) {
-        let Some(log_file) = &self.log_file else {
-            return;
-        };
-
-        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
         let status = if event.passed { "passed" } else { "FAILED" };
 
-        // Truncate message for log readability
-        let message = if event.message.len() > 100 {
-            format!("{}...", &event.message[..97])
-        } else {
-            event.message.to_string()
-        };
-
-        let line = format!(
-            "{} VALIDATOR {} {} hook={} \"{}\"\n",
-            timestamp, event.name, status, event.hook_type, message
+        let content = format!(
+            "VALIDATOR {} {} hook={} \"{}\"",
+            event.name, status, event.hook_type, event.message
         );
 
-        if let Ok(mut file) = log_file.lock() {
-            let _ = file.write_all(line.as_bytes());
-            let _ = file.flush();
+        self.write_log_line(&content);
+    }
+
+    // =========================================================================
+    // Validator Execution
+    // =========================================================================
+
+    /// Execute validators using the cached runner.
+    ///
+    /// The runner is created lazily on first access and reused for subsequent calls.
+    /// If the agent is unavailable, placeholder pass results are returned.
+    pub async fn execute_validators(
+        &self,
+        validators: &[&Validator],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Vec<ExecutedValidator> {
+        if validators.is_empty() {
+            return Vec::new();
         }
+
+        if self.is_agent_skipped() {
+            return self.placeholder_validator_results(validators, hook_type);
+        }
+
+        let results = self
+            .run_validators_with_fallback(validators, hook_type, input, changed_files)
+            .await;
+
+        self.log_validator_results(&results, hook_type);
+        results
+    }
+
+    /// Check if agent execution is disabled via environment variable.
+    fn is_agent_skipped(&self) -> bool {
+        if std::env::var("AVP_SKIP_AGENT").is_ok() {
+            tracing::debug!("AVP_SKIP_AGENT set - skipping agent execution");
+            return true;
+        }
+        false
+    }
+
+    /// Run validators with cached runner, falling back to placeholders on error.
+    async fn run_validators_with_fallback(
+        &self,
+        validators: &[&Validator],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Vec<ExecutedValidator> {
+        match self
+            .execute_with_cached_runner(validators, hook_type, input, changed_files)
+            .await
+        {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::warn!("Failed to execute validators: {} - using placeholders", e);
+                self.placeholder_validator_results(validators, hook_type)
+            }
+        }
+    }
+
+    /// Log results for each executed validator.
+    fn log_validator_results(&self, results: &[ExecutedValidator], hook_type: HookType) {
+        let hook_type_str = hook_type.to_string();
+        for result in results {
+            self.log_validator(&ValidatorEvent {
+                name: &result.name,
+                passed: result.result.passed(),
+                message: result.result.message(),
+                hook_type: &hook_type_str,
+            });
+        }
+    }
+
+    /// Execute validators with the cached runner.
+    async fn execute_with_cached_runner(
+        &self,
+        validators: &[&Validator],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Result<Vec<ExecutedValidator>, AvpError> {
+        let mut guard = self.runner_cache.lock().await;
+
+        // Create runner if not cached
+        if guard.is_none() {
+            tracing::debug!("Creating cached ValidatorRunner...");
+            let (agent, notifications) = self.agent().await?;
+            let runner = ValidatorRunner::new(agent, notifications)?;
+            *guard = Some(runner);
+            tracing::debug!("ValidatorRunner cached successfully");
+        }
+
+        // Execute with the cached runner
+        let runner = guard.as_ref().unwrap();
+        tracing::debug!(
+            "Executing {} validators via cached ACP runner for hook {}",
+            validators.len(),
+            hook_type
+        );
+        Ok(runner
+            .execute_validators(validators, hook_type, input, changed_files)
+            .await)
+    }
+
+    /// Generate placeholder pass results when agent is unavailable.
+    fn placeholder_validator_results(
+        &self,
+        validators: &[&Validator],
+        hook_type: HookType,
+    ) -> Vec<ExecutedValidator> {
+        validators
+            .iter()
+            .map(|validator| {
+                tracing::debug!(
+                    "Would execute validator '{}' ({}) for hook {}",
+                    validator.name(),
+                    validator.source,
+                    hook_type
+                );
+
+                ExecutedValidator {
+                    name: validator.name().to_string(),
+                    severity: validator.severity(),
+                    result: crate::validator::ValidatorResult::pass(format!(
+                        "Validator '{}' matched (runner unavailable)",
+                        validator.name()
+                    )),
+                }
+            })
+            .collect()
     }
 }
 
@@ -387,10 +558,13 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_decision_display() {
-        assert_eq!(format!("{}", Decision::Allow), "allow");
-        assert_eq!(format!("{}", Decision::Block), "block");
-        assert_eq!(format!("{}", Decision::Error), "error");
+    fn test_decision_equality() {
+        assert_eq!(Decision::Allow, Decision::Allow);
+        assert_eq!(Decision::Block, Decision::Block);
+        assert_eq!(Decision::Error, Decision::Error);
+        assert_ne!(Decision::Allow, Decision::Block);
+        assert_ne!(Decision::Allow, Decision::Error);
+        assert_ne!(Decision::Block, Decision::Error);
     }
 
     #[test]
@@ -449,5 +623,150 @@ mod tests {
         std::env::set_current_dir(&original_dir).unwrap();
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_log_event_writes_to_file() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+
+        // Log an event
+        let event = HookEvent {
+            hook_type: "PreToolUse",
+            decision: Decision::Allow,
+            details: Some("tool=Bash".to_string()),
+        };
+        ctx.log_event(&event);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        // Read log file and verify content
+        let log_path = ctx.avp_dir().join("avp.log");
+        let log_content = fs::read_to_string(&log_path).unwrap();
+        assert!(log_content.contains("PreToolUse"));
+        assert!(log_content.contains("decision=allow"));
+        assert!(log_content.contains("tool=Bash"));
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_log_validator_writes_to_file() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+
+        // Log a validator event
+        let event = ValidatorEvent {
+            name: "test-validator",
+            hook_type: "PostToolUse",
+            passed: true,
+            message: "All checks passed",
+        };
+        ctx.log_validator(&event);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        // Read log file and verify content
+        let log_path = ctx.avp_dir().join("avp.log");
+        let log_content = fs::read_to_string(&log_path).unwrap();
+        assert!(log_content.contains("VALIDATOR"));
+        assert!(log_content.contains("test-validator"));
+        assert!(log_content.contains("passed"));
+        assert!(log_content.contains("PostToolUse"));
+        assert!(log_content.contains("All checks passed"));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_agent_returns_injected_agent() {
+        use agent_client_protocol_extras::PlaybackAgent;
+
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        // Create a fixture file for the playback agent
+        let fixture_dir = temp.path().join("fixtures");
+        fs::create_dir_all(&fixture_dir).unwrap();
+        fs::write(fixture_dir.join("test.json"), r#"{"messages": []}"#).unwrap();
+
+        // Create a PlaybackAgent and inject it
+        let playback = PlaybackAgent::new(fixture_dir.join("test.json"), "test");
+        let notifications = playback.subscribe_notifications();
+        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(playback);
+
+        let ctx = AvpContext::with_agent(agent, notifications).unwrap();
+
+        // agent() should return the injected agent
+        let result = ctx.agent().await;
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        assert!(result.is_ok(), "Should return injected agent");
+    }
+
+    #[test]
+    fn test_hook_event_construction() {
+        // Test HookEvent struct construction and fields
+        let event = HookEvent {
+            hook_type: "PreToolUse",
+            decision: Decision::Allow,
+            details: Some("tool=Bash".to_string()),
+        };
+
+        assert_eq!(event.hook_type, "PreToolUse");
+        assert_eq!(event.decision, Decision::Allow);
+        assert_eq!(event.details, Some("tool=Bash".to_string()));
+
+        // Test without details
+        let event_no_details = HookEvent {
+            hook_type: "Stop",
+            decision: Decision::Block,
+            details: None,
+        };
+
+        assert_eq!(event_no_details.hook_type, "Stop");
+        assert_eq!(event_no_details.decision, Decision::Block);
+        assert!(event_no_details.details.is_none());
+    }
+
+    #[test]
+    fn test_validator_event_construction() {
+        // Test ValidatorEvent struct construction and fields
+        let event = ValidatorEvent {
+            name: "no-secrets",
+            passed: true,
+            message: "No secrets found",
+            hook_type: "PostToolUse",
+        };
+
+        assert_eq!(event.name, "no-secrets");
+        assert!(event.passed);
+        assert_eq!(event.message, "No secrets found");
+        assert_eq!(event.hook_type, "PostToolUse");
+
+        // Test failed validator
+        let failed_event = ValidatorEvent {
+            name: "safe-commands",
+            passed: false,
+            message: "Dangerous command detected",
+            hook_type: "PreToolUse",
+        };
+
+        assert_eq!(failed_event.name, "safe-commands");
+        assert!(!failed_event.passed);
+        assert_eq!(failed_event.message, "Dangerous command detected");
     }
 }

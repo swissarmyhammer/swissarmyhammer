@@ -982,12 +982,7 @@ impl ToolCallHandler {
             }
             "terminal_write" => {
                 if let Some(data) = arguments.get("data").and_then(|d| d.as_str()) {
-                    let preview = if data.len() > 50 {
-                        format!("{}...", &data[..50])
-                    } else {
-                        data.to_string()
-                    };
-                    format!("Write data to terminal: {}", preview)
+                    format!("Write data to terminal: {}", data)
                 } else {
                     "Write data to terminal".to_string()
                 }

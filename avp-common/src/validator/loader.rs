@@ -117,49 +117,53 @@ impl ValidatorLoader {
     /// Note: Prefer `load_from_context()` when an AvpContext is available.
     /// Note: Call `load_includes()` before this to enable `@` reference expansion.
     pub fn load_all(&mut self) -> Result<(), AvpError> {
-        // Use VirtualFileSystem with AvpConfig for directory stacking
         let mut vfs = VirtualFileSystem::<AvpConfig>::new("validators");
 
-        // Load from all directories following precedence
         if let Err(e) = vfs.load_all() {
             tracing::warn!("Failed to load validators from some directories: {}", e);
         }
 
-        // Parse each loaded file as a validator
         for file_entry in vfs.list() {
-            let source = match file_entry.source {
-                FileSource::Builtin | FileSource::Dynamic => ValidatorSource::Builtin,
-                FileSource::User => ValidatorSource::User,
-                FileSource::Local => ValidatorSource::Project,
-            };
-
-            match parse_validator_with_expansion(
-                &file_entry.content,
-                file_entry.path.clone(),
-                source,
-                &self.expander,
-            ) {
-                Ok(validator) => {
-                    tracing::debug!(
-                        "Loaded validator '{}' from {} ({})",
-                        validator.name(),
-                        validator.source,
-                        file_entry.path.display()
-                    );
-                    self.validators
-                        .insert(validator.name().to_string(), validator);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse validator at {}: {}",
-                        file_entry.path.display(),
-                        e
-                    );
-                }
-            }
+            let source = Self::map_file_source(&file_entry.source);
+            self.parse_and_insert_validator(&file_entry.content, &file_entry.path, source);
         }
 
         Ok(())
+    }
+
+    /// Map VFS file source to validator source.
+    fn map_file_source(source: &FileSource) -> ValidatorSource {
+        match source {
+            FileSource::Builtin | FileSource::Dynamic => ValidatorSource::Builtin,
+            FileSource::User => ValidatorSource::User,
+            FileSource::Local => ValidatorSource::Project,
+        }
+    }
+
+    /// Parse content as a validator and insert into the collection.
+    fn parse_and_insert_validator(&mut self, content: &str, path: &Path, source: ValidatorSource) {
+        match parse_validator_with_expansion(content, path.to_path_buf(), source, &self.expander) {
+            Ok(validator) => {
+                tracing::debug!(
+                    "Loaded validator '{}' from {} ({})",
+                    validator.name(),
+                    validator.source,
+                    path.display()
+                );
+                self.validators
+                    .insert(validator.name().to_string(), validator);
+            }
+            Err(e) => Self::log_parse_error(&e, path),
+        }
+    }
+
+    /// Log validator parse errors appropriately.
+    fn log_parse_error(error: &AvpError, path: &Path) {
+        if error.is_partial() {
+            tracing::trace!("Skipping partial: {}", path.display());
+        } else {
+            tracing::warn!("Failed to parse validator at {}: {}", path.display(), error);
+        }
     }
 
     /// Load validators from a specific directory.
@@ -168,57 +172,32 @@ impl ValidatorLoader {
             return Ok(());
         }
 
-        // Walk the directory looking for .md files
-        for entry in walkdir::WalkDir::new(path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            let file_path = entry.path();
-
-            // Only process .md files
-            if file_path.extension().and_then(|s| s.to_str()) != Some("md") {
-                continue;
-            }
-
-            match std::fs::read_to_string(file_path) {
-                Ok(content) => {
-                    match parse_validator_with_expansion(
-                        &content,
-                        file_path.to_path_buf(),
-                        source.clone(),
-                        &self.expander,
-                    ) {
-                        Ok(validator) => {
-                            tracing::debug!(
-                                "Loaded validator '{}' from {} ({})",
-                                validator.name(),
-                                validator.source,
-                                file_path.display()
-                            );
-                            self.validators
-                                .insert(validator.name().to_string(), validator);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to parse validator at {}: {}",
-                                file_path.display(),
-                                e
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to read validator file {}: {}",
-                        file_path.display(),
-                        e
-                    );
-                }
-            }
+        for entry in Self::walk_markdown_files(path) {
+            self.load_validator_file(entry.path(), source.clone());
         }
 
         Ok(())
+    }
+
+    /// Walk a directory and yield markdown file entries.
+    fn walk_markdown_files(path: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
+        walkdir::WalkDir::new(path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+    }
+
+    /// Load a single validator file.
+    fn load_validator_file(&mut self, file_path: &Path, source: ValidatorSource) {
+        match std::fs::read_to_string(file_path) {
+            Ok(content) => {
+                self.parse_and_insert_validator(&content, file_path, source);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read validator file {}: {}", file_path.display(), e);
+            }
+        }
     }
 
     /// Add a builtin validator from embedded content.
@@ -236,7 +215,12 @@ impl ValidatorLoader {
                     .insert(validator.name().to_string(), validator);
             }
             Err(e) => {
-                tracing::error!("Failed to parse builtin validator '{}': {}", name, e);
+                // Partials are expected to fail parsing - log at trace level
+                if e.is_partial() {
+                    tracing::trace!("Skipping partial '{}': {}", name, e);
+                } else {
+                    tracing::error!("Failed to parse builtin validator '{}': {}", name, e);
+                }
             }
         }
     }
@@ -535,7 +519,7 @@ Check for issues in the code.
     }
 
     #[test]
-    fn test_loader_with_partials() {
+    fn test_loader_skips_partials() {
         let mut loader = ValidatorLoader::new();
 
         // Add a regular validator
@@ -551,33 +535,24 @@ Check for issues.
 "#,
         );
 
-        // Add a partial (identified by _partials/ prefix)
+        // Try to add a partial (identified by _partials/ prefix) - should be skipped
         loader.add_builtin(
-            "_partials/response-format",
-            r#"---
-name: _partials/response-format
-description: Response format partial
-severity: info
-trigger: PreToolUse
----
-{% partial %}
-
-Return JSON with status and message fields.
-"#,
+            "_partials/shared-content",
+            "{% partial %}\n\nShared content for templates.",
         );
 
-        // Both should be accessible
-        assert!(loader.get("regular-validator").is_some());
-        assert!(loader.get("_partials/response-format").is_some());
-        assert_eq!(loader.len(), 2);
+        // Try to add content with {% partial %} marker - should be skipped
+        loader.add_builtin("another-partial", "{% partial %}\n\nAnother partial.");
 
-        // TemplateContentProvider should return both
-        let names = loader.list_template_names();
-        assert_eq!(names.len(), 2);
+        // Only the regular validator should be loaded
+        assert!(loader.get("regular-validator").is_some());
+        assert!(loader.get("_partials/shared-content").is_none());
+        assert!(loader.get("another-partial").is_none());
+        assert_eq!(loader.len(), 1);
     }
 
     #[test]
-    fn test_load_directory_with_partials() {
+    fn test_load_directory_skips_partials() {
         let temp = TempDir::new().unwrap();
         let validators_dir = temp.path().join("validators");
         let partials_dir = validators_dir.join("_partials");
@@ -592,24 +567,15 @@ description: Test validator
 severity: error
 trigger: PreToolUse
 ---
-Check issues. {% include 'response-helper' %}
+Check issues.
 "#,
         )
         .unwrap();
 
-        // Create a partial in _partials directory
+        // Create a partial in _partials directory - should be skipped
         fs::write(
-            partials_dir.join("response-helper.md"),
-            r#"---
-name: _partials/response-helper
-description: Response helper partial
-severity: info
-trigger: PreToolUse
----
-{% partial %}
-
-Return JSON response.
-"#,
+            partials_dir.join("shared-content.md"),
+            "{% partial %}\n\nShared content for templates.",
         )
         .unwrap();
 
@@ -618,14 +584,46 @@ Return JSON response.
             .load_directory(&validators_dir, ValidatorSource::Project)
             .unwrap();
 
-        // Should load both the validator and the partial
+        // Should load only the validator, not the partial
         assert!(loader.get("test-validator").is_some());
-        assert!(loader.get("_partials/response-helper").is_some());
+        assert!(loader.get("_partials/shared-content").is_none());
+        assert_eq!(loader.len(), 1);
+    }
 
-        // TemplateContentProvider should expose both
-        assert!(loader.get_template_content("test-validator").is_some());
-        assert!(loader
-            .get_template_content("_partials/response-helper")
-            .is_some());
+    #[test]
+    fn test_loader_with_expander() {
+        use swissarmyhammer_directory::{AvpConfig, YamlExpander};
+
+        let expander = YamlExpander::<AvpConfig>::new();
+        let mut loader = ValidatorLoader::with_expander(expander);
+
+        assert!(loader.is_empty());
+        // Verify expander is accessible via mutable reference
+        let _ = loader.expander_mut();
+    }
+
+    #[test]
+    fn test_loader_load_includes() {
+        let mut loader = ValidatorLoader::new();
+        // load_includes should succeed even if no includes exist
+        let result = loader.load_includes();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_loader_load_all() {
+        let mut loader = ValidatorLoader::new();
+        // load_all loads from VirtualFileSystem directories
+        // This may or may not find validators depending on the environment
+        let result = loader.load_all();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_loader_get_directories() {
+        let dirs = ValidatorLoader::get_directories();
+        // Returns a list of validator directories (may be empty if none exist)
+        // The function should not panic
+        assert!(dirs.len() <= 2); // At most user + project directories
     }
 }

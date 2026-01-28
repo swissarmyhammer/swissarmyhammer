@@ -52,7 +52,7 @@
 //!
 //! // Access registered tools
 //! let tool_names: Vec<_> = registry.list_tools().iter()
-//!     .map(|t| t.name())
+//!     .map(|t| t.name)
 //!     .collect();
 //! println!("Registered {} tools", tool_names.len());
 //! # }
