@@ -40,7 +40,9 @@ resolver = "2"
 
 [workspace.metadata.release]
 publish = false  # Don't auto-publish
-
+shared-version = true          # All crates share the same version
+tag-name = "v{{version}}"      # Single tag for workspace
+consolidate-commits = true     # One commit for all version bumps
 
 [workspace.package]
 version = "0.4.1"

@@ -48,7 +48,8 @@ Examine the command for these dangerous patterns:
  
 6. ** Editing **
     - `vi`, `vim`, `nano`, or other interactive editors that may hang
-    - `sed` or `awk` commands -- you should be using your editing tools
+    - `sed` or `awk` commands to edit files -- you should be using your editing tools
+      - These are acceptable in shell pipelines, but not as standalone commands
 
 ## Exceptions (Allow)
 
