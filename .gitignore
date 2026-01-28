@@ -47,7 +47,6 @@ ideas/
 
 # Project documentation and status files in .swissarmyhammer/
 .swissarmyhammer/*.md
-!.swissarmyhammer/rules/
 
 # Project status and audit files
 **/ACTIVEFORM_IMPLEMENTATION.md
@@ -121,7 +120,6 @@ swissarmyhammer-agent-executor/.swissarmyhammer
 swissarmyhammer-cli/.swissarmyhammer
 swissarmyhammer-workflow/.swissarmyhammer
 swissarmyhammer-tools/.swissarmyhammer
-swissarmyhammer-rules/.swissarmyhammer
 claude-agent/.swissarmyhammer/sessions
 acp-conformance/.swissarmyhammer/sessions
 

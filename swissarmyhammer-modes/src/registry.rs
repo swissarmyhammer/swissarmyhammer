@@ -229,10 +229,28 @@ mod tests {
         // Verify builtin_modes() function returns the expected modes
         let builtins = crate::builtin_modes();
 
-        // We have 10 modes: 3 original (Explore, Plan, general-purpose) + 7 prompt-referencing
-        assert_eq!(builtins.len(), 10, "Should have exactly 10 builtin modes");
-
         let ids: Vec<&str> = builtins.iter().map(|(id, _)| *id).collect();
+
+        // Define expected modes explicitly
+        // Note: rule-checker mode removed as part of swissarmyhammer-rules crate removal
+        let expected_modes = [
+            "general-purpose",
+            "Explore",
+            "Plan",
+            "default",
+            "planner",
+            "implementer",
+            "reviewer",
+            "tester",
+            "committer",
+        ];
+
+        assert_eq!(
+            builtins.len(),
+            expected_modes.len(),
+            "Should have exactly {} builtin modes",
+            expected_modes.len()
+        );
 
         // Original embedded modes
         assert!(
@@ -249,7 +267,7 @@ mod tests {
         assert!(ids.contains(&"reviewer"), "Should have reviewer");
         assert!(ids.contains(&"tester"), "Should have tester");
         assert!(ids.contains(&"committer"), "Should have committer");
-        assert!(ids.contains(&"rule-checker"), "Should have rule-checker");
+        // Note: rule-checker mode removed as part of swissarmyhammer-rules crate removal
 
         // Verify each has content
         for (id, content) in builtins {

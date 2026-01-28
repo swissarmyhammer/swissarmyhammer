@@ -440,11 +440,8 @@ mod tests {
         let agent_name = &builtin_agents[0].name;
 
         // Test all valid use cases dynamically from the enum
-        let valid_use_cases = [
-            AgentUseCase::Root,
-            AgentUseCase::Rules,
-            AgentUseCase::Workflows,
-        ];
+        // Note: AgentUseCase::Rules was removed as part of swissarmyhammer-rules crate removal
+        let valid_use_cases = [AgentUseCase::Root, AgentUseCase::Workflows];
 
         for use_case in valid_use_cases {
             assert_use_command_config_only_failure(
@@ -477,7 +474,7 @@ mod tests {
 
         // Test setting a nonexistent agent for a use case
         let result = execute_use_command(
-            AgentUseCase::Rules.to_string(),
+            AgentUseCase::Workflows.to_string(),
             Some("nonexistent".to_string()),
             &context,
         )

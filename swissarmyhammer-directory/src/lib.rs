@@ -26,8 +26,8 @@
 //! println!("Directory at: {}", dir.root().display());
 //!
 //! // Load files with precedence
-//! let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("rules");
-//! vfs.add_builtin("default-rule", "# Default rule content");
+//! let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+//! vfs.add_builtin("default-prompt", "# Default prompt content");
 //! vfs.load_all()?;
 //!
 //! for file in vfs.list() {

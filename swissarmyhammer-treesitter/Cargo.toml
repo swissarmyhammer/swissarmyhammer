@@ -47,9 +47,6 @@ tree-sitter-toml = { workspace = true }
 tree-sitter-markdown = { workspace = true }
 tree-sitter-sql = { workspace = true }
 
-# Internal dependencies
-swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
-
 # Standard dependencies
 thiserror = { workspace = true }
 anyhow = { workspace = true }

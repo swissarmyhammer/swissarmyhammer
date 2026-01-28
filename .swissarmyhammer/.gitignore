@@ -25,5 +25,4 @@ transcripts/
 questions/
 
 # Keep these directories (they should be committed):
-# - rules/      Project-specific code quality rules
 # - docs/       Project documentation

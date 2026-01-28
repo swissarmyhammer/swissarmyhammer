@@ -79,13 +79,13 @@ stateDiagram-v2
 /// Test that different modes are correctly propagated
 #[test]
 fn test_various_modes_flow_correctly() {
+    // Note: rule-checker mode removed as part of swissarmyhammer-rules crate removal
     let modes = vec![
         ("planner", "Planning specialist"),
         ("implementer", "Implementation specialist"),
         ("reviewer", "Review specialist"),
         ("tester", "Testing specialist"),
         ("committer", "Commit specialist"),
-        ("rule-checker", "Rule checking agent"),
     ];
 
     for (mode_id, description) in modes {

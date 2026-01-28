@@ -114,7 +114,6 @@ File System:
 Development Workflow:
 • todo_create, todo_show, todo_list - Todo tracking
 • todo_mark_complete - Todo completion
-• rules_create, rules_check - Code quality and standards
 
 Execution:
 • shell_execute - Run shell commands

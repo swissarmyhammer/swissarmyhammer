@@ -541,10 +541,8 @@ fn test_use_case_to_agent_name_mapping() {
     // Configure different agents for different use cases
     ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
         .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Rules)
-        .expect("Should configure rules agent");
     ModelManager::use_agent_for_use_case(
-        "qwen-next",
+        "qwen-coder",
         swissarmyhammer_config::AgentUseCase::Workflows,
     )
     .expect("Should configure workflows agent");
@@ -555,15 +553,10 @@ fn test_use_case_to_agent_name_mapping() {
             .expect("Should get root agent");
     assert_eq!(root_agent, Some("claude-code".to_string()));
 
-    let rules_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Rules)
-            .expect("Should get rules agent");
-    assert_eq!(rules_agent, Some("qwen-coder".to_string()));
-
     let workflows_agent =
         ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
             .expect("Should get workflows agent");
-    assert_eq!(workflows_agent, Some("qwen-next".to_string()));
+    assert_eq!(workflows_agent, Some("qwen-coder".to_string()));
 }
 
 #[test]
@@ -576,12 +569,12 @@ fn test_use_case_fallback_to_root() {
     ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
         .expect("Should configure root agent");
 
-    // Verify rules use case falls back to root
-    let rules_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Rules)
-            .expect("Should get agent for rules");
+    // Verify workflows use case falls back to root
+    let workflows_agent =
+        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
+            .expect("Should get agent for workflows");
     assert_eq!(
-        rules_agent,
+        workflows_agent,
         Some("claude-code".to_string()),
         "Rules should fall back to root agent"
     );
@@ -603,15 +596,10 @@ fn test_model_use_case_enum_variants() {
 
     // Test all variants exist and convert to strings correctly
     assert_eq!(AgentUseCase::Root.to_string(), "root");
-    assert_eq!(AgentUseCase::Rules.to_string(), "rules");
     assert_eq!(AgentUseCase::Workflows.to_string(), "workflows");
 
     // Test parsing from strings
     assert_eq!("root".parse::<AgentUseCase>().unwrap(), AgentUseCase::Root);
-    assert_eq!(
-        "rules".parse::<AgentUseCase>().unwrap(),
-        AgentUseCase::Rules
-    );
     assert_eq!(
         "workflows".parse::<AgentUseCase>().unwrap(),
         AgentUseCase::Workflows
@@ -619,10 +607,6 @@ fn test_model_use_case_enum_variants() {
 
     // Test case insensitivity
     assert_eq!("ROOT".parse::<AgentUseCase>().unwrap(), AgentUseCase::Root);
-    assert_eq!(
-        "Rules".parse::<AgentUseCase>().unwrap(),
-        AgentUseCase::Rules
-    );
     assert_eq!(
         "WORKFLOWS".parse::<AgentUseCase>().unwrap(),
         AgentUseCase::Workflows
@@ -645,8 +629,8 @@ fn test_resolve_agent_config_for_use_case() {
     // Configure different agents for different use cases
     ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
         .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Rules)
-        .expect("Should configure rules agent");
+    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Workflows)
+        .expect("Should configure workflows agent");
 
     // Resolve root use case
     let root_config =
@@ -657,13 +641,13 @@ fn test_resolve_agent_config_for_use_case() {
         swissarmyhammer_config::ModelExecutorType::ClaudeCode
     );
 
-    // Resolve rules use case
-    let rules_config = ModelManager::resolve_agent_config_for_use_case(
-        swissarmyhammer_config::AgentUseCase::Rules,
+    // Resolve workflows use case
+    let workflows_config = ModelManager::resolve_agent_config_for_use_case(
+        swissarmyhammer_config::AgentUseCase::Workflows,
     )
-    .expect("Should resolve rules config");
+    .expect("Should resolve workflows config");
     assert_eq!(
-        rules_config.executor_type(),
+        workflows_config.executor_type(),
         swissarmyhammer_config::ModelExecutorType::LlamaAgent
     );
 }
@@ -710,9 +694,12 @@ fn test_agents_map_in_config_file_operations() {
     assert!(initial_config.contains("agents:"), "Should have agents map");
     assert!(initial_config.contains("root: claude-code"));
 
-    // Add rules agent to existing config
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Rules)
-        .expect("Should add rules agent");
+    // Add workflows agent to existing config
+    ModelManager::use_agent_for_use_case(
+        "qwen-coder",
+        swissarmyhammer_config::AgentUseCase::Workflows,
+    )
+    .expect("Should add workflows agent");
 
     let updated_config = helper.read_config();
     assert!(
@@ -724,22 +711,9 @@ fn test_agents_map_in_config_file_operations() {
         "Should preserve root agent"
     );
     assert!(
-        updated_config.contains("rules: qwen-coder"),
-        "Should add rules agent"
+        updated_config.contains("workflows: qwen-coder"),
+        "Should add workflows agent"
     );
-
-    // Add workflows agent
-    ModelManager::use_agent_for_use_case(
-        "qwen-next",
-        swissarmyhammer_config::AgentUseCase::Workflows,
-    )
-    .expect("Should add workflows agent");
-
-    let final_config = helper.read_config();
-    assert!(final_config.contains("agents:"));
-    assert!(final_config.contains("root: claude-code"));
-    assert!(final_config.contains("rules: qwen-coder"));
-    assert!(final_config.contains("workflows: qwen-next"));
 }
 
 #[test]
@@ -764,8 +738,8 @@ agents:
     helper.write_config(existing_config);
 
     // Update agents map with new use case
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Rules)
-        .expect("Should add rules agent");
+    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Workflows)
+        .expect("Should add workflows agent");
 
     let updated_config = helper.read_config();
 
@@ -787,8 +761,8 @@ agents:
         "Should preserve root agent"
     );
     assert!(
-        updated_config.contains("rules: qwen-coder"),
-        "Should add rules agent"
+        updated_config.contains("workflows: qwen-coder"),
+        "Should add workflows agent"
     );
 }
 
@@ -1307,10 +1281,8 @@ fn test_global_agent_flag_override_concept() {
     // Setup: Configure different agents for different use cases
     ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
         .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Rules)
-        .expect("Should configure rules agent");
     ModelManager::use_agent_for_use_case(
-        "qwen-next",
+        "qwen-coder",
         swissarmyhammer_config::AgentUseCase::Workflows,
     )
     .expect("Should configure workflows agent");
@@ -1321,15 +1293,10 @@ fn test_global_agent_flag_override_concept() {
             .expect("Should get root agent");
     assert_eq!(root_agent, Some("claude-code".to_string()));
 
-    let rules_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Rules)
-            .expect("Should get rules agent");
-    assert_eq!(rules_agent, Some("qwen-coder".to_string()));
-
     let workflows_agent =
         ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
             .expect("Should get workflows agent");
-    assert_eq!(workflows_agent, Some("qwen-next".to_string()));
+    assert_eq!(workflows_agent, Some("qwen-coder".to_string()));
 
     // The runtime override would happen in the CLI layer by:
     // 1. Reading the --agent flag value
@@ -1384,8 +1351,8 @@ fn test_global_agent_override_preserves_config_file() {
     // Setup initial config
     ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
         .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Rules)
-        .expect("Should configure rules agent");
+    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Workflows)
+        .expect("Should configure workflows agent");
 
     let initial_config = helper.read_config();
     let initial_size = helper.config_size();
@@ -1422,11 +1389,11 @@ fn test_global_agent_override_preserves_config_file() {
         "Root agent should still be claude-code"
     );
 
-    let rules_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Rules)
-            .expect("Should get rules agent");
+    let workflows_agent =
+        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
+            .expect("Should get workflows agent");
     assert_eq!(
-        rules_agent,
+        workflows_agent,
         Some("qwen-coder".to_string()),
         "Rules agent should still be qwen-coder"
     );

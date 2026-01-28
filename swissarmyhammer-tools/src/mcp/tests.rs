@@ -654,7 +654,7 @@ async fn test_builtin_partials_not_exposed_in_mcp() {
     }
 
     // Check that hidden prompts (like .check) are not exposed
-    let hidden_names = vec![".check", ".system/rule-checker"];
+    let hidden_names = vec![".check"];
 
     for hidden_name in hidden_names {
         assert!(

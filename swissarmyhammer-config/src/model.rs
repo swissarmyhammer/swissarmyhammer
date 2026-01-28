@@ -195,8 +195,6 @@ pub enum ModelExecutorType {
 pub enum AgentUseCase {
     /// Default/fallback agent for general operations
     Root,
-    /// Agent for rule checking operations
-    Rules,
     /// Agent for workflow execution (plan, review, implement, etc.)
     Workflows,
 }
@@ -205,7 +203,6 @@ impl fmt::Display for AgentUseCase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AgentUseCase::Root => write!(f, "root"),
-            AgentUseCase::Rules => write!(f, "rules"),
             AgentUseCase::Workflows => write!(f, "workflows"),
         }
     }
@@ -215,22 +212,14 @@ impl std::str::FromStr for AgentUseCase {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s_lower = s.to_lowercase();
-
-        for variant in [
-            AgentUseCase::Root,
-            AgentUseCase::Rules,
-            AgentUseCase::Workflows,
-        ] {
-            if variant.to_string() == s_lower {
-                return Ok(variant);
-            }
+        match s.to_lowercase().as_str() {
+            "root" => Ok(AgentUseCase::Root),
+            "workflows" => Ok(AgentUseCase::Workflows),
+            _ => Err(format!(
+                "Invalid use case: '{}'. Valid options: root, workflows",
+                s
+            )),
         }
-
-        Err(format!(
-            "Invalid use case: '{}'. Valid options: root, rules, workflows",
-            s
-        ))
     }
 }
 
@@ -1589,7 +1578,7 @@ impl ModelManager {
     /// ```no_run
     /// use swissarmyhammer_config::model::{ModelManager, AgentUseCase};
     ///
-    /// let config = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)?;
+    /// let config = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows)?;
     /// println!("Using agent: {:?}", config.executor_type());
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
@@ -3451,7 +3440,7 @@ agents:
         env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
 
         // Test 1: No config - should return default claude-code
-        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
+        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows);
         assert!(
             result.is_ok(),
             "Should resolve to default agent when no config exists"
@@ -3459,7 +3448,7 @@ agents:
         let config = result.unwrap();
         assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
-        // Test 2: Config with root agent only - rules should fall back to root
+        // Test 2: Config with root agent only - workflows should fall back to root
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
         let config_path = sah_dir.join("sah.yaml");
@@ -3468,7 +3457,7 @@ agents:
 "#;
         fs::write(&config_path, config_with_root).expect("Failed to write config");
 
-        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
+        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows);
         assert!(
             result.is_ok(),
             "Should resolve to root agent when use case not configured"
@@ -3476,15 +3465,16 @@ agents:
         let config = result.unwrap();
         assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
-        // Test 3: Config with specific rules agent - should use rules agent
-        let config_with_rules = r#"agents:
+        // Test 3: Config with specific workflows agent - should use workflows agent
+        let config_with_workflows = r#"agents:
   root: "claude-code"
-  rules: "qwen-coder"
+  workflows: "qwen-coder"
 "#;
-        fs::write(&config_path, config_with_rules).expect("Failed to write config with rules");
+        fs::write(&config_path, config_with_workflows)
+            .expect("Failed to write config with workflows");
 
-        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
-        assert!(result.is_ok(), "Should resolve to rules-specific agent");
+        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows);
+        assert!(result.is_ok(), "Should resolve to workflows-specific agent");
         let config = result.unwrap();
         assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
 
@@ -3516,12 +3506,12 @@ agents:
         fn test_resolve_use_case_with_specific_agent() {
             let _temp = setup_test_env();
 
-            // Set Rules to specific agent
-            ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Rules).unwrap();
+            // Set Workflows to specific agent
+            ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Workflows).unwrap();
 
             // Verify it resolves correctly
             let agent =
-                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
+                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows).unwrap();
             assert!(matches!(
                 agent.executor_type(),
                 ModelExecutorType::ClaudeCode
@@ -3535,9 +3525,9 @@ agents:
             // Set only Root
             ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Root).unwrap();
 
-            // Rules should fall back to Root
+            // Workflows should fall back to Root
             let agent =
-                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
+                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows).unwrap();
             assert!(matches!(
                 agent.executor_type(),
                 ModelExecutorType::ClaudeCode
@@ -3551,7 +3541,7 @@ agents:
             // Don't configure anything
             // Should fall back to default (claude-code)
             let agent =
-                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
+                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows).unwrap();
             assert!(matches!(
                 agent.executor_type(),
                 ModelExecutorType::ClaudeCode
@@ -3561,10 +3551,6 @@ agents:
         #[test]
         fn test_use_case_from_str() {
             assert_eq!("root".parse::<AgentUseCase>().unwrap(), AgentUseCase::Root);
-            assert_eq!(
-                "rules".parse::<AgentUseCase>().unwrap(),
-                AgentUseCase::Rules
-            );
             assert_eq!(
                 "workflows".parse::<AgentUseCase>().unwrap(),
                 AgentUseCase::Workflows
@@ -3576,7 +3562,6 @@ agents:
         #[test]
         fn test_use_case_display() {
             assert_eq!(AgentUseCase::Root.to_string(), "root");
-            assert_eq!(AgentUseCase::Rules.to_string(), "rules");
             assert_eq!(AgentUseCase::Workflows.to_string(), "workflows");
         }
 
@@ -3601,7 +3586,7 @@ agents:
             let config_path = ModelManager::ensure_config_structure().unwrap();
             std::fs::write(
                 &config_path,
-                "agents:\n  root: claude-code\n  rules: qwen-coder\n",
+                "agents:\n  root: claude-code\n  workflows: qwen-coder\n",
             )
             .unwrap();
 
@@ -3613,7 +3598,7 @@ agents:
                 "claude-code"
             );
             assert_eq!(
-                ModelManager::get_agent_for_use_case(AgentUseCase::Rules)
+                ModelManager::get_agent_for_use_case(AgentUseCase::Workflows)
                     .unwrap()
                     .unwrap(),
                 "qwen-coder"

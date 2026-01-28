@@ -879,13 +879,13 @@ mod tests {
     fn test_workflow_mode_various_values() {
         let mut context = create_empty_test_context();
 
+        // Note: rule-checker mode removed as part of swissarmyhammer-rules crate removal
         let test_modes = vec![
             "planner",
             "implementer",
             "reviewer",
             "tester",
             "committer",
-            "rule-checker",
             "custom-mode",
             "mode-with-numbers-123",
         ];

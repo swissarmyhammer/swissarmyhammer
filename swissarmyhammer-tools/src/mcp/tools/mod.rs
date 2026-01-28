@@ -40,7 +40,6 @@ pub mod files;
 pub mod flow;
 pub mod git;
 pub mod questions;
-pub mod rules;
 pub mod shell;
 pub mod todo;
 pub mod web_fetch;

@@ -27,8 +27,7 @@ This workflow processes specification files and generates detailed implementatio
 stateDiagram-v2
     [*] --> start
     start --> create_draft
-    create_draft --> generate_rules
-    generate_rules --> generate_todos
+    create_draft --> generate_todos
     generate_todos --> done
     done --> [*]
 ```
@@ -37,6 +36,5 @@ stateDiagram-v2
 
 - start: log "Making the plan {{ plan_filename }}"
 - create_draft: execute prompt "create-draft-plan" with plan_filename="{{ plan_filename }}"
-- generate_rules: execute prompt "generate-rules" with plan_filename="{{ plan_filename }}"
 - generate_todos: execute prompt "generate-todos" with plan_filename="{{ plan_filename }}"
 - done: log "Plan ready"

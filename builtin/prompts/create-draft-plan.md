@@ -65,5 +65,4 @@ Your draft plan should include:
 Write the complete draft plan to: `.swissarmyhammer/tmp/DRAFT_PLAN.md`
 
 This file will be used by subsequent prompts to generate:
-- Rules via `generate-rules` prompt
 - Todos via `generate-todos` prompt

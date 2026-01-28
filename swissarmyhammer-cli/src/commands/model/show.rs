@@ -32,11 +32,7 @@ pub async fn execute_show_command(
     table.set_header(vec!["Use Case", "Agent", "Source"]);
 
     // Show each use case
-    for use_case in [
-        AgentUseCase::Root,
-        AgentUseCase::Rules,
-        AgentUseCase::Workflows,
-    ] {
+    for use_case in [AgentUseCase::Root, AgentUseCase::Workflows] {
         let (agent_name, source) = get_agent_info_for_use_case(use_case);
 
         table.add_row(vec![

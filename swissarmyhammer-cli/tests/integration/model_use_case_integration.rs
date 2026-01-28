@@ -163,8 +163,7 @@ async fn test_model_show_command_with_config() -> Result<()> {
 
     let config_content = r#"agents:
   root: "claude-code"
-  rules: "qwen-coder"
-  workflows: "claude-code"
+  workflows: "qwen-coder"
 "#;
     ctx.create_config(config_content)?;
 
@@ -177,7 +176,6 @@ async fn test_model_show_command_with_config() -> Result<()> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_stdout_contains_use_case(&stdout, "root");
-    assert_stdout_contains_use_case(&stdout, "rules");
     assert_stdout_contains_use_case(&stdout, "workflows");
     assert_stdout_contains_model(&stdout, "claude-code");
     assert_stdout_contains_model(&stdout, "qwen-coder");
@@ -190,11 +188,11 @@ async fn test_model_show_command_with_config() -> Result<()> {
 // =============================================================================
 
 #[tokio::test]
-async fn test_model_use_with_use_case_rules() -> Result<()> {
+async fn test_model_use_with_use_case_workflows() -> Result<()> {
     let ctx = TestContext::new()?;
 
     let output = ctx
-        .run_command(&["model", "use", "rules", "qwen-coder"])
+        .run_command(&["model", "use", "workflows", "qwen-coder"])
         .await?;
 
     if !output.status.success() {
@@ -204,28 +202,10 @@ async fn test_model_use_with_use_case_rules() -> Result<()> {
 
     assert!(
         output.status.success(),
-        "agent use rules qwen-coder should succeed"
+        "agent use workflows qwen-coder should succeed"
     );
 
-    ctx.assert_config_contains(&[("rules:", "qwen-coder")])?;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_model_use_with_use_case_workflows() -> Result<()> {
-    let ctx = TestContext::new()?;
-
-    let output = ctx
-        .run_command(&["model", "use", "workflows", "claude-code"])
-        .await?;
-
-    assert!(
-        output.status.success(),
-        "agent use workflows claude-code should succeed"
-    );
-
-    ctx.assert_config_contains(&[("workflows:", "claude-code")])?;
+    ctx.assert_config_contains(&[("workflows:", "qwen-coder")])?;
 
     Ok(())
 }
@@ -254,17 +234,10 @@ async fn test_model_use_multiple_use_cases() -> Result<()> {
         .run_command(&["model", "use", "root", "claude-code"])
         .await?;
     let _ = ctx
-        .run_command(&["model", "use", "rules", "qwen-coder"])
-        .await?;
-    let _ = ctx
-        .run_command(&["model", "use", "workflows", "claude-code"])
+        .run_command(&["model", "use", "workflows", "qwen-coder"])
         .await?;
 
-    ctx.assert_config_contains(&[
-        ("root:", "claude-code"),
-        ("rules:", "qwen-coder"),
-        ("workflows:", "claude-code"),
-    ])?;
+    ctx.assert_config_contains(&[("root:", "claude-code"), ("workflows:", "qwen-coder")])?;
 
     Ok(())
 }
@@ -296,7 +269,7 @@ async fn test_model_use_nonexistent_model_for_use_case() -> Result<()> {
     let ctx = TestContext::new()?;
 
     let output = ctx
-        .run_command(&["model", "use", "rules", "nonexistent-agent"])
+        .run_command(&["model", "use", "workflows", "nonexistent-agent"])
         .await?;
 
     assert!(
@@ -327,7 +300,7 @@ async fn test_global_model_override_flag() -> Result<()> {
 
     let config_content = r#"models:
   root: "claude-code"
-  rules: "qwen-coder"
+  workflows: "qwen-coder"
 "#;
     ctx.create_config(config_content)?;
 
@@ -361,7 +334,7 @@ models:
     ctx.create_config(existing_config)?;
 
     let output = ctx
-        .run_command(&["model", "use", "rules", "qwen-coder"])
+        .run_command(&["model", "use", "workflows", "qwen-coder"])
         .await?;
 
     assert!(
@@ -369,7 +342,7 @@ models:
         "agent use should update existing config"
     );
 
-    let config = ctx.assert_config_contains(&[("rules:", "qwen-coder")])?;
+    let config = ctx.assert_config_contains(&[("workflows:", "qwen-coder")])?;
     assert!(
         config.contains("other_section:"),
         "Should preserve other_section"
@@ -392,12 +365,12 @@ async fn test_model_use_updates_existing_use_case() -> Result<()> {
 
     let initial_config = r#"models:
   root: "claude-code"
-  rules: "qwen-coder"
+  workflows: "qwen-coder"
 "#;
     ctx.create_config(initial_config)?;
 
     let output = ctx
-        .run_command(&["model", "use", "rules", "claude-code"])
+        .run_command(&["model", "use", "workflows", "claude-code"])
         .await?;
 
     assert!(
@@ -405,10 +378,10 @@ async fn test_model_use_updates_existing_use_case() -> Result<()> {
         "agent use should update existing use case"
     );
 
-    let updated_config = ctx.assert_config_contains(&[("rules:", "claude-code")])?;
+    let updated_config = ctx.assert_config_contains(&[("workflows:", "claude-code")])?;
     assert!(
-        !updated_config.contains("rules: \"qwen-coder\""),
-        "Should not have qwen-coder for rules anymore"
+        !updated_config.contains("workflows: \"qwen-coder\""),
+        "Should not have qwen-coder for workflows anymore"
     );
 
     Ok(())
@@ -489,16 +462,8 @@ async fn test_workflow_sequential_use_case_configuration() -> Result<()> {
         "Setting root model should succeed"
     );
 
-    let use_rules_output = ctx
-        .run_command(&["model", "use", "rules", "qwen-coder"])
-        .await?;
-    assert!(
-        use_rules_output.status.success(),
-        "Setting rules model should succeed"
-    );
-
     let use_workflows_output = ctx
-        .run_command(&["model", "use", "workflows", "claude-code"])
+        .run_command(&["model", "use", "workflows", "qwen-coder"])
         .await?;
     assert!(
         use_workflows_output.status.success(),
@@ -516,10 +481,7 @@ async fn test_workflow_final_state_verification() -> Result<()> {
         .run_command(&["model", "use", "root", "claude-code"])
         .await?;
     let _ = ctx
-        .run_command(&["model", "use", "rules", "qwen-coder"])
-        .await?;
-    let _ = ctx
-        .run_command(&["model", "use", "workflows", "claude-code"])
+        .run_command(&["model", "use", "workflows", "qwen-coder"])
         .await?;
 
     let final_show_output = ctx.run_command(&["model", "show"]).await?;
@@ -531,9 +493,8 @@ async fn test_workflow_final_state_verification() -> Result<()> {
     let final_stdout = String::from_utf8_lossy(&final_show_output.stdout);
     assert_stdout_contains_use_case(&final_stdout, "root");
     assert_stdout_contains_model(&final_stdout, "claude-code");
-    assert_stdout_contains_use_case(&final_stdout, "rules");
-    assert_stdout_contains_model(&final_stdout, "qwen-coder");
     assert_stdout_contains_use_case(&final_stdout, "workflows");
+    assert_stdout_contains_model(&final_stdout, "qwen-coder");
 
     Ok(())
 }
@@ -546,17 +507,12 @@ async fn test_workflow_config_file_validation() -> Result<()> {
         .run_command(&["model", "use", "root", "claude-code"])
         .await?;
     let _ = ctx
-        .run_command(&["model", "use", "rules", "qwen-coder"])
-        .await?;
-    let _ = ctx
-        .run_command(&["model", "use", "workflows", "claude-code"])
+        .run_command(&["model", "use", "workflows", "qwen-coder"])
         .await?;
 
-    let config =
-        ctx.assert_config_contains(&[("root:", ""), ("rules:", ""), ("workflows:", "")])?;
+    let config = ctx.assert_config_contains(&[("root:", ""), ("workflows:", "")])?;
 
     assert!(config.contains("root:"), "Should have root use case");
-    assert!(config.contains("rules:"), "Should have rules use case");
     assert!(
         config.contains("workflows:"),
         "Should have workflows use case"
@@ -573,7 +529,7 @@ async fn test_use_case_configuration_persistence() -> Result<()> {
         .run_command(&["model", "use", "root", "claude-code"])
         .await?;
     let _ = ctx
-        .run_command(&["model", "use", "rules", "qwen-coder"])
+        .run_command(&["model", "use", "workflows", "qwen-coder"])
         .await?;
 
     let config_path = ctx
@@ -601,9 +557,9 @@ async fn test_use_case_configuration_persistence() -> Result<()> {
         "Should have root: claude-code"
     );
     assert!(
-        agents.get(serde_yaml::Value::String("rules".to_string()))
+        agents.get(serde_yaml::Value::String("workflows".to_string()))
             == Some(&serde_yaml::Value::String("qwen-coder".to_string())),
-        "Should have rules: qwen-coder"
+        "Should have workflows: qwen-coder"
     );
 
     Ok(())

@@ -1055,12 +1055,10 @@ Usage patterns:
 
 Use cases:
   root      - Default model for general operations
-  rules     - Model for rule checking operations
   workflows - Model for workflow execution
 
 Examples:
   sah model use claude-code               # Set root model
-  sah model use rules qwen-coder          # Use Qwen for rules
   sah model use workflows claude-code     # Use Claude for workflows
 ";
 
@@ -2077,7 +2075,7 @@ impl CliBuilder {
             SubcommandSpec::new("use", "Use a specific model for a use case")
                 .long_about(MODEL_USE_LONG_ABOUT)
                 .args(vec![
-                    ArgSpec::new("first", "Model name OR use case (root, rules, workflows)")
+                    ArgSpec::new("first", "Model name OR use case (root, workflows)")
                         .value_name("FIRST")
                         .required(true),
                     ArgSpec::new(

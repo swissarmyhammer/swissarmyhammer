@@ -12,33 +12,33 @@ tags:
 stateDiagram-v2
     [*] --> start
     start --> do_todos
-    do_todos --> review_code
-    review_code --> commit_changes
+    do_todos --> test
+    test --> commit_changes
     commit_changes --> done
     done --> [*]
 ```
 
 ## Actions
 
-- start: log "Starting implementation workflow: do → review → commit"
+- start: log "Starting implementation workflow: do → test → commit"
 - do_todos: run workflow "do"
-- review_code: run workflow "review"
+- test: run workflow "test"
 - commit_changes: execute prompt "commit"
-- done: log "Implementation complete: all todos done, code reviewed, and changes committed!"
+- done: log "Implementation complete: all todos done, tests run, and changes committed!"
 
 ## Description
 
 This workflow provides a complete implementation cycle by chaining together three key workflows:
 
 1. **Do Todos** - Works through all pending todo items autonomously
-2. **Review Code** - Runs rules checks on changed files and fixes violations
+2. **Test** - Runs tests to verify the implementation
 3. **Commit Changes** - Creates a conventional commit with all changes
 
 ### When to Use
 
 Use this workflow when you want to:
-- Complete a feature or fix with proper quality checks
-- Ensure code meets standards before committing
+- Complete a feature or fix with proper testing
+- Ensure tests pass before committing
 - Automate the entire development cycle from task to commit
 
 ### Workflow Steps
@@ -51,13 +51,10 @@ The `do` workflow iterates through all pending todos:
 - Marks the todo as complete
 - Repeats until no todos remain
 
-#### Step 2: Review Code
-The `review` workflow ensures code quality:
-- Runs rules checks on changed files
-- Creates todos for any violations found
-- Runs the `do` workflow to fix violations
-- Runs tests to verify fixes
-- Repeats until all rules pass
+#### Step 2: Test
+The `test` workflow verifies the implementation:
+- Runs the project test suite
+- Reports any failures
 
 #### Step 3: Commit Changes
 The `commit` prompt finalizes the work:
@@ -70,7 +67,6 @@ The `commit` prompt finalizes the work:
 ### Requirements
 
 - At least one pending todo to start the workflow
-- Rules configured for code review (optional but recommended)
 - Git repository initialized
 - Clean working directory (no uncommitted scratch files)
 
@@ -80,4 +76,4 @@ The `commit` prompt finalizes the work:
 sah flow implement
 ```
 
-This will autonomously complete all todos, review the code for rule violations, fix any issues, and commit the final changes with a proper commit message.
+This will autonomously complete all todos, run tests, and commit the final changes with a proper commit message.

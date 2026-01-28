@@ -21,8 +21,8 @@ use tokio::sync::{Mutex, RwLock};
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_cel_tools, register_file_tools, register_flow_tools, register_git_tools,
-    register_questions_tools, register_rules_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
+    register_questions_tools, register_shell_tools, register_todo_tools, register_web_fetch_tools,
+    register_web_search_tools, ToolContext, ToolRegistry,
 };
 
 /// Server instructions displayed to MCP clients
@@ -320,11 +320,7 @@ impl McpServer {
             }
         };
 
-        for use_case in [
-            AgentUseCase::Root,
-            AgentUseCase::Rules,
-            AgentUseCase::Workflows,
-        ] {
+        for use_case in [AgentUseCase::Root, AgentUseCase::Workflows] {
             use_case_agents.insert(use_case, Arc::new(override_agent.clone()));
         }
 
@@ -342,11 +338,7 @@ impl McpServer {
             Arc<swissarmyhammer_config::model::ModelConfig>,
         >,
     ) {
-        for use_case in [
-            AgentUseCase::Root,
-            AgentUseCase::Rules,
-            AgentUseCase::Workflows,
-        ] {
+        for use_case in [AgentUseCase::Root, AgentUseCase::Workflows] {
             match ModelManager::resolve_agent_config_for_use_case(use_case) {
                 Ok(config) => {
                     tracing::debug!(
@@ -411,7 +403,6 @@ impl McpServer {
         register_flow_tools(tool_registry);
         register_git_tools(tool_registry);
         register_questions_tools(tool_registry);
-        register_rules_tools(tool_registry);
         register_shell_tools(tool_registry);
         register_todo_tools(tool_registry);
         register_web_fetch_tools(tool_registry);

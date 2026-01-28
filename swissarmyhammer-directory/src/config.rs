@@ -49,7 +49,7 @@ pub trait DirectoryConfig: Send + Sync {
 
 /// Configuration for `.swissarmyhammer` directories.
 ///
-/// SwissArmyHammer uses this configuration for managing rules, prompts,
+/// SwissArmyHammer uses this configuration for managing prompts,
 /// workflows, and other project configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SwissarmyhammerConfig;
@@ -83,7 +83,6 @@ transcripts/
 questions/
 
 # Keep these directories (they should be committed):
-# - rules/      Project-specific code quality rules
 # - docs/       Project documentation
 "#;
 

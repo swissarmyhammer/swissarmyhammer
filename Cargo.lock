@@ -6190,7 +6190,6 @@ dependencies = [
  "swissarmyhammer-doctor",
  "swissarmyhammer-git",
  "swissarmyhammer-prompts",
- "swissarmyhammer-rules",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "swissarmyhammer-workflow",
@@ -6379,42 +6378,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swissarmyhammer-rules"
-version = "0.4.0"
-dependencies = [
- "agent-client-protocol",
- "anyhow",
- "chrono",
- "dirs",
- "futures-util",
- "git2",
- "glob",
- "ignore",
- "include_dir",
- "liquid",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "serial_test",
- "sha2",
- "swissarmyhammer-agent",
- "swissarmyhammer-build",
- "swissarmyhammer-common",
- "swissarmyhammer-config",
- "swissarmyhammer-prompts",
- "swissarmyhammer-templating",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
- "tree-sitter",
- "ulid",
- "walkdir",
-]
-
-[[package]]
 name = "swissarmyhammer-shell"
 version = "0.4.0"
 dependencies = [
@@ -6516,7 +6479,6 @@ dependencies = [
  "swissarmyhammer-git",
  "swissarmyhammer-mcp-proxy",
  "swissarmyhammer-prompts",
- "swissarmyhammer-rules",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",
  "swissarmyhammer-workflow",

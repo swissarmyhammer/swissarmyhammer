@@ -10,8 +10,25 @@ fn test_builtin_modes_load() {
     let mut registry = ModeRegistry::new();
     let modes = registry.load_all().unwrap();
 
-    // 3 original embedded modes + 7 prompt-referencing modes
-    assert_eq!(modes.len(), 10, "Should load 10 builtin modes");
+    // Define expected modes explicitly
+    // Note: rule-checker mode removed as part of swissarmyhammer-rules crate removal
+    let expected_modes = [
+        "general-purpose",
+        "Explore",
+        "Plan",
+        "default",
+        "planner",
+        "implementer",
+        "reviewer",
+        "tester",
+        "committer",
+    ];
+    assert_eq!(
+        modes.len(),
+        expected_modes.len(),
+        "Should load {} builtin modes",
+        expected_modes.len()
+    );
 
     // Verify original embedded modes are present
     assert!(
@@ -31,10 +48,7 @@ fn test_builtin_modes_load() {
     assert!(registry.get("reviewer").is_some(), "Should have reviewer");
     assert!(registry.get("tester").is_some(), "Should have tester");
     assert!(registry.get("committer").is_some(), "Should have committer");
-    assert!(
-        registry.get("rule-checker").is_some(),
-        "Should have rule-checker"
-    );
+    // Note: rule-checker mode removed as part of swissarmyhammer-rules crate removal
 
     // Verify mode content for embedded mode
     let explore_mode = registry.get("Explore").unwrap();

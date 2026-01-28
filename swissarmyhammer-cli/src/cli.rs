@@ -88,7 +88,6 @@ Example usage:
   swissarmyhammer --verbose prompt list          # List prompts with details
   swissarmyhammer --format=json prompt list      # List prompts as JSON
   swissarmyhammer --debug prompt test help       # Test prompt with debug info
-  swissarmyhammer --model qwen-coder rules check # Use qwen-coder for rule checking
   swissarmyhammer agent list                     # List available agents
   swissarmyhammer agent use claude-code          # Apply Claude Code agent to project
   swissarmyhammer flow run code-review           # Execute code review workflow
@@ -348,7 +347,6 @@ for each use case in the project.
 
 SwissArmyHammer supports configuring different models for different use cases:
 • root      - Default model for general operations
-• rules     - Model for rule checking operations
 • workflows - Model for workflow execution (plan, review, implement, etc.)
 
 This command shows the current assignment for each use case, including whether
@@ -374,7 +372,6 @@ project, including which AI model to use and how to execute tools.
 
 SwissArmyHammer supports configuring different models for different use cases:
 • root      - Default model for general operations (default when use case not specified)
-• rules     - Model for rule checking operations
 • workflows - Model for workflow execution (plan, review, implement, etc.)
 
 Model precedence (highest to lowest):
@@ -394,12 +391,11 @@ Common model types:
 Examples:
   sah model use claude-code                # Apply Claude Code model to root use case
   sah model use root claude-code           # Apply Claude Code model to root use case (explicit)
-  sah model use rules qwen-coder           # Apply Qwen model to rules use case
   sah model use workflows claude-code      # Apply Claude Code to workflows use case
   sah --debug model use claude-code        # Apply with debug output
 ")]
     Use {
-        /// First argument: either model name (sets root) OR use case (root, rules, workflows)
+        /// First argument: either model name (sets root) OR use case (root, workflows)
         #[arg(id = "first")]
         first: String,
         /// Second argument: model name (required when first argument is a use case)

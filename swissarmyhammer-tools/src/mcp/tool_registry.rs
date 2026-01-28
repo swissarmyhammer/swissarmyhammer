@@ -353,7 +353,6 @@ pub struct ToolContext {
     ///
     /// This is the base directory where tools should operate. For example:
     /// - Todo storage will be in `{working_dir}/.swissarmyhammer/todo/`
-    /// - Rules will be in `{working_dir}/.swissarmyhammer/rules/`
     ///
     /// If None, tools should use `std::env::current_dir()` or git root detection
     /// as a fallback. In tests, this should always be set to an isolated directory.
@@ -740,7 +739,6 @@ pub trait McpTool: Doctorable + Send + Sync {
             "todo" => Some("todo"),
             "outline" => Some("outline"),
             "notify" => Some("notify"),
-            "rules" => Some("rule"),
             _ => None,
         }
     }
@@ -1712,11 +1710,6 @@ register_tool_category!(
     "Register all question-related tools with the registry"
 );
 register_tool_category!(
-    register_rules_tools,
-    rules,
-    "Register all rules-related tools with the registry"
-);
-register_tool_category!(
     register_shell_tools,
     shell,
     "Register all shell-related tools with the registry"
@@ -1755,7 +1748,6 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_flow_tools(&mut registry);
     register_git_tools(&mut registry);
     register_questions_tools(&mut registry);
-    register_rules_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
@@ -2493,12 +2485,10 @@ mod tests {
         let agent_config = context.agent_config.clone();
 
         // Test that all use cases fall back to root agent when not configured
-        let rules_agent = context.get_agent_for_use_case(AgentUseCase::Rules);
         let workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
         let root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
 
         // All should return the same agent config (root)
-        assert!(Arc::ptr_eq(&rules_agent, &agent_config));
         assert!(Arc::ptr_eq(&workflows_agent, &agent_config));
         assert!(Arc::ptr_eq(&root_agent, &agent_config));
     }
@@ -2509,21 +2499,17 @@ mod tests {
 
         // Create context with use case specific agents
         let root_agent = Arc::new(ModelConfig::default());
-        let rules_agent = Arc::new(ModelConfig::default());
+        let workflows_agent = Arc::new(ModelConfig::default());
 
         let mut use_case_agents = HashMap::new();
-        use_case_agents.insert(AgentUseCase::Rules, rules_agent.clone());
+        use_case_agents.insert(AgentUseCase::Workflows, workflows_agent.clone());
 
         let mut context = create_test_context_with_use_case_agents(use_case_agents);
         context.agent_config = root_agent.clone();
 
-        // Test that Rules use case gets its specific agent (Arc-wrapped, so we can check pointer equality)
-        let resolved_rules_agent = context.get_agent_for_use_case(AgentUseCase::Rules);
-        assert!(Arc::ptr_eq(&resolved_rules_agent, &rules_agent));
-
-        // Test that Workflows falls back to root agent
+        // Test that Workflows use case gets its specific agent
         let resolved_workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
-        assert!(Arc::ptr_eq(&resolved_workflows_agent, &root_agent));
+        assert!(Arc::ptr_eq(&resolved_workflows_agent, &workflows_agent));
 
         // Test that Root falls back to root agent
         let resolved_root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
