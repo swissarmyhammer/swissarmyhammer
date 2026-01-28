@@ -35,7 +35,7 @@ fn test_stop_validators_load() {
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
 
-    // Check that code-quality Stop validators are loaded
+    // Check that Stop validators are loaded
     let validators = loader.list();
     let stop_validators: Vec<_> = validators
         .iter()
@@ -47,34 +47,18 @@ fn test_stop_validators_load() {
         "Should have at least one Stop validator"
     );
 
-    // Check specific code-quality validators
-    let expected_validators = [
-        "no-string-equality",
-        "no-magic-numbers",
-        "no-hard-code",
-        "no-commented-code",
-        "cognitive-complexity",
-        "function-length",
-        "missing-docs",
-        "missing-tests",
-        "naming-consistency",
-        "code-duplication",
-    ];
-
-    for name in expected_validators {
-        let validator = loader.get(name);
-        assert!(
-            validator.is_some(),
-            "Stop validator '{}' should be loaded",
-            name
-        );
-        assert_eq!(
-            validator.unwrap().trigger(),
-            HookType::Stop,
-            "Validator '{}' should have Stop trigger",
-            name
-        );
-    }
+    // code-duplication is the only code-quality validator that remains a Stop validator
+    // (others were converted to PostToolUse for per-file checking)
+    let validator = loader.get("code-duplication");
+    assert!(
+        validator.is_some(),
+        "Stop validator 'code-duplication' should be loaded"
+    );
+    assert_eq!(
+        validator.unwrap().trigger(),
+        HookType::Stop,
+        "Validator 'code-duplication' should have Stop trigger"
+    );
 }
 
 #[test]
@@ -119,15 +103,22 @@ fn test_stop_validators_match_stop_hook() {
 
     // Should have Stop validators matching
     let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
+
+    // code-duplication is the only Stop validator now
     assert!(
-        names.contains(&"no-string-equality"),
-        "no-string-equality should match Stop hook, got: {:?}",
+        names.contains(&"code-duplication"),
+        "code-duplication should match Stop hook, got: {:?}",
         names
     );
+
+    // code-quality validators are now PostToolUse and should NOT match Stop
     assert!(
-        names.contains(&"cognitive-complexity"),
-        "cognitive-complexity should match Stop hook, got: {:?}",
-        names
+        !names.contains(&"cognitive-complexity"),
+        "cognitive-complexity should NOT match Stop hook (now PostToolUse)"
+    );
+    assert!(
+        !names.contains(&"no-string-equality"),
+        "no-string-equality should NOT match Stop hook (now PostToolUse)"
     );
 }
 
@@ -319,7 +310,7 @@ async fn test_file_tracker_no_change_detected_when_unchanged() {
 // PlaybackAgent Integration Tests
 // ============================================================================
 
-/// Integration test: Stop validator passes with low complexity code.
+/// Integration test: Stop validator passes with non-duplicated code.
 #[tokio::test]
 #[serial_test::serial(cwd)]
 async fn test_stop_validator_passes_with_changed_files_playback() {
@@ -332,10 +323,10 @@ async fn test_stop_validator_passes_with_changed_files_playback() {
     let (agent, notifications) = context.agent().await.expect("Should get agent");
     let runner = ValidatorRunner::new(agent, notifications).expect("Should create runner");
 
-    // Load the cognitive-complexity validator
+    // Load the code-duplication validator (only remaining Stop validator)
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
-    let validator = loader.get("cognitive-complexity").unwrap();
+    let validator = loader.get("code-duplication").unwrap();
 
     // Build Stop input
     let input = HookInputBuilder::stop("test-session");
@@ -348,15 +339,14 @@ async fn test_stop_validator_passes_with_changed_files_playback() {
         .execute_validator(validator, HookType::Stop, &input, Some(&changed_files))
         .await;
 
-    // The validator should PASS
-    assert_validator_passed(&result, "for simple code");
-    assert_message_contains(&result, &["complexity", "acceptable", "passed"]);
+    // The validator should PASS (playback fixture returns passing response)
+    assert_validator_passed(&result, "for non-duplicated code");
 }
 
-/// Integration test: Stop validator fails with high complexity code.
+/// Integration test: Stop validator fails with duplicated code.
 #[tokio::test]
 #[serial_test::serial(cwd)]
-async fn test_stop_validator_fails_with_complex_code_playback() {
+async fn test_stop_validator_fails_with_duplicated_code_playback() {
     let (temp, _) = create_test_context();
 
     // Create context with PlaybackAgent
@@ -366,25 +356,24 @@ async fn test_stop_validator_fails_with_complex_code_playback() {
     let (agent, notifications) = context.agent().await.expect("Should get agent");
     let runner = ValidatorRunner::new(agent, notifications).expect("Should create runner");
 
-    // Load the cognitive-complexity validator
+    // Load the code-duplication validator (only remaining Stop validator)
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
-    let validator = loader.get("cognitive-complexity").unwrap();
+    let validator = loader.get("code-duplication").unwrap();
 
     // Build Stop input
     let input = HookInputBuilder::stop("test-session");
 
     // Changed files
-    let changed_files = vec!["src/complex.rs".to_string()];
+    let changed_files = vec!["src/duplicated.rs".to_string()];
 
     // Execute the validator
     let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::Stop, &input, Some(&changed_files))
         .await;
 
-    // The validator should FAIL
-    assert_validator_failed(&result, "for complex code");
-    assert_message_contains(&result, &["complexity", "threshold"]);
+    // The validator should FAIL (playback fixture returns failing response)
+    assert_validator_failed(&result, "for duplicated code");
 }
 
 /// Helper: Execute validator with changed files and return result message.
@@ -399,7 +388,8 @@ async fn run_validator_with_changed_files(
 
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
-    let validator = loader.get("cognitive-complexity").unwrap();
+    // Use code-duplication validator (the only remaining Stop validator)
+    let validator = loader.get("code-duplication").unwrap();
 
     let input = HookInputBuilder::stop("test-session");
     let (result, _) = runner
@@ -455,10 +445,10 @@ async fn test_stop_validator_response_acknowledges_files() {
         run_validator_with_changed_files(&temp, "stop_with_changed_files.json", files).await;
 
     // Verify the validator passed and returned a response about the files
-    assert!(passed, "Validator should pass for files with acceptable complexity");
+    assert!(passed, "Validator should pass for files without duplication");
     assert!(
-        message.contains("changed files") || message.contains("complexity"),
-        "Response should acknowledge processing files: {}",
+        !message.is_empty(),
+        "Response should have a message: {}",
         message
     );
 }
@@ -595,7 +585,7 @@ async fn test_stop_hook_blocking_json_format() {
     );
 }
 
-/// Test that multiple Stop validators run in parallel, not per-file.
+/// Test that Stop validators run in parallel, not per-file.
 #[test]
 #[serial_test::serial(cwd)]
 fn test_stop_validators_count_matches_validators_not_files() {
@@ -612,10 +602,11 @@ fn test_stop_validators_count_matches_validators_not_files() {
     // NOT multiplied by number of changed files
     let validator_count = matching.len();
 
-    // We should have multiple Stop validators
+    // We should have at least 1 Stop validator (code-duplication)
+    // Most code-quality validators are now PostToolUse
     assert!(
-        validator_count >= 5,
-        "Should have at least 5 Stop validators, got: {}",
+        validator_count >= 1,
+        "Should have at least 1 Stop validator, got: {}",
         validator_count
     );
 
