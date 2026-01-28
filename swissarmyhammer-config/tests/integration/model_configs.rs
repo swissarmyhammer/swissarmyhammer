@@ -629,8 +629,11 @@ fn test_resolve_agent_config_for_use_case() {
     // Configure different agents for different use cases
     ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
         .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Workflows)
-        .expect("Should configure workflows agent");
+    ModelManager::use_agent_for_use_case(
+        "qwen-coder",
+        swissarmyhammer_config::AgentUseCase::Workflows,
+    )
+    .expect("Should configure workflows agent");
 
     // Resolve root use case
     let root_config =
@@ -738,8 +741,11 @@ agents:
     helper.write_config(existing_config);
 
     // Update agents map with new use case
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Workflows)
-        .expect("Should add workflows agent");
+    ModelManager::use_agent_for_use_case(
+        "qwen-coder",
+        swissarmyhammer_config::AgentUseCase::Workflows,
+    )
+    .expect("Should add workflows agent");
 
     let updated_config = helper.read_config();
 
@@ -1351,8 +1357,11 @@ fn test_global_agent_override_preserves_config_file() {
     // Setup initial config
     ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
         .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Workflows)
-        .expect("Should configure workflows agent");
+    ModelManager::use_agent_for_use_case(
+        "qwen-coder",
+        swissarmyhammer_config::AgentUseCase::Workflows,
+    )
+    .expect("Should configure workflows agent");
 
     let initial_config = helper.read_config();
     let initial_size = helper.config_size();
