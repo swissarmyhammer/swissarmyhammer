@@ -154,7 +154,7 @@ tar = "0.4"
 flate2 = "1.0"
 zip = "0.6"
 reqwest = { version = "0.12", features = ["json", "stream", "gzip", "cookies", "rustls-tls"] }
-git2 = "0.18"
+git2 = { version = "0.18", default-features = false, features = ["vendored-libgit2"] }
 fs_extra = "1.3"
 url = "2.5"
 indicatif = "0.17"
@@ -188,7 +188,7 @@ llama-embedding = { path = "llama-embedding" }
 llama-loader = { path = "llama-loader" }
 num_cpus = "1.0"
 process-wrap = "8.0"
-hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "default-tls"] }
+hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "rustls-tls"] }
 polars = { version = "0.41.0", features = ["lazy", "parquet", "dtype-struct", "streaming"] }
 jsonschema = "0.18"
 
