@@ -443,10 +443,12 @@ impl GrepFileTool {
 
             let lines: Vec<&str> = content.lines().collect();
             let mut file_matches = Vec::new();
+            let mut file_has_match = false;
 
             for (line_num, line) in lines.iter().enumerate() {
                 if regex.is_match(line) {
                     match_count += 1;
+                    file_has_match = true;
 
                     if output_mode == "content" {
                         // Include context lines
@@ -469,7 +471,7 @@ impl GrepFileTool {
                 }
             }
 
-            if !file_matches.is_empty() {
+            if file_has_match {
                 file_count += 1;
                 if output_mode == "content" {
                     results.extend(file_matches);
