@@ -532,6 +532,7 @@ version = "0.4.0"
 dependencies = [
  "avp-common",
  "clap",
+ "comfy-table",
  "dirs",
  "serde",
  "serde_json",

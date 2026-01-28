@@ -65,6 +65,7 @@
 
 pub mod doctor;
 pub mod install;
+pub mod list;
 
 // Re-export everything from avp-common for backwards compatibility
 pub use avp_common::*;

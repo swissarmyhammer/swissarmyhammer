@@ -5,6 +5,7 @@
 //! - `avp install <target>`: Install AVP hooks into Claude Code settings
 //! - `avp uninstall <target>`: Remove AVP hooks from Claude Code settings
 //! - `avp doctor`: Diagnose AVP configuration and setup
+//! - `avp list`: List all available validators
 //!
 //! Targets: project, local, user
 //!
@@ -19,6 +20,7 @@ use tracing_subscriber::EnvFilter;
 
 use avp::doctor;
 use avp::install::{self, InstallTarget};
+use avp::list;
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
 use avp_common::AvpError;
@@ -59,6 +61,12 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// List all available validators
+    List {
+        /// Show detailed output including descriptions
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[tokio::main]
@@ -94,6 +102,7 @@ async fn main() {
             }
         },
         Some(Commands::Doctor { verbose }) => doctor::run_doctor(verbose),
+        Some(Commands::List { verbose }) => list::run_list(verbose),
         None => {
             // Default behavior: process hook from stdin
             match run_hook_processor(&cli).await {
@@ -125,10 +134,14 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
         println!("  avp                           Process hook from stdin (pipe JSON)");
         println!("  avp install <project|local|user>   Install hooks to Claude settings");
         println!("  avp uninstall <project|local|user> Remove hooks from Claude settings");
+        println!("  avp list [-v]                 List all available validators");
+        println!("  avp doctor [-v]               Diagnose AVP setup");
         println!();
         println!("Examples:");
         println!("  avp install project           Install to .claude/settings.json");
         println!("  avp install user              Install to ~/.claude/settings.json");
+        println!("  avp list                      Show all validators");
+        println!("  avp list -v                   Show validators with descriptions");
         println!("  echo '{{...}}' | avp           Process a hook event");
         println!();
         println!("Run 'avp --help' for more information.");
@@ -252,6 +265,33 @@ mod tests {
             Some(Commands::Install {
                 target: InstallTarget::User
             })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_list() {
+        let cli = Cli::parse_from(["avp", "list"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::List { verbose: false })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_list_verbose() {
+        let cli = Cli::parse_from(["avp", "list", "-v"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::List { verbose: true })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_list_verbose_long() {
+        let cli = Cli::parse_from(["avp", "list", "--verbose"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::List { verbose: true })
         ));
     }
 }

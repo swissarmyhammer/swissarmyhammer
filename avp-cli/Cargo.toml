@@ -29,6 +29,9 @@ serde_json = { workspace = true }
 # CLI
 clap = { workspace = true }
 
+# Table display
+comfy-table = { workspace = true }
+
 # Async runtime
 tokio = { workspace = true }
 
