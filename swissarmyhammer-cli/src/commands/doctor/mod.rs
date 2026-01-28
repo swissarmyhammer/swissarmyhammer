@@ -18,6 +18,7 @@
 use crate::exit_codes::EXIT_ERROR;
 use anyhow::Result;
 use swissarmyhammer_common::SwissarmyhammerDirectory;
+use swissarmyhammer_doctor::DoctorRunner;
 
 // Re-export types from submodules
 pub use types::*;
@@ -36,6 +37,16 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// of the system's configuration and any potential issues.
 pub struct Doctor {
     checks: Vec<Check>,
+}
+
+impl DoctorRunner for Doctor {
+    fn checks(&self) -> &[Check] {
+        &self.checks
+    }
+
+    fn checks_mut(&mut self) -> &mut Vec<Check> {
+        &mut self.checks
+    }
 }
 
 impl Doctor {
@@ -265,28 +276,6 @@ impl Doctor {
 
         Ok(())
     }
-
-    /// Get exit code based on check results
-    ///
-    /// # Returns
-    ///
-    /// - 0: All checks passed (no errors or warnings)
-    /// - 1: At least one warning detected
-    /// - 2: At least one error detected
-    pub fn get_exit_code(&self) -> i32 {
-        let has_error = self.checks.iter().any(|c| c.status == CheckStatus::Error);
-        let has_warning = self.checks.iter().any(|c| c.status == CheckStatus::Warning);
-
-        let exit_code = if has_error {
-            ExitCode::Error
-        } else if has_warning {
-            ExitCode::Warning
-        } else {
-            ExitCode::Success
-        };
-
-        exit_code.into()
-    }
 }
 
 /// Helper function to capitalize first letter of a string
@@ -325,48 +314,8 @@ async fn run_doctor_diagnostics(
     // Run all diagnostics without output
     let exit_code = doctor.run_diagnostics_without_output().await?;
 
-    // Format and display results using comfy-table for better emoji handling
-    use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-
-    if cli_context.verbose {
-        table.set_header(vec!["Status", "Check", "Result", "Fix", "Category"]);
-        for check in &doctor.checks {
-            let result = display::VerboseCheckResult::from(check);
-            // Create colored cell for status using comfy-table's Cell API
-            let status_cell = match check.status {
-                CheckStatus::Ok => Cell::new("✓").fg(Color::Green),
-                CheckStatus::Warning => Cell::new("⚠").fg(Color::Yellow),
-                CheckStatus::Error => Cell::new("✗").fg(Color::Red),
-            };
-            table.add_row(vec![
-                status_cell,
-                Cell::new(&result.name),
-                Cell::new(&result.message),
-                Cell::new(&result.fix),
-                Cell::new(&result.category),
-            ]);
-        }
-    } else {
-        table.set_header(vec!["Status", "Check", "Result"]);
-        for check in &doctor.checks {
-            let result = display::CheckResult::from(check);
-            // Create colored cell for status using comfy-table's Cell API
-            let status_cell = match check.status {
-                CheckStatus::Ok => Cell::new("✓").fg(Color::Green),
-                CheckStatus::Warning => Cell::new("⚠").fg(Color::Yellow),
-                CheckStatus::Error => Cell::new("✗").fg(Color::Red),
-            };
-            table.add_row(vec![
-                status_cell,
-                Cell::new(&result.name),
-                Cell::new(&result.message),
-            ]);
-        }
-    }
-
-    println!("{table}");
+    // Print the checks table using the shared crate
+    doctor.print_table(cli_context.verbose);
 
     Ok(exit_code)
 }

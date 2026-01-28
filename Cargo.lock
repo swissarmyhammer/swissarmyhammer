@@ -535,6 +535,8 @@ dependencies = [
  "dirs",
  "serde",
  "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-doctor",
  "tempfile",
  "tokio",
  "tracing",
@@ -6184,6 +6186,7 @@ dependencies = [
  "swissarmyhammer-cel",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
+ "swissarmyhammer-doctor",
  "swissarmyhammer-git",
  "swissarmyhammer-prompts",
  "swissarmyhammer-rules",
@@ -6259,6 +6262,16 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "swissarmyhammer-doctor"
+version = "0.3.0"
+dependencies = [
+ "comfy-table",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

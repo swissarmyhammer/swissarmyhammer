@@ -310,6 +310,11 @@ impl AvpContext {
         self.project_dir.root()
     }
 
+    /// Get the turn state manager for tracking file changes.
+    pub fn turn_state(&self) -> Arc<TurnStateManager> {
+        Arc::clone(&self.turn_state)
+    }
+
     /// Get the project validators directory path (./<AVP_DIR>/validators).
     ///
     /// Returns the path even if it doesn't exist yet.
@@ -775,5 +780,24 @@ mod tests {
         assert_eq!(failed_event.name, "safe-commands");
         assert!(!failed_event.passed);
         assert_eq!(failed_event.message, "Dangerous command detected");
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_turn_state() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+
+        // turn_state() should return a valid Arc<TurnStateManager>
+        let turn_state = ctx.turn_state();
+        // Verify we can clone it (Arc functionality)
+        let _cloned = Arc::clone(&turn_state);
+
+        std::env::set_current_dir(&original_dir).unwrap();
     }
 }

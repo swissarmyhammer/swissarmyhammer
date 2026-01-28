@@ -8,7 +8,6 @@ use crate::builtin::load_builtins;
 use crate::chain::{Chain, ChainFactory, ChainOutput};
 use crate::context::{AvpContext, Decision, HookEvent};
 use crate::error::AvpError;
-use crate::turn::TurnStateManager;
 use crate::types::HookType;
 
 // Import Claude-specific types from sibling modules
@@ -72,9 +71,8 @@ impl ClaudeCodeHookStrategy {
 
         let context = Arc::new(context);
         let validator_loader = Arc::new(validator_loader);
-        // TurnStateManager needs the project root (parent of .avp directory)
-        let project_root = context.avp_dir().parent().unwrap_or(context.avp_dir());
-        let turn_state = Arc::new(TurnStateManager::new(project_root));
+        // Use the turn state manager from the context
+        let turn_state = context.turn_state();
 
         let chain_factory =
             ChainFactory::new(context.clone(), validator_loader.clone(), turn_state);

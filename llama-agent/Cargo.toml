@@ -1,7 +1,11 @@
 [package]
 name = "llama-agent"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Local LLM agent using llama.cpp"
 
 [dependencies]
 # Fixture support

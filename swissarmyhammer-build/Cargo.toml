@@ -1,9 +1,11 @@
 [package]
 name = "swissarmyhammer-build"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Shared build utilities for SwissArmyHammer crates"
-license = "MIT"
 
 # This is a build-time only crate
 [lib]

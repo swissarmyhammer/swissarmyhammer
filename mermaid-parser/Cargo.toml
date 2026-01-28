@@ -1,17 +1,17 @@
 [package]
 name = "mermaid-parser"
 version.workspace = true
-authors = ["William Ballard <wballard@mailbox.org>"]
-edition = "2021"
-license = "MIT OR Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "A fast, reliable parser for Mermaid diagram syntax with comprehensive diagram type support"
-repository = "https://github.com/wballard/mermaid-parser"
-homepage = "https://github.com/wballard/mermaid-parser"
 documentation = "https://docs.rs/mermaid-parser"
 readme = "README.md"
 keywords = ["mermaid", "parser", "diagram", "visualization", "graph"]
 categories = ["parser-implementations", "visualization", "text-processing"]
-rust-version = "1.70.0"
 
 [badges]
 maintenance = { status = "actively-developed" }

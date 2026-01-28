@@ -24,6 +24,7 @@ path = "src/main.rs"
 [dependencies]
 # Library dependencies
 swissarmyhammer = { path = "../swissarmyhammer" }
+swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-cel = { path = "../swissarmyhammer-cel" }

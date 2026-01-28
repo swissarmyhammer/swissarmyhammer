@@ -1,6 +1,12 @@
 //! Type definitions for the doctor module
+//!
+//! Re-exports core types from swissarmyhammer-doctor and provides
+//! sah-specific types like WorkflowDirectory.
 
 use std::path::{Path, PathBuf};
+
+// Re-export core doctor types from the shared crate
+pub use swissarmyhammer_doctor::{Check, CheckStatus, ExitCode};
 
 /// Wrapper type for workflow directory paths to provide type safety
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,47 +102,6 @@ impl std::fmt::Display for WorkflowCategory {
             WorkflowCategory::Local => write!(f, "Local"),
         }
     }
-}
-
-/// Status of a diagnostic check
-#[derive(Debug, PartialEq, Clone)]
-pub enum CheckStatus {
-    /// Check passed without issues
-    Ok,
-    /// Check passed but with potential issues
-    Warning,
-    /// Check failed with errors
-    Error,
-}
-
-/// Exit codes for the doctor command
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExitCode {
-    /// All checks passed
-    Success = 0,
-    /// Warnings detected
-    Warning = 1,
-    /// Errors detected
-    Error = 2,
-}
-
-impl From<ExitCode> for i32 {
-    fn from(code: ExitCode) -> i32 {
-        code as i32
-    }
-}
-
-/// Result of a single diagnostic check
-#[derive(Debug, Clone)]
-pub struct Check {
-    /// Name of the check performed
-    pub name: String,
-    /// Status of the check (Ok, Warning, Error)
-    pub status: CheckStatus,
-    /// Descriptive message about the check result
-    pub message: String,
-    /// Optional fix suggestion for warnings or errors
-    pub fix: Option<String>,
 }
 
 #[cfg(test)]

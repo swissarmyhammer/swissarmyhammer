@@ -4,6 +4,7 @@
 //! - `avp` (no args): Read JSON from stdin, process hook, write JSON to stdout
 //! - `avp install <target>`: Install AVP hooks into Claude Code settings
 //! - `avp uninstall <target>`: Remove AVP hooks from Claude Code settings
+//! - `avp doctor`: Diagnose AVP configuration and setup
 //!
 //! Targets: project, local, user
 //!
@@ -16,6 +17,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use avp::doctor;
 use avp::install::{self, InstallTarget};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
@@ -51,6 +53,12 @@ enum Commands {
         #[arg(value_enum)]
         target: InstallTarget,
     },
+    /// Diagnose AVP configuration and setup
+    Doctor {
+        /// Show detailed output including fix suggestions
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[tokio::main]
@@ -85,6 +93,7 @@ async fn main() {
                 1
             }
         },
+        Some(Commands::Doctor { verbose }) => doctor::run_doctor(verbose),
         None => {
             // Default behavior: process hook from stdin
             match run_hook_processor(&cli).await {

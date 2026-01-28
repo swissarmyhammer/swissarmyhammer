@@ -1,11 +1,12 @@
 [package]
 name = "llama-embedding"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Text embedding functionality using llama-cpp-2 with batch processing support"
-authors = ["Claude"]
-license = "MIT"
-repository = "https://github.com/wballard/llama-agent"
 
 [lib]
 name = "llama_embedding"

@@ -35,6 +35,7 @@ members = [
     "swissarmyhammer-project-detection",
     "avp-common",
     "avp-cli",
+    "swissarmyhammer-doctor",
 ]
 resolver = "2"
 

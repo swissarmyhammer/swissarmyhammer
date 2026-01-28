@@ -3,7 +3,9 @@ name = "avp-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Agent Validator Protocol -  hook processor CLI"
+repository.workspace = true
+homepage.workspace = true
+description = "Agent Validator Protocol - Claude Code hook processor CLI"
 
 [lib]
 name = "avp"
@@ -16,6 +18,9 @@ path = "src/main.rs"
 [dependencies]
 # Core library
 avp-common = { path = "../avp-common" }
+
+# Shared doctor infrastructure
+swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
 
 # Serialization (needed for main.rs JSON handling)
 serde = { workspace = true }
@@ -33,6 +38,9 @@ tracing-subscriber = { workspace = true }
 
 # File system
 dirs = { workspace = true }
+
+# Git detection
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
