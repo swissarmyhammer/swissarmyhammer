@@ -1,7 +1,7 @@
 //! Install and uninstall AVP hooks in Claude Code settings.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
 use serde_json::{json, Map, Value};
@@ -189,8 +189,158 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
 
     println!("AVP hooks installed to {}", path.display());
+
+    // For project installs, also create the .avp directory structure
+    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
+        create_avp_project_structure()?;
+    }
+
     Ok(())
 }
+
+/// Create the .avp project directory with README and sample validators.
+fn create_avp_project_structure() -> Result<(), String> {
+    let avp_dir = PathBuf::from(".avp");
+    let validators_dir = avp_dir.join("validators");
+
+    // Create directories
+    fs::create_dir_all(&validators_dir)
+        .map_err(|e| format!("Failed to create .avp/validators: {}", e))?;
+
+    // Create README.md
+    let readme_path = avp_dir.join("README.md");
+    if !readme_path.exists() {
+        fs::write(&readme_path, AVP_README)
+            .map_err(|e| format!("Failed to write .avp/README.md: {}", e))?;
+        println!("Created {}", readme_path.display());
+    }
+
+    // Create sample validators
+    create_sample_validator(
+        &validators_dir,
+        "file-changes.md",
+        SAMPLE_FILE_CHANGES_VALIDATOR,
+    )?;
+    create_sample_validator(
+        &validators_dir,
+        "session-summary.md",
+        SAMPLE_SESSION_SUMMARY_VALIDATOR,
+    )?;
+
+    Ok(())
+}
+
+/// Create a sample validator file if it doesn't exist.
+fn create_sample_validator(dir: &Path, filename: &str, content: &str) -> Result<(), String> {
+    let path = dir.join(filename);
+    if !path.exists() {
+        fs::write(&path, content)
+            .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+        println!("Created {}", path.display());
+    }
+    Ok(())
+}
+
+/// README content for the .avp directory.
+const AVP_README: &str = r#"# AVP - Agent Validator Protocol
+
+This directory contains validators for Claude Code hooks. Validators are markdown
+files with YAML frontmatter that define validation rules.
+
+## Directory Structure
+
+```
+.avp/
+├── README.md           # This file
+├── avp.log             # Hook event log (auto-generated, gitignored)
+└── validators/         # Your validator files
+    ├── file-changes.md
+    └── session-summary.md
+```
+
+## Validator Format
+
+Validators use markdown with YAML frontmatter:
+
+```markdown
+---
+name: validator-name
+description: What this validator does
+severity: warn          # info, warn, or error (error = blocking)
+trigger: PostToolUse    # Hook event that triggers this validator
+match:                  # Optional: filter which events trigger this
+  tools: [Write, Edit]  # Tool names (regex patterns)
+  files: ["*.ts"]       # File globs
+---
+
+# Instructions for the validator
+
+Describe what the validator should check and how it should respond.
+```
+
+## Triggers
+
+- `PreToolUse` - Before a tool runs (can block)
+- `PostToolUse` - After a tool succeeds
+- `PostToolUseFailure` - After a tool fails
+- `Stop` - When Claude finishes responding
+- `SessionStart` - When a session begins
+- `SessionEnd` - When a session ends
+- `UserPromptSubmit` - When user submits a prompt
+
+## Severity Levels
+
+- `info` - Informational, logged but never blocks
+- `warn` - Warning, logged but doesn't block (default)
+- `error` - Error, blocks the action if validation fails
+
+## More Information
+
+See the sample validators in this directory for examples.
+"#;
+
+/// Sample validator for file changes (PostToolUse on Write/Edit).
+const SAMPLE_FILE_CHANGES_VALIDATOR: &str = r#"---
+name: file-changes
+description: Review file modifications for common issues
+severity: warn
+trigger: PostToolUse
+match:
+  tools: [Write, Edit]
+---
+
+# File Changes Validator
+
+Review the file changes made by this tool call.
+
+Check for:
+1. Syntax errors or obvious bugs
+2. Removed code that might still be needed
+3. Debug statements or console.log left in
+4. TODO comments that should be addressed
+
+If you find issues, explain what you found. Otherwise, confirm the changes look good.
+"#;
+
+/// Sample validator for session summary (Stop hook).
+const SAMPLE_SESSION_SUMMARY_VALIDATOR: &str = r#"---
+name: session-summary
+description: Summarize what was accomplished in this response
+severity: info
+trigger: Stop
+---
+
+# Session Summary Validator
+
+Briefly summarize what Claude accomplished in this response.
+
+Note:
+- What files were modified
+- What the main changes were
+- Any pending work mentioned
+
+This is informational only - it helps maintain context across sessions.
+"#;
 
 /// Uninstall AVP hooks from the specified target.
 pub fn uninstall(target: InstallTarget) -> Result<(), String> {
