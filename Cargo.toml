@@ -44,7 +44,7 @@ publish = false  # Don't auto-publish
 
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.91.1"
 authors = ["SwissArmyHammer Team"]
