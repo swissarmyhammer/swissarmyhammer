@@ -3,7 +3,8 @@
 //! This crate provides the core types, chain of responsibility pattern,
 //! and hook dispatching logic for the Agent Validator Protocol.
 //!
-//! Includes code-quality validators that run on Stop hook.
+//! Includes code-quality validators that run on PostToolUse (Edit/Write)
+//! and code-duplication validator that runs on the Stop hook.
 
 pub mod builtin;
 pub mod chain;

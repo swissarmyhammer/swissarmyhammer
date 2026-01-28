@@ -1,36 +1,65 @@
 ---
 name: no-log-truncation
 description: Detect truncation of log messages which loses diagnostic information
-trigger: Stop
 severity: error
+trigger: PostToolUse
+match:
+  tools:
+    - .*write.*
+    - .*edit.*
+  files:
+    - "@file_groups/source_code"
 tags:
   - code-quality
   - logging
+timeout: 30
 ---
 
-# No Log Truncation
+# No Log Truncation Validator
 
-Check the changed files for log message truncation patterns that lose diagnostic information.
+You are a code quality validator that checks for log message truncation patterns.
 
-## What to Look For
+## What to Check
 
-1. **Explicit truncation for "readability"**:
-   - Comments mentioning truncation "for readability" or "for log readability"
-   - Taking substrings or slices of log messages before logging
-   - Using `.take(n)` or `[..n]` on message strings
+Examine the file content for patterns that truncate log messages:
 
-2. **Length-based truncation**:
-   - Checking message length and truncating if over a threshold
-   - Adding "..." or ellipsis to indicate truncation
-   - Using substring operations on error/log messages
-
-3. **Format truncation**:
-   - Using format specifiers that limit string width (e.g., `{:.100}`)
-   - Limiting output in log macros
+1. **Explicit Truncation**: Comments mentioning truncation "for readability" or "for log readability"
+2. **Substring Operations**: Taking substrings or slices of log messages before logging
+3. **Iterator Limits**: Using `.take(n)` or `[..n]` on message strings
+4. **Length Checks**: Checking message length and truncating if over a threshold
+5. **Ellipsis Addition**: Adding "..." to indicate truncation
+6. **Format Width Limits**: Using format specifiers that limit string width (e.g., `{:.100}`)
 
 ## Why This Matters
 
-- Truncated logs make debugging harder - you lose the context
+- Truncated logs make debugging harder - you lose critical context
 - The "readability" gained is false economy - grep and log tools handle long lines
 - Critical diagnostic information often appears at the end of messages
-- Modern log systems handle arbitrary-length messages well
+- Modern log systems handle arbitrary-length messages efficiently
+- When something goes wrong in production, you want ALL the information
+
+## Exceptions (Don't Flag)
+
+- User-facing output that genuinely needs truncation for display
+- Preview text generation (e.g., showing first 100 chars of a document)
+- Intentional summarization for dashboards or alerts
+
+## Response Format
+
+Return JSON in this exact format:
+
+```json
+{
+  "status": "passed",
+  "message": "No log truncation patterns detected"
+}
+```
+
+Or if issues are found:
+
+```json
+{
+  "status": "failed",
+  "message": "Found 1 log truncation - Line 42: truncating error message with '&message[..100]' before logging. Log the full message; diagnostic information may be lost"
+}
+```

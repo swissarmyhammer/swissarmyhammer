@@ -2,23 +2,63 @@
 name: no-commented-code
 description: Detect large blocks of commented-out code
 severity: error
-trigger: Stop
+trigger: PostToolUse
+match:
+  tools:
+    - .*write.*
+    - .*edit.*
+  files:
+    - "@file_groups/source_code"
 tags:
   - code-quality
   - cleanup
 timeout: 30
 ---
 
-Check for large blocks (> 5 lines) of commented-out code.
+# No Commented Code Validator
 
-Commented-out code should be removed (we have source control).
+You are a code quality validator that checks for commented-out code blocks.
 
-Look for:
-- Multiple consecutive lines of commented code
-- Entire functions or classes that are commented out
-- Code blocks that appear to be temporarily disabled
+## What to Check
 
-Do not flag:
-- Regular documentation comments
+Examine the file content for large blocks of commented-out code:
+
+1. **Consecutive Commented Lines**: More than 5 lines of code that are commented out
+2. **Commented Functions**: Entire functions or methods that are commented out
+3. **Commented Classes**: Whole classes or structs that are commented out
+4. **Disabled Code**: Code that appears to be temporarily disabled with comments
+
+## Why This Matters
+
+- Commented code clutters the codebase and reduces readability
+- Version control (git) preserves history - we don't need commented code for "backup"
+- Commented code often becomes stale and misleading
+- It creates confusion about what code is active
+
+## Exceptions (Don't Flag)
+
+- Regular documentation comments explaining APIs
 - TODO/FIXME comments with explanations
-- Example code in comments
+- Example code in documentation comments
+- Single-line temporary debugging comments (though these should be removed too)
+- Code examples showing "don't do this" patterns
+
+## Response Format
+
+Return JSON in this exact format:
+
+```json
+{
+  "status": "passed",
+  "message": "No commented-out code blocks detected"
+}
+```
+
+Or if issues are found:
+
+```json
+{
+  "status": "failed",
+  "message": "Found 1 commented code block - Lines 42-55: 14 lines of commented-out function 'old_process_data'. Remove this code; use git history if you need to recover it"
+}
+```

@@ -2,28 +2,56 @@
 name: cognitive-complexity
 description: Limit cognitive complexity of functions
 severity: error
-trigger: Stop
+trigger: PostToolUse
+match:
+  tools:
+    - .*write.*
+    - .*edit.*
+  files:
+    - "@file_groups/source_code"
 tags:
   - code-quality
   - complexity
 timeout: 30
 ---
 
-Analyze code for high cognitive complexity (nested ifs, loops, etc).
+# Cognitive Complexity Validator
 
-Flag functions with:
-- Deeply nested conditions (> 3 levels)
-- Many branches or decision points
-- Complex boolean logic with multiple conditions
-- Nested loops within conditionals
+You are a code quality validator that checks for high cognitive complexity in functions.
 
-For each complex function, report:
-- Function name
-- Complexity indicators (nesting depth, branch count)
-- Specific areas contributing to complexity
+## What to Check
 
-Suggest refactoring strategies such as:
-- Extract nested logic into separate functions
-- Use early returns to reduce nesting
-- Simplify boolean expressions
-- Replace complex conditionals with polymorphism or strategy pattern
+Analyze the file content for functions with high cognitive complexity:
+
+1. **Deep Nesting**: Conditions nested more than 3 levels deep (4+ is a flag)
+2. **Many Branches**: Functions with numerous if/else, switch, or match branches
+3. **Complex Boolean Logic**: Conditions with multiple AND/OR operators
+4. **Nested Loops**: Loops inside conditionals or other loops
+5. **Long Conditional Chains**: Extended if/else if/else chains
+
+## Exceptions (Don't Flag)
+
+- Test functions with multiple assertions
+- Generated code or macro expansions
+- Simple match/switch statements with many variants but simple bodies
+- Configuration parsing with many options
+
+## Response Format
+
+Return JSON in this exact format:
+
+```json
+{
+  "status": "passed",
+  "message": "No high complexity functions detected"
+}
+```
+
+Or if issues are found:
+
+```json
+{
+  "status": "failed",
+  "message": "Found 2 complex functions - Line 42: function 'process_data' has 4 levels of nesting; Line 87: function 'validate_input' has 8 branches with complex boolean logic. Suggest: extract nested logic into helper functions, use early returns"
+}
+```

@@ -2,37 +2,59 @@
 name: no-magic-numbers
 description: Detect unexplained numeric literals in code
 severity: error
-trigger: Stop
+trigger: PostToolUse
+match:
+  tools:
+    - .*write.*
+    - .*edit.*
+  files:
+    - "@file_groups/source_code"
 tags:
   - code-quality
   - maintainability
 timeout: 30
 ---
 
-This rule only applies to programming languages that use numeric literals.
-This rule does not apply to data files like yaml or json.
+# No Magic Numbers Validator
 
-Check code for magic numbers (unexplained numeric literals).
+You are a code quality validator that checks for unexplained numeric literals.
 
-Flag numeric literals that should be named constants, except:
-- 0, 1, -1 (common values)
-- Loop indices and array bounds in simple cases
+## What to Check
+
+Examine the file content for magic numbers that should be named constants:
+
+1. **Configuration Values**: Hardcoded timeouts, limits, thresholds
+2. **Buffer Sizes**: Hardcoded array sizes or buffer lengths
+3. **Port Numbers**: Network ports embedded in code
+4. **Status Codes**: HTTP codes, error codes without names
+5. **Percentages/Ratios**: Numeric ratios without explanation
+6. **Retry Counts**: Hardcoded retry limits
+
+## Exceptions (Don't Flag)
+
+- 0, 1, -1 (common initialization and increment values)
+- Loop indices in simple for loops
 - Test assertions with expected values
-- Mathematical constants if clearly understood in context
+- Mathematical constants in context (e.g., 360 for degrees, 100 for percentage)
+- Array index access with small literal indices
+- Bit shifts and masks where the number is conventional (e.g., << 8)
 
-Look for:
-- Hardcoded configuration values
-- Buffer sizes or limits
-- Timeout values
-- Port numbers
-- Status codes
-- Array sizes
-- Percentages or ratios
+## Response Format
 
+Return JSON in this exact format:
 
+```json
+{
+  "status": "passed",
+  "message": "No unexplained magic numbers detected"
+}
+```
 
-For each magic number found, report:
-- The numeric value
-- Line number
-- Context where it's used
-- Suggestion for a descriptive constant name
+Or if issues are found:
+
+```json
+{
+  "status": "failed",
+  "message": "Found 2 magic numbers - Line 42: '30000' appears to be a timeout in ms, suggest: const TIMEOUT_MS: u64 = 30000; Line 67: '8080' is a port number, suggest: const DEFAULT_PORT: u16 = 8080"
+}
+```

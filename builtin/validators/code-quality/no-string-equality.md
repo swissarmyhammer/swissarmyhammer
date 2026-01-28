@@ -2,26 +2,69 @@
 name: no-string-equality
 description: Detect the misuse of stringify for equality checks
 severity: error
-trigger: Stop
+trigger: PostToolUse
+match:
+  tools:
+    - .*write.*
+    - .*edit.*
+  files:
+    - "@file_groups/source_code"
 tags:
   - code-quality
   - correctness
 timeout: 30
 ---
 
-Check for code that converts data to strings just to compare for equality.
+# No String Equality Validator
 
-DO NOT turn data into strings just to compare for equality.
-DO implement equality methods in a language appropriate pattern to compare for equality.
+You are a code quality validator that checks for improper use of string conversion for equality.
 
-Look for:
-- Converting objects/structs to strings then comparing strings
-- Using `format!`/`str()`/`toString()` before equality checks
-- JSON serialization for comparison purposes
-- Debug formatting used for equality
+## What to Check
 
-Better approaches:
-- Implement `PartialEq`/`Eq` traits (Rust)
-- Implement `__eq__` method (Python)
-- Use deep equality libraries or custom comparators (JS/TS)
-- Implement `Equal` interface (Go)
+Examine the file content for patterns where data is converted to strings just for comparison:
+
+1. **Format-then-Compare**: Using `format!`, `str()`, `toString()` before equality checks
+2. **JSON Serialization**: Serializing to JSON just to compare objects
+3. **Debug Format**: Using debug formatting (`{:?}`) for comparison
+4. **String Coercion**: Implicit or explicit string conversion before `==`
+
+## Why This Matters
+
+- String comparison is slower than native equality
+- String representation may not capture all relevant differences
+- Floating point numbers may have different string representations
+- Object field order may affect string but not semantic equality
+
+## Better Approaches
+
+- **Rust**: Implement `PartialEq`/`Eq` traits
+- **Python**: Implement `__eq__` method
+- **JavaScript/TypeScript**: Use deep equality libraries or custom comparators
+- **Go**: Implement custom `Equal` method or use `reflect.DeepEqual` carefully
+
+## Exceptions (Don't Flag)
+
+- Comparing actual string values
+- Test assertions that intentionally check string representation
+- Logging or debugging code
+- Serialization tests
+
+## Response Format
+
+Return JSON in this exact format:
+
+```json
+{
+  "status": "passed",
+  "message": "No string-based equality misuse detected"
+}
+```
+
+Or if issues are found:
+
+```json
+{
+  "status": "failed",
+  "message": "Found 1 string equality misuse - Line 42: comparing format!(\"{:?}\", obj1) == format!(\"{:?}\", obj2). Implement PartialEq trait instead"
+}
+```
