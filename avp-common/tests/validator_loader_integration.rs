@@ -521,7 +521,9 @@ fn test_validator_without_any_frontmatter() {
         .load_directory(&validators_dir, ValidatorSource::Project)
         .unwrap();
 
-    let v = loader.get("comfy-table-rule").expect("should load validator without frontmatter");
+    let v = loader
+        .get("comfy-table-rule")
+        .expect("should load validator without frontmatter");
     assert_eq!(v.name(), "comfy-table-rule");
     assert_eq!(v.description(), "Validator: comfy-table-rule");
     assert_eq!(v.trigger(), avp_common::types::HookType::PostToolUse);

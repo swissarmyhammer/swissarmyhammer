@@ -130,7 +130,9 @@ fn print_diagnostics(loader: &ValidatorLoader) {
             if diag.user_directory.exists {
                 println!("  Status: ✓ exists");
             } else {
-                println!("  Status: ✗ does not exist (create this directory to add user validators)");
+                println!(
+                    "  Status: ✗ does not exist (create this directory to add user validators)"
+                );
             }
         }
         None => {

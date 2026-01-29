@@ -21,7 +21,12 @@ pub fn minimal_validator(name: &str, description: &str) -> String {
 }
 
 /// Create a validator with specific settings.
-pub fn validator_with_settings(name: &str, description: &str, trigger: &str, severity: &str) -> String {
+pub fn validator_with_settings(
+    name: &str,
+    description: &str,
+    trigger: &str,
+    severity: &str,
+) -> String {
     format!(
         "---\nname: {}\ndescription: {}\ntrigger: {}\nseverity: {}\n---\n\nCheck for issues.\n",
         name, description, trigger, severity

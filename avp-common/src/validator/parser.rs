@@ -298,7 +298,9 @@ Body.
         assert_eq!(validator.severity(), Severity::Warn);
         // Body is the entire content
         assert!(validator.body.contains("My Validation Rule"));
-        assert!(validator.body.contains("Check that the code follows best practices"));
+        assert!(validator
+            .body
+            .contains("Check that the code follows best practices"));
     }
 
     #[test]
