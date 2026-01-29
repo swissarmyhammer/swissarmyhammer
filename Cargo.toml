@@ -196,7 +196,7 @@ jsonschema = "0.18"
 mermaid-parser = { path = "mermaid-parser" }
 
 # Ripgrep library
-grep = "0.3"
+grep = "0.4.1"
 
 # Additional common dependencies
 libc = "0.2"
