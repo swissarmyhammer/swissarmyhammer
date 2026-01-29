@@ -284,7 +284,10 @@ impl McpTool for GrepFileTool {
             }
             "files_with_matches" => {
                 if files_with_matches.is_empty() {
-                    format!("No files found with matches | Time: {}ms", results.search_time_ms)
+                    format!(
+                        "No files found with matches | Time: {}ms",
+                        results.search_time_ms
+                    )
                 } else {
                     let files: Vec<String> = files_with_matches
                         .iter()
@@ -307,7 +310,12 @@ impl McpTool for GrepFileTool {
                         .matches
                         .iter()
                         .map(|m| {
-                            format!("{}:{}: {}", m.file_path.display(), m.line_number, m.matched_text)
+                            format!(
+                                "{}:{}: {}",
+                                m.file_path.display(),
+                                m.line_number,
+                                m.matched_text
+                            )
                         })
                         .collect();
                     format!(
@@ -369,7 +377,10 @@ mod tests {
         let tool = GrepFileTool::new().await;
         let mut arguments = serde_json::Map::new();
         arguments.insert("pattern".to_string(), json!("test"));
-        arguments.insert("path".to_string(), json!(temp_dir.path().display().to_string()));
+        arguments.insert(
+            "path".to_string(),
+            json!(temp_dir.path().display().to_string()),
+        );
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_ok());

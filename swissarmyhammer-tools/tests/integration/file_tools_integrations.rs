@@ -2046,8 +2046,7 @@ async fn test_grep_tool_timing_info() {
     let tool = registry.get_tool("files_grep").unwrap();
 
     // Create test file
-    let (_env, temp_dir, _test_file) =
-        create_test_file("test.txt", "Test content for timing");
+    let (_env, temp_dir, _test_file) = create_test_file("test.txt", "Test content for timing");
 
     // Test basic search
     let mut arguments = grep_args("content");
