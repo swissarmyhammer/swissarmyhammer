@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acp-conformance"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-extras"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
@@ -528,7 +528,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "avp-cli"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "avp-common",
  "clap",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "avp-common"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -1129,7 +1129,7 @@ checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "claude-agent"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -3502,7 +3502,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-agent"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -3548,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "llama-common"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -3588,7 +3588,7 @@ dependencies = [
 
 [[package]]
 name = "llama-embedding"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "llama-common",
  "llama-cpp-2",
@@ -3607,7 +3607,7 @@ dependencies = [
 
 [[package]]
 name = "llama-loader"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "dirs",
  "hf-hub",
@@ -3667,7 +3667,7 @@ checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
 
 [[package]]
 name = "markdowndown"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3766,7 +3766,7 @@ dependencies = [
 
 [[package]]
 name = "mermaid-parser"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "chumsky",
  "rstest",
@@ -3844,7 +3844,7 @@ dependencies = [
 
 [[package]]
 name = "model-context-protocol-extras"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -6098,7 +6098,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "swissarmyhammer"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6168,7 +6168,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-agent"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -6187,11 +6187,11 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-build"
-version = "0.4.2"
+version = "0.5.0"
 
 [[package]]
 name = "swissarmyhammer-cel"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6206,7 +6206,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-cli"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6259,7 +6259,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-common"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -6286,7 +6286,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-config"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -6309,7 +6309,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-directory"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "dirs",
  "serde",
@@ -6322,7 +6322,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-doctor"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "comfy-table",
  "serde",
@@ -6332,7 +6332,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-git"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6348,7 +6348,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-mcp-proxy"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6374,7 +6374,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-modes"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -6394,7 +6394,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-project-detection"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6403,7 +6403,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-prompts"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6435,7 +6435,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-shell"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "regex",
  "serde",
@@ -6450,7 +6450,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-templating"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "liquid",
@@ -6470,7 +6470,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-todo"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "fs2",
@@ -6487,7 +6487,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-tools"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -6557,7 +6557,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-workflow"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
