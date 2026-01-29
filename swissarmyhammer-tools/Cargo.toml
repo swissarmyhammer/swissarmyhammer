@@ -65,6 +65,7 @@ thiserror = { workspace = true }
 glob = { workspace = true }
 walkdir = { workspace = true }
 ignore = { workspace = true }
+grep = { workspace = true }
 
 # File watching
 notify = { workspace = true }

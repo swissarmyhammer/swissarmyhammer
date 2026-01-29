@@ -1692,7 +1692,6 @@ async fn test_grep_tool_basic_pattern_matching() {
 
     // Should find "functions" in README.md and "Helper function" in lib.rs
     assert!(response_text.contains("functions") || response_text.contains("Helper function"));
-    assert!(response_text.contains("Engine:")); // Should show which engine was used
     assert!(response_text.contains("Time:")); // Should show timing info
 }
 
@@ -2041,32 +2040,24 @@ async fn test_grep_tool_no_matches() {
 }
 
 #[tokio::test]
-async fn test_grep_tool_ripgrep_fallback_behavior() {
+async fn test_grep_tool_timing_info() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
     // Create test file
     let (_env, temp_dir, _test_file) =
-        create_test_file("test.txt", "Test content for engine detection");
+        create_test_file("test.txt", "Test content for timing");
 
-    // Test basic search to see which engine is used
+    // Test basic search
     let mut arguments = grep_args("content");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok(), "Engine detection test should succeed");
+    assert!(result.is_ok(), "Timing test should succeed");
 
     let call_result = result.unwrap();
     let response_text = extract_response_text(&call_result);
-
-    // Should indicate which engine was used
-    assert!(
-        response_text.contains("Engine: ripgrep")
-            || response_text.contains("Engine: regex fallback"),
-        "Response should indicate which engine was used. Got: {}",
-        response_text
-    );
 
     // Should include timing information
     assert!(response_text.contains("Time:"));
