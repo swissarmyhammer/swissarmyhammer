@@ -295,6 +295,102 @@ impl ValidatorLoader {
 
         dirs
     }
+
+    /// Get diagnostic information about validator loading.
+    ///
+    /// Returns information about:
+    /// - Which directories are being searched
+    /// - Whether each directory exists
+    /// - How many validators were loaded from each source
+    ///
+    /// Useful for debugging why validators aren't being loaded.
+    pub fn diagnostics(&self) -> ValidatorDiagnostics {
+        let mut user_dir_info = DirectoryInfo {
+            path: None,
+            exists: false,
+            error: None,
+        };
+
+        let mut project_dir_info = DirectoryInfo {
+            path: None,
+            exists: false,
+            error: None,
+        };
+
+        // Check user directory
+        match ManagedDirectory::<AvpConfig>::from_user_home() {
+            Ok(dir) => {
+                let validators_dir = dir.subdir("validators");
+                user_dir_info.path = Some(validators_dir.clone());
+                user_dir_info.exists = validators_dir.exists();
+            }
+            Err(e) => {
+                user_dir_info.error = Some(format!("{}", e));
+            }
+        }
+
+        // Check project directory
+        match ManagedDirectory::<AvpConfig>::from_git_root() {
+            Ok(dir) => {
+                let validators_dir = dir.subdir("validators");
+                project_dir_info.path = Some(validators_dir.clone());
+                project_dir_info.exists = validators_dir.exists();
+            }
+            Err(e) => {
+                project_dir_info.error = Some(format!("{}", e));
+            }
+        }
+
+        // Count validators by source
+        let mut builtin_count = 0;
+        let mut user_count = 0;
+        let mut project_count = 0;
+
+        for v in self.validators.values() {
+            match v.source {
+                ValidatorSource::Builtin => builtin_count += 1,
+                ValidatorSource::User => user_count += 1,
+                ValidatorSource::Project => project_count += 1,
+            }
+        }
+
+        ValidatorDiagnostics {
+            user_directory: user_dir_info,
+            project_directory: project_dir_info,
+            builtin_count,
+            user_count,
+            project_count,
+            total_count: self.validators.len(),
+        }
+    }
+}
+
+/// Information about a validator directory.
+#[derive(Debug, Clone)]
+pub struct DirectoryInfo {
+    /// Path to the directory (if resolvable).
+    pub path: Option<std::path::PathBuf>,
+    /// Whether the directory exists.
+    pub exists: bool,
+    /// Error message if directory couldn't be resolved.
+    pub error: Option<String>,
+}
+
+/// Diagnostic information about validator loading.
+#[derive(Debug, Clone)]
+pub struct ValidatorDiagnostics {
+    /// Information about the user validators directory (~/.avp/validators).
+    pub user_directory: DirectoryInfo,
+    /// Information about the project validators directory (.avp/validators).
+    pub project_directory: DirectoryInfo,
+    /// Number of builtin validators loaded.
+    pub builtin_count: usize,
+    /// Number of user validators loaded.
+    pub user_count: usize,
+    /// Number of project validators loaded.
+    pub project_count: usize,
+    /// Total number of validators loaded.
+    pub total_count: usize,
 }
 
 /// Implement TemplateContentProvider for ValidatorLoader.
@@ -629,5 +725,116 @@ Check issues.
         // Returns a list of validator directories (may be empty if none exist)
         // The function should not panic
         assert!(dirs.len() <= 2); // At most user + project directories
+    }
+
+    #[test]
+    fn test_loader_diagnostics_empty() {
+        let loader = ValidatorLoader::new();
+        let diag = loader.diagnostics();
+
+        // Empty loader should have zero counts
+        assert_eq!(diag.builtin_count, 0);
+        assert_eq!(diag.user_count, 0);
+        assert_eq!(diag.project_count, 0);
+        assert_eq!(diag.total_count, 0);
+    }
+
+    #[test]
+    fn test_loader_diagnostics_with_validators() {
+        let temp = TempDir::new().unwrap();
+        let validators_dir = temp.path().join("validators");
+        fs::create_dir_all(&validators_dir).unwrap();
+
+        fs::write(
+            validators_dir.join("user-validator.md"),
+            r#"---
+name: user-validator
+description: User validator
+severity: warn
+trigger: PostToolUse
+---
+Body.
+"#,
+        )
+        .unwrap();
+
+        let mut loader = ValidatorLoader::new();
+
+        // Add a builtin
+        loader.add_builtin(
+            "builtin-test",
+            r#"---
+name: builtin-test
+description: Builtin
+severity: error
+trigger: PreToolUse
+---
+Body.
+"#,
+        );
+
+        // Load user validator
+        loader
+            .load_directory(&validators_dir, ValidatorSource::User)
+            .unwrap();
+
+        let diag = loader.diagnostics();
+
+        assert_eq!(diag.builtin_count, 1, "Should have 1 builtin");
+        assert_eq!(diag.user_count, 1, "Should have 1 user validator");
+        assert_eq!(diag.project_count, 0, "Should have 0 project validators");
+        assert_eq!(diag.total_count, 2, "Should have 2 total");
+    }
+
+    #[test]
+    fn test_directory_info_fields() {
+        // Test DirectoryInfo struct fields are accessible
+        let info = DirectoryInfo {
+            path: Some(std::path::PathBuf::from("/test/path")),
+            exists: true,
+            error: None,
+        };
+
+        assert_eq!(info.path, Some(std::path::PathBuf::from("/test/path")));
+        assert!(info.exists);
+        assert!(info.error.is_none());
+
+        let info_with_error = DirectoryInfo {
+            path: None,
+            exists: false,
+            error: Some("Test error".to_string()),
+        };
+
+        assert!(info_with_error.path.is_none());
+        assert!(!info_with_error.exists);
+        assert_eq!(info_with_error.error, Some("Test error".to_string()));
+    }
+
+    #[test]
+    fn test_validator_diagnostics_fields() {
+        // Test ValidatorDiagnostics struct fields are accessible
+        let diag = ValidatorDiagnostics {
+            user_directory: DirectoryInfo {
+                path: Some(std::path::PathBuf::from("/home/user/.avp/validators")),
+                exists: true,
+                error: None,
+            },
+            project_directory: DirectoryInfo {
+                path: Some(std::path::PathBuf::from("/project/.avp/validators")),
+                exists: false,
+                error: None,
+            },
+            builtin_count: 5,
+            user_count: 2,
+            project_count: 0,
+            total_count: 7,
+        };
+
+        assert!(diag.user_directory.exists);
+        assert!(!diag.project_directory.exists);
+        assert_eq!(diag.builtin_count, 5);
+        assert_eq!(diag.user_count, 2);
+        assert_eq!(diag.project_count, 0);
+        assert_eq!(diag.total_count, 7);
     }
 }

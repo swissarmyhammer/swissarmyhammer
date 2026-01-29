@@ -102,7 +102,7 @@ async fn main() {
             }
         },
         Some(Commands::Doctor { verbose }) => doctor::run_doctor(verbose),
-        Some(Commands::List { verbose }) => list::run_list(verbose),
+        Some(Commands::List { verbose }) => list::run_list(verbose, cli.debug),
         None => {
             // Default behavior: process hook from stdin
             match run_hook_processor(&cli).await {

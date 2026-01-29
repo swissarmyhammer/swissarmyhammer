@@ -1,5 +1,5 @@
 ---
-name: rust-formatt  
+name: rust-format  
 description: Make sure rust code is formatted
 severity: warn
 trigger: PostToolUse

@@ -19,11 +19,12 @@ const MAX_DESCRIPTION_LENGTH: usize = 50;
 /// # Arguments
 ///
 /// * `verbose` - If true, includes description column in output.
+/// * `debug` - If true, shows diagnostic information about directories searched.
 ///
 /// # Returns
 ///
 /// Exit code: 0 on success.
-pub fn run_list(verbose: bool) -> i32 {
+pub fn run_list(verbose: bool, debug: bool) -> i32 {
     let mut loader = ValidatorLoader::new();
 
     // Load builtins first (lowest precedence)
@@ -32,6 +33,11 @@ pub fn run_list(verbose: bool) -> i32 {
     // Load user and project validators (will override builtins with same name)
     if let Err(e) = loader.load_all() {
         eprintln!("Warning: Failed to load some validators: {}", e);
+    }
+
+    // Show diagnostics if debug mode is enabled
+    if debug {
+        print_diagnostics(&loader);
     }
 
     let mut validators = loader.list();
@@ -107,6 +113,68 @@ fn truncate_description(desc: &str, max_len: usize) -> String {
     }
 }
 
+/// Print diagnostic information about validator loading.
+///
+/// Shows which directories are being searched and counts by source.
+fn print_diagnostics(loader: &ValidatorLoader) {
+    let diag = loader.diagnostics();
+
+    println!("=== Validator Loading Diagnostics ===");
+    println!();
+
+    // User directory info
+    println!("User directory (~/.avp/validators):");
+    match &diag.user_directory.path {
+        Some(path) => {
+            println!("  Path: {}", path.display());
+            if diag.user_directory.exists {
+                println!("  Status: ✓ exists");
+            } else {
+                println!("  Status: ✗ does not exist (create this directory to add user validators)");
+            }
+        }
+        None => {
+            if let Some(err) = &diag.user_directory.error {
+                println!("  Status: ✗ could not resolve ({})", err);
+            } else {
+                println!("  Status: ✗ could not resolve home directory");
+            }
+        }
+    }
+    println!();
+
+    // Project directory info
+    println!("Project directory (.avp/validators):");
+    match &diag.project_directory.path {
+        Some(path) => {
+            println!("  Path: {}", path.display());
+            if diag.project_directory.exists {
+                println!("  Status: ✓ exists");
+            } else {
+                println!("  Status: ✗ does not exist");
+            }
+        }
+        None => {
+            if let Some(err) = &diag.project_directory.error {
+                println!("  Status: ✗ could not resolve ({})", err);
+            } else {
+                println!("  Status: ✗ not in a git repository");
+            }
+        }
+    }
+    println!();
+
+    // Counts
+    println!("Validators loaded:");
+    println!("  📦 Built-in: {}", diag.builtin_count);
+    println!("  👤 User: {}", diag.user_count);
+    println!("  📁 Project: {}", diag.project_count);
+    println!("  Total: {}", diag.total_count);
+    println!();
+    println!("=========================================");
+    println!();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,14 +215,21 @@ mod tests {
     #[test]
     fn test_run_list() {
         // Should not panic and return 0
-        let exit_code = run_list(false);
+        let exit_code = run_list(false, false);
         assert_eq!(exit_code, 0);
     }
 
     #[test]
     fn test_run_list_verbose() {
         // Should not panic and return 0
-        let exit_code = run_list(true);
+        let exit_code = run_list(true, false);
+        assert_eq!(exit_code, 0);
+    }
+
+    #[test]
+    fn test_run_list_debug() {
+        // Should not panic and return 0, and print diagnostics
+        let exit_code = run_list(false, true);
         assert_eq!(exit_code, 0);
     }
 }

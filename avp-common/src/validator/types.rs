@@ -157,13 +157,42 @@ fn default_timeout() -> u32 {
     DEFAULT_VALIDATOR_TIMEOUT_SECONDS
 }
 
+/// Default trigger hook type.
+fn default_trigger() -> HookType {
+    HookType::PostToolUse
+}
+
 /// YAML frontmatter for a validator file.
+///
+/// # Sensible Defaults
+///
+/// When frontmatter fields are omitted, the following defaults are applied:
+///
+/// - `name`: Defaults to the file stem (e.g., `check-types.md` → `check-types`)
+/// - `description`: Defaults to "Validator: {name}"
+/// - `trigger`: Defaults to `PostToolUse`
+/// - `severity`: Defaults to `warn`
+/// - `match.files`: Defaults to source code patterns when `match` is omitted
+/// - `timeout`: Defaults to 30 seconds
+///
+/// This allows creating minimal validators with just a body:
+///
+/// ```markdown
+/// ---
+/// ---
+///
+/// Check that the code follows best practices...
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidatorFrontmatter {
     /// Unique name for the validator.
+    /// Defaults to the file stem if not provided.
+    #[serde(default)]
     pub name: String,
 
     /// Human-readable description.
+    /// Defaults to "Validator: {name}" if not provided.
+    #[serde(default)]
     pub description: String,
 
     /// Severity level for findings.
@@ -171,13 +200,16 @@ pub struct ValidatorFrontmatter {
     pub severity: Severity,
 
     /// Hook event type that triggers this validator.
+    /// Defaults to PostToolUse if not provided.
+    #[serde(default = "default_trigger")]
     pub trigger: HookType,
 
     /// Optional match criteria for filtering which events trigger this validator.
     ///
     /// When present, the validator only runs if the event matches the specified
-    /// tools and/or file patterns. When absent, the validator runs for all events
-    /// of the configured trigger type.
+    /// tools and/or file patterns. When absent, defaults are applied:
+    /// - `files`: Source code patterns (*.rs, *.ts, *.py, etc.)
+    /// - `tools`: All tools (no filtering)
     #[serde(default, rename = "match")]
     pub match_criteria: Option<ValidatorMatch>,
 
@@ -196,6 +228,51 @@ pub struct ValidatorFrontmatter {
     /// Timeout in seconds (default: 30).
     #[serde(default = "default_timeout")]
     pub timeout: u32,
+}
+
+impl ValidatorFrontmatter {
+    /// Apply defaults based on the file path and optional source code patterns.
+    ///
+    /// This fills in missing fields with sensible defaults:
+    /// - `name`: File stem (e.g., `check-types.md` → `check-types`)
+    /// - `description`: "Validator: {name}"
+    /// - `match.files`: Source code patterns from `@file_groups/source_code` (if provided and match is None)
+    ///
+    /// The `source_code_patterns` parameter should be loaded from `builtin/file_groups/source_code.yaml`
+    /// via the YAML expander. If None, no default match criteria is applied.
+    ///
+    /// Note: Stop validators do not get default file patterns because they check all changed
+    /// files at session end rather than filtering by specific file patterns.
+    pub fn apply_defaults(
+        &mut self,
+        path: &std::path::Path,
+        source_code_patterns: Option<&[String]>,
+    ) {
+        // Default name to file stem
+        if self.name.is_empty() {
+            self.name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unnamed")
+                .to_string();
+        }
+
+        // Default description
+        if self.description.is_empty() {
+            self.description = format!("Validator: {}", self.name);
+        }
+
+        // Default match criteria to source code files (if patterns provided)
+        // Skip for Stop validators - they check all changed files, not specific patterns
+        if self.match_criteria.is_none() && self.trigger != HookType::Stop {
+            if let Some(patterns) = source_code_patterns {
+                self.match_criteria = Some(ValidatorMatch {
+                    tools: vec![],
+                    files: patterns.to_vec(),
+                });
+            }
+        }
+    }
 }
 
 /// Source of a validator (builtin, user, or project).
@@ -764,5 +841,169 @@ mod tests {
         assert_eq!(ctx.tool_name, None);
         assert_eq!(ctx.file_path, None);
         assert_eq!(ctx.event_context, None);
+    }
+
+    #[test]
+    fn test_apply_defaults_sets_name_from_file_stem() {
+        let mut frontmatter = ValidatorFrontmatter {
+            name: String::new(),
+            description: String::new(),
+            severity: Severity::default(),
+            trigger: HookType::PostToolUse,
+            match_criteria: None,
+            trigger_matcher: None,
+            tags: vec![],
+            once: false,
+            timeout: DEFAULT_VALIDATOR_TIMEOUT_SECONDS,
+        };
+
+        frontmatter.apply_defaults(&PathBuf::from("/path/to/my-validator.md"), None);
+
+        assert_eq!(frontmatter.name, "my-validator");
+    }
+
+    #[test]
+    fn test_apply_defaults_sets_description_from_name() {
+        let mut frontmatter = ValidatorFrontmatter {
+            name: String::new(),
+            description: String::new(),
+            severity: Severity::default(),
+            trigger: HookType::PostToolUse,
+            match_criteria: None,
+            trigger_matcher: None,
+            tags: vec![],
+            once: false,
+            timeout: DEFAULT_VALIDATOR_TIMEOUT_SECONDS,
+        };
+
+        frontmatter.apply_defaults(&PathBuf::from("check-types.md"), None);
+
+        assert_eq!(frontmatter.description, "Validator: check-types");
+    }
+
+    #[test]
+    fn test_apply_defaults_sets_source_code_match_criteria_when_patterns_provided() {
+        let mut frontmatter = ValidatorFrontmatter {
+            name: "test".to_string(),
+            description: "Test".to_string(),
+            severity: Severity::default(),
+            trigger: HookType::PostToolUse,
+            match_criteria: None,
+            trigger_matcher: None,
+            tags: vec![],
+            once: false,
+            timeout: DEFAULT_VALIDATOR_TIMEOUT_SECONDS,
+        };
+
+        let patterns = vec!["*.rs".to_string(), "*.ts".to_string(), "*.py".to_string()];
+        frontmatter.apply_defaults(&PathBuf::from("test.md"), Some(&patterns));
+
+        let match_criteria = frontmatter
+            .match_criteria
+            .expect("match_criteria should be set");
+        assert!(match_criteria.tools.is_empty(), "tools should be empty");
+        assert_eq!(match_criteria.files.len(), 3);
+        assert!(match_criteria.files.contains(&"*.rs".to_string()));
+        assert!(match_criteria.files.contains(&"*.ts".to_string()));
+        assert!(match_criteria.files.contains(&"*.py".to_string()));
+    }
+
+    #[test]
+    fn test_apply_defaults_no_match_criteria_when_no_patterns() {
+        let mut frontmatter = ValidatorFrontmatter {
+            name: "test".to_string(),
+            description: "Test".to_string(),
+            severity: Severity::default(),
+            trigger: HookType::PostToolUse,
+            match_criteria: None,
+            trigger_matcher: None,
+            tags: vec![],
+            once: false,
+            timeout: DEFAULT_VALIDATOR_TIMEOUT_SECONDS,
+        };
+
+        frontmatter.apply_defaults(&PathBuf::from("test.md"), None);
+
+        assert!(
+            frontmatter.match_criteria.is_none(),
+            "match_criteria should remain None when no patterns provided"
+        );
+    }
+
+    #[test]
+    fn test_apply_defaults_preserves_explicit_values() {
+        const CUSTOM_TIMEOUT: u32 = DEFAULT_VALIDATOR_TIMEOUT_SECONDS * 2;
+        let mut frontmatter = ValidatorFrontmatter {
+            name: "explicit-name".to_string(),
+            description: "Explicit description".to_string(),
+            severity: Severity::Error,
+            trigger: HookType::PreToolUse,
+            match_criteria: Some(ValidatorMatch {
+                tools: vec!["Bash".to_string()],
+                files: vec!["*.sh".to_string()],
+            }),
+            trigger_matcher: None,
+            tags: vec!["custom".to_string()],
+            once: true,
+            timeout: CUSTOM_TIMEOUT,
+        };
+
+        let patterns = vec!["*.rs".to_string()];
+        frontmatter.apply_defaults(&PathBuf::from("other-name.md"), Some(&patterns));
+
+        // All explicit values should be preserved
+        assert_eq!(frontmatter.name, "explicit-name");
+        assert_eq!(frontmatter.description, "Explicit description");
+        assert_eq!(frontmatter.severity, Severity::Error);
+        assert_eq!(frontmatter.trigger, HookType::PreToolUse);
+
+        let match_criteria = frontmatter.match_criteria.unwrap();
+        assert_eq!(match_criteria.tools, vec!["Bash"]);
+        assert_eq!(match_criteria.files, vec!["*.sh"]);
+    }
+
+    #[test]
+    fn test_apply_defaults_handles_path_without_extension() {
+        let mut frontmatter = ValidatorFrontmatter {
+            name: String::new(),
+            description: String::new(),
+            severity: Severity::default(),
+            trigger: HookType::PostToolUse,
+            match_criteria: None,
+            trigger_matcher: None,
+            tags: vec![],
+            once: false,
+            timeout: DEFAULT_VALIDATOR_TIMEOUT_SECONDS,
+        };
+
+        frontmatter.apply_defaults(&PathBuf::from("validator-name"), None);
+
+        assert_eq!(frontmatter.name, "validator-name");
+    }
+
+    #[test]
+    fn test_apply_defaults_stop_validators_no_file_patterns() {
+        // Stop validators should NOT get default file patterns because they
+        // check all changed files at session end, not specific patterns
+        let mut frontmatter = ValidatorFrontmatter {
+            name: "stop-validator".to_string(),
+            description: "A stop validator".to_string(),
+            severity: Severity::default(),
+            trigger: HookType::Stop,
+            match_criteria: None,
+            trigger_matcher: None,
+            tags: vec![],
+            once: false,
+            timeout: DEFAULT_VALIDATOR_TIMEOUT_SECONDS,
+        };
+
+        let patterns = vec!["*.rs".to_string(), "*.ts".to_string()];
+        frontmatter.apply_defaults(&PathBuf::from("test.md"), Some(&patterns));
+
+        // match_criteria should remain None for Stop validators
+        assert!(
+            frontmatter.match_criteria.is_none(),
+            "Stop validators should not get default file patterns"
+        );
     }
 }

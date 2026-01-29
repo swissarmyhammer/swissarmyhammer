@@ -6,6 +6,34 @@
 #![allow(dead_code)] // Methods are available for future tests
 
 use agent_client_protocol_extras::PlaybackAgent;
+use std::path::Path;
+
+// ============================================================================
+// Validator Fixture Helpers
+// ============================================================================
+
+/// Create a minimal valid validator markdown file content.
+pub fn minimal_validator(name: &str, description: &str) -> String {
+    format!(
+        "---\nname: {}\ndescription: {}\ntrigger: PostToolUse\nseverity: warn\n---\n\nValidation instructions for {}.\n",
+        name, description, name
+    )
+}
+
+/// Create a validator with specific settings.
+pub fn validator_with_settings(name: &str, description: &str, trigger: &str, severity: &str) -> String {
+    format!(
+        "---\nname: {}\ndescription: {}\ntrigger: {}\nseverity: {}\n---\n\nCheck for issues.\n",
+        name, description, trigger, severity
+    )
+}
+
+/// Create a validator directory in a temp path and return the validators subdirectory path.
+pub fn create_validator_dir(base: &Path) -> std::path::PathBuf {
+    let validators_dir = base.join("validators");
+    std::fs::create_dir_all(&validators_dir).unwrap();
+    validators_dir
+}
 use avp_common::context::AvpContext;
 use avp_common::types::{CommonInput, HookType, PostToolUseInput, PreToolUseInput};
 use avp_common::validator::ExecutedValidator;

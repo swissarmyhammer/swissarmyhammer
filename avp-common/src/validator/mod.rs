@@ -74,7 +74,7 @@ pub use executor::{
     render_validator_prompt_with_partials_and_changed_files, ValidatorRenderContext,
     VALIDATOR_PROMPT_NAME,
 };
-pub use loader::ValidatorLoader;
+pub use loader::{DirectoryInfo, ValidatorDiagnostics, ValidatorLoader};
 pub use parser::parse_validator;
 pub use runner::ValidatorRunner;
 pub use types::{

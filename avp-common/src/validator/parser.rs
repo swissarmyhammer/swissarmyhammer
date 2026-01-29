@@ -103,6 +103,9 @@ pub fn parse_validator_with_expansion<C: DirectoryConfig>(
     parse_validator_internal(content, path, source, Some(expander))
 }
 
+/// The path to the source code file patterns in the YAML include system.
+const SOURCE_CODE_PATTERNS_PATH: &str = "file_groups/source_code";
+
 /// Internal implementation that optionally expands includes.
 fn parse_validator_internal<C: DirectoryConfig>(
     content: &str,
@@ -137,11 +140,25 @@ fn parse_validator_internal<C: DirectoryConfig>(
     }
 
     // Deserialize to typed frontmatter
-    let frontmatter: ValidatorFrontmatter =
+    let mut frontmatter: ValidatorFrontmatter =
         serde_yaml::from_value(yaml_value).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to deserialize frontmatter: {}", e),
         })?;
+
+    // Load source code patterns from expander for defaults
+    let source_code_patterns: Option<Vec<String>> = expander.and_then(|exp| {
+        exp.get(SOURCE_CODE_PATTERNS_PATH).and_then(|value| {
+            value.as_sequence().map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+        })
+    });
+
+    // Apply sensible defaults (name from file stem, description, source code file patterns)
+    frontmatter.apply_defaults(&path, source_code_patterns.as_deref());
 
     Ok(Validator {
         frontmatter,
@@ -153,24 +170,24 @@ fn parse_validator_internal<C: DirectoryConfig>(
 
 /// Extract frontmatter and body from markdown content.
 ///
-/// Returns (frontmatter, body) or an error if no frontmatter is found.
-fn extract_frontmatter<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'a str), AvpError> {
+/// Returns (frontmatter, body). If no frontmatter is found (no `---` delimiters),
+/// returns empty frontmatter and the entire content as body. Defaults will be
+/// applied to create a valid validator.
+fn extract_frontmatter<'a>(content: &'a str, _path: &Path) -> Result<(&'a str, &'a str), AvpError> {
     let content = content.trim();
 
-    // Must start with ---
+    // If no frontmatter delimiter, return empty frontmatter and whole content as body
     if !content.starts_with("---") {
-        return Err(AvpError::Validator {
-            validator: path.display().to_string(),
-            message: "file must start with YAML frontmatter (---)".to_string(),
-        });
+        return Ok(("", content));
     }
 
     // Find the closing ---
     let rest = &content[YAML_DELIMITER_LEN..];
-    let end_idx = rest.find("\n---").ok_or_else(|| AvpError::Validator {
-        validator: path.display().to_string(),
-        message: "missing closing frontmatter delimiter (---)".to_string(),
-    })?;
+
+    // If no closing delimiter, treat entire content as body with no frontmatter
+    let Some(end_idx) = rest.find("\n---") else {
+        return Ok(("", content));
+    };
 
     let frontmatter = &rest[..end_idx].trim();
     let body = &rest[end_idx + YAML_CLOSING_DELIMITER_LEN..].trim();
@@ -182,7 +199,7 @@ fn extract_frontmatter<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'
 mod tests {
     use super::*;
     use crate::types::HookType;
-    use crate::validator::types::Severity;
+    use crate::validator::types::{Severity, DEFAULT_VALIDATOR_TIMEOUT_SECONDS};
 
     #[test]
     fn test_parse_validator_basic() {
@@ -261,32 +278,49 @@ Body.
     }
 
     #[test]
-    fn test_parse_validator_missing_frontmatter() {
-        let content = "# No frontmatter\n\nJust body.";
+    fn test_parse_validator_no_frontmatter_uses_defaults() {
+        let content = "# My Validation Rule\n\nCheck that the code follows best practices.";
 
-        let result = parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin);
+        let validator = parse_validator(
+            content,
+            PathBuf::from("/validators/code-quality.md"),
+            ValidatorSource::User,
+        )
+        .unwrap();
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("must start with YAML frontmatter"));
+        // Name defaults to file stem
+        assert_eq!(validator.name(), "code-quality");
+        // Description defaults based on name
+        assert_eq!(validator.description(), "Validator: code-quality");
+        // Trigger defaults to PostToolUse
+        assert_eq!(validator.trigger(), HookType::PostToolUse);
+        // Severity defaults to warn
+        assert_eq!(validator.severity(), Severity::Warn);
+        // Body is the entire content
+        assert!(validator.body.contains("My Validation Rule"));
+        assert!(validator.body.contains("Check that the code follows best practices"));
     }
 
     #[test]
-    fn test_parse_validator_unclosed_frontmatter() {
+    fn test_parse_validator_unclosed_frontmatter_uses_defaults() {
+        // If someone starts with --- but forgets to close, treat whole content as body
         let content = r#"---
 name: unclosed
-description: Missing closing delimiter
-severity: error
-trigger: PreToolUse
 
-Body without closing delimiter.
+This is actually the body since there's no closing delimiter.
 "#;
 
-        let result = parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin);
+        let validator = parse_validator(
+            content,
+            PathBuf::from("my-validator.md"),
+            ValidatorSource::Project,
+        )
+        .unwrap();
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("missing closing frontmatter"));
+        // Name defaults to file stem since frontmatter wasn't properly parsed
+        assert_eq!(validator.name(), "my-validator");
+        // Body contains the whole content
+        assert!(validator.body.contains("name: unclosed"));
     }
 
     #[test]
@@ -322,11 +356,173 @@ Body.
 
         // Default severity is warn
         assert_eq!(validator.severity(), Severity::Warn);
-        // Default timeout is 30
-        assert_eq!(validator.frontmatter.timeout, 30);
+        // Default timeout
+        assert_eq!(
+            validator.frontmatter.timeout,
+            DEFAULT_VALIDATOR_TIMEOUT_SECONDS
+        );
         // Default once is false
         assert!(!validator.frontmatter.once);
-        // No match criteria by default
+        // No match criteria without expander (no source code patterns available)
         assert!(validator.frontmatter.match_criteria.is_none());
+    }
+
+    #[test]
+    fn test_parse_validator_name_defaults_to_file_stem() {
+        let content = r#"---
+---
+
+Minimal body.
+"#;
+
+        let validator = parse_validator(
+            content,
+            PathBuf::from("/path/to/my-custom-validator.md"),
+            ValidatorSource::Project,
+        )
+        .unwrap();
+
+        assert_eq!(validator.name(), "my-custom-validator");
+    }
+
+    #[test]
+    fn test_parse_validator_description_defaults_from_name() {
+        let content = r#"---
+name: check-types
+---
+
+Body.
+"#;
+
+        let validator =
+            parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin).unwrap();
+
+        assert_eq!(validator.description(), "Validator: check-types");
+    }
+
+    #[test]
+    fn test_parse_validator_trigger_defaults_to_post_tool_use() {
+        let content = r#"---
+---
+
+Body.
+"#;
+
+        let validator =
+            parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin).unwrap();
+
+        assert_eq!(validator.trigger(), HookType::PostToolUse);
+    }
+
+    #[test]
+    fn test_parse_validator_minimal_frontmatter() {
+        // Validators can have completely empty frontmatter - all values will be defaulted
+        let content = r#"---
+---
+
+Check that the code is correct.
+"#;
+
+        let validator = parse_validator(
+            content,
+            PathBuf::from("code-review.md"),
+            ValidatorSource::User,
+        )
+        .unwrap();
+
+        assert_eq!(validator.name(), "code-review");
+        assert_eq!(validator.description(), "Validator: code-review");
+        assert_eq!(validator.trigger(), HookType::PostToolUse);
+        assert_eq!(validator.severity(), Severity::Warn);
+        assert!(validator.body.contains("Check that the code is correct"));
+    }
+
+    #[test]
+    fn test_parse_validator_with_expansion_applies_source_code_defaults() {
+        use swissarmyhammer_directory::AvpConfig;
+
+        let content = r#"---
+name: test-validator
+description: Test
+---
+
+Body.
+"#;
+
+        // Create expander with source code patterns
+        let mut expander = YamlExpander::<AvpConfig>::new();
+        expander
+            .add_builtin(
+                "file_groups/source_code",
+                r#"
+- "*.rs"
+- "*.ts"
+- "*.py"
+"#,
+            )
+            .unwrap();
+
+        let validator = parse_validator_with_expansion(
+            content,
+            PathBuf::from("test.md"),
+            ValidatorSource::Builtin,
+            &expander,
+        )
+        .unwrap();
+
+        // Should have default match criteria from source code patterns
+        let match_criteria = validator
+            .frontmatter
+            .match_criteria
+            .as_ref()
+            .expect("match_criteria should be set from defaults");
+
+        assert!(match_criteria.tools.is_empty());
+        assert!(match_criteria.files.contains(&"*.rs".to_string()));
+        assert!(match_criteria.files.contains(&"*.ts".to_string()));
+        assert!(match_criteria.files.contains(&"*.py".to_string()));
+    }
+
+    #[test]
+    fn test_parse_validator_explicit_match_not_overridden() {
+        use swissarmyhammer_directory::AvpConfig;
+
+        let content = r#"---
+name: bash-only
+description: Only checks bash
+match:
+  tools:
+    - Bash
+  files:
+    - "*.sh"
+---
+
+Body.
+"#;
+
+        // Create expander with source code patterns
+        let mut expander = YamlExpander::<AvpConfig>::new();
+        expander
+            .add_builtin(
+                "file_groups/source_code",
+                r#"
+- "*.rs"
+- "*.ts"
+"#,
+            )
+            .unwrap();
+
+        let validator = parse_validator_with_expansion(
+            content,
+            PathBuf::from("test.md"),
+            ValidatorSource::Builtin,
+            &expander,
+        )
+        .unwrap();
+
+        // Should preserve explicit match criteria, not use defaults
+        let match_criteria = validator.frontmatter.match_criteria.as_ref().unwrap();
+        assert_eq!(match_criteria.tools, vec!["Bash"]);
+        assert_eq!(match_criteria.files, vec!["*.sh"]);
     }
 }
