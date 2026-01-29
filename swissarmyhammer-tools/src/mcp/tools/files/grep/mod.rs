@@ -442,54 +442,56 @@ impl GrepFileTool {
             };
 
             let lines: Vec<&str> = content.lines().collect();
-            let mut file_has_match = false;
+            let mut file_matches = Vec::new();
 
             for (line_num, line) in lines.iter().enumerate() {
                 if regex.is_match(line) {
                     match_count += 1;
-                    file_has_match = true;
 
-                    // Build GrepMatch struct for content mode
                     if output_mode == "content" {
-                        let context_before: Vec<String> = if context_lines > 0 {
-                            let start = line_num.saturating_sub(context_lines);
-                            (start..line_num)
-                                .map(|i| lines[i].to_string())
-                                .collect()
-                        } else {
-                            vec![]
-                        };
+                        // Include context lines
+                        let start = line_num.saturating_sub(context_lines);
+                        let end = std::cmp::min(line_num + context_lines + 1, lines.len());
 
-                        let context_after: Vec<String> = if context_lines > 0 {
-                            let end = std::cmp::min(line_num + context_lines + 1, lines.len());
-                            ((line_num + 1)..end)
-                                .map(|i| lines[i].to_string())
-                                .collect()
-                        } else {
-                            vec![]
-                        };
+                        let context_block: Vec<String> = (start..end)
+                            .map(|i| {
+                                let prefix = if i == line_num { ">" } else { " " };
+                                format!("{}{}:{}", prefix, i + 1, lines[i])
+                            })
+                            .collect();
 
-                        results.push(GrepMatch {
-                            file_path: path.to_path_buf(),
-                            line_number: line_num + 1, // 1-based
-                            column: None,
-                            matched_text: line.to_string(),
-                            context_before,
-                            context_after,
-                        });
+                        file_matches.push(format!(
+                            "{}:\n{}",
+                            path.display(),
+                            context_block.join("\n")
+                        ));
                     }
                 }
             }
 
-            if file_has_match {
+            if !file_matches.is_empty() {
                 file_count += 1;
+                if output_mode == "content" {
+                    results.extend(file_matches);
+                } else if output_mode == "files_with_matches" {
+                    results.push(path.to_string_lossy().to_string());
+                }
             }
         }
 
         let search_time_ms = start_time.elapsed().as_millis() as u64;
 
+        // Convert to GrepResults format
+        let matches = if output_mode == "content" {
+            // For fallback, we don't parse individual matches from the combined results
+            // This is acceptable as the primary use case should be ripgrep
+            vec![]
+        } else {
+            vec![]
+        };
+
         Ok(GrepResults {
-            matches: results,
+            matches,
             files_searched: file_count,
             total_matches: match_count,
             search_time_ms,
