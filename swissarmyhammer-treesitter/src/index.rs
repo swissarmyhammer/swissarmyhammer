@@ -657,6 +657,29 @@ impl IndexContext {
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
+
+    /// Embed arbitrary text using the index's embedding model.
+    ///
+    /// This is useful for semantic search where you want to find chunks
+    /// similar to a given query string. The embedding model is loaded
+    /// if not already loaded.
+    ///
+    /// Returns the embedding vector that can be used with `SimilarityQuery::embedding()`.
+    pub async fn embed_text(&mut self, text: &str) -> Result<Vec<f32>> {
+        let config = self.config.embedding.clone();
+        self.ensure_embedding_model_loaded(&config).await?;
+
+        let model = self
+            .embedding_model
+            .as_ref()
+            .ok_or_else(|| TreeSitterError::embedding_error("Embedding model not loaded"))?;
+
+        let result = model.embed_text(text).await.map_err(|e| {
+            TreeSitterError::embedding_error(format!("Failed to embed text: {}", e))
+        })?;
+
+        Ok(result.embedding)
+    }
 }
 
 #[cfg(test)]
@@ -664,6 +687,10 @@ mod tests {
     use super::*;
     use crate::test_utils::{run_progress_test, setup_test_dir, ProgressCollector};
     use tempfile::TempDir;
+
+    /// Minimum expected embedding dimensions from typical embedding models.
+    /// Most code embedding models produce vectors of 768+ dimensions.
+    const MIN_EMBEDDING_DIMENSIONS: usize = 256;
 
     #[test]
     fn test_index_config_default() {
@@ -950,6 +977,35 @@ mod tests {
 
         assert!(!context.is_empty());
         assert_eq!(context.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_embed_text() {
+        let dir = setup_test_dir();
+        let mut context = IndexContext::new(dir.path());
+
+        // Scan to initialize the embedding model
+        context.scan().await.unwrap();
+
+        // Embed some text
+        let embedding = context.embed_text("fn main() { }").await.unwrap();
+
+        // Embedding should be a non-empty vector
+        assert!(!embedding.is_empty());
+        // Typical embedding models produce vectors of 768 or more dimensions
+        assert!(embedding.len() >= MIN_EMBEDDING_DIMENSIONS);
+    }
+
+    #[tokio::test]
+    async fn test_embed_text_loads_model_lazily() {
+        let dir = setup_test_dir();
+        let mut context = IndexContext::new(dir.path());
+
+        // Don't scan - just call embed_text directly
+        // This tests that embed_text loads the model if needed
+        let embedding = context.embed_text("test code").await.unwrap();
+
+        assert!(!embedding.is_empty());
     }
 
     #[tokio::test]

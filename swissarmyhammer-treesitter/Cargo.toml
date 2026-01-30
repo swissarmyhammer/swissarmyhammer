@@ -69,6 +69,13 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# RPC and IPC for leader/client architecture
+tarpc = { version = "0.35", features = ["tokio1", "serde-transport"] }
+tokio-serde = { version = "0.9", features = ["bincode"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+fs2 = "0.4"
+futures = { workspace = true }
+
 # SIMD-accelerated vector operations
 simsimd = { workspace = true }
 
@@ -81,3 +88,4 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 test-log = { workspace = true }
 tracing-subscriber = { workspace = true }
+serial_test = { workspace = true }

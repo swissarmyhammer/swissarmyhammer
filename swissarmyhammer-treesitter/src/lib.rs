@@ -80,6 +80,7 @@ pub mod error;
 pub mod index;
 pub mod language;
 pub mod parsed_file;
+pub mod query;
 pub mod watcher;
 
 #[cfg(test)]
@@ -94,6 +95,13 @@ pub use index::{IndexConfig, IndexContext, IndexStats, IndexStatus, ScanResult};
 pub use language::{LanguageConfig, LanguageRegistry};
 pub use parsed_file::ParsedFile;
 pub use watcher::{IndexWatcher, IndexWatcherCallback};
+
+// Query protocol for leader/client architecture
+pub use query::{
+    ChunkResult, ClientError, DuplicateCluster, ElectionError, IndexClient, IndexLeader,
+    IndexService, IndexStatusInfo, LeaderElection, LeaderGuard, QueryError, QueryErrorKind,
+    QueryMatch, SimilarChunkResult,
+};
 
 #[cfg(test)]
 mod tests {
