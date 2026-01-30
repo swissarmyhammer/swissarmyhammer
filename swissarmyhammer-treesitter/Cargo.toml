@@ -31,7 +31,7 @@ tree-sitter-c-sharp = { workspace = true }
 tree-sitter-ruby = { workspace = true }
 tree-sitter-php = { workspace = true }
 tree-sitter-swift = { workspace = true }
-tree-sitter-kotlin = { workspace = true }
+tree-sitter-kotlin-ng = { workspace = true }
 tree-sitter-scala = { workspace = true }
 tree-sitter-lua = { workspace = true }
 tree-sitter-elixir = { workspace = true }
@@ -43,10 +43,41 @@ tree-sitter-html = { workspace = true }
 tree-sitter-css = { workspace = true }
 tree-sitter-json = { workspace = true }
 tree-sitter-yaml = { workspace = true }
-tree-sitter-toml = { workspace = true }
-tree-sitter-markdown = { workspace = true }
-tree-sitter-sql = { workspace = true }
+tree-sitter-toml-ng = { workspace = true }
+tree-sitter-md = { workspace = true }
+tree-sitter-sequel = { workspace = true }
 
 # Standard dependencies
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+# Async and concurrency
+tokio = { workspace = true }
+once_cell = { workspace = true }
+
+# File watching
+notify = { workspace = true }
+async-watcher = { workspace = true }
+
+# File discovery (gitignore support)
+ignore = { workspace = true }
+
+# Utilities
+md5 = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# SIMD-accelerated vector operations
+simsimd = { workspace = true }
+
+# Embedding support
+llama-embedding = { path = "../llama-embedding" }
+llama-loader = { path = "../llama-loader" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+test-log = { workspace = true }
+tracing-subscriber = { workspace = true }

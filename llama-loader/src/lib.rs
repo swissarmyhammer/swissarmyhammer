@@ -5,6 +5,7 @@
 //! from HuggingFace and local sources.
 
 pub mod detection;
+pub mod download_lock;
 pub mod error;
 pub mod huggingface;
 pub mod loader;
@@ -23,4 +24,5 @@ pub use huggingface::{
 };
 pub use loader::ModelLoader;
 pub use multipart::{download_folder_model, download_multi_part_model};
+pub use download_lock::DownloadCoordinator;
 pub use types::{LoadedModel, ModelConfig, ModelMetadata, ModelSource, RetryConfig};
