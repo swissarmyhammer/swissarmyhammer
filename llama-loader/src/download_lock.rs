@@ -42,9 +42,8 @@ impl DownloadCoordinator {
     /// Create a new coordinator using the default cache directory
     pub fn new() -> Result<Self, ModelError> {
         let lock_dir = Self::default_lock_dir()?;
-        fs::create_dir_all(&lock_dir).map_err(|e| {
-            ModelError::Cache(format!("Failed to create lock directory: {}", e))
-        })?;
+        fs::create_dir_all(&lock_dir)
+            .map_err(|e| ModelError::Cache(format!("Failed to create lock directory: {}", e)))?;
         Ok(Self { lock_dir })
     }
 
@@ -52,9 +51,7 @@ impl DownloadCoordinator {
     fn default_lock_dir() -> Result<PathBuf, ModelError> {
         // Use HuggingFace cache directory structure
         let cache_dir = std::env::var("HF_HOME")
-            .or_else(|_| {
-                std::env::var("XDG_CACHE_HOME").map(|p| format!("{}/huggingface", p))
-            })
+            .or_else(|_| std::env::var("XDG_CACHE_HOME").map(|p| format!("{}/huggingface", p)))
             .unwrap_or_else(|_| {
                 dirs::home_dir()
                     .map(|h| h.join(".cache/huggingface").to_string_lossy().to_string())
@@ -67,8 +64,10 @@ impl DownloadCoordinator {
     /// Generate a lock file path for a given repo and filename
     fn lock_path(&self, repo: &str, filename: &str) -> PathBuf {
         // Create a safe filename from repo/filename
-        let safe_name = format!("{}_{}", repo.replace('/', "--"), filename)
-            .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.', "_");
+        let safe_name = format!("{}_{}", repo.replace('/', "--"), filename).replace(
+            |c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.',
+            "_",
+        );
         self.lock_dir.join(format!("{}.lock", safe_name))
     }
 
@@ -200,9 +199,8 @@ impl DownloadCoordinator {
 
     /// Check if a lock file is stale (from a crashed process)
     fn is_stale_lock(&self, lock_path: &Path) -> Result<bool, ModelError> {
-        let metadata = fs::metadata(lock_path).map_err(|e| {
-            ModelError::Cache(format!("Failed to read lock metadata: {}", e))
-        })?;
+        let metadata = fs::metadata(lock_path)
+            .map_err(|e| ModelError::Cache(format!("Failed to read lock metadata: {}", e)))?;
 
         let modified = metadata.modified().map_err(|e| {
             ModelError::Cache(format!("Failed to get lock modification time: {}", e))
@@ -242,9 +240,8 @@ impl DownloadCoordinator {
 
     /// Read the completed file path from a lock file
     fn read_completed_path(&self, lock_path: &Path) -> Result<Option<PathBuf>, ModelError> {
-        let content = fs::read_to_string(lock_path).map_err(|e| {
-            ModelError::Cache(format!("Failed to read lock file: {}", e))
-        })?;
+        let content = fs::read_to_string(lock_path)
+            .map_err(|e| ModelError::Cache(format!("Failed to read lock file: {}", e)))?;
 
         if !content.contains("status=completed") {
             return Ok(None);
@@ -292,9 +289,8 @@ impl LockGuard {
             downloaded_path.display()
         );
 
-        fs::write(&self.path, content).map_err(|e| {
-            ModelError::Cache(format!("Failed to update lock file: {}", e))
-        })?;
+        fs::write(&self.path, content)
+            .map_err(|e| ModelError::Cache(format!("Failed to update lock file: {}", e)))?;
 
         Ok(())
     }

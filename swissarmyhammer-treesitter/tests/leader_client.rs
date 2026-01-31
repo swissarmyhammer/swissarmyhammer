@@ -6,7 +6,7 @@
 //! - Query execution
 //! - Handling of "not ready" state
 //!
-//! Tests that create an `IndexLeader` must run serially because the
+//! Tests that create an `WorkspaceLeader` must run serially because the
 //! llama embedding backend can only be initialized once per process.
 
 use std::path::PathBuf;
@@ -17,7 +17,7 @@ use tempfile::TempDir;
 use tokio::task::JoinHandle;
 
 use swissarmyhammer_treesitter::{
-    ClientError, ElectionError, IndexClient, IndexLeader, LeaderElection, QueryError,
+    ClientError, ElectionError, IndexClient, WorkspaceLeader, LeaderElection, QueryError,
     QueryErrorKind,
 };
 
@@ -75,7 +75,7 @@ impl TestContext {
         let socket_path = election.socket_path().to_path_buf();
 
         let guard = election.try_become_leader().unwrap();
-        let leader = IndexLeader::new(guard, dir.path()).await.unwrap();
+        let leader = WorkspaceLeader::new(guard, dir.path()).await.unwrap();
 
         let leader_handle = tokio::spawn(async move {
             let _ = leader.run(&socket_path).await;
@@ -288,8 +288,14 @@ async fn test_multiple_clients() {
     assert!(status2.is_ready);
 
     // Both should see the same number of files
-    let files1 = c1.list_files().await.expect("Client 1 failed to list files");
-    let files2 = c2.list_files().await.expect("Client 2 failed to list files");
+    let files1 = c1
+        .list_files()
+        .await
+        .expect("Client 1 failed to list files");
+    let files2 = c2
+        .list_files()
+        .await
+        .expect("Client 2 failed to list files");
     assert_eq!(files1.len(), files2.len());
 }
 
@@ -392,7 +398,10 @@ async fn test_find_all_duplicates() {
 
     // Find all duplicates - the test workspace has duplicate helper() functions
     let clusters = client
-        .find_all_duplicates(TEST_DUPLICATE_MIN_SIMILARITY, TEST_DUPLICATE_MIN_CHUNK_BYTES)
+        .find_all_duplicates(
+            TEST_DUPLICATE_MIN_SIMILARITY,
+            TEST_DUPLICATE_MIN_CHUNK_BYTES,
+        )
         .await
         .expect("find_all_duplicates should succeed");
 
@@ -473,7 +482,11 @@ async fn test_invalidate_file() {
     // Verify new_function does NOT exist before modification
     let query = "(function_item name: (identifier) @name)".to_string();
     let matches_before = client
-        .tree_sitter_query(query.clone(), Some(vec![main_rs.clone()]), Some("rust".to_string()))
+        .tree_sitter_query(
+            query.clone(),
+            Some(vec![main_rs.clone()]),
+            Some("rust".to_string()),
+        )
         .await
         .expect("Tree-sitter query failed before modification");
 
@@ -511,7 +524,10 @@ fn new_function() {
         .expect("invalidate_file should succeed");
 
     // Status should still show the file is indexed
-    let status_after = client.status().await.expect("Failed to get status after invalidate");
+    let status_after = client
+        .status()
+        .await
+        .expect("Failed to get status after invalidate");
     assert_eq!(
         status_before.files_total, status_after.files_total,
         "File count should remain the same"

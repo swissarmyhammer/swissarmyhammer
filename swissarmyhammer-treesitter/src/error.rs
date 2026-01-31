@@ -84,6 +84,10 @@ pub enum TreeSitterError {
     /// Embedding model error
     #[error("Embedding error: {0}")]
     EmbeddingError(String),
+
+    /// Connection error (e.g., failed to connect to index leader)
+    #[error("Connection error: {0}")]
+    ConnectionError(String),
 }
 
 impl Severity for TreeSitterError {
@@ -105,6 +109,7 @@ impl Severity for TreeSitterError {
             TreeSitterError::LockError(_) => ErrorSeverity::Critical,
             TreeSitterError::QueryError { .. } => ErrorSeverity::Critical,
             TreeSitterError::EmbeddingError(_) => ErrorSeverity::Error,
+            TreeSitterError::ConnectionError(_) => ErrorSeverity::Error,
         }
     }
 }
@@ -163,6 +168,11 @@ impl TreeSitterError {
     pub fn embedding_error(message: impl Into<String>) -> Self {
         TreeSitterError::EmbeddingError(message.into())
     }
+
+    /// Create a connection error
+    pub fn connection_error(message: impl Into<String>) -> Self {
+        TreeSitterError::ConnectionError(message.into())
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +206,7 @@ mod tests {
             TreeSitterError::watcher_error("test error"),
             TreeSitterError::NotInitialized,
             TreeSitterError::embedding_error("model load failed"),
+            TreeSitterError::connection_error("failed to connect"),
         ];
 
         for error in errors {

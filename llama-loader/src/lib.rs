@@ -17,6 +17,7 @@ pub mod types;
 pub use detection::{
     auto_detect_hf_model_file, auto_detect_hf_model_file_with_folder, get_folder_files,
 };
+pub use download_lock::DownloadCoordinator;
 pub use error::ModelError;
 pub use huggingface::{
     load_huggingface_model, load_huggingface_model_with_folder, load_huggingface_model_with_path,
@@ -24,5 +25,4 @@ pub use huggingface::{
 };
 pub use loader::ModelLoader;
 pub use multipart::{download_folder_model, download_multi_part_model};
-pub use download_lock::DownloadCoordinator;
 pub use types::{LoadedModel, ModelConfig, ModelMetadata, ModelSource, RetryConfig};

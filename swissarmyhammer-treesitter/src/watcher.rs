@@ -19,7 +19,7 @@ pub const DEBOUNCE_DURATION_MS: u64 = 500;
 /// Callback trait for file change events
 ///
 /// Implement this trait to handle file change notifications from the watcher.
-pub trait IndexWatcherCallback: Send + Sync + 'static {
+pub trait WorkspaceWatcherCallback: Send + Sync + 'static {
     /// Called when files are added or modified
     fn on_files_changed(
         &self,
@@ -42,11 +42,11 @@ pub trait IndexWatcherCallback: Send + Sync + 'static {
 /// # Example
 ///
 /// ```ignore
-/// use swissarmyhammer_treesitter::IndexWatcher;
+/// use swissarmyhammer_treesitter::WorkspaceWatcher;
 ///
 /// struct MyCallback;
 ///
-/// impl IndexWatcherCallback for MyCallback {
+/// impl WorkspaceWatcherCallback for MyCallback {
 ///     async fn on_files_changed(&self, paths: Vec<PathBuf>) -> Result<()> {
 ///         for path in paths {
 ///             println!("File changed: {}", path.display());
@@ -63,13 +63,13 @@ pub trait IndexWatcherCallback: Send + Sync + 'static {
 ///     }
 /// }
 ///
-/// let mut watcher = IndexWatcher::new();
+/// let mut watcher = WorkspaceWatcher::new();
 /// watcher.start("/path/to/project", MyCallback).await?;
 ///
 /// // Later...
 /// watcher.stop();
 /// ```
-pub struct IndexWatcher {
+pub struct WorkspaceWatcher {
     /// Handle to stop the watcher
     stop_handle: Option<tokio::task::JoinHandle<()>>,
 
@@ -80,7 +80,7 @@ pub struct IndexWatcher {
     is_watching: bool,
 }
 
-impl IndexWatcher {
+impl WorkspaceWatcher {
     /// Create a new file watcher (not yet watching)
     pub fn new() -> Self {
         Self {
@@ -95,7 +95,7 @@ impl IndexWatcher {
     /// Uses 500ms debounce to batch rapid file changes.
     pub async fn start<C>(&mut self, root_path: impl AsRef<Path>, callback: C) -> Result<()>
     where
-        C: IndexWatcherCallback + Clone + 'static,
+        C: WorkspaceWatcherCallback + Clone + 'static,
     {
         let root_path = root_path.as_ref().to_path_buf();
 
@@ -179,13 +179,13 @@ impl IndexWatcher {
     }
 }
 
-impl Default for IndexWatcher {
+impl Default for WorkspaceWatcher {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for IndexWatcher {
+impl Drop for WorkspaceWatcher {
     fn drop(&mut self) {
         self.stop();
     }
@@ -234,21 +234,21 @@ mod tests {
 
     #[test]
     fn test_watcher_new() {
-        let watcher = IndexWatcher::new();
+        let watcher = WorkspaceWatcher::new();
         assert!(!watcher.is_watching());
         assert!(watcher.root_path().is_none());
     }
 
     #[test]
     fn test_watcher_default() {
-        let watcher = IndexWatcher::default();
+        let watcher = WorkspaceWatcher::default();
         assert!(!watcher.is_watching());
     }
 
     #[tokio::test]
     async fn test_watcher_start_and_stop() {
         let dir = setup_minimal_test_dir();
-        let mut watcher = IndexWatcher::new();
+        let mut watcher = WorkspaceWatcher::new();
         let callback = TestWatcherCallback::new();
 
         // Start watching
@@ -268,7 +268,7 @@ mod tests {
         let dir2 = TempDir::new().unwrap();
         std::fs::write(dir2.path().join("lib.rs"), "pub fn foo() {}").unwrap();
 
-        let mut watcher = IndexWatcher::new();
+        let mut watcher = WorkspaceWatcher::new();
         let callback = TestWatcherCallback::new();
 
         // Start watching dir1
@@ -398,7 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_watcher_start_nonexistent_path() {
-        let mut watcher = IndexWatcher::new();
+        let mut watcher = WorkspaceWatcher::new();
         let callback = TestWatcherCallback::new();
 
         let result = watcher
@@ -411,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_watcher_stop() {
-        let mut watcher = IndexWatcher::new();
+        let mut watcher = WorkspaceWatcher::new();
         watcher.stop(); // Should not panic even if not watching
         assert!(!watcher.is_watching());
     }
@@ -422,7 +422,7 @@ mod tests {
         let callback = TestWatcherCallback::new();
 
         {
-            let mut watcher = IndexWatcher::new();
+            let mut watcher = WorkspaceWatcher::new();
             watcher.start(dir.path(), callback).await.unwrap();
             assert!(watcher.is_watching());
             // Watcher is dropped here

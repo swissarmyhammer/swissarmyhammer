@@ -79,8 +79,10 @@ pub mod chunk;
 pub mod error;
 pub mod index;
 pub mod language;
+mod leader;
 pub mod parsed_file;
 pub mod query;
+mod unified;
 pub mod watcher;
 
 #[cfg(test)]
@@ -94,14 +96,20 @@ pub use error::{Result, TreeSitterError};
 pub use index::{IndexConfig, IndexContext, IndexStats, IndexStatus, ScanResult};
 pub use language::{LanguageConfig, LanguageRegistry};
 pub use parsed_file::ParsedFile;
-pub use watcher::{IndexWatcher, IndexWatcherCallback};
+pub use watcher::{WorkspaceWatcher, WorkspaceWatcherCallback};
 
 // Query protocol for leader/client architecture
 pub use query::{
-    ChunkResult, ClientError, DuplicateCluster, ElectionError, IndexClient, IndexLeader,
-    IndexService, IndexStatusInfo, LeaderElection, LeaderGuard, QueryError, QueryErrorKind,
-    QueryMatch, SimilarChunkResult,
+    ChunkResult, ClientError, DuplicateCluster, ElectionConfig, ElectionError, IndexClient,
+    IndexService, IndexStatusInfo, LeaderElection, LeaderGuard, QueryError,
+    QueryErrorKind, QueryMatch, SimilarChunkResult,
 };
+
+// Workspace leader process
+pub use leader::WorkspaceLeader;
+
+// Workspace with automatic leader/client mode
+pub use unified::Workspace;
 
 #[cfg(test)]
 mod tests {

@@ -6451,6 +6451,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-leader-election"
+version = "0.5.0"
+dependencies = [
+ "fs2",
+ "md5",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "swissarmyhammer-mcp-proxy"
 version = "0.5.0"
 dependencies = [
@@ -6642,6 +6652,7 @@ dependencies = [
  "swissarmyhammer-prompts",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",
+ "swissarmyhammer-treesitter",
  "swissarmyhammer-workflow",
  "tempfile",
  "test-log",
@@ -6665,7 +6676,6 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-watcher",
- "fs2",
  "futures",
  "ignore",
  "llama-embedding",
@@ -6678,6 +6688,7 @@ dependencies = [
  "serial_test",
  "simsimd",
  "swissarmyhammer-common",
+ "swissarmyhammer-leader-election",
  "tarpc",
  "tempfile",
  "test-log",

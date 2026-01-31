@@ -15,11 +15,11 @@ use tarpc::client;
 use tokio::net::UnixStream;
 use tokio_serde::formats::Bincode;
 
-use crate::query::election::LeaderElection;
 use crate::query::service::IndexServiceClient;
 use crate::query::types::{
     DuplicateCluster, IndexStatusInfo, QueryError, QueryMatch, SimilarChunkResult,
 };
+use swissarmyhammer_leader_election::LeaderElection;
 
 /// Client for querying the tree-sitter index.
 ///
@@ -296,7 +296,9 @@ mod tests {
     /// Verify tree_sitter_query signature compiles
     #[allow(dead_code)]
     async fn api_tree_sitter_query(c: &IndexClient) {
-        let _ = c.tree_sitter_query("(identifier)".to_string(), None, None).await;
+        let _ = c
+            .tree_sitter_query("(identifier)".to_string(), None, None)
+            .await;
     }
 
     /// Verify list_files signature compiles

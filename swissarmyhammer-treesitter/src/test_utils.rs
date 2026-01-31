@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use crate::error::Result;
 use crate::index::{IndexContext, IndexStatus, ScanResult};
-use crate::watcher::IndexWatcherCallback;
+use crate::watcher::WorkspaceWatcherCallback;
 
 /// Create a temporary directory with common test files
 ///
@@ -88,7 +88,7 @@ impl Default for ProgressCollector {
     }
 }
 
-/// Test callback for IndexWatcher that tracks call counts
+/// Test callback for WorkspaceWatcher that tracks call counts
 ///
 /// # Example
 ///
@@ -137,7 +137,7 @@ impl Default for TestWatcherCallback {
     }
 }
 
-impl IndexWatcherCallback for TestWatcherCallback {
+impl WorkspaceWatcherCallback for TestWatcherCallback {
     async fn on_files_changed(&self, paths: Vec<PathBuf>) -> Result<()> {
         self.changed_count.fetch_add(paths.len(), Ordering::SeqCst);
         Ok(())

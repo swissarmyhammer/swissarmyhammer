@@ -118,6 +118,24 @@ impl std::fmt::Display for QueryError {
 
 impl std::error::Error for QueryError {}
 
+/// Check if the index is ready, returning `QueryError::NotReady` if not.
+///
+/// This is a convenience function to avoid duplicating the readiness check pattern
+/// across multiple query implementations.
+///
+/// # Example
+///
+/// ```ignore
+/// let ctx = context.read().await;
+/// check_ready(ctx.status().is_complete())?;
+/// ```
+pub fn check_ready(is_complete: bool) -> Result<(), QueryError> {
+    if !is_complete {
+        return Err(QueryError::not_ready());
+    }
+    Ok(())
+}
+
 impl QueryError {
     /// Create a "not ready" error
     pub fn not_ready() -> Self {
@@ -164,6 +182,20 @@ impl QueryError {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn test_check_ready_when_complete() {
+        let result = check_ready(true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_ready_when_not_complete() {
+        let result = check_ready(false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err.kind, QueryErrorKind::NotReady));
+    }
 
     #[test]
     fn test_query_error_not_ready() {

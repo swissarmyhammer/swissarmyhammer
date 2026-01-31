@@ -386,6 +386,12 @@ impl IndexContext {
             self.send_progress(self.last_status.clone());
         }
 
+        tracing::info!(
+            "Discovered {} files to parse in {}",
+            files_to_parse.len(),
+            self.root_path.display()
+        );
+
         // Second pass: parse files
         for path in files_to_parse {
             self.last_status.current_file = Some(path.clone());
@@ -415,7 +421,8 @@ impl IndexContext {
 
         // Third pass: embed chunks
         let embedding_config = self.config.embedding.clone();
-        self.run_embedding_phase(&embedding_config, &mut errors).await?;
+        self.run_embedding_phase(&embedding_config, &mut errors)
+            .await?;
 
         // Send final status
         self.last_status.current_file = None;
@@ -438,8 +445,15 @@ impl IndexContext {
         config: &EmbeddingModelConfig,
         errors: &mut Vec<(PathBuf, String)>,
     ) -> Result<()> {
+        let files_count = self.files.len();
+        if files_count == 0 {
+            return Ok(());
+        }
+
+        tracing::info!("Loading embedding model...");
         self.ensure_embedding_model_loaded(config).await?;
 
+        tracing::info!("Embedding {} parsed files...", files_count);
         let paths_to_embed: Vec<PathBuf> = self.files.keys().cloned().collect();
 
         for path in paths_to_embed {
@@ -453,6 +467,12 @@ impl IndexContext {
 
             tokio::task::yield_now().await;
         }
+
+        tracing::info!(
+            "Embedding complete: {} files, {} chunks",
+            self.last_status.files_embedded,
+            self.chunk_graph.chunks().len()
+        );
 
         Ok(())
     }
@@ -600,7 +620,8 @@ impl IndexContext {
         // Clear old chunks and re-embed
         self.chunk_graph.remove_file(path);
         let embedding_config = self.config.embedding.clone();
-        self.ensure_embedding_model_loaded(&embedding_config).await?;
+        self.ensure_embedding_model_loaded(&embedding_config)
+            .await?;
         let mut errors = Vec::new();
         self.embed_file_chunks(path, &mut errors).await;
 
@@ -849,7 +870,10 @@ mod tests {
 
         // Record how many chunks exist after initial scan
         let initial_chunk_count = context.chunk_graph().chunks_for_file(&path).len();
-        assert!(initial_chunk_count > 0, "Should have chunks after scan with embedding");
+        assert!(
+            initial_chunk_count > 0,
+            "Should have chunks after scan with embedding"
+        );
 
         // Manually add a fake chunk with a distinctive embedding
         let parsed = context.get(&path).unwrap();
@@ -922,7 +946,10 @@ mod tests {
         let stats = context.stats();
         assert_eq!(stats.total_files, 4);
         // Embedding is always enabled, so we should have chunks
-        assert!(stats.total_chunks > 0, "Should have chunks with embedding enabled");
+        assert!(
+            stats.total_chunks > 0,
+            "Should have chunks with embedding enabled"
+        );
     }
 
     #[tokio::test]

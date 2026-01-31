@@ -1,6 +1,6 @@
-//! Query protocol for leader/client tree-sitter index architecture
+//! Query protocol for leader/client tree-sitter workspace architecture
 //!
-//! This module provides the RPC protocol for querying a shared tree-sitter index.
+//! This module provides the RPC protocol for querying a shared tree-sitter workspace.
 //! One process acts as the "leader" holding the actual index in memory, while
 //! other processes connect as clients and send queries over a Unix socket.
 //!
@@ -13,26 +13,31 @@
 //! # Example
 //!
 //! ```ignore
-//! use swissarmyhammer_treesitter::query::{IndexClient, connect_or_become_leader};
+//! use swissarmyhammer_treesitter::Workspace;
 //!
-//! // Connect to existing leader or become one
-//! let client = connect_or_become_leader("/path/to/project").await?;
+//! // Open workspace - leader/client mode is handled automatically
+//! let workspace = Workspace::open("/path/to/project").await?;
 //!
 //! // Find duplicates
-//! let duplicates = client.find_all_duplicates(0.85, 100).await?;
+//! let duplicates = workspace.find_all_duplicates(0.85, 100).await?;
 //!
 //! // Semantic search
-//! let results = client.semantic_search("fn main", 10, 0.7).await?;
+//! let results = workspace.semantic_search("fn main", 10, 0.7).await?;
 //! ```
 
 mod client;
-mod election;
-mod leader;
-mod service;
+pub(crate) mod server;
+pub(crate) mod service;
 mod types;
 
 pub use client::{ClientError, IndexClient};
-pub use election::{ElectionError, LeaderElection, LeaderGuard};
-pub use leader::IndexLeader;
 pub use service::IndexService;
-pub use types::*;
+pub use types::{
+    check_ready, Capture, ChunkResult, DuplicateCluster, IndexStatusInfo, QueryError,
+    QueryErrorKind, QueryMatch, SimilarChunkResult,
+};
+
+// Re-export from leader-election crate for backward compatibility
+pub use swissarmyhammer_leader_election::{
+    ElectionConfig, ElectionError, LeaderElection, LeaderGuard,
+};

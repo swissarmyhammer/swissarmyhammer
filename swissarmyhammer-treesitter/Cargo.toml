@@ -73,8 +73,10 @@ serde_json = { workspace = true }
 tarpc = { version = "0.35", features = ["tokio1", "serde-transport"] }
 tokio-serde = { version = "0.9", features = ["bincode"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-fs2 = "0.4"
 futures = { workspace = true }
+
+# Leader election
+swissarmyhammer-leader-election = { workspace = true }
 
 # SIMD-accelerated vector operations
 simsimd = { workspace = true }
