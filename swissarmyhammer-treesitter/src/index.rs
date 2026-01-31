@@ -118,6 +118,12 @@ pub struct IndexStatus {
     /// When embedding is disabled, this stays at 0.
     pub files_embedded: usize,
 
+    /// Total chunks discovered for embedding (set at start of embedding phase)
+    pub chunks_total: usize,
+
+    /// Chunks successfully embedded so far (grows during embedding phase)
+    pub chunks_embedded: usize,
+
     /// Current file being processed (None when not actively processing)
     pub current_file: Option<PathBuf>,
 
@@ -163,9 +169,14 @@ impl IndexStatus {
         }
     }
 
+    /// Check if a phase is complete: total > 0 and processed == total
+    fn is_phase_complete(processed: usize, total: usize) -> bool {
+        total > 0 && processed == total
+    }
+
     /// Whether parsing phase is complete
     pub fn is_parsing_complete(&self) -> bool {
-        self.files_total > 0 && self.files_processed() == self.files_total
+        Self::is_phase_complete(self.files_processed(), self.files_total)
     }
 
     /// Whether embedding phase is complete
@@ -173,7 +184,7 @@ impl IndexStatus {
     /// Returns true when all parsed files have been embedded.
     /// If no embedding is happening (files_embedded == 0), returns false.
     pub fn is_embedding_complete(&self) -> bool {
-        self.files_parsed > 0 && self.files_embedded == self.files_parsed
+        Self::is_phase_complete(self.files_embedded, self.files_parsed)
     }
 
     /// Whether all processing is complete
@@ -183,7 +194,7 @@ impl IndexStatus {
     /// - Or all embedding is done (files_embedded == files_parsed)
     pub fn is_complete(&self) -> bool {
         self.is_parsing_complete()
-            && (self.files_embedded == 0 || self.files_embedded == self.files_parsed)
+            && (self.files_embedded == 0 || self.is_embedding_complete())
     }
 }
 
@@ -456,6 +467,14 @@ impl IndexContext {
         tracing::info!("Embedding {} parsed files...", files_count);
         let paths_to_embed: Vec<PathBuf> = self.files.keys().cloned().collect();
 
+        // Count total chunks across all files for progress tracking in IndexStatus
+        self.last_status.chunks_total = paths_to_embed
+            .iter()
+            .filter_map(|p| self.files.get(p))
+            .map(|parsed| chunk_file(parsed.clone()).len())
+            .sum();
+        tracing::info!("Total chunks to embed: {}", self.last_status.chunks_total);
+
         for path in paths_to_embed {
             self.last_status.current_file = Some(path.clone());
             self.send_progress(self.last_status.clone());
@@ -477,7 +496,8 @@ impl IndexContext {
         Ok(())
     }
 
-    /// Embed all chunks for a single file and add to graph
+    /// Embed all chunks for a single file and add to graph.
+    /// Updates `last_status.chunks_embedded` as chunks are processed.
     async fn embed_file_chunks(&mut self, path: &Path, errors: &mut Vec<(PathBuf, String)>) {
         let Some(parsed) = self.files.get(path) else {
             return;
@@ -496,10 +516,18 @@ impl IndexContext {
             let Some(content) = chunk.content() else {
                 continue;
             };
+
+            // Log progress using IndexStatus (1-indexed for display)
+            let current = self.last_status.chunks_embedded + 1;
+            let total = self.last_status.chunks_total;
+            let symbol_path = chunk.symbol_path();
+            tracing::info!("Embedding {}/{}: {}", current, total, symbol_path);
+
             match model.embed_text(content).await {
                 Ok(result) => {
                     chunk.embedding = Some(result.embedding);
                     self.chunk_graph.add(chunk);
+                    self.last_status.chunks_embedded += 1;
                 }
                 Err(e) => {
                     errors.push((path.to_path_buf(), format!("Embedding error: {}", e)));
@@ -521,7 +549,7 @@ impl IndexContext {
                 folder: None,
             },
             normalize_embeddings: true,
-            max_sequence_length: None,
+            max_sequence_length: None, // Use model's context size
             debug: false,
         };
 
@@ -623,6 +651,9 @@ impl IndexContext {
         self.ensure_embedding_model_loaded(&embedding_config)
             .await?;
         let mut errors = Vec::new();
+        // Set up chunk tracking for this single file refresh
+        self.last_status.chunks_total = chunk_file(parsed.clone()).len();
+        self.last_status.chunks_embedded = 0;
         self.embed_file_chunks(path, &mut errors).await;
 
         Ok((*parsed).clone())

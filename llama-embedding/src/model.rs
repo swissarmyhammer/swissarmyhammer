@@ -21,6 +21,15 @@ use std::os::raw::c_char;
 
 static GLOBAL_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 
+/// llama.cpp's default n_batch value (tokens per batch).
+///
+/// Used as initial batch size before model is loaded. After loading, batch_size
+/// is updated to match the model's context_size for full-context embedding.
+/// This value comes from llama.cpp's LlamaContextParams default.
+///
+/// Reference: https://github.com/ggerganov/llama.cpp/blob/master/include/llama.h
+const LLAMA_CPP_DEFAULT_N_BATCH: u32 = 512;
+
 // Null log callback to suppress llama.cpp verbose output
 extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
     // Do nothing - this suppresses all llama.cpp logging
@@ -47,12 +56,27 @@ fn set_logging_suppression(suppress: bool) {
     }
 }
 
-/// Core embedding model that handles individual text embedding operations
+/// Core embedding model that handles individual text embedding operations.
+///
+/// This struct manages the lifecycle of an embedding model, including loading,
+/// configuration, and text embedding generation. It automatically determines
+/// the maximum sequence length from the model's context size when not explicitly
+/// configured.
 pub struct EmbeddingModel {
+    /// The loaded llama model, None until load_model() is called
     model: Option<LlamaModel>,
+    /// User-provided configuration for embedding operations
     config: EmbeddingConfig,
+    /// Model metadata extracted after loading (context size, source, etc.)
     metadata: Option<ModelMetadata>,
+    /// Shared backend instance for llama operations
     backend: Arc<LlamaBackend>,
+    /// Effective max sequence length: uses config value if set, otherwise model's context_size.
+    /// This ensures we never exceed the model's capabilities.
+    effective_max_seq_len: Option<usize>,
+    /// Batch size for context creation, set to match model's context_size after loading.
+    /// This allows embedding texts up to the full context window.
+    batch_size: u32,
 }
 
 impl EmbeddingModel {
@@ -79,6 +103,8 @@ impl EmbeddingModel {
             config,
             metadata: None,
             backend,
+            effective_max_seq_len: None,
+            batch_size: LLAMA_CPP_DEFAULT_N_BATCH,
         })
     }
 
@@ -92,9 +118,11 @@ impl EmbeddingModel {
         let start_time = Instant::now();
 
         // Create ModelConfig for the loader
+        // Note: batch_size here is for the loader, not the context; we set context
+        // batch size after loading based on the model's actual context_size
         let model_config = ModelConfig {
             source: self.config.model_source.clone(),
-            batch_size: 1024, // Default batch size for embedding
+            batch_size: LLAMA_CPP_DEFAULT_N_BATCH,
             n_seq_max: 1,
             n_threads: 1,
             n_threads_batch: 1,
@@ -118,7 +146,17 @@ impl EmbeddingModel {
 
         // Store the model and metadata
         self.model = Some(loaded_model.model);
-        self.metadata = Some(loaded_model.metadata);
+        self.metadata = Some(loaded_model.metadata.clone());
+
+        // Set batch_size to model's context_size for full-context embedding
+        let ctx_size = loaded_model.metadata.context_size;
+        self.batch_size = ctx_size as u32;
+        info!("Set batch size to model context size: {} tokens", ctx_size);
+
+        // Set effective max sequence length:
+        // - Use config value if specified
+        // - Otherwise use model's context_size from metadata
+        self.effective_max_seq_len = self.config.max_sequence_length.or(Some(ctx_size));
 
         info!(
             "Embedding model loaded successfully in {}",
@@ -148,8 +186,8 @@ impl EmbeddingModel {
         // Tokenize the text
         let tokens = self.tokenize_text(&context, text)?;
 
-        // Apply sequence length limit if configured
-        let final_tokens = if let Some(max_len) = self.config.max_sequence_length {
+        // Apply sequence length limit (from config or model's context size)
+        let final_tokens = if let Some(max_len) = self.effective_max_seq_len {
             if tokens.len() > max_len {
                 debug!("Truncating tokens from {} to {}", tokens.len(), max_len);
                 tokens[..max_len].to_vec()
@@ -157,6 +195,8 @@ impl EmbeddingModel {
                 tokens
             }
         } else {
+            // This should never happen after load_model is called,
+            // but handle it gracefully
             tokens
         };
 
@@ -230,7 +270,14 @@ impl EmbeddingModel {
     }
 
     fn create_context<'a>(&self, model: &'a LlamaModel) -> Result<LlamaContext<'a>> {
-        let context_params = LlamaContextParams::default().with_embeddings(true);
+        use std::num::NonZeroU32;
+
+        // n_ctx must be >= n_batch, so set both to the same value
+        let n_ctx = NonZeroU32::new(self.batch_size);
+        let context_params = LlamaContextParams::default()
+            .with_embeddings(true)
+            .with_n_ctx(n_ctx)
+            .with_n_batch(self.batch_size);
 
         model
             .new_context(&self.backend, context_params)

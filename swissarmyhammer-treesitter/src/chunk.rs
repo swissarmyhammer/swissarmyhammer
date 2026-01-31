@@ -47,39 +47,40 @@ impl ChunkSource {
         Self::Text(content.into())
     }
 
-    /// File path (None for text sources)
-    pub fn path(&self) -> Option<&Path> {
-        match self {
-            Self::Parsed { parsed_file, .. } => Some(&parsed_file.path),
-            Self::Text(_) => None,
-        }
-    }
-
-    /// Byte length of this chunk
-    pub fn byte_len(&self) -> usize {
-        match self {
-            Self::Parsed {
-                start_byte,
-                end_byte,
-                ..
-            } => end_byte.saturating_sub(*start_byte),
-            Self::Text(s) => s.len(),
-        }
-    }
-
-    /// Tree-sitter node for this chunk (None for text sources)
-    pub fn node(&self) -> Option<tree_sitter::Node<'_>> {
+    /// Extract parsed fields: (parsed_file, start_byte, end_byte).
+    /// Returns None for Text variant. Used to reduce destructuring duplication.
+    fn parsed_fields(&self) -> Option<(&Arc<ParsedFile>, usize, usize)> {
         match self {
             Self::Parsed {
                 start_byte,
                 end_byte,
                 parsed_file,
-            } => parsed_file
-                .tree
-                .root_node()
-                .descendant_for_byte_range(*start_byte, *end_byte),
+            } => Some((parsed_file, *start_byte, *end_byte)),
             Self::Text(_) => None,
         }
+    }
+
+    /// File path (None for text sources)
+    pub fn path(&self) -> Option<&Path> {
+        self.parsed_fields().map(|(pf, _, _)| pf.path.as_path())
+    }
+
+    /// Byte length of this chunk
+    pub fn byte_len(&self) -> usize {
+        match self.parsed_fields() {
+            Some((_, start, end)) => end.saturating_sub(start),
+            None => match self {
+                Self::Text(s) => s.len(),
+                _ => 0,
+            },
+        }
+    }
+
+    /// Tree-sitter node for this chunk (None for text sources)
+    pub fn node(&self) -> Option<tree_sitter::Node<'_>> {
+        self.parsed_fields().and_then(|(pf, start, end)| {
+            pf.tree.root_node().descendant_for_byte_range(start, end)
+        })
     }
 
     /// Parent node of this chunk's node (None for text sources)
@@ -89,13 +90,12 @@ impl ChunkSource {
 
     /// Text content of this chunk
     pub fn content(&self) -> Option<&str> {
-        match self {
-            Self::Parsed {
-                start_byte,
-                end_byte,
-                parsed_file,
-            } => parsed_file.get_text(*start_byte, *end_byte),
-            Self::Text(s) => Some(s.as_str()),
+        match self.parsed_fields() {
+            Some((pf, start, end)) => pf.get_text(start, end),
+            None => match self {
+                Self::Text(s) => Some(s.as_str()),
+                _ => None,
+            },
         }
     }
 
@@ -108,24 +108,23 @@ impl ChunkSource {
     pub fn is_text(&self) -> bool {
         matches!(self, Self::Text(_))
     }
+
+    /// Extract comparison key for Parsed variant: (path, start_byte, end_byte).
+    /// Returns None for Text variant.
+    fn parsed_key(&self) -> Option<(&Path, usize, usize)> {
+        self.parsed_fields()
+            .map(|(pf, start, end)| (pf.path.as_path(), start, end))
+    }
 }
 
 impl PartialEq for ChunkSource {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Self::Parsed {
-                    start_byte: s1,
-                    end_byte: e1,
-                    parsed_file: p1,
-                },
-                Self::Parsed {
-                    start_byte: s2,
-                    end_byte: e2,
-                    parsed_file: p2,
-                },
-            ) => p1.path == p2.path && s1 == s2 && e1 == e2,
-            (Self::Text(t1), Self::Text(t2)) => t1 == t2,
+        match (self.parsed_key(), other.parsed_key()) {
+            (Some(k1), Some(k2)) => k1 == k2,
+            (None, None) => match (self, other) {
+                (Self::Text(t1), Self::Text(t2)) => t1 == t2,
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -135,21 +134,14 @@ impl Eq for ChunkSource {}
 
 impl std::hash::Hash for ChunkSource {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            Self::Parsed {
-                start_byte,
-                end_byte,
-                parsed_file,
-            } => {
-                0u8.hash(state);
-                parsed_file.path.hash(state);
-                start_byte.hash(state);
-                end_byte.hash(state);
-            }
-            Self::Text(s) => {
-                1u8.hash(state);
-                s.hash(state);
-            }
+        if let Some((path, start, end)) = self.parsed_key() {
+            0u8.hash(state);
+            path.hash(state);
+            start.hash(state);
+            end.hash(state);
+        } else if let Self::Text(s) = self {
+            1u8.hash(state);
+            s.hash(state);
         }
     }
 }
@@ -162,22 +154,14 @@ impl PartialOrd for ChunkSource {
 
 impl Ord for ChunkSource {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (self, other) {
-            (
-                Self::Parsed {
-                    start_byte: s1,
-                    end_byte: e1,
-                    parsed_file: p1,
-                },
-                Self::Parsed {
-                    start_byte: s2,
-                    end_byte: e2,
-                    parsed_file: p2,
-                },
-            ) => (&p1.path, s1, e1).cmp(&(&p2.path, s2, e2)),
-            (Self::Text(t1), Self::Text(t2)) => t1.cmp(t2),
-            (Self::Parsed { .. }, Self::Text(_)) => std::cmp::Ordering::Less,
-            (Self::Text(_), Self::Parsed { .. }) => std::cmp::Ordering::Greater,
+        match (self.parsed_key(), other.parsed_key()) {
+            (Some(k1), Some(k2)) => k1.cmp(&k2),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => match (self, other) {
+                (Self::Text(t1), Self::Text(t2)) => t1.cmp(t2),
+                _ => std::cmp::Ordering::Equal,
+            },
         }
     }
 }
@@ -246,6 +230,42 @@ impl SemanticChunk {
     /// Check if this chunk has an embedding
     pub fn has_embedding(&self) -> bool {
         self.embedding.is_some()
+    }
+
+    /// Get a human-readable symbol path for this chunk.
+    ///
+    /// Returns something like "file.rs::StructName::method_name" for nested definitions,
+    /// or "file.rs::function_name" for top-level items.
+    pub fn symbol_path(&self) -> String {
+        let file_name = self.file_name_or_default();
+        let Some(node) = self.node() else {
+            return file_name;
+        };
+
+        // Get source bytes for utf8_text extraction
+        let source_bytes = self.source_bytes();
+        let names = collect_symbol_names(node, source_bytes);
+        if names.is_empty() {
+            format!("{}::{}", file_name, node.kind())
+        } else {
+            format!("{}::{}", file_name, names.join("::"))
+        }
+    }
+
+    /// Get the source bytes for this chunk's file.
+    /// Returns empty slice for text-only sources.
+    fn source_bytes(&self) -> &[u8] {
+        match &self.source {
+            ChunkSource::Parsed { parsed_file, .. } => parsed_file.source.as_bytes(),
+            ChunkSource::Text(_) => &[],
+        }
+    }
+
+    fn file_name_or_default(&self) -> String {
+        self.path()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<text>".to_string())
     }
 
     /// Cosine similarity with another chunk (0.0 if either lacks embedding)
@@ -317,40 +337,33 @@ pub enum QuerySource {
 }
 
 impl SimilarityQuery {
-    /// Query by a single chunk
-    pub fn chunk(chunk: SemanticChunk) -> Self {
+    /// Create a new query with the given source and default settings.
+    fn new(source: QuerySource) -> Self {
         Self {
-            source: QuerySource::Chunk(chunk),
+            source,
             top_k: DEFAULT_TOP_K,
             min_similarity: DEFAULT_MIN_SIMILARITY,
         }
+    }
+
+    /// Query by a single chunk
+    pub fn chunk(chunk: SemanticChunk) -> Self {
+        Self::new(QuerySource::Chunk(chunk))
     }
 
     /// Query by multiple chunks
     pub fn chunks(chunks: Vec<SemanticChunk>) -> Self {
-        Self {
-            source: QuerySource::Chunks(chunks),
-            top_k: DEFAULT_TOP_K,
-            min_similarity: DEFAULT_MIN_SIMILARITY,
-        }
+        Self::new(QuerySource::Chunks(chunks))
     }
 
     /// Query by file path
     pub fn file(path: impl Into<PathBuf>) -> Self {
-        Self {
-            source: QuerySource::File(path.into()),
-            top_k: DEFAULT_TOP_K,
-            min_similarity: DEFAULT_MIN_SIMILARITY,
-        }
+        Self::new(QuerySource::File(path.into()))
     }
 
     /// Query by raw embedding vector
     pub fn embedding(embedding: Vec<f32>) -> Self {
-        Self {
-            source: QuerySource::Embedding(embedding),
-            top_k: DEFAULT_TOP_K,
-            min_similarity: DEFAULT_MIN_SIMILARITY,
-        }
+        Self::new(QuerySource::Embedding(embedding))
     }
 
     /// Set maximum results to return
@@ -475,20 +488,17 @@ impl ChunkGraph {
     }
 
     fn sort_and_truncate(&self, results: &mut Vec<SimilarChunk>, top_k: usize) {
-        results.sort_by(|a, b| match a.chunk.source.cmp(&b.chunk.source) {
-            std::cmp::Ordering::Equal => b
-                .similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal),
-            other => other,
-        });
-        results.dedup_by(|a, b| a.chunk.source == b.chunk.source);
-
+        // Sort by similarity descending first
         results.sort_by(|a, b| {
             b.similarity
                 .partial_cmp(&a.similarity)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        // Dedup keeping first occurrence (highest similarity) using a seen set
+        let mut seen = std::collections::HashSet::new();
+        results.retain(|r| seen.insert(r.chunk.source.clone()));
+
         results.truncate(top_k);
     }
 
@@ -508,10 +518,183 @@ impl ChunkGraph {
     }
 }
 
-/// Extract chunks from a parsed file
+/// Node kinds that represent meaningful semantic units worth embedding.
 ///
-/// Every AST node becomes a chunk. Size limits are handled at embedding
-/// time based on the embedding model's constraints.
+/// These are the "definition" level constructs across languages - functions,
+/// classes, structs, etc. We skip low-level nodes like identifiers, literals,
+/// and operators since they don't carry standalone semantic meaning.
+const EMBEDDABLE_NODE_KINDS: &[&str] = &[
+    // Rust
+    "function_item",
+    "impl_item",
+    "struct_item",
+    "enum_item",
+    "trait_item",
+    "mod_item",
+    "macro_definition",
+    "const_item",
+    "static_item",
+    "type_item",
+    // Python
+    "function_definition",
+    "class_definition",
+    "decorated_definition",
+    // JavaScript/TypeScript
+    "function_declaration",
+    "function_expression",
+    "arrow_function",
+    "class_declaration",
+    "method_definition",
+    "generator_function_declaration",
+    "export_statement",
+    // Go
+    "function_declaration",
+    "method_declaration",
+    "type_declaration",
+    "type_spec",
+    // Java
+    "method_declaration",
+    "class_declaration",
+    "interface_declaration",
+    "enum_declaration",
+    "constructor_declaration",
+    // C/C++
+    "function_definition",
+    "struct_specifier",
+    "class_specifier",
+    "enum_specifier",
+    "namespace_definition",
+    // Ruby
+    "method",
+    "class",
+    "module",
+    "singleton_method",
+    // PHP
+    "function_definition",
+    "method_declaration",
+    "class_declaration",
+    "interface_declaration",
+    "trait_declaration",
+    // Swift
+    "function_declaration",
+    "class_declaration",
+    "struct_declaration",
+    "enum_declaration",
+    "protocol_declaration",
+    // Kotlin
+    "function_declaration",
+    "class_declaration",
+    "object_declaration",
+    // Scala
+    "function_definition",
+    "class_definition",
+    "object_definition",
+    "trait_definition",
+    // Elixir
+    "call", // def, defp, defmodule are calls in Elixir's AST
+    // Haskell
+    "function",
+    "type_signature",
+    // Lua
+    "function_declaration",
+    "local_function",
+    // Bash
+    "function_definition",
+    // SQL
+    "create_function_statement",
+    "create_procedure",
+    "create_table_statement",
+    "create_view_statement",
+];
+
+/// Check if a node kind should be embedded.
+fn is_embeddable_kind(kind: &str) -> bool {
+    EMBEDDABLE_NODE_KINDS.contains(&kind)
+}
+
+/// Container node kinds that provide naming context (impl, class, module, etc.)
+const CONTAINER_KINDS: &[&str] = &[
+    "impl_item",
+    "class_definition",
+    "class_declaration",
+    "module",
+    "mod_item",
+    "namespace_definition",
+    "interface_declaration",
+    "trait_item",
+];
+
+/// Collect symbol names from a node up through its ancestors.
+/// Returns names in order from outermost to innermost (e.g., ["Struct", "method"]).
+fn collect_symbol_names(node: tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_names_recursive(node, source, &mut names);
+    names.reverse();
+    names
+}
+
+fn collect_names_recursive(node: tree_sitter::Node<'_>, source: &[u8], names: &mut Vec<String>) {
+    if let Some(name) = extract_node_name(node, source) {
+        names.push(name);
+    }
+    // Walk up to find parent containers, skipping intermediate nodes like declaration_list
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        let pk = parent.kind();
+        if is_embeddable_kind(pk) || CONTAINER_KINDS.contains(&pk) {
+            collect_names_recursive(parent, source, names);
+            break;
+        }
+        current = parent;
+    }
+}
+
+/// Extract the name identifier from a node.
+fn extract_node_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    // Try common name fields
+    for field in &["name", "identifier", "declarator"] {
+        if let Some(name) = try_extract_name_field(node, field, source) {
+            return Some(name);
+        }
+    }
+    // Special case for impl blocks
+    if node.kind() == "impl_item" {
+        return extract_impl_type_name(node, source);
+    }
+    None
+}
+
+/// Validate that text is a simple identifier suitable for symbol paths.
+/// Rejects text with newlines or exceeding the max length.
+fn is_valid_symbol_text(text: &str, max_len: usize) -> bool {
+    !text.contains('\n') && text.len() < max_len
+}
+
+fn try_extract_name_field(node: tree_sitter::Node<'_>, field: &str, source: &[u8]) -> Option<String> {
+    let name_node = node.child_by_field_name(field)?;
+    let text = name_node.utf8_text(source).ok()?;
+    // Only accept simple identifiers (no whitespace, reasonable length)
+    if !text.contains(' ') && is_valid_symbol_text(text, 100) {
+        Some(text.to_string())
+    } else {
+        None
+    }
+}
+
+fn extract_impl_type_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let type_node = node.child_by_field_name("type")?;
+    let text = type_node.utf8_text(source).ok()?;
+    if is_valid_symbol_text(text, 50) {
+        Some(format!("impl {}", text))
+    } else {
+        None
+    }
+}
+
+/// Extract chunks from a parsed file.
+///
+/// Only extracts nodes whose kind is in the allowlist of meaningful
+/// semantic units (functions, classes, structs, etc.).
 pub fn chunk_file(parsed_file: Arc<ParsedFile>) -> Vec<SemanticChunk> {
     let mut chunks = Vec::new();
     let root = parsed_file.root_node();
@@ -524,11 +707,13 @@ fn extract_chunks_recursive(
     node: tree_sitter::Node<'_>,
     parsed_file: &Arc<ParsedFile>,
 ) {
-    // Add this node as a chunk
-    let chunk = SemanticChunk::from_parsed(parsed_file.clone(), node.start_byte(), node.end_byte());
-    chunks.push(chunk);
+    // Only add this node as a chunk if it's a meaningful semantic unit
+    if is_embeddable_kind(node.kind()) {
+        let chunk = SemanticChunk::from_parsed(parsed_file.clone(), node.start_byte(), node.end_byte());
+        chunks.push(chunk);
+    }
 
-    // Recurse into children
+    // Always recurse into children to find nested definitions
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         extract_chunks_recursive(chunks, child, parsed_file);
@@ -694,13 +879,100 @@ mod tests {
     }
 
     #[test]
-    fn test_chunk_file_creates_chunks_for_all_nodes() {
+    fn test_chunk_file_filters_to_meaningful_nodes() {
         let parsed = create_parsed_file("fn main() {} fn other() {}");
         let chunks = chunk_file(parsed);
 
-        // Should create chunks for every AST node
-        assert!(!chunks.is_empty());
-        // At minimum: source_file, two function_items, their children
-        assert!(chunks.len() > 2);
+        // Should only create chunks for function_item nodes, not identifiers etc.
+        assert_eq!(chunks.len(), 2, "Expected 2 function_item chunks");
+
+        // Verify they're actually function_items
+        for chunk in &chunks {
+            let node = chunk.node().expect("chunk should have node");
+            assert_eq!(node.kind(), "function_item");
+        }
+    }
+
+    #[test]
+    fn test_is_embeddable_kind_rust() {
+        assert!(is_embeddable_kind("function_item"));
+        assert!(is_embeddable_kind("impl_item"));
+        assert!(is_embeddable_kind("struct_item"));
+        assert!(is_embeddable_kind("enum_item"));
+        assert!(is_embeddable_kind("trait_item"));
+        assert!(!is_embeddable_kind("identifier"));
+        assert!(!is_embeddable_kind("string_literal"));
+        assert!(!is_embeddable_kind("source_file"));
+    }
+
+    #[test]
+    fn test_is_embeddable_kind_python() {
+        assert!(is_embeddable_kind("function_definition"));
+        assert!(is_embeddable_kind("class_definition"));
+        assert!(!is_embeddable_kind("expression_statement"));
+    }
+
+    #[test]
+    fn test_is_embeddable_kind_javascript() {
+        assert!(is_embeddable_kind("function_declaration"));
+        assert!(is_embeddable_kind("arrow_function"));
+        assert!(is_embeddable_kind("class_declaration"));
+        assert!(!is_embeddable_kind("call_expression"));
+    }
+
+    #[test]
+    fn test_chunk_file_finds_nested_definitions() {
+        // impl block containing methods
+        let source = r#"
+impl Foo {
+    fn bar() {}
+    fn baz() {}
+}
+"#;
+        let parsed = create_parsed_file(source);
+        let chunks = chunk_file(parsed);
+
+        // Should find: impl_item + 2 function_items
+        assert_eq!(chunks.len(), 3, "Expected impl_item and 2 function_items");
+
+        let kinds: Vec<_> = chunks
+            .iter()
+            .map(|c| c.node().unwrap().kind())
+            .collect();
+        assert!(kinds.contains(&"impl_item"));
+        assert_eq!(kinds.iter().filter(|k| **k == "function_item").count(), 2);
+    }
+
+    #[test]
+    fn test_symbol_path_function() {
+        let parsed = create_parsed_file("fn main() {}");
+        let chunk = SemanticChunk::from_parsed(parsed, 0, 12);
+        let path = chunk.symbol_path();
+        assert!(path.contains("test.rs"), "Should contain filename");
+        assert!(path.contains("main"), "Should contain function name");
+    }
+
+    #[test]
+    fn test_symbol_path_text_chunk() {
+        let chunk = SemanticChunk::from_text("search query");
+        assert_eq!(chunk.symbol_path(), "<text>");
+    }
+
+    #[test]
+    fn test_symbol_path_nested_method() {
+        let source = "impl Foo { fn bar() {} }";
+        let parsed = create_parsed_file(source);
+        // Find the function_item within the impl
+        let chunks = chunk_file(parsed);
+        let method_chunk = chunks.iter().find(|c| {
+            c.node().map(|n| n.kind()) == Some("function_item")
+        });
+        assert!(method_chunk.is_some());
+        let path = method_chunk.unwrap().symbol_path();
+        // Should have both the impl type AND the method name
+        assert!(path.contains("Foo"), "Should contain impl type: {}", path);
+        assert!(path.contains("bar"), "Should contain method name: {}", path);
+        // Full path should be like "test.rs::impl Foo::bar"
+        assert!(path.contains("impl Foo::bar"), "Should have full path: {}", path);
     }
 }

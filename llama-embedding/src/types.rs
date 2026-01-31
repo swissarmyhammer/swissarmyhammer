@@ -8,7 +8,8 @@ pub struct EmbeddingConfig {
     pub model_source: ModelSource,
     /// Normalize embeddings to unit vectors
     pub normalize_embeddings: bool,
-    /// Maximum sequence length for tokenization
+    /// Maximum sequence length for tokenization.
+    /// If None, uses the model's context_size from metadata after loading.
     pub max_sequence_length: Option<usize>,
     /// Enable debug logging
     pub debug: bool,

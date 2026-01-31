@@ -89,5 +89,9 @@ llama-loader = { path = "../llama-loader" }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 test-log = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serial_test = { workspace = true }
+
+[[example]]
+name = "index_bench"
+path = "examples/index_bench.rs"
