@@ -351,36 +351,46 @@ pub fn uninstall(target: InstallTarget) -> Result<(), String> {
             "No settings file at {}, nothing to uninstall",
             path.display()
         );
-        return Ok(());
-    }
+    } else {
+        // Read existing settings
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let mut settings: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
 
-    // Read existing settings
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    let mut settings: Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+        // Remove AVP hooks
+        remove_hooks(&mut settings);
 
-    // Remove AVP hooks
-    remove_hooks(&mut settings);
+        // If hooks object is now empty, remove it
+        if let Some(hooks) = settings.get("hooks").and_then(|h| h.as_object()) {
+            if hooks.is_empty() {
+                settings.as_object_mut().unwrap().remove("hooks");
+            }
+        }
 
-    // If hooks object is now empty, remove it
-    if let Some(hooks) = settings.get("hooks").and_then(|h| h.as_object()) {
-        if hooks.is_empty() {
-            settings.as_object_mut().unwrap().remove("hooks");
+        // Write back (or delete if settings is just {})
+        if settings.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+            fs::remove_file(&path)
+                .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
+            println!("AVP hooks uninstalled, removed empty {}", path.display());
+        } else {
+            let content = serde_json::to_string_pretty(&settings)
+                .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+            fs::write(&path, content)
+                .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+            println!("AVP hooks uninstalled from {}", path.display());
         }
     }
 
-    // Write back (or delete if settings is just {})
-    if settings.as_object().map(|o| o.is_empty()).unwrap_or(false) {
-        fs::remove_file(&path)
-            .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
-        println!("AVP hooks uninstalled, removed empty {}", path.display());
-    } else {
-        let content = serde_json::to_string_pretty(&settings)
-            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-        fs::write(&path, content)
-            .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
-        println!("AVP hooks uninstalled from {}", path.display());
+    // Remove .avp directory if it exists
+    let avp_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?
+        .join(".avp");
+
+    if avp_dir.exists() {
+        fs::remove_dir_all(&avp_dir)
+            .map_err(|e| format!("Failed to remove {}: {}", avp_dir.display(), e))?;
+        println!("Removed {}", avp_dir.display());
     }
 
     Ok(())

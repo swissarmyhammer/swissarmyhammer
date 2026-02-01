@@ -3,7 +3,7 @@
 //! Commands:
 //! - `avp` (no args): Read JSON from stdin, process hook, write JSON to stdout
 //! - `avp init [target]`: Install AVP hooks into Claude Code settings (default: project)
-//! - `avp deinit [target]`: Remove AVP hooks from Claude Code settings (default: project)
+//! - `avp deinit [target]`: Remove AVP hooks and .avp directory (default: project)
 //! - `avp doctor`: Diagnose AVP configuration and setup
 //! - `avp list`: List all available validators
 //!
@@ -49,7 +49,7 @@ enum Commands {
         #[arg(value_enum, default_value_t = InstallTarget::Project)]
         target: InstallTarget,
     },
-    /// Remove AVP hooks from Claude Code settings
+    /// Remove AVP hooks from Claude Code settings and delete .avp directory
     Deinit {
         /// Where to remove the hooks from
         #[arg(value_enum, default_value_t = InstallTarget::Project)]
@@ -133,7 +133,7 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
         println!("Usage:");
         println!("  avp                           Process hook from stdin (pipe JSON)");
         println!("  avp init [project|local|user]      Install hooks (default: project)");
-        println!("  avp deinit [project|local|user]    Remove hooks (default: project)");
+        println!("  avp deinit [project|local|user]    Remove hooks and .avp dir (default: project)");
         println!("  avp list [-v]                 List all available validators");
         println!("  avp doctor [-v]               Diagnose AVP setup");
         println!();
