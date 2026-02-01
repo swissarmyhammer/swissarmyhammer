@@ -9,7 +9,7 @@ use clap::{Arg, ArgAction, Command};
 use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use swissarmyhammer_operations::Operation;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
@@ -1193,22 +1193,32 @@ impl CliBuilder {
     fn create_command_data_from_tool(tool: &dyn McpTool, schema: &Value) -> Option<CommandData> {
         let operations = tool.operations();
 
-        // If tool has operations, create subcommands from them instead of flat args
+        // If tool has operations, create noun-grouped subcommands
+        // Structure: tool -> noun -> verb (e.g., kanban -> board -> init)
         if !operations.is_empty() {
-            // For operation-based tools, use schema args for each subcommand
-            // This ensures CLI args match what the MCP tool expects
+            // For operation-based tools, use schema args for each verb subcommand
             let schema_args = Self::precompute_args(schema);
 
-            let subcommands: Vec<CommandData> = operations
-                .iter()
-                .map(|op| Self::create_command_data_from_operation(*op, &schema_args))
+            // Group operations by noun
+            let mut noun_groups: HashMap<&str, Vec<&dyn Operation>> = HashMap::new();
+            for op in operations {
+                noun_groups.entry(op.noun()).or_default().push(*op);
+            }
+
+            // Create noun subcommands, each containing verb subcommands
+            let mut subcommands: Vec<CommandData> = noun_groups
+                .into_iter()
+                .map(|(noun, ops)| Self::create_noun_command_data(noun, ops, &schema_args))
                 .collect();
+
+            // Sort by noun name for consistent ordering
+            subcommands.sort_by(|a, b| a.name.cmp(&b.name));
 
             Some(CommandData {
                 name: tool.cli_name().to_string(),
                 about: tool.cli_about().map(|s| s.to_string()),
                 long_about: Some(tool.description().to_string()),
-                args: Vec::new(), // No direct args - use subcommands instead
+                args: Vec::new(), // No direct args - use noun subcommands
                 subcommands,
             })
         } else {
@@ -1223,12 +1233,35 @@ impl CliBuilder {
         }
     }
 
-    /// Create command data from an Operation using tool schema args
-    fn create_command_data_from_operation(op: &dyn Operation, schema_args: &[ArgData]) -> CommandData {
-        // Convert "add task" to "add-task" for CLI
-        let op_name = op.op_string().replace(' ', "-");
+    /// Create command data for a noun grouping (e.g., "board", "task", "column")
+    fn create_noun_command_data(
+        noun: &str,
+        ops: Vec<&dyn Operation>,
+        schema_args: &[ArgData],
+    ) -> CommandData {
+        let mut verb_subcommands: Vec<CommandData> = ops
+            .into_iter()
+            .map(|op| Self::create_verb_command_data(op, schema_args))
+            .collect();
 
-        // Use schema args (excluding "op" since that's set by the subcommand itself)
+        // Sort by verb name for consistent ordering
+        verb_subcommands.sort_by(|a, b| a.name.cmp(&b.name));
+
+        CommandData {
+            name: noun.to_string(),
+            about: Some(format!("{} operations", noun)),
+            long_about: None,
+            args: Vec::new(),
+            subcommands: verb_subcommands,
+        }
+    }
+
+    /// Create command data for a verb (e.g., "init", "add", "move")
+    fn create_verb_command_data(op: &dyn Operation, schema_args: &[ArgData]) -> CommandData {
+        // Use just the verb as the subcommand name
+        let verb_name = op.verb().to_string();
+
+        // Use schema args (excluding "op" since that's set by the noun+verb path)
         let args: Vec<ArgData> = schema_args
             .iter()
             .filter(|arg| arg.name != "op")
@@ -1236,7 +1269,7 @@ impl CliBuilder {
             .collect();
 
         CommandData {
-            name: op_name,
+            name: verb_name,
             about: Some(op.description().to_string()),
             long_about: None,
             args,
@@ -1482,27 +1515,40 @@ impl CliBuilder {
             cmd = cmd.long_about(intern_string(long_about.clone()));
         }
 
-        // If tool has operation subcommands, add them
-        if !tool_data.subcommands.is_empty() {
-            for subcmd_data in &tool_data.subcommands {
-                let mut subcmd = Command::new(intern_string(subcmd_data.name.clone()));
+        // Recursively add subcommands (handles noun -> verb nesting)
+        for subcmd_data in &tool_data.subcommands {
+            let subcmd = Self::build_command_from_data(subcmd_data);
+            cmd = cmd.subcommand(subcmd);
+        }
 
-                if let Some(ref about) = subcmd_data.about {
-                    subcmd = subcmd.about(intern_string(about.clone()));
-                }
+        // Add direct args (for leaf commands or non-operation tools)
+        for arg_data in &tool_data.args {
+            cmd = cmd.arg(ArgBuilder::new(arg_data).build());
+        }
 
-                // Add arguments from operation parameters
-                for arg_data in &subcmd_data.args {
-                    subcmd = subcmd.arg(ArgBuilder::new(arg_data).build());
-                }
+        cmd
+    }
 
-                cmd = cmd.subcommand(subcmd);
-            }
-        } else {
-            // Non-operation tool - add arguments from tool schema
-            for arg_data in &tool_data.args {
-                cmd = cmd.arg(ArgBuilder::new(arg_data).build());
-            }
+    /// Build a command recursively from CommandData
+    fn build_command_from_data(data: &CommandData) -> Command {
+        let mut cmd = Command::new(intern_string(data.name.clone()));
+
+        if let Some(ref about) = data.about {
+            cmd = cmd.about(intern_string(about.clone()));
+        }
+
+        if let Some(ref long_about) = data.long_about {
+            cmd = cmd.long_about(intern_string(long_about.clone()));
+        }
+
+        // Recursively add subcommands
+        for subcmd_data in &data.subcommands {
+            cmd = cmd.subcommand(Self::build_command_from_data(subcmd_data));
+        }
+
+        // Add args
+        for arg_data in &data.args {
+            cmd = cmd.arg(ArgBuilder::new(arg_data).build());
         }
 
         cmd

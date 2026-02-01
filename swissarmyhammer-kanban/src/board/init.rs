@@ -8,7 +8,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute};
 
 /// Initialize a new kanban board
-#[operation(verb = "init", noun = "board", description = "Initialize a new kanban board")]
+#[operation(
+    verb = "init",
+    noun = "board",
+    description = "Initialize a new kanban board"
+)]
 #[derive(Debug, Deserialize)]
 pub struct InitBoard {
     /// The board name
@@ -62,7 +66,6 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer_operations::Operation;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {

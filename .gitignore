@@ -181,3 +181,7 @@ acp-conformance/.swissarmyhammer/
 
 # AVP local state
 .avp/
+
+# Kanban test artifacts
+.kanban/
+swissarmyhammer-config/.swissarmyhammer/

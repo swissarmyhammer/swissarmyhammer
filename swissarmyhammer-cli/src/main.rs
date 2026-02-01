@@ -861,20 +861,33 @@ async fn handle_dynamic_tool_command(
 
     // Convert clap matches to JSON arguments
     let arguments = if !operations.is_empty() {
-        // Operation-based tool - look for subcommand
+        // Operation-based tool with noun-grouped structure
+        // Pattern: tool -> noun -> verb (e.g., kanban -> board -> init)
         match matches.subcommand() {
-            Some((op_name, op_matches)) => {
-                // Convert "init-board" back to "init board" for the op parameter
-                let op_string = op_name.replace('-', " ");
-                match convert_operation_matches_to_arguments(op_matches, &op_string, &schema) {
-                    Ok(args) => args,
-                    Err(e) => return report_error_and_exit(format!("Error processing arguments: {}", e)),
+            Some((noun, noun_matches)) => {
+                // Look for verb subcommand within the noun
+                match noun_matches.subcommand() {
+                    Some((verb, verb_matches)) => {
+                        // Construct "verb noun" for the op parameter (e.g., "init board")
+                        let op_string = format!("{} {}", verb, noun);
+                        match convert_operation_matches_to_arguments(verb_matches, &op_string, &schema) {
+                            Ok(args) => args,
+                            Err(e) => return report_error_and_exit(format!("Error processing arguments: {}", e)),
+                        }
+                    }
+                    None => {
+                        // No verb subcommand - show help for noun
+                        return report_error_and_exit(format!(
+                            "No verb specified for '{}'. Use --help to see available operations for '{}'.",
+                            noun, noun
+                        ));
+                    }
                 }
             }
             None => {
-                // No subcommand - show help
+                // No noun subcommand - show help
                 return report_error_and_exit(format!(
-                    "No operation specified for '{}'. Use --help to see available operations.",
+                    "No noun specified for '{}'. Use --help to see available nouns.",
                     tool_name
                 ));
             }
