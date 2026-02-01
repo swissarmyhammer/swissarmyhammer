@@ -209,7 +209,7 @@ fn should_run_as_subprocess(args: &[&str]) -> bool {
     !args.is_empty()
         && matches!(
             args[0],
-            "todo" | "memo" | "shell" | "file" | "search" | "web-search" | "rule"
+            "todo" | "memo" | "shell" | "file" | "search" | "web-search" | "rule" | "tool"
         )
 }
 

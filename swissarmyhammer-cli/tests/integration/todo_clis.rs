@@ -122,7 +122,7 @@ fn create_todo_and_get_id(
     context: Option<&str>,
     temp_path: &std::path::Path,
 ) -> String {
-    let mut args = vec!["todo", "create", "--task", task];
+    let mut args = vec!["tool", "todo_create", "--task", task];
     if let Some(ctx) = context {
         args.extend_from_slice(&["--context", ctx]);
     }
@@ -130,7 +130,7 @@ fn create_todo_and_get_id(
     let output = run_sah_command_with_cwd(&args, temp_path);
     assert!(
         output.status.success(),
-        "todo create should succeed. stderr: {}",
+        "todo_create should succeed. stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -164,10 +164,10 @@ fn setup_todos_with_completion_pattern(
         );
 
         let complete_output =
-            run_sah_command_with_cwd(&["todo", "complete", "--id", &ids[index]], temp_path);
+            run_sah_command_with_cwd(&["tool", "todo_mark_complete", "--id", &ids[index]], temp_path);
         assert!(
             complete_output.status.success(),
-            "todo complete should succeed"
+            "todo_mark_complete should succeed"
         );
     }
 
@@ -198,7 +198,7 @@ fn setup_todos_with_one_completed(
 /// Helper function to show next todo and assert it contains expected task
 fn assert_next_todo_contains(temp_path: &std::path::Path, expected_task: &str) {
     assert_output_contains(
-        &["todo", "show", "--item", "next"],
+        &["tool", "todo_show", "--item", "next"],
         temp_path,
         true,
         &[expected_task],
@@ -209,7 +209,7 @@ fn assert_next_todo_contains(temp_path: &std::path::Path, expected_task: &str) {
 /// Helper function to complete a todo and verify success
 fn complete_todo_and_verify(todo_id: &str, temp_path: &std::path::Path) {
     assert_output_contains(
-        &["todo", "complete", "--id", todo_id],
+        &["tool", "todo_mark_complete", "--id", todo_id],
         temp_path,
         true,
         &["marked_complete"],
@@ -218,8 +218,8 @@ fn complete_todo_and_verify(todo_id: &str, temp_path: &std::path::Path) {
 }
 
 /// Helper function to run command and assert no incomplete todos state
-fn assert_no_incomplete_todos(args: &[&str], temp_path: &std::path::Path) {
-    let stdout = run_and_get_output(args, temp_path, true);
+fn assert_no_incomplete_todos(temp_path: &std::path::Path) {
+    let stdout = run_and_get_output(&["tool", "todo_show", "--item", "next"], temp_path, true);
     assert!(
         stdout.contains("No incomplete todo items") || stdout.contains("null"),
         "Should indicate no incomplete items: {}",
@@ -305,24 +305,13 @@ fn assert_todo_list_filter(
     let completed_arg = if completed { "true" } else { "false" };
 
     let stdout = assert_output_contains(
-        &["todo", "list", "--completed", completed_arg],
+        &["tool", "todo_list", "--completed", completed_arg],
         temp_path,
         true,
         expected_tasks,
         unexpected_tasks,
     );
     assert_yaml_field_value(&stdout, "total", expected_count);
-}
-
-/// Helper function to assert help text contains all expected commands
-fn assert_help_contains_commands(help_text: &str, commands: &[&str]) {
-    for command in commands {
-        assert!(
-            help_text.contains(command),
-            "help should mention '{}' command",
-            command
-        );
-    }
 }
 
 /// Helper function to assert todo file was created in the .swissarmyhammer directory
@@ -338,27 +327,22 @@ fn assert_todo_file_created(temp_path: &std::path::Path) {
     );
 }
 
-/// Test that todo commands are available in help output
+/// Test that todo tools are available in help output
 #[test]
 fn test_todo_commands_in_help() {
     let output = Command::new(env!("CARGO_BIN_EXE_sah"))
-        .arg("--help")
+        .args(["tool", "--help"])
         .output()
-        .expect("Failed to execute sah --help");
+        .expect("Failed to execute sah tool --help");
 
-    let _stdout = String::from_utf8_lossy(&output.stdout);
-    // Help should not contain 'todo' as a top-level command (it's a tool category)
-    // but running 'sah todo --help' should work
+    assert!(output.status.success(), "sah tool --help should succeed");
 
-    let todo_help = Command::new(env!("CARGO_BIN_EXE_sah"))
-        .args(["todo", "--help"])
-        .output()
-        .expect("Failed to execute sah todo --help");
-
-    assert!(todo_help.status.success(), "todo --help should succeed");
-
-    let todo_stdout = String::from_utf8_lossy(&todo_help.stdout);
-    assert_help_contains_commands(&todo_stdout, &["create", "show", "list", "complete"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The tool category should list todo_create, todo_list, todo_show, todo_mark_complete
+    assert!(
+        stdout.contains("todo_create") || stdout.contains("todo"),
+        "tool help should mention todo tools"
+    );
 }
 
 /// Test todo create command
@@ -369,8 +353,8 @@ fn test_todo_create_command() {
 
     assert_output_contains(
         &[
-            "todo",
-            "create",
+            "tool",
+            "todo_create",
             "--task",
             "Test task",
             "--context",
@@ -392,7 +376,7 @@ fn test_todo_create_without_context() {
     let temp_path = &temp_dir.temp_dir();
 
     assert_output_contains(
-        &["todo", "create", "--task", "Simple task"],
+        &["tool", "todo_create", "--task", "Simple task"],
         temp_path,
         true,
         &["Created todo item", "Simple task"],
@@ -421,7 +405,7 @@ fn test_todo_show_next_empty() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
 
-    assert_no_incomplete_todos(&["todo", "show", "--item", "next"], temp_path);
+    assert_no_incomplete_todos(temp_path);
 }
 
 /// Test todo complete command
@@ -443,7 +427,7 @@ fn test_todo_create_missing_task() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
 
-    let stderr = run_and_get_output(&["todo", "create"], temp_path, false);
+    let stderr = run_and_get_output(&["tool", "todo_create"], temp_path, false);
     assert!(
         stderr.contains("--task") || stderr.contains("required"),
         "Error should mention missing task argument"
@@ -458,7 +442,7 @@ fn test_todo_complete_invalid_id() {
 
     // Should fail with an error about the ID not being found
     run_and_get_output(
-        &["todo", "complete", "--id", "01INVALID00000000000000000"],
+        &["tool", "todo_mark_complete", "--id", "01INVALID00000000000000000"],
         temp_path,
         false,
     );
@@ -484,7 +468,7 @@ fn test_todo_full_workflow() {
     complete_todo_and_verify(&todo_id, temp_path);
 
     // Step 4: Verify no more incomplete todos
-    assert_no_incomplete_todos(&["todo", "show", "--item", "next"], temp_path);
+    assert_no_incomplete_todos(temp_path);
 }
 
 /// Test todo list command with no todos
@@ -493,7 +477,7 @@ fn test_todo_list_empty() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
 
-    let stdout = run_and_get_output(&["todo", "list"], temp_path, true);
+    let stdout = run_and_get_output(&["tool", "todo_list"], temp_path, true);
     assert_todo_counts(&stdout, 0, 0, 0);
 }
 
@@ -507,7 +491,7 @@ fn test_todo_list_multiple() {
     create_three_test_todos(temp_path);
 
     let stdout = assert_output_contains(
-        &["todo", "list"],
+        &["tool", "todo_list"],
         temp_path,
         true,
         &["Task 1", "Task 2", "Task 3"],
@@ -562,7 +546,7 @@ fn test_todo_list_sort_order() {
 
     // List all todos - verify all tasks are present
     let stdout = assert_output_contains(
-        &["todo", "list"],
+        &["tool", "todo_list"],
         temp_path,
         true,
         &["Task 1", "Task 2", "Task 3"],

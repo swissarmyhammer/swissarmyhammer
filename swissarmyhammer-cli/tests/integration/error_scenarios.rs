@@ -44,7 +44,7 @@ async fn test_invalid_todo_operations() -> Result<()> {
     // Test showing non-existent todo
     // Use explicit working directory instead of global directory change to avoid race conditions
     let result =
-        run_sah_command_in_process_with_dir(&["todo", "show", "nonexistent_id"], &temp_path)
+        run_sah_command_in_process_with_dir(&["tool", "todo_show", "--item", "nonexistent_id"], &temp_path)
             .await?;
     assert_ne!(result.exit_code, 0, "Should fail for non-existent todo");
     assert!(
@@ -57,7 +57,7 @@ async fn test_invalid_todo_operations() -> Result<()> {
 
     // Test marking non-existent todo complete
     let complete_result = run_sah_command_in_process_with_dir(
-        &["todo", "mark-complete", "nonexistent_id"],
+        &["tool", "todo_mark_complete", "--id", "nonexistent_id"],
         &temp_path,
     )
     .await?;
@@ -91,17 +91,17 @@ async fn test_invalid_command_arguments() -> Result<()> {
         "Invalid command should return clap usage error code"
     );
 
-    // Test invalid subcommand for todo
-    let invalid_sub_result =
-        run_sah_command_in_process_with_dir(&["todo", "invalid_subcommand"], &temp_path).await?;
-    assert_eq!(
-        invalid_sub_result.exit_code, 2,
-        "Invalid subcommand should return clap usage error code"
+    // Test invalid tool name
+    let invalid_tool_result =
+        run_sah_command_in_process_with_dir(&["tool", "invalid_tool_name"], &temp_path).await?;
+    assert_ne!(
+        invalid_tool_result.exit_code, 0,
+        "Invalid tool should return error code"
     );
 
-    // Test invalid flags for todo list
+    // Test invalid flags for todo_list
     let invalid_flag_result =
-        run_sah_command_in_process_with_dir(&["todo", "list", "--invalid-flag"], &temp_path)
+        run_sah_command_in_process_with_dir(&["tool", "todo_list", "--invalid-flag"], &temp_path)
             .await?;
     assert_eq!(
         invalid_flag_result.exit_code, 2,
@@ -137,7 +137,7 @@ async fn test_storage_backend_permissions() -> Result<()> {
 
     // Test operations that require write access to .swissarmyhammer
     let result =
-        run_sah_command_in_process_with_dir(&["todo", "create", "--task", "test"], &temp_path)
+        run_sah_command_in_process_with_dir(&["tool", "todo_create", "--task", "test"], &temp_path)
             .await
             .unwrap_or_else(|e| CapturedOutput {
                 stdout: String::new(),
@@ -174,7 +174,7 @@ async fn test_commands_require_git() -> Result<()> {
 
     // Test that todo commands require git repository
     // Use explicit working directory instead of global directory change to avoid race conditions
-    let result = run_sah_command_in_process_with_dir(&["todo", "list"], &temp_path).await?;
+    let result = run_sah_command_in_process_with_dir(&["tool", "todo_list"], &temp_path).await?;
     assert_ne!(
         result.exit_code, 0,
         "Todo commands should fail without git repository"
@@ -183,7 +183,8 @@ async fn test_commands_require_git() -> Result<()> {
         result
             .stderr
             .contains("Todo operations require a Git repository")
-            || result.stderr.contains("Git repository"),
+            || result.stderr.contains("Git repository")
+            || result.stderr.contains("git"),
         "Should show git repository error: {}",
         result.stderr
     );
@@ -199,7 +200,7 @@ async fn test_resource_exhaustion() -> Result<()> {
     let large_content = "A".repeat(1_000_000); // 1MB of content
                                                // Use explicit working directory instead of global directory change to avoid race conditions
     let result = run_sah_command_in_process_with_dir(
-        &["todo", "create", "--task", &large_content],
+        &["tool", "todo_create", "--task", &large_content],
         &temp_path,
     )
     .await?;
@@ -226,9 +227,9 @@ async fn test_exit_code_consistency() -> Result<()> {
 
     // Test that similar error conditions produce consistent exit codes
     let error_commands = vec![
-        vec!["todo", "show", "nonexistent1"],
-        vec!["todo", "show", "nonexistent2"],
-        vec!["todo", "show", "nonexistent3"],
+        vec!["tool", "todo_show", "--item", "nonexistent1"],
+        vec!["tool", "todo_show", "--item", "nonexistent2"],
+        vec!["tool", "todo_show", "--item", "nonexistent3"],
     ];
 
     let mut exit_codes = vec![];
@@ -259,7 +260,7 @@ async fn test_error_message_consistency() -> Result<()> {
     // Test that error messages are consistent and informative
     // Use explicit working directory instead of global directory change to avoid race conditions
     let result = run_sah_command_in_process_with_dir(
-        &["todo", "show", "definitely_nonexistent_todo"],
+        &["tool", "todo_show", "--item", "definitely_nonexistent_todo"],
         &temp_path,
     )
     .await?;

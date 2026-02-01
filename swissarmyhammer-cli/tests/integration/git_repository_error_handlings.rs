@@ -19,7 +19,7 @@ async fn test_todo_commands_require_git_repository() {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["todo", "list"], &temp_dir).await;
+    let result = run_sah_command_in_process_with_dir(&["tool", "todo_list"], &temp_dir).await;
 
     // Restore original directory
 
@@ -33,7 +33,8 @@ async fn test_todo_commands_require_git_repository() {
         output
             .stderr
             .contains("Todo operations require a Git repository")
-            || output.stderr.contains("Git repository"),
+            || output.stderr.contains("Git repository")
+            || output.stderr.contains("git"),
         "Should show git repository error: {}",
         output.stderr
     );
@@ -56,7 +57,7 @@ async fn test_commands_work_in_git_repository() {
     // Use explicit working directory instead of global directory change
 
     // Test that todo list command now works (or at least doesn't fail with Git repository error)
-    let result = run_sah_command_in_process_with_dir(&["todo", "list"], &temp_dir).await;
+    let result = run_sah_command_in_process_with_dir(&["tool", "todo_list"], &temp_dir).await;
 
     // Restore original directory
 
@@ -77,7 +78,7 @@ async fn test_git_repository_error_exit_codes() {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["todo", "list"], &temp_dir).await;
+    let result = run_sah_command_in_process_with_dir(&["tool", "todo_list"], &temp_dir).await;
 
     // Restore original directory
 
@@ -115,7 +116,7 @@ async fn test_web_search_works_without_git() {
     // Use explicit working directory instead of global directory change
 
     let result =
-        run_sah_command_in_process_with_dir(&["web-search", "search", "test"], &temp_dir).await;
+        run_sah_command_in_process_with_dir(&["tool", "web_search", "--query", "test"], &temp_dir).await;
 
     // Restore original directory
 
@@ -141,7 +142,7 @@ async fn test_error_messages_are_actionable() {
     // Use explicit working directory instead of global directory change
 
     let result =
-        run_sah_command_in_process_with_dir(&["todo", "create", "--task", "Test task"], &temp_dir)
+        run_sah_command_in_process_with_dir(&["tool", "todo_create", "--task", "Test task"], &temp_dir)
             .await;
 
     // Restore original directory

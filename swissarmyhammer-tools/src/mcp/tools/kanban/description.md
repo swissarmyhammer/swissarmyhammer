@@ -1,6 +1,6 @@
 # kanban
 
-Kanban board operations for task management within a repository.
+Kanban board operations for task management. This is the best way to keep a TODO list for a project.
 
 ## Overview
 
@@ -13,7 +13,7 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 ### Board Operations
 
 - `init board` - Initialize a new board (requires `name`)
-- `get board` - Get board with task counts
+- `get board` - Get board metadata
 - `update board` - Update board metadata
 
 ### Task Operations
