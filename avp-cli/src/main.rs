@@ -2,8 +2,8 @@
 //!
 //! Commands:
 //! - `avp` (no args): Read JSON from stdin, process hook, write JSON to stdout
-//! - `avp install <target>`: Install AVP hooks into Claude Code settings
-//! - `avp uninstall <target>`: Remove AVP hooks from Claude Code settings
+//! - `avp init <target>`: Install AVP hooks into Claude Code settings
+//! - `avp deinit <target>`: Remove AVP hooks from Claude Code settings
 //! - `avp doctor`: Diagnose AVP configuration and setup
 //! - `avp list`: List all available validators
 //!
@@ -44,13 +44,13 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Install AVP hooks into Claude Code settings
-    Install {
+    Init {
         /// Where to install the hooks
         #[arg(value_enum)]
         target: InstallTarget,
     },
     /// Remove AVP hooks from Claude Code settings
-    Uninstall {
+    Deinit {
         /// Where to remove the hooks from
         #[arg(value_enum)]
         target: InstallTarget,
@@ -87,14 +87,14 @@ async fn main() {
         .init();
 
     let exit_code = match cli.command {
-        Some(Commands::Install { target }) => match install::install(target) {
+        Some(Commands::Init { target }) => match install::install(target) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("Error: {}", e);
                 1
             }
         },
-        Some(Commands::Uninstall { target }) => match install::uninstall(target) {
+        Some(Commands::Deinit { target }) => match install::uninstall(target) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("Error: {}", e);
@@ -132,14 +132,14 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
         println!();
         println!("Usage:");
         println!("  avp                           Process hook from stdin (pipe JSON)");
-        println!("  avp install <project|local|user>   Install hooks to Claude settings");
-        println!("  avp uninstall <project|local|user> Remove hooks from Claude settings");
+        println!("  avp init <project|local|user>      Install hooks to Claude settings");
+        println!("  avp deinit <project|local|user>    Remove hooks from Claude settings");
         println!("  avp list [-v]                 List all available validators");
         println!("  avp doctor [-v]               Diagnose AVP setup");
         println!();
         println!("Examples:");
-        println!("  avp install project           Install to .claude/settings.json");
-        println!("  avp install user              Install to ~/.claude/settings.json");
+        println!("  avp init project              Install to .claude/settings.json");
+        println!("  avp init user                 Install to ~/.claude/settings.json");
         println!("  avp list                      Show all validators");
         println!("  avp list -v                   Show validators with descriptions");
         println!("  echo '{{...}}' | avp           Process a hook event");
@@ -213,56 +213,56 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parsing_install_project() {
-        let cli = Cli::parse_from(["avp", "install", "project"]);
+    fn test_cli_parsing_init_project() {
+        let cli = Cli::parse_from(["avp", "init", "project"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Install {
+            Some(Commands::Init {
                 target: InstallTarget::Project
             })
         ));
     }
 
     #[test]
-    fn test_cli_parsing_install_local() {
-        let cli = Cli::parse_from(["avp", "install", "local"]);
+    fn test_cli_parsing_init_local() {
+        let cli = Cli::parse_from(["avp", "init", "local"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Install {
+            Some(Commands::Init {
                 target: InstallTarget::Local
             })
         ));
     }
 
     #[test]
-    fn test_cli_parsing_install_user() {
-        let cli = Cli::parse_from(["avp", "install", "user"]);
+    fn test_cli_parsing_init_user() {
+        let cli = Cli::parse_from(["avp", "init", "user"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Install {
+            Some(Commands::Init {
                 target: InstallTarget::User
             })
         ));
     }
 
     #[test]
-    fn test_cli_parsing_uninstall_project() {
-        let cli = Cli::parse_from(["avp", "uninstall", "project"]);
+    fn test_cli_parsing_deinit_project() {
+        let cli = Cli::parse_from(["avp", "deinit", "project"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Uninstall {
+            Some(Commands::Deinit {
                 target: InstallTarget::Project
             })
         ));
     }
 
     #[test]
-    fn test_cli_parsing_debug_with_install() {
-        let cli = Cli::parse_from(["avp", "--debug", "install", "user"]);
+    fn test_cli_parsing_debug_with_init() {
+        let cli = Cli::parse_from(["avp", "--debug", "init", "user"]);
         assert!(cli.debug);
         assert!(matches!(
             cli.command,
-            Some(Commands::Install {
+            Some(Commands::Init {
                 target: InstallTarget::User
             })
         ));
