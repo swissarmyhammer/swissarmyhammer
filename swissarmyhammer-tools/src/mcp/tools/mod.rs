@@ -39,6 +39,7 @@ pub mod cel;
 pub mod files;
 pub mod flow;
 pub mod git;
+pub mod kanban;
 pub mod questions;
 pub mod shell;
 pub mod todo;

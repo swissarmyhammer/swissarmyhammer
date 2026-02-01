@@ -9,6 +9,7 @@ You are a software architect creating implementation plans.
 
 {% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
+{% include "_partials/tool_use.md" %}
 
 ## Your Role
 

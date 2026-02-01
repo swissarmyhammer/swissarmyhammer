@@ -9,8 +9,9 @@ use clap::{Arg, ArgAction, Command};
 use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use swissarmyhammer_operations::Operation;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
 use swissarmyhammer_workflow::WorkflowStorage;
 use tokio::sync::RwLock;
@@ -143,6 +144,8 @@ struct CommandData {
     about: Option<String>,
     long_about: Option<String>,
     args: Vec<ArgData>,
+    /// Subcommands for operation-based tools (verb-noun operations)
+    subcommands: Vec<CommandData>,
 }
 
 /// Pre-computed argument data with owned strings
@@ -167,22 +170,6 @@ enum ArgType {
     Array,
 }
 
-impl ArgType {
-    /// Apply this type's configuration to an ArgBuilder
-    ///
-    /// Uses the strategy pattern to let each type configure itself,
-    /// reducing cognitive complexity in the builder.
-    fn apply_to_builder(self, builder: ArgBuilder, is_required: bool) -> ArgBuilder {
-        match self {
-            ArgType::Boolean => builder.build_boolean(),
-            ArgType::NullableBoolean => builder.build_nullable_boolean(),
-            ArgType::Integer => builder.build_integer(is_required),
-            ArgType::Float => builder.build_float(is_required),
-            ArgType::Array => builder.build_array(is_required),
-            ArgType::String => builder.build_string(is_required),
-        }
-    }
-}
 
 /// Configuration for building a command with documentation
 struct CommandConfig {
@@ -539,108 +526,75 @@ struct ArgBuilder {
 }
 
 impl ArgBuilder {
-    /// Create a new ArgBuilder from ArgData
+    /// Create a new ArgBuilder from ArgData, fully configured
     fn new(arg_data: &ArgData) -> Self {
         let name_static = intern_string(arg_data.name.clone());
-        let arg = Arg::new(name_static).long(name_static);
-        Self { arg }
-    }
+        let mut arg = Arg::new(name_static).long(name_static);
 
-    /// Configure the argument with required flag
-    fn with_required(mut self, is_required: bool) -> Self {
-        if is_required {
-            self.arg = self.arg.required(true);
+        // Apply required flag
+        if arg_data.is_required {
+            arg = arg.required(true);
         }
-        self
-    }
 
-    /// Configure the argument based on its type
-    fn with_type(self, arg_data: &ArgData) -> Self {
-        arg_data
-            .arg_type
-            .clone()
-            .apply_to_builder(self, arg_data.is_required)
-    }
-
-    /// Apply metadata (help text, enum values, default values)
-    fn with_metadata(mut self, arg_data: &ArgData) -> Self {
+        // Apply help text
         if let Some(help) = &arg_data.help {
-            self.arg = self.arg.help(intern_string(help.clone()));
+            arg = arg.help(intern_string(help.clone()));
         }
 
+        // Apply default value
+        if let Some(default) = &arg_data.default_value {
+            arg = arg.default_value(intern_string(default.clone()));
+        }
+
+        // Apply possible values (enum)
         if let Some(values) = &arg_data.possible_values {
             let str_values: Vec<&'static str> =
                 values.iter().map(|s| intern_string(s.clone())).collect();
-            self.arg = self
-                .arg
-                .value_parser(clap::builder::PossibleValuesParser::new(str_values));
+            arg = arg.value_parser(clap::builder::PossibleValuesParser::new(str_values));
         }
 
-        if let Some(default) = &arg_data.default_value {
-            self.arg = self.arg.default_value(intern_string(default.clone()));
-        }
+        // Apply type-specific configuration
+        arg = match arg_data.arg_type {
+            ArgType::Boolean => arg.action(ArgAction::SetTrue),
+            ArgType::NullableBoolean => arg
+                .value_parser(clap::builder::PossibleValuesParser::new(["true", "false"]))
+                .value_name("BOOL"),
+            ArgType::Integer => {
+                let mut a = arg.value_parser(clap::value_parser!(i64));
+                if !arg_data.is_required {
+                    a = a.value_name("NUMBER");
+                }
+                a
+            }
+            ArgType::Float => {
+                let mut a = arg.value_parser(clap::value_parser!(f64));
+                if !arg_data.is_required {
+                    a = a.value_name("NUMBER");
+                }
+                a
+            }
+            ArgType::Array => {
+                let mut a = arg.action(ArgAction::Append);
+                if !arg_data.is_required {
+                    a = a.value_name("VALUE");
+                }
+                a
+            }
+            ArgType::String => {
+                if !arg_data.is_required {
+                    arg.value_name("TEXT")
+                } else {
+                    arg
+                }
+            }
+        };
 
-        self
+        Self { arg }
     }
 
     /// Build the final Arg
     fn build(self) -> Arg {
         self.arg
-    }
-
-    /// Build a boolean argument
-    fn build_boolean(mut self) -> Self {
-        self.arg = self.arg.action(ArgAction::SetTrue);
-        self
-    }
-
-    /// Build a nullable boolean argument
-    fn build_nullable_boolean(mut self) -> Self {
-        self.arg = self
-            .arg
-            .value_parser(clap::builder::PossibleValuesParser::new(["true", "false"]))
-            .value_name("BOOL");
-        self
-    }
-
-    /// Build a numeric argument with a specific value parser
-    fn build_numeric(
-        mut self,
-        is_required: bool,
-        parser: impl clap::builder::IntoResettable<clap::builder::ValueParser>,
-    ) -> Self {
-        self.arg = self.arg.value_parser(parser);
-        if !is_required {
-            self.arg = self.arg.value_name("NUMBER");
-        }
-        self
-    }
-
-    /// Build an integer argument
-    fn build_integer(self, is_required: bool) -> Self {
-        self.build_numeric(is_required, clap::value_parser!(i64))
-    }
-
-    /// Build a float argument
-    fn build_float(self, is_required: bool) -> Self {
-        self.build_numeric(is_required, clap::value_parser!(f64))
-    }
-
-    /// Build an array argument
-    fn build_array(mut self, is_required: bool) -> Self {
-        self.arg = self.arg.action(ArgAction::Append);
-        if !is_required {
-            self.arg = self.arg.value_name("VALUE");
-        }
-        self
-    }
-
-    /// Build a string argument
-    fn build_string(mut self, is_required: bool) -> Self {
-        if !is_required {
-            self.arg = self.arg.value_name("TEXT");
-        }
-        self
     }
 }
 
@@ -1142,42 +1096,16 @@ enum RegistryIterType {
 
 /// Dynamic CLI builder that generates commands from MCP tool registry
 ///
-/// Pre-computes all command and argument data at construction time to avoid
-/// runtime allocations and satisfy clap's 'static lifetime requirements.
+/// Generates CLI commands dynamically from the tool registry at build time.
 pub struct CliBuilder {
     /// Shared reference to the tool registry
     tool_registry: Arc<RwLock<ToolRegistry>>,
-    /// Pre-computed category command data
-    category_commands: HashMap<String, CommandData>,
-    /// Pre-computed tool commands organized by category
-    tool_commands: HashMap<String, HashMap<String, CommandData>>,
 }
 
 impl CliBuilder {
     /// Create a new CLI builder with the given tool registry
     pub fn new(tool_registry: Arc<RwLock<ToolRegistry>>) -> Self {
-        let (category_commands, tool_commands) = Self::precompute_all_commands(&tool_registry);
-
-        Self {
-            tool_registry,
-            category_commands,
-            tool_commands,
-        }
-    }
-
-    /// Precompute all command data from the registry
-    fn precompute_all_commands(
-        tool_registry: &Arc<RwLock<ToolRegistry>>,
-    ) -> (
-        HashMap<String, CommandData>,
-        HashMap<String, HashMap<String, CommandData>>,
-    ) {
-        let registry = tool_registry
-            .try_read()
-            .expect("ToolRegistry should not be locked");
-        let category_commands = Self::precompute_category_commands(&registry);
-        let tool_commands = Self::precompute_tool_commands(&registry);
-        (category_commands, tool_commands)
+        Self { tool_registry }
     }
 
     /// Generic iteration helper over the tool registry
@@ -1218,69 +1146,6 @@ impl CliBuilder {
         F: FnMut(&dyn McpTool),
     {
         Self::iter_registry(registry, RegistryIterType::AllTools, f)
-    }
-
-    /// Build a map from items using an iterator and key-value extraction function
-    ///
-    /// Generic helper that consolidates the pattern of creating a HashMap,
-    /// iterating over items, and inserting key-value pairs.
-    fn build_map_from_iter<K, V, I, F>(items: I, mut key_value_fn: F) -> HashMap<K, V>
-    where
-        K: std::hash::Hash + Eq,
-        I: Iterator,
-        F: FnMut(I::Item) -> Option<(K, V)>,
-    {
-        let mut map = HashMap::new();
-        for item in items {
-            if let Some((key, value)) = key_value_fn(item) {
-                map.insert(key, value);
-            }
-        }
-        map
-    }
-
-    /// Pre-compute category command data
-    fn precompute_category_commands(registry: &ToolRegistry) -> HashMap<String, CommandData> {
-        let categories = registry.get_cli_categories();
-        Self::build_map_from_iter(categories.into_iter(), |category| {
-            let category_name = category.to_string();
-            let category_cmd_data = CommandData {
-                name: category_name.clone(),
-                about: Some(format!(
-                    "{} management commands (MCP Tool)",
-                    category.to_uppercase()
-                )),
-                long_about: None,
-                args: Vec::new(),
-            };
-            Some((category_name, category_cmd_data))
-        })
-    }
-
-    /// Pre-compute tool command data
-    fn precompute_tool_commands(
-        registry: &ToolRegistry,
-    ) -> HashMap<String, HashMap<String, CommandData>> {
-        let categories = registry.get_cli_categories();
-        Self::build_map_from_iter(categories.into_iter(), |category| {
-            let tools_in_category = Self::precompute_category_tool_commands(registry, &category);
-            Some((category.to_string(), tools_in_category))
-        })
-    }
-
-    /// Pre-compute tool commands for a specific category
-    fn precompute_category_tool_commands(
-        registry: &ToolRegistry,
-        category: &str,
-    ) -> HashMap<String, CommandData> {
-        let tools = registry.get_tools_for_category(category);
-        Self::build_map_from_iter(tools.into_iter(), |tool| {
-            if tool.hidden_from_cli() {
-                return None;
-            }
-            Self::precompute_tool_command(tool)
-                .map(|tool_cmd_data| (tool.cli_name().to_string(), tool_cmd_data))
-        })
     }
 
     /// Pre-compute command data for a tool with validation
@@ -1326,12 +1191,57 @@ impl CliBuilder {
 
     /// Create command data from validated tool
     fn create_command_data_from_tool(tool: &dyn McpTool, schema: &Value) -> Option<CommandData> {
-        Some(CommandData {
-            name: tool.cli_name().to_string(),
-            about: tool.cli_about().map(|s| s.to_string()),
-            long_about: Some(tool.description().to_string()),
-            args: Self::precompute_args(schema),
-        })
+        let operations = tool.operations();
+
+        // If tool has operations, create subcommands from them instead of flat args
+        if !operations.is_empty() {
+            // For operation-based tools, use schema args for each subcommand
+            // This ensures CLI args match what the MCP tool expects
+            let schema_args = Self::precompute_args(schema);
+
+            let subcommands: Vec<CommandData> = operations
+                .iter()
+                .map(|op| Self::create_command_data_from_operation(*op, &schema_args))
+                .collect();
+
+            Some(CommandData {
+                name: tool.cli_name().to_string(),
+                about: tool.cli_about().map(|s| s.to_string()),
+                long_about: Some(tool.description().to_string()),
+                args: Vec::new(), // No direct args - use subcommands instead
+                subcommands,
+            })
+        } else {
+            // Non-operation-based tool - use schema for args
+            Some(CommandData {
+                name: tool.cli_name().to_string(),
+                about: tool.cli_about().map(|s| s.to_string()),
+                long_about: Some(tool.description().to_string()),
+                args: Self::precompute_args(schema),
+                subcommands: Vec::new(),
+            })
+        }
+    }
+
+    /// Create command data from an Operation using tool schema args
+    fn create_command_data_from_operation(op: &dyn Operation, schema_args: &[ArgData]) -> CommandData {
+        // Convert "add task" to "add-task" for CLI
+        let op_name = op.op_string().replace(' ', "-");
+
+        // Use schema args (excluding "op" since that's set by the subcommand itself)
+        let args: Vec<ArgData> = schema_args
+            .iter()
+            .filter(|arg| arg.name != "op")
+            .cloned()
+            .collect();
+
+        CommandData {
+            name: op_name,
+            about: Some(op.description().to_string()),
+            long_about: None,
+            args,
+            subcommands: Vec::new(),
+        }
     }
 
     /// Pre-compute argument data from JSON schema
@@ -1391,7 +1301,8 @@ impl CliBuilder {
         let cli = Self::build_base_cli();
         let cli = Self::add_core_commands(cli);
         let cli = self.build_with_workflow_shortcuts(cli, workflow_storage);
-        self.add_tool_category_commands(cli)
+        // All tools are now accessible via unified `sah tool <toolname>` command
+        self.add_unified_tool_command(cli)
     }
 
     /// Build CLI with workflow shortcuts integrated
@@ -1512,36 +1423,89 @@ impl CliBuilder {
         shortcuts
     }
 
-    /// Add dynamic MCP tool category commands to the CLI
-    fn add_tool_category_commands(&self, mut cli: Command) -> Command {
-        let category_names = self.get_sorted_category_names();
+    /// Add unified tool command with all MCP tools as subcommands
+    ///
+    /// Creates `sah tool <toolname>` command that provides access to all registered MCP tools.
+    /// Tools are listed by their full MCP name with underscores converted to hyphens
+    /// (e.g., web-search, treesitter-search, files-read).
+    fn add_unified_tool_command(&self, cli: Command) -> Command {
+        let mut tool_cmd = Command::new("tool")
+            .about("Execute any registered MCP tool directly")
+            .long_about(
+                "Access all registered MCP tools via unified command interface.\n\n\
+                 Use 'sah tool --help' to see all available tools.\n\
+                 Use 'sah tool <name> --help' for tool-specific help.",
+            );
 
-        for category_name in category_names.iter() {
-            if let Some(cmd) = self.build_category_with_tools(category_name) {
-                cli = cli.subcommand(cmd);
+        // Get registry and build subcommands directly from tools
+        let registry = self
+            .tool_registry
+            .try_read()
+            .expect("ToolRegistry should not be locked");
+
+        // Collect all tools with their full names
+        let mut all_tools: Vec<_> = Vec::new();
+        for category in registry.get_cli_categories() {
+            for tool in registry.get_tools_for_category(&category) {
+                if tool.hidden_from_cli() {
+                    continue;
+                }
+                // Use full tool name as-is (e.g., web_search, treesitter_search)
+                let cli_tool_name =
+                    <dyn McpTool as McpTool>::name(tool).to_string();
+                if let Some(tool_data) = Self::precompute_tool_command(tool) {
+                    all_tools.push((cli_tool_name, tool_data));
+                }
             }
         }
 
-        cli
+        // Sort by name for consistent ordering
+        all_tools.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (tool_name, tool_data) in all_tools {
+            let subcmd = Self::build_tool_subcommand_from_data(&tool_name, &tool_data);
+            tool_cmd = tool_cmd.subcommand(subcmd);
+        }
+
+        cli.subcommand(tool_cmd)
     }
 
-    /// Get sorted category names for consistent ordering
-    fn get_sorted_category_names(&self) -> Vec<String> {
-        let mut category_names: Vec<String> = self.category_commands.keys().cloned().collect();
-        category_names.sort();
-        category_names
-    }
+    /// Build a tool subcommand from tool data
+    fn build_tool_subcommand_from_data(tool_name: &str, tool_data: &CommandData) -> Command {
+        let mut cmd = Command::new(intern_string(tool_name.to_string()));
 
-    /// Build a category command with its tools
-    ///
-    /// Encapsulates the "get category data, build command, add tools" flow
-    /// to reduce complexity in add_tool_category_commands.
-    fn build_category_with_tools(&self, category_name: &str) -> Option<Command> {
-        self.category_commands
-            .get(category_name)
-            .map(|category_data| {
-                self.build_category_command_from_data(category_name, category_data)
-            })
+        if let Some(ref about) = tool_data.about {
+            cmd = cmd.about(intern_string(about.clone()));
+        }
+
+        if let Some(ref long_about) = tool_data.long_about {
+            cmd = cmd.long_about(intern_string(long_about.clone()));
+        }
+
+        // If tool has operation subcommands, add them
+        if !tool_data.subcommands.is_empty() {
+            for subcmd_data in &tool_data.subcommands {
+                let mut subcmd = Command::new(intern_string(subcmd_data.name.clone()));
+
+                if let Some(ref about) = subcmd_data.about {
+                    subcmd = subcmd.about(intern_string(about.clone()));
+                }
+
+                // Add arguments from operation parameters
+                for arg_data in &subcmd_data.args {
+                    subcmd = subcmd.arg(ArgBuilder::new(arg_data).build());
+                }
+
+                cmd = cmd.subcommand(subcmd);
+            }
+        } else {
+            // Non-operation tool - add arguments from tool schema
+            for arg_data in &tool_data.args {
+                cmd = cmd.arg(ArgBuilder::new(arg_data).build());
+            }
+        }
+
+        cmd
     }
 
     /// Build CLI with warnings for validation issues (graceful degradation)
@@ -1707,64 +1671,6 @@ impl CliBuilder {
         cmd
     }
 
-    /// Build a command for a specific tool category from pre-computed data
-    fn build_category_command_from_data(
-        &self,
-        category_name: &str,
-        category_data: &CommandData,
-    ) -> Command {
-        let mut cmd = Self::build_command_base(category_data);
-        cmd = cmd.subcommand_help_heading("Tools");
-        self.add_tool_subcommands_to_category(cmd, category_name)
-    }
-
-    /// Add tool subcommands to a category command
-    fn add_tool_subcommands_to_category(&self, mut cmd: Command, category_name: &str) -> Command {
-        if let Some(tools_in_category) = self.tool_commands.get(category_name) {
-            for tool_data in tools_in_category.values() {
-                cmd = cmd.subcommand(self.build_tool_command_from_data(tool_data));
-            }
-        }
-        cmd
-    }
-
-    /// Build a command for a specific MCP tool from pre-computed data
-    fn build_tool_command_from_data(&self, tool_data: &CommandData) -> Command {
-        let mut cmd = Self::build_command_base(tool_data);
-        let args = self.build_args_for_command(&tool_data.args);
-        for arg in args {
-            cmd = cmd.arg(arg);
-        }
-        cmd
-    }
-
-    /// Build arguments for a command from argument data
-    ///
-    /// Extracts the argument iteration and building logic to reduce complexity
-    /// in build_tool_command_from_data.
-    ///
-    /// # Parameters
-    ///
-    /// * `args` - Slice of ArgData to convert into clap Args
-    ///
-    /// # Returns
-    ///
-    /// Vec of built clap Args ready to add to a command
-    fn build_args_for_command(&self, args: &[ArgData]) -> Vec<Arg> {
-        args.iter()
-            .map(|arg_data| self.build_arg_from_data(arg_data))
-            .collect()
-    }
-
-    /// Build a clap argument from pre-computed data
-    fn build_arg_from_data(&self, arg_data: &ArgData) -> Arg {
-        ArgBuilder::new(arg_data)
-            .with_required(arg_data.is_required)
-            .with_type(arg_data)
-            .with_metadata(arg_data)
-            .build()
-    }
-
     /// Create a flag argument (boolean with SetTrue action)
     ///
     /// Consolidates the common pattern of creating boolean flag arguments with
@@ -1795,6 +1701,7 @@ impl CliBuilder {
             about: Some(config.about.to_string()),
             long_about: Some(config.long_about.to_string()),
             args: Vec::new(),
+            subcommands: Vec::new(),
         };
         Self::build_command_base(&data)
     }

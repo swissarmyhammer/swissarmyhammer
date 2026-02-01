@@ -4,7 +4,6 @@ description: Tool Use Hints
 partial: true
 ---
 
-{% include "_partials/detected-projects" %}
 
 ## File Tools
 - **File Paths:** Always use absolute paths when referring to files with tools. Relative paths are not supported. You must provide an absolute path.

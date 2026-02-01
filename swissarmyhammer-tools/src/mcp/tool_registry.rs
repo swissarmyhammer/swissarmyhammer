@@ -739,6 +739,12 @@ pub trait McpTool: Doctorable + Send + Sync {
             "todo" => Some("todo"),
             "outline" => Some("outline"),
             "notify" => Some("notify"),
+            "kanban" => Some("kanban"),
+            "flow" => Some("flow"),
+            "git" => Some("git"),
+            "cel" => Some("cel"),
+            "question" => Some("question"),
+            "treesitter" => Some("treesitter"),
             _ => None,
         }
     }
@@ -797,6 +803,20 @@ pub trait McpTool: Doctorable + Send + Sync {
     /// All tools are visible in CLI by default.
     fn hidden_from_cli(&self) -> bool {
         false
+    }
+
+    /// Get the operations this tool supports (for operation-based CLI generation)
+    ///
+    /// Tools that use the operation pattern return their operations here,
+    /// enabling the CLI to generate noun-verb subcommand structure.
+    /// Tools that don't use operations return an empty slice and use schema-based
+    /// CLI generation instead.
+    ///
+    /// # Default
+    ///
+    /// Returns an empty slice - tool uses schema-based CLI generation.
+    fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
+        &[]
     }
 }
 
@@ -1720,6 +1740,11 @@ register_tool_category!(
     "Register all todo-related tools with the registry"
 );
 register_tool_category!(
+    register_kanban_tools,
+    kanban,
+    "Register all kanban board tools with the registry"
+);
+register_tool_category!(
     register_web_fetch_tools,
     web_fetch,
     "Register all web fetch-related tools with the registry"
@@ -1755,6 +1780,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_questions_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
+    register_kanban_tools(&mut registry);
     register_treesitter_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
     register_web_search_tools(&mut registry);

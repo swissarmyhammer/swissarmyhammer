@@ -793,19 +793,43 @@ async fn lookup_tool_by_cli_name(
     let registry_arc = cli_tool_context.get_tool_registry_arc();
     let registry = registry_arc.read().await;
 
-    match registry.get_tool_by_cli_name(category, tool_name) {
-        Some(tool) => Ok(<dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool).to_string()),
-        None => {
-            let available_tools: Vec<String> = registry
-                .get_tools_for_category(category)
-                .iter()
-                .map(|t| format!("{} -> {}", t.cli_name(), <dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(*t)))
-                .collect();
-            Err(format_tool_not_found_error(
-                tool_name,
-                category,
-                &available_tools,
-            ))
+    // For the unified "tool" category, tool_name is already the full MCP tool name
+    if category == "tool" {
+        match registry.get_tool(tool_name) {
+            Some(tool) => Ok(<dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool).to_string()),
+            None => {
+                // List all available tools across all categories
+                let mut available_tools: Vec<String> = Vec::new();
+                for cat in registry.get_cli_categories() {
+                    for t in registry.get_tools_for_category(&cat) {
+                        if !t.hidden_from_cli() {
+                            available_tools.push(<dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(t).to_string());
+                        }
+                    }
+                }
+                Err(format_tool_not_found_error(
+                    tool_name,
+                    category,
+                    &available_tools,
+                ))
+            }
+        }
+    } else {
+        // Legacy category-based lookup
+        match registry.get_tool_by_cli_name(category, tool_name) {
+            Some(tool) => Ok(<dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool).to_string()),
+            None => {
+                let available_tools: Vec<String> = registry
+                    .get_tools_for_category(category)
+                    .iter()
+                    .map(|t| format!("{} -> {}", t.cli_name(), <dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(*t)))
+                    .collect();
+                Err(format_tool_not_found_error(
+                    tool_name,
+                    category,
+                    &available_tools,
+                ))
+            }
         }
     }
 }
@@ -823,12 +847,45 @@ async fn handle_dynamic_tool_command(
         Err(e) => return report_error_and_exit(e),
     };
 
+    // Check if tool has operations (subcommands)
+    let registry_arc = cli_tool_context.get_tool_registry_arc();
+    let registry = registry_arc.read().await;
+    let tool = match registry.get_tool(&full_tool_name) {
+        Some(t) => t,
+        None => return report_error_and_exit(format!("Tool not found: {}", full_tool_name)),
+    };
+
+    let operations = tool.operations();
+    let schema = tool.schema();
+    drop(registry); // Release lock before executing
+
     // Convert clap matches to JSON arguments
-    let arguments =
+    let arguments = if !operations.is_empty() {
+        // Operation-based tool - look for subcommand
+        match matches.subcommand() {
+            Some((op_name, op_matches)) => {
+                // Convert "init-board" back to "init board" for the op parameter
+                let op_string = op_name.replace('-', " ");
+                match convert_operation_matches_to_arguments(op_matches, &op_string, &schema) {
+                    Ok(args) => args,
+                    Err(e) => return report_error_and_exit(format!("Error processing arguments: {}", e)),
+                }
+            }
+            None => {
+                // No subcommand - show help
+                return report_error_and_exit(format!(
+                    "No operation specified for '{}'. Use --help to see available operations.",
+                    tool_name
+                ));
+            }
+        }
+    } else {
+        // Schema-based tool
         match convert_matches_to_arguments(matches, &full_tool_name, &cli_tool_context).await {
             Ok(args) => args,
             Err(e) => return report_error_and_exit(format!("Error processing arguments: {}", e)),
-        };
+        }
+    };
 
     // Execute the MCP tool
     match cli_tool_context
@@ -874,6 +931,36 @@ async fn convert_matches_to_arguments(
     // Extract properties from schema
     if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
         for (prop_name, prop_schema) in properties {
+            if let Some(value) = extract_clap_value(matches, prop_name, prop_schema) {
+                arguments.insert(prop_name.clone(), value);
+            }
+        }
+    }
+
+    Ok(arguments)
+}
+
+/// Convert operation subcommand matches to JSON arguments for operation-based tools
+///
+/// This extracts arguments from a subcommand and adds the "op" parameter.
+/// Uses the tool's schema for argument extraction since that's what the MCP tool expects.
+fn convert_operation_matches_to_arguments(
+    matches: &clap::ArgMatches,
+    op_string: &str,
+    schema: &serde_json::Value,
+) -> Result<serde_json::Map<String, serde_json::Value>, Box<dyn std::error::Error>> {
+    let mut arguments = serde_json::Map::new();
+
+    // Set the op parameter
+    arguments.insert("op".to_string(), serde_json::Value::String(op_string.to_string()));
+
+    // Extract arguments from schema properties (same as schema-based tools)
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (prop_name, prop_schema) in properties {
+            // Skip "op" since we already set it
+            if prop_name == "op" {
+                continue;
+            }
             if let Some(value) = extract_clap_value(matches, prop_name, prop_schema) {
                 arguments.insert(prop_name.clone(), value);
             }

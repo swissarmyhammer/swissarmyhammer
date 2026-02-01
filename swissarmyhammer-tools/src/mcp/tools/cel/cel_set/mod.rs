@@ -85,6 +85,8 @@ impl McpTool for CelSetTool {
     }
 
     fn schema(&self) -> serde_json::Value {
+        // Note: For CLI compatibility, we use "string" type for expression/value.
+        // The MCP interface still accepts any JSON type which gets converted internally.
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -97,12 +99,12 @@ impl McpTool for CelSetTool {
                     "description": "Alias for 'name' - name of the variable to store the result"
                 },
                 "expression": {
-                    "type": ["string", "boolean", "number", "object", "array", "null"],
-                    "description": "CEL expression to evaluate or literal value (string, boolean, number, null, array, object) (alias: value)"
+                    "type": "string",
+                    "description": "CEL expression to evaluate (alias: value)"
                 },
                 "value": {
-                    "type": ["string", "boolean", "number", "object", "array", "null"],
-                    "description": "Alias for 'expression' - CEL expression to evaluate or literal value (string, boolean, number, null, array, object)"
+                    "type": "string",
+                    "description": "Alias for 'expression' - CEL expression to evaluate"
                 }
             }
         })

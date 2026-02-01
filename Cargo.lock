@@ -6300,6 +6300,7 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-doctor",
  "swissarmyhammer-git",
+ "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
@@ -6402,6 +6403,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-kanban"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "fs2",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-operations",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "swissarmyhammer-leader-election"
 version = "0.5.0"
 dependencies = [
@@ -6455,6 +6475,25 @@ dependencies = [
  "tokio",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "swissarmyhammer-operations"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "serde_json",
+ "swissarmyhammer-operations-macros",
+ "tokio",
+]
+
+[[package]]
+name = "swissarmyhammer-operations-macros"
+version = "0.5.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
@@ -6599,7 +6638,9 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
+ "swissarmyhammer-kanban",
  "swissarmyhammer-mcp-proxy",
+ "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",

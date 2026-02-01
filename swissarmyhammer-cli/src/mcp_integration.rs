@@ -13,8 +13,9 @@ use std::sync::Arc;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
-    register_file_tools, register_flow_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, register_web_search_tools,
+    register_cel_tools, register_file_tools, register_flow_tools, register_git_tools,
+    register_kanban_tools, register_questions_tools, register_shell_tools, register_todo_tools,
+    register_treesitter_tools, register_web_fetch_tools, register_web_search_tools,
 };
 use tokio::sync::RwLock;
 
@@ -97,12 +98,19 @@ impl CliToolContext {
     }
 
     /// Create and populate tool registry
+    ///
+    /// This should mirror the registration in `swissarmyhammer_tools::mcp::server::register_all_tools`
     async fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
+        register_cel_tools(&mut tool_registry);
         register_file_tools(&mut tool_registry).await;
         register_flow_tools(&mut tool_registry);
+        register_git_tools(&mut tool_registry);
+        register_kanban_tools(&mut tool_registry);
+        register_questions_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_todo_tools(&mut tool_registry);
+        register_treesitter_tools(&mut tool_registry);
         register_web_fetch_tools(&mut tool_registry);
         register_web_search_tools(&mut tool_registry);
         tool_registry
@@ -288,5 +296,46 @@ mod tests {
         }
     }
 
-    // Helper function for tests
+    /// Validates that all registered tools pass CLI validation.
+    ///
+    /// This test uses the same code path as the actual CLI (CliToolContext::new())
+    /// to ensure the test validates the real tool registration, not a separate copy.
+    /// If this test fails, it means a tool was added without proper schema validation.
+    #[tokio::test]
+    async fn test_all_registered_tools_pass_cli_validation() {
+        use crate::dynamic_cli::CliBuilder;
+
+        // Use the same code path as the actual CLI
+        let context = CliToolContext::new().await.expect("Failed to create CliToolContext");
+        let tool_registry_arc = context.get_tool_registry_arc();
+
+        // Create CLI builder and validate all tools
+        let cli_builder = CliBuilder::new(tool_registry_arc);
+        let validation_errors = cli_builder.validate_all_tools();
+
+        // If there are validation errors, fail with detailed messages
+        if !validation_errors.is_empty() {
+            let error_messages: Vec<String> = validation_errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect();
+            panic!(
+                "Tool validation failed! All registered tools must have valid schemas for CLI generation.\n\
+                 Validation errors:\n  - {}",
+                error_messages.join("\n  - ")
+            );
+        }
+
+        // Also verify the stats show all tools are valid
+        let stats = cli_builder.get_validation_stats();
+        assert!(
+            stats.is_all_valid(),
+            "Expected all tools to be valid. Stats: {}",
+            stats.summary()
+        );
+        assert!(
+            stats.total_tools > 0,
+            "Expected at least one tool to be registered"
+        );
+    }
 }
