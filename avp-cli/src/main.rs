@@ -2,8 +2,8 @@
 //!
 //! Commands:
 //! - `avp` (no args): Read JSON from stdin, process hook, write JSON to stdout
-//! - `avp init <target>`: Install AVP hooks into Claude Code settings
-//! - `avp deinit <target>`: Remove AVP hooks from Claude Code settings
+//! - `avp init [target]`: Install AVP hooks into Claude Code settings (default: project)
+//! - `avp deinit [target]`: Remove AVP hooks from Claude Code settings (default: project)
 //! - `avp doctor`: Diagnose AVP configuration and setup
 //! - `avp list`: List all available validators
 //!
@@ -46,13 +46,13 @@ enum Commands {
     /// Install AVP hooks into Claude Code settings
     Init {
         /// Where to install the hooks
-        #[arg(value_enum)]
+        #[arg(value_enum, default_value_t = InstallTarget::Project)]
         target: InstallTarget,
     },
     /// Remove AVP hooks from Claude Code settings
     Deinit {
         /// Where to remove the hooks from
-        #[arg(value_enum)]
+        #[arg(value_enum, default_value_t = InstallTarget::Project)]
         target: InstallTarget,
     },
     /// Diagnose AVP configuration and setup
@@ -132,13 +132,13 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
         println!();
         println!("Usage:");
         println!("  avp                           Process hook from stdin (pipe JSON)");
-        println!("  avp init <project|local|user>      Install hooks to Claude settings");
-        println!("  avp deinit <project|local|user>    Remove hooks from Claude settings");
+        println!("  avp init [project|local|user]      Install hooks (default: project)");
+        println!("  avp deinit [project|local|user]    Remove hooks (default: project)");
         println!("  avp list [-v]                 List all available validators");
         println!("  avp doctor [-v]               Diagnose AVP setup");
         println!();
         println!("Examples:");
-        println!("  avp init project              Install to .claude/settings.json");
+        println!("  avp init                      Install to .claude/settings.json");
         println!("  avp init user                 Install to ~/.claude/settings.json");
         println!("  avp list                      Show all validators");
         println!("  avp list -v                   Show validators with descriptions");
@@ -213,6 +213,17 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parsing_init_default() {
+        let cli = Cli::parse_from(["avp", "init"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Init {
+                target: InstallTarget::Project
+            })
+        ));
+    }
+
+    #[test]
     fn test_cli_parsing_init_project() {
         let cli = Cli::parse_from(["avp", "init", "project"]);
         assert!(matches!(
@@ -241,6 +252,17 @@ mod tests {
             cli.command,
             Some(Commands::Init {
                 target: InstallTarget::User
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_deinit_default() {
+        let cli = Cli::parse_from(["avp", "deinit"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Deinit {
+                target: InstallTarget::Project
             })
         ));
     }
