@@ -88,6 +88,14 @@ pub enum TreeSitterError {
     /// Connection error (e.g., failed to connect to index leader)
     #[error("Connection error: {0}")]
     ConnectionError(String),
+
+    /// Database error (SQLite operations)
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+
+    /// Not the leader - cannot perform write operations
+    #[error("Not leader: {0}")]
+    NotLeader(String),
 }
 
 impl Severity for TreeSitterError {
@@ -110,6 +118,8 @@ impl Severity for TreeSitterError {
             TreeSitterError::QueryError { .. } => ErrorSeverity::Critical,
             TreeSitterError::EmbeddingError(_) => ErrorSeverity::Error,
             TreeSitterError::ConnectionError(_) => ErrorSeverity::Error,
+            TreeSitterError::DatabaseError(_) => ErrorSeverity::Error,
+            TreeSitterError::NotLeader(_) => ErrorSeverity::Error,
         }
     }
 }
@@ -173,6 +183,16 @@ impl TreeSitterError {
     pub fn connection_error(message: impl Into<String>) -> Self {
         TreeSitterError::ConnectionError(message.into())
     }
+
+    /// Create a database error
+    pub fn database_error(message: impl Into<String>) -> Self {
+        TreeSitterError::DatabaseError(message.into())
+    }
+
+    /// Create a not leader error
+    pub fn not_leader(message: impl Into<String>) -> Self {
+        TreeSitterError::NotLeader(message.into())
+    }
 }
 
 #[cfg(test)]
@@ -207,6 +227,7 @@ mod tests {
             TreeSitterError::NotInitialized,
             TreeSitterError::embedding_error("model load failed"),
             TreeSitterError::connection_error("failed to connect"),
+            TreeSitterError::database_error("sqlite error"),
         ];
 
         for error in errors {

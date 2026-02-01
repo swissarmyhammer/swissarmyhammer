@@ -133,8 +133,8 @@ impl McpTool for TreesitterDuplicatesTool {
 mod tests {
     use super::*;
     use crate::mcp::tools::treesitter::shared::test_helpers::{
-        assert_execute_fails_no_leader, assert_schema_has_properties, assert_schema_is_object,
-        assert_tool_basics,
+        assert_execute_succeeds_on_empty_workspace, assert_schema_has_properties,
+        assert_schema_is_object, assert_tool_basics, execute_tool_with_temp_path,
     };
 
     #[test]
@@ -200,15 +200,20 @@ mod tests {
     #[tokio::test]
     async fn test_execute_no_leader_running() {
         let tool = TreesitterDuplicatesTool::new();
-        assert_execute_fails_no_leader(&tool, None).await;
+        assert_execute_succeeds_on_empty_workspace(&tool, None).await;
     }
 
     #[tokio::test]
-    async fn test_execute_with_file_param_no_leader() {
+    async fn test_execute_with_nonexistent_file_returns_error() {
+        // When searching for duplicates in a specific file that doesn't exist,
+        // the tool should return an error
         let tool = TreesitterDuplicatesTool::new();
         let mut extra_args = serde_json::Map::new();
-        extra_args.insert("file".to_string(), json!("src/main.rs"));
-        assert_execute_fails_no_leader(&tool, Some(extra_args)).await;
+        extra_args.insert("file".to_string(), json!("nonexistent/file.rs"));
+        let (result, _temp_dir) =
+            execute_tool_with_temp_path(&tool, Some(extra_args)).await;
+        // Returns error because the file doesn't exist
+        assert!(result.is_err());
     }
 
     #[test]

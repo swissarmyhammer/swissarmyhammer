@@ -1,20 +1,28 @@
-//! Quick CLI to benchmark workspace indexing
+//! Quick CLI to benchmark workspace indexing with progress display
 //!
 //! Usage: cargo run --release -p swissarmyhammer-treesitter --example index_bench /path/to/directory
+//!
+//! This example demonstrates:
+//! - Using the builder pattern to configure a workspace
+//! - Setting up a progress callback to monitor indexing
+//! - Incremental indexing (run, kill, run again to see incremental behavior)
 
 use std::env;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use swissarmyhammer_treesitter::Workspace;
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing subscriber for console output
+    // Initialize tracing with timestamps
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("swissarmyhammer_treesitter=debug".parse()?)
+                .add_directive("index_bench=info".parse()?)
+                .add_directive("swissarmyhammer_treesitter=info".parse()?)
                 .add_directive("llama_embedding=info".parse()?)
                 .add_directive("llama_loader=info".parse()?),
         )
@@ -34,26 +42,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    println!("Indexing directory: {}", dir.display());
-    println!("---");
+    info!(directory = %dir.display(), "Starting index");
 
-    let start = Instant::now();
+    // Track last printed progress to avoid flooding output
+    let last_printed = Arc::new(AtomicUsize::new(0));
+    let last_printed_clone = last_printed.clone();
 
-    // Open workspace - this will scan and index
-    let workspace = Workspace::open(&dir).await?;
+    // Open workspace with progress callback using builder pattern
+    let workspace = Workspace::new(&dir)
+        .with_progress(move |status| {
+            let processed = status.files_processed();
+            let last = last_printed_clone.load(Ordering::Relaxed);
 
-    let elapsed = start.elapsed();
+            // Log every 10 files or when complete
+            if processed >= last + 10 || status.is_complete() {
+                last_printed_clone.store(processed, Ordering::Relaxed);
 
-    // Get status
+                if status.chunks_total > 0 {
+                    info!(
+                        embedded = status.chunks_embedded,
+                        total = status.chunks_total,
+                        progress = format!("{:.1}%", status.progress().unwrap_or(0.0) * 100.0),
+                        "Embedding chunks"
+                    );
+                } else {
+                    info!(
+                        parsed = status.files_parsed,
+                        total = status.files_total,
+                        skipped = status.files_skipped,
+                        errors = status.files_errored,
+                        current = ?status.current_file,
+                        "Parsing files"
+                    );
+                }
+            }
+        })
+        .open()
+        .await?;
+
+    info!(is_leader = workspace.is_leader(), "Opened workspace");
+
+    // Build the index - this is where the progress callback fires
+    if workspace.is_leader() {
+        info!("Building index");
+        workspace.build().await?;
+    } else {
+        info!("Not leader - using existing index");
+    }
+
+    // Get final status
     let status = workspace.status().await?;
 
-    println!("---");
-    println!("Indexing complete!");
-    println!("  Total time: {:.2}s", elapsed.as_secs_f64());
-    println!("  Files discovered: {}", status.files_total);
-    println!("  Files indexed: {}", status.files_indexed);
-    println!("  Files embedded: {}", status.files_embedded);
-    println!("  Is leader: {}", workspace.is_leader());
+    info!(
+        files_total = status.files_total,
+        files_indexed = status.files_indexed,
+        files_embedded = status.files_embedded,
+        is_leader = workspace.is_leader(),
+        database = %workspace.database_path().display(),
+        "Indexing complete"
+    );
 
     Ok(())
 }

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
-use swissarmyhammer_treesitter::IndexClient;
+use swissarmyhammer_treesitter::Workspace;
 
 /// MCP tool for checking tree-sitter index status
 #[derive(Default)]
@@ -54,26 +54,26 @@ impl McpTool for TreesitterStatusTool {
 
         tracing::debug!("Checking tree-sitter index status for {:?}", workspace_path);
 
-        // Try to connect - status tool returns success with "not running" message instead of error
-        let client = match IndexClient::connect(&workspace_path).await {
-            Ok(c) => c,
+        // Open workspace - this will become leader or reader depending on lock state
+        let workspace = match Workspace::open(&workspace_path).await {
+            Ok(w) => w,
             Err(e) => {
                 return Ok(BaseToolImpl::create_success_response(format!(
-                    "**Index Status: Not Running**\n\n\
-                     No tree-sitter index is running for this workspace.\n\
+                    "**Index Status: Not Available**\n\n\
+                     Could not open tree-sitter workspace.\n\
                      Error: {}\n\n\
-                     To start the index, run the indexing process for: {}",
+                     Workspace path: {}",
                     e,
                     workspace_path.display()
                 )));
             }
         };
 
-        let status = client.status().await.map_err(|e| {
+        let status = workspace.status().await.map_err(|e| {
             McpError::internal_error(format!("Failed to get index status: {}", e), None)
         })?;
 
-        let files = client.list_files().await.unwrap_or_default();
+        let files = workspace.list_files().await.unwrap_or_default();
 
         let ready_status = if status.is_ready { "Ready" } else { "Building" };
         let progress = if status.files_total > 0 {
@@ -154,16 +154,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_no_leader_returns_not_running() {
+    async fn test_execute_on_empty_workspace_succeeds() {
+        // With Workspace::open(), the tool becomes a leader automatically
+        // and returns status information even for an empty workspace
         let tool = TreesitterStatusTool::new();
         let (result, _temp_dir) = execute_tool_with_temp_path(&tool, None).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
+        // Should have at least one content item
+        assert!(!response.content.is_empty());
+        // Verify it's a text response
         let content = &response.content[0];
-        if let rmcp::model::RawContent::Text(text) = &content.raw {
-            assert!(text.text.contains("Not Running"));
-        }
+        assert!(matches!(&content.raw, rmcp::model::RawContent::Text(_)));
     }
 
     #[tokio::test]

@@ -294,15 +294,18 @@ pub mod test_helpers {
         (result, temp_dir)
     }
 
-    /// Assert that tool execution fails when no index leader is running.
-    pub async fn assert_execute_fails_no_leader<T: McpTool>(
+    /// Assert that tool execution succeeds on an empty workspace.
+    ///
+    /// With the Workspace API, opening a workspace makes the process
+    /// a leader automatically, so tools should succeed (with empty results).
+    pub async fn assert_execute_succeeds_on_empty_workspace<T: McpTool>(
         tool: &T,
         extra_args: Option<serde_json::Map<String, serde_json::Value>>,
     ) {
         let (result, _temp_dir) = execute_tool_with_temp_path(tool, extra_args).await;
         assert!(
-            result.is_err(),
-            "Tool should return error when no leader is running"
+            result.is_ok(),
+            "Tool should succeed on empty workspace"
         );
     }
 }

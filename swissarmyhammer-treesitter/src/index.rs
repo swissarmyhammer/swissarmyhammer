@@ -298,6 +298,15 @@ impl IndexContext {
         self
     }
 
+    /// Set a pre-wrapped progress callback
+    ///
+    /// This takes a `ProgressCallback` (Arc-wrapped) directly, useful when
+    /// the callback has already been wrapped.
+    pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
+        self.progress_callback = Some(callback);
+        self
+    }
+
     /// Set custom configuration
     pub fn with_config(mut self, config: IndexConfig) -> Self {
         self.config = config;
@@ -1543,7 +1552,7 @@ mod tests {
 
     #[test]
     fn test_index_status_is_complete_edge_cases() {
-        // Empty status is not complete
+        // Empty status is not complete (needs scanning first)
         let status = IndexStatus::new(PathBuf::from("/test"));
         assert!(!status.is_complete());
 

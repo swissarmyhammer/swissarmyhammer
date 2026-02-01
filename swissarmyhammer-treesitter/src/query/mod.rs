@@ -1,14 +1,7 @@
-//! Query protocol for leader/client tree-sitter workspace architecture
+//! Query types for tree-sitter workspace operations
 //!
-//! This module provides the RPC protocol for querying a shared tree-sitter workspace.
-//! One process acts as the "leader" holding the actual index in memory, while
-//! other processes connect as clients and send queries over a Unix socket.
-//!
-//! # Architecture
-//!
-//! - **Leader**: Owns the `IndexContext`, maintains file watchers, handles queries
-//! - **Client**: Connects to leader via Unix socket, sends queries, receives results
-//! - **Election**: File-lock based leader election (first process wins)
+//! This module provides serializable types for querying a tree-sitter workspace.
+//! These types are used to communicate query results and status information.
 //!
 //! # Example
 //!
@@ -25,13 +18,8 @@
 //! let results = workspace.semantic_search("fn main", 10, 0.7).await?;
 //! ```
 
-mod client;
-pub(crate) mod server;
-pub(crate) mod service;
 mod types;
 
-pub use client::{ClientError, IndexClient};
-pub use service::IndexService;
 pub use types::{
     check_ready, Capture, ChunkResult, DuplicateCluster, IndexStatusInfo, QueryError,
     QueryErrorKind, QueryMatch, SimilarChunkResult,

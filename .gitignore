@@ -173,5 +173,10 @@ acp-conformance/.swissarmyhammer/
 
 .acp
 
-# AVP logs
+# Tree-sitter index database files
+.treesitter-index.db
+.treesitter-index.db-shm
+.treesitter-index.db-wal
+
+# AVP local state
 .avp/

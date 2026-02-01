@@ -1,16 +1,29 @@
-//! Workspace with automatic leader/client mode
+//! Workspace with automatic leader/client mode using SQLite storage
 //!
 //! The `Workspace` struct transparently handles whether this process is the leader
-//! (holding the actual data) or a client (connecting to another process).
-//! Callers don't need to understand leader election - just call `Workspace::open()`.
+//! (performing writes to the index) or a reader (querying the index).
+//!
+//! # Storage
+//!
+//! The index is stored in a SQLite database in WAL mode, allowing one writer (leader)
+//! and multiple concurrent readers (non-leaders). The leader performs batch writes
+//! per file during indexing.
 //!
 //! # Example
 //!
 //! ```ignore
 //! use swissarmyhammer_treesitter::Workspace;
 //!
-//! // Simple usage - leader/client mode is handled internally
-//! let workspace = Workspace::open("/path/to/workspace").await?;
+//! // Open workspace and set up progress callback before building
+//! let workspace = Workspace::new("/path/to/workspace")
+//!     .with_progress(|status| {
+//!         println!("Progress: {}/{} files", status.files_parsed, status.files_total);
+//!     })
+//!     .open()
+//!     .await?;
+//!
+//! // Build the index (only works if we're the leader)
+//! workspace.build().await?;
 //!
 //! // Query the workspace - works the same regardless of mode
 //! let status = workspace.status().await?;
@@ -20,107 +33,206 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
-use tokio::net::UnixListener;
-use tokio::sync::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
 
 use swissarmyhammer_leader_election::{ElectionConfig, ElectionError, LeaderElection, LeaderGuard};
 
-use crate::index::{IndexConfig, IndexContext};
-use crate::query::server::{IndexServiceServer, find_all_duplicates_impl, find_duplicates_in_file_impl, semantic_search_impl, tree_sitter_query_impl};
-use crate::query::service::{IndexService, IndexServiceClient};
-use crate::query::{check_ready, DuplicateCluster, IndexStatusInfo, QueryError, QueryMatch, SimilarChunkResult};
+use crate::chunk::{cosine_similarity, SemanticChunk, SimilarityQuery};
+use crate::db::{database_path, EmbeddedChunkRecord, IndexDatabase};
+use crate::index::{IndexConfig, IndexContext, IndexStatus, ProgressCallback};
+use crate::query::{
+    check_ready, ChunkResult, DuplicateCluster, IndexStatusInfo, QueryError, QueryMatch,
+    SimilarChunkResult,
+};
 use crate::{Result, TreeSitterError};
 
-/// Time to wait for a newly started leader to begin listening on its socket
-const LEADER_STARTUP_DELAY: Duration = Duration::from_millis(100);
+/// Maximum number of similar chunks to return when finding duplicates for a file
+const DUPLICATES_TOP_K: usize = 100;
 
-/// Time to wait before retrying connection when another process holds the leader lock
-const LEADER_ELECTION_RETRY_DELAY: Duration = Duration::from_millis(500);
-
-/// Internal mode of the index
+/// Internal mode of the workspace
 enum WorkspaceMode {
-    /// This process owns the index data and serves queries
+    /// This process owns the index and writes to the database
     Leader {
-        /// The index context with all parsed files and embeddings
-        context: Arc<RwLock<IndexContext>>,
+        /// The database for persistent storage (internally thread-safe)
+        db: Arc<IndexDatabase>,
         /// Guard that holds the leader lock (released on drop)
         _guard: LeaderGuard,
-        /// Handle to the background server task
-        _server_handle: tokio::task::JoinHandle<()>,
     },
-    /// This process connects to a leader via RPC
-    Client {
-        /// RPC client for sending queries
-        client: IndexServiceClient,
+    /// This process reads from the database only
+    Reader {
+        /// Read-only database connection
+        db: Arc<IndexDatabase>,
     },
+}
+
+/// Builder for creating a Workspace with configuration
+pub struct WorkspaceBuilder {
+    workspace_root: PathBuf,
+    election_config: ElectionConfig,
+    index_config: IndexConfig,
+    progress_callback: Option<ProgressCallback>,
+}
+
+impl WorkspaceBuilder {
+    /// Create a new workspace builder for the given path
+    pub fn new(workspace_root: impl AsRef<Path>) -> Self {
+        Self {
+            workspace_root: workspace_root.as_ref().to_path_buf(),
+            election_config: ElectionConfig::default(),
+            index_config: IndexConfig::default(),
+            progress_callback: None,
+        }
+    }
+
+    /// Set a progress callback for indexing operations
+    ///
+    /// The callback is called during the build phase with status updates.
+    pub fn with_progress<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(IndexStatus) + Send + Sync + 'static,
+    {
+        self.progress_callback = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set custom election configuration
+    pub fn with_election_config(mut self, config: ElectionConfig) -> Self {
+        self.election_config = config;
+        self
+    }
+
+    /// Set custom index configuration
+    pub fn with_index_config(mut self, config: IndexConfig) -> Self {
+        self.index_config = config;
+        self
+    }
+
+    /// Open the workspace, establishing leader/reader mode
+    ///
+    /// This does NOT start indexing. Call `build()` to index the workspace.
+    pub async fn open(self) -> Result<Workspace> {
+        Workspace::open_internal(
+            self.workspace_root,
+            self.election_config,
+            self.index_config,
+            self.progress_callback,
+        )
+        .await
+    }
 }
 
 /// A tree-sitter workspace with automatic leader/client mode.
 ///
 /// `Workspace` transparently handles whether this process is the leader
-/// (holding the actual data) or a client (connecting to another process).
-/// Callers don't need to understand leader election - just call `Workspace::open()`.
+/// (holding the index and writing to the database) or a reader (querying the database).
 ///
 /// # Leader Election
 ///
 /// When you call `Workspace::open()`:
-/// 1. First, it tries to connect to an existing leader
-/// 2. If no leader exists, this process becomes the leader
-/// 3. The leader scans and indexes the workspace
-/// 4. Clients connect to the leader via Unix socket RPC
+/// 1. First, it tries to become the leader
+/// 2. If another process is leader, it becomes a reader
+/// 3. Call `build()` to start indexing (only leaders can build)
 ///
 /// # Example
 ///
 /// ```ignore
-/// // Simple usage - leader/client mode is handled internally
-/// let index = Workspace::open("/path/to/workspace").await?;
+/// // Set up workspace with progress callback
+/// let workspace = Workspace::new("/path/to/workspace")
+///     .with_progress(|status| {
+///         println!("{}/{} files", status.files_parsed, status.files_total);
+///     })
+///     .open()
+///     .await?;
 ///
-/// // Query the index - works the same regardless of mode
-/// let status = index.status().await?;
-/// let files = index.list_files().await?;
+/// // Build the index (only works for leader)
+/// workspace.build().await?;
+///
+/// // Query the workspace
+/// let status = workspace.status().await?;
+/// let files = workspace.list_files().await?;
 /// ```
 pub struct Workspace {
     mode: WorkspaceMode,
     election: LeaderElection,
+    workspace_root: PathBuf,
+    /// Index context - always present, configured with callbacks
+    context: Arc<TokioRwLock<IndexContext>>,
+    /// Whether build() has been called
+    is_built: std::sync::atomic::AtomicBool,
 }
 
 impl Workspace {
-    /// Open an index for a workspace, automatically handling leader election.
+    /// Create a new workspace builder for the given path
     ///
-    /// This will:
-    /// 1. Try to connect to an existing leader
-    /// 2. If no leader exists, become the leader and scan the workspace
-    ///
-    /// The leader election is transparent to the caller.
-    pub async fn open(workspace_root: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with_config(workspace_root, ElectionConfig::default(), None).await
+    /// Use the builder to configure callbacks before opening:
+    /// ```ignore
+    /// let workspace = Workspace::new("/path")
+    ///     .with_progress(|status| println!("{:?}", status))
+    ///     .open()
+    ///     .await?;
+    /// ```
+    pub fn new(workspace_root: impl AsRef<Path>) -> WorkspaceBuilder {
+        WorkspaceBuilder::new(workspace_root)
     }
 
-    /// Open an index with custom configuration.
+    /// Open a workspace, automatically handling leader election.
     ///
-    /// # Arguments
-    /// * `workspace_root` - Path to the workspace to index
-    /// * `election_config` - Configuration for leader election (prefix, base dir)
-    /// * `index_config` - Optional configuration for the index (when becoming leader)
+    /// This is a convenience method that opens and builds in one step.
+    /// For more control, use `Workspace::new().with_progress(...).open()` then `build()`.
+    pub async fn open(workspace_root: impl AsRef<Path>) -> Result<Self> {
+        let workspace = Self::open_internal(
+            workspace_root.as_ref().to_path_buf(),
+            ElectionConfig::default(),
+            IndexConfig::default(),
+            None,
+        )
+        .await?;
+
+        // Auto-build for backward compatibility
+        workspace.build().await?;
+        Ok(workspace)
+    }
+
+    /// Open a workspace with custom configuration.
+    ///
+    /// This is a convenience method that opens and builds in one step.
+    /// For more control, use the builder pattern.
     pub async fn open_with_config(
         workspace_root: impl AsRef<Path>,
         election_config: ElectionConfig,
         index_config: Option<IndexConfig>,
     ) -> Result<Self> {
-        let workspace_root = workspace_root.as_ref();
-        let election = LeaderElection::with_config(workspace_root, election_config);
+        let workspace = Self::open_internal(
+            workspace_root.as_ref().to_path_buf(),
+            election_config,
+            index_config.unwrap_or_default(),
+            None,
+        )
+        .await?;
 
-        // First, try to connect to an existing leader
-        if let Ok(client) = Self::try_connect(&election).await {
-            return Ok(Self {
-                mode: WorkspaceMode::Client { client },
-                election,
-            });
+        // Auto-build for backward compatibility
+        workspace.build().await?;
+        Ok(workspace)
+    }
+
+    /// Internal open implementation
+    async fn open_internal(
+        workspace_root: PathBuf,
+        election_config: ElectionConfig,
+        index_config: IndexConfig,
+        progress_callback: Option<ProgressCallback>,
+    ) -> Result<Self> {
+        let election = LeaderElection::with_config(&workspace_root, election_config);
+        let db_path = database_path(&workspace_root);
+
+        // Create the index context with configuration
+        let mut context = IndexContext::new(&workspace_root).with_config(index_config);
+        if let Some(callback) = progress_callback {
+            context = context.with_progress_callback(callback);
         }
 
-        // No leader running - try to become the leader
+        // Try to become the leader
         match election.try_become_leader() {
             Ok(guard) => {
                 tracing::info!(
@@ -128,57 +240,46 @@ impl Workspace {
                     workspace_root.display()
                 );
 
-                // Create and scan the index
-                let config = index_config.unwrap_or_default();
-                let mut context = IndexContext::new(workspace_root).with_config(config);
-                let result = context.scan().await?;
-
-                tracing::info!(
-                    "Index scan complete: {} files parsed, {} skipped, {} errors in {}ms",
-                    result.files_parsed,
-                    result.files_skipped,
-                    result.errors.len(),
-                    result.total_time_ms
-                );
-
-                let context = Arc::new(RwLock::new(context));
-                let socket_path = election.socket_path().to_path_buf();
-
-                // Start the RPC server in the background
-                let server_context = context.clone();
-                let server_handle = tokio::spawn(async move {
-                    if let Err(e) = run_leader_server(server_context, &socket_path).await {
-                        tracing::error!("Index leader server error: {}", e);
-                    }
-                });
-
-                // Wait for server to start
-                tokio::time::sleep(LEADER_STARTUP_DELAY).await;
+                // Open database in read-write mode
+                let db = IndexDatabase::open_readwrite(&db_path).map_err(|e| {
+                    TreeSitterError::database_error(format!("Failed to open database: {}", e))
+                })?;
 
                 Ok(Self {
                     mode: WorkspaceMode::Leader {
-                        context,
+                        db: Arc::new(db),
                         _guard: guard,
-                        _server_handle: server_handle,
                     },
                     election,
+                    workspace_root,
+                    context: Arc::new(TokioRwLock::new(context)),
+                    is_built: std::sync::atomic::AtomicBool::new(false),
                 })
             }
             Err(ElectionError::LockHeld) => {
-                // Another process is the leader - wait and try connecting again
-                tracing::debug!("Another process holds the leader lock, waiting to connect...");
-                tokio::time::sleep(LEADER_ELECTION_RETRY_DELAY).await;
+                // Another process is the leader - open database in read-only mode
+                tracing::debug!("Another process is leader, opening database in read-only mode");
 
-                let client = Self::try_connect(&election).await.map_err(|e| {
-                    TreeSitterError::connection_error(format!(
-                        "Failed to connect after waiting for leader: {}",
+                // Wait a bit for the leader to create the database if it's just starting
+                if !db_path.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+
+                let db = IndexDatabase::open_readonly(&db_path).map_err(|e| {
+                    TreeSitterError::database_error(format!(
+                        "Failed to open database in read-only mode: {}",
                         e
                     ))
                 })?;
 
                 Ok(Self {
-                    mode: WorkspaceMode::Client { client },
+                    mode: WorkspaceMode::Reader {
+                        db: Arc::new(db),
+                    },
                     election,
+                    workspace_root,
+                    context: Arc::new(TokioRwLock::new(context)),
+                    is_built: std::sync::atomic::AtomicBool::new(false),
                 })
             }
             Err(e) => Err(TreeSitterError::connection_error(format!(
@@ -188,17 +289,96 @@ impl Workspace {
         }
     }
 
-    /// Try to connect to an existing leader
-    async fn try_connect(
-        election: &LeaderElection,
-    ) -> std::result::Result<IndexServiceClient, String> {
-        if !election.leader_exists() {
-            return Err("No leader socket found".to_string());
+    /// Build the index by scanning and parsing files.
+    ///
+    /// This method:
+    /// - Only works if this workspace is the leader
+    /// - Scans all files in the workspace
+    /// - Parses them with tree-sitter
+    /// - Generates embeddings
+    /// - Writes results to the database
+    ///
+    /// Progress is reported through the callback set with `with_progress()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TreeSitterError::NotLeader` if called on a reader workspace.
+    pub async fn build(&self) -> Result<()> {
+        // Check if we're the leader
+        let db = match &self.mode {
+            WorkspaceMode::Leader { db, .. } => db.clone(),
+            WorkspaceMode::Reader { .. } => {
+                return Err(TreeSitterError::not_leader(
+                    "Cannot build index: another process is the leader",
+                ));
+            }
+        };
+
+        // Scan and parse files
+        let mut context = self.context.write().await;
+        let result = context.scan().await?;
+
+        tracing::info!(
+            "Index scan complete: {} files parsed, {} skipped, {} errors in {}ms",
+            result.files_parsed,
+            result.files_skipped,
+            result.errors.len(),
+            result.total_time_ms
+        );
+
+        // Write chunks to database
+        Self::sync_to_database(&context, &db)?;
+
+        self.is_built
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        Ok(())
+    }
+
+    /// Sync the in-memory index to the database
+    fn sync_to_database(context: &IndexContext, db: &Arc<IndexDatabase>) -> Result<()> {
+        db.begin_transaction().map_err(|e| {
+            TreeSitterError::database_error(format!("Failed to begin transaction: {}", e))
+        })?;
+
+        for path in context.files() {
+            if let Some(parsed) = context.get(&path) {
+                // Upsert file record
+                let file_id = db.upsert_file(&path, &parsed.content_hash).map_err(|e| {
+                    TreeSitterError::database_error(format!("Failed to upsert file: {}", e))
+                })?;
+
+                // Get chunks from the chunk graph
+                let chunks = context.chunk_graph().chunks_for_file(&path);
+                for chunk in chunks {
+                    let embedding = chunk.embedding.as_deref();
+                    let symbol_path = chunk.symbol_path();
+
+                    if let crate::chunk::ChunkSource::Parsed {
+                        start_byte,
+                        end_byte,
+                        ..
+                    } = &chunk.source
+                    {
+                        db.insert_chunk(&file_id, *start_byte, *end_byte, embedding, &symbol_path)
+                            .map_err(|e| {
+                                TreeSitterError::database_error(format!(
+                                    "Failed to insert chunk: {}",
+                                    e
+                                ))
+                            })?;
+                    }
+                }
+            }
         }
 
-        connect_to_socket(election.socket_path())
-            .await
-            .map_err(|e| e.to_string())
+        db.commit_transaction().map_err(|e| {
+            TreeSitterError::database_error(format!("Failed to commit transaction: {}", e))
+        })?;
+
+        tracing::info!("Synced {} files to database", context.files().len());
+
+        Ok(())
     }
 
     /// Check if this instance is the leader
@@ -206,47 +386,62 @@ impl Workspace {
         matches!(self.mode, WorkspaceMode::Leader { .. })
     }
 
-    /// Get the workspace root
-    pub fn workspace_root(&self) -> &Path {
-        self.election.workspace_root()
+    /// Check if the index has been built
+    pub fn is_built(&self) -> bool {
+        self.is_built.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Get the socket path for this workspace's index
+    /// Get the workspace root
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
+    /// Get the socket path for this workspace's index (for backward compatibility)
     pub fn socket_path(&self) -> &Path {
         self.election.socket_path()
+    }
+
+    /// Get the database path for this workspace
+    pub fn database_path(&self) -> PathBuf {
+        database_path(&self.workspace_root)
     }
 
     /// Get current index status.
     pub async fn status(&self) -> std::result::Result<IndexStatusInfo, QueryError> {
         match &self.mode {
-            WorkspaceMode::Leader { context, .. } => {
-                let ctx = context.read().await;
+            WorkspaceMode::Leader { db, .. } => {
+                let ctx = self.context.read().await;
                 let status = ctx.status();
                 Ok(IndexStatusInfo {
                     files_total: status.files_total,
-                    files_indexed: status.files_parsed,
+                    files_indexed: db.file_count().unwrap_or(0),
                     files_embedded: status.files_embedded,
                     is_ready: status.is_complete(),
                     root_path: ctx.root_path().to_path_buf(),
                 })
             }
-            WorkspaceMode::Client { client } => client
-                .status(tarpc::context::current())
-                .await
-                .map_err(|e| QueryError::internal(e.to_string())),
+            WorkspaceMode::Reader { db } => {
+                let file_count = db.file_count().unwrap_or(0);
+                let chunk_count = db.chunk_count().unwrap_or(0);
+                Ok(IndexStatusInfo {
+                    files_total: file_count,
+                    files_indexed: file_count,
+                    files_embedded: if chunk_count > 0 { file_count } else { 0 },
+                    is_ready: file_count > 0,
+                    root_path: self.workspace_root.clone(),
+                })
+            }
         }
     }
 
     /// List all files in the index.
     pub async fn list_files(&self) -> std::result::Result<Vec<PathBuf>, QueryError> {
         match &self.mode {
-            WorkspaceMode::Leader { context, .. } => {
-                let ctx = context.read().await;
-                Ok(ctx.files())
-            }
-            WorkspaceMode::Client { client } => client
-                .list_files(tarpc::context::current())
-                .await
+            WorkspaceMode::Leader { db, .. } => db
+                .list_files()
+                .map_err(|e| QueryError::internal(e.to_string())),
+            WorkspaceMode::Reader { db } => db
+                .list_files()
                 .map_err(|e| QueryError::internal(e.to_string())),
         }
     }
@@ -262,15 +457,23 @@ impl Workspace {
         min_chunk_bytes: usize,
     ) -> std::result::Result<Vec<DuplicateCluster>, QueryError> {
         match &self.mode {
-            WorkspaceMode::Leader { context, .. } => {
-                let ctx = context.read().await;
-                check_ready(ctx.status().is_complete())?;
-                Ok(find_all_duplicates_impl(ctx.chunk_graph(), min_similarity, min_chunk_bytes))
+            WorkspaceMode::Leader { .. } => {
+                let ctx = self.context.read().await;
+                check_index_ready(&ctx.status())?;
+                Ok(find_all_duplicates_from_graph(
+                    ctx.chunk_graph(),
+                    min_similarity,
+                    min_chunk_bytes,
+                ))
             }
-            WorkspaceMode::Client { client } => client
-                .find_all_duplicates(tarpc::context::current(), min_similarity, min_chunk_bytes)
-                .await
-                .map_err(|e| QueryError::internal(e.to_string()))?,
+            WorkspaceMode::Reader { db } => {
+                let chunks = db.get_all_embedded_chunks().map_err(db_to_query_error)?;
+                Ok(find_all_duplicates_from_records(
+                    &chunks,
+                    min_similarity,
+                    min_chunk_bytes,
+                ))
+            }
         }
     }
 
@@ -283,15 +486,15 @@ impl Workspace {
         min_similarity: f32,
     ) -> std::result::Result<Vec<SimilarChunkResult>, QueryError> {
         match &self.mode {
-            WorkspaceMode::Leader { context, .. } => {
-                let ctx = context.read().await;
-                check_ready(ctx.status().is_complete())?;
-                find_duplicates_in_file_impl(ctx.chunk_graph(), &file, min_similarity)
+            WorkspaceMode::Leader { .. } => {
+                let ctx = self.context.read().await;
+                check_index_ready(&ctx.status())?;
+                find_duplicates_in_file_from_graph(ctx.chunk_graph(), &file, min_similarity)
             }
-            WorkspaceMode::Client { client } => client
-                .find_duplicates_in_file(tarpc::context::current(), file, min_similarity)
-                .await
-                .map_err(|e| QueryError::internal(e.to_string()))?,
+            WorkspaceMode::Reader { db } => {
+                let all_chunks = db.get_all_embedded_chunks().map_err(db_to_query_error)?;
+                find_duplicates_in_file_from_records(&all_chunks, &file, min_similarity)
+            }
         }
     }
 
@@ -305,28 +508,38 @@ impl Workspace {
         min_similarity: f32,
     ) -> std::result::Result<Vec<SimilarChunkResult>, QueryError> {
         match &self.mode {
-            WorkspaceMode::Leader { context, .. } => {
+            WorkspaceMode::Leader { .. } => {
                 // Need write lock to potentially load embedding model
-                let mut ctx = context.write().await;
-                check_ready(ctx.status().is_complete())?;
+                let mut ctx = self.context.write().await;
+                check_index_ready(&ctx.status())?;
 
                 let query_embedding = ctx
                     .embed_text(&text)
                     .await
                     .map_err(|e| QueryError::embedding_error(e.to_string()))?;
 
-                Ok(semantic_search_impl(ctx.chunk_graph(), query_embedding, top_k, min_similarity))
+                Ok(semantic_search_from_graph(
+                    ctx.chunk_graph(),
+                    query_embedding,
+                    top_k,
+                    min_similarity,
+                ))
             }
-            WorkspaceMode::Client { client } => client
-                .semantic_search(tarpc::context::current(), text, top_k, min_similarity)
-                .await
-                .map_err(|e| QueryError::internal(e.to_string()))?,
+            WorkspaceMode::Reader { .. } => {
+                // Reader mode cannot embed text (no model loaded)
+                // For now, return an error - in future we could load the model
+                Err(QueryError::embedding_error(
+                    "Semantic search not available in reader mode (no embedding model)",
+                ))
+            }
         }
     }
 
     /// Execute a tree-sitter query and return matches.
     ///
     /// The query is an S-expression pattern like `(function_item name: (identifier) @name)`.
+    ///
+    /// Note: This only works in leader mode as it requires the parsed AST.
     pub async fn tree_sitter_query(
         &self,
         query: String,
@@ -334,98 +547,475 @@ impl Workspace {
         language: Option<String>,
     ) -> std::result::Result<Vec<QueryMatch>, QueryError> {
         match &self.mode {
-            WorkspaceMode::Leader { context, .. } => {
-                let ctx = context.read().await;
-                check_ready(ctx.status().is_complete())?;
+            WorkspaceMode::Leader { .. } => {
+                let ctx = self.context.read().await;
+                check_index_ready(&ctx.status())?;
                 tree_sitter_query_impl(&ctx, &query, files, language)
             }
-            WorkspaceMode::Client { client } => client
-                .tree_sitter_query(tarpc::context::current(), query, files, language)
-                .await
-                .map_err(|e| QueryError::internal(e.to_string()))?,
+            WorkspaceMode::Reader { .. } => {
+                // Reader mode cannot run tree-sitter queries (no parsed AST)
+                Err(QueryError::internal(
+                    "Tree-sitter queries not available in reader mode (no parsed AST)",
+                ))
+            }
         }
     }
 
     /// Invalidate a file (force re-parse and re-embed).
     pub async fn invalidate_file(&self, file: PathBuf) -> std::result::Result<(), QueryError> {
         match &self.mode {
-            WorkspaceMode::Leader { context, .. } => {
-                let mut ctx = context.write().await;
+            WorkspaceMode::Leader { db, .. } => {
+                let mut ctx = self.context.write().await;
                 ctx.refresh(&file)
                     .await
                     .map_err(|e| QueryError::internal(e.to_string()))?;
+
+                // Re-sync this file to the database
+                let parsed = ctx
+                    .get(&file)
+                    .ok_or_else(|| QueryError::file_not_found(&file))?;
+
+                let file_id = db
+                    .upsert_file(&file, &parsed.content_hash)
+                    .map_err(|e| QueryError::internal(e.to_string()))?;
+
+                // Get fresh chunks
+                let chunks = ctx.chunk_graph().chunks_for_file(&file);
+                for chunk in chunks {
+                    let embedding = chunk.embedding.as_deref();
+                    let symbol_path = chunk.symbol_path();
+
+                    if let crate::chunk::ChunkSource::Parsed {
+                        start_byte,
+                        end_byte,
+                        ..
+                    } = &chunk.source
+                    {
+                        db.insert_chunk(&file_id, *start_byte, *end_byte, embedding, &symbol_path)
+                            .map_err(|e| QueryError::internal(e.to_string()))?;
+                    }
+                }
+
                 Ok(())
             }
-            WorkspaceMode::Client { client } => client
-                .invalidate_file(tarpc::context::current(), file)
-                .await
-                .map_err(|e| QueryError::internal(e.to_string()))?,
+            WorkspaceMode::Reader { .. } => {
+                Err(QueryError::internal("Cannot invalidate files in reader mode"))
+            }
         }
     }
 }
 
-/// Connect to a leader's RPC socket
-async fn connect_to_socket(
-    socket_path: &Path,
-) -> std::result::Result<IndexServiceClient, std::io::Error> {
-    use tarpc::client;
-    use tokio::net::UnixStream;
-    use tokio_serde::formats::Bincode;
+// ============================================================================
+// Implementation helpers
+// ============================================================================
 
-    let stream = UnixStream::connect(socket_path).await?;
-    let codec_builder = Bincode::default;
-    let framed = tokio_util::codec::Framed::new(
-        stream,
-        tarpc::tokio_util::codec::LengthDelimitedCodec::new(),
-    );
-    let transport = tarpc::serde_transport::new(framed, codec_builder());
-    let client = IndexServiceClient::new(client::Config::default(), transport).spawn();
-    Ok(client)
+/// Trait for items that can be clustered by embedding similarity
+trait Clusterable {
+    /// Get the embedding vector for similarity comparison
+    fn embedding(&self) -> Option<&[f32]>;
+    /// Get the file path for ensuring duplicates are from different files
+    fn file_path(&self) -> Option<&Path>;
+    /// Get the byte size of this item
+    fn byte_len(&self) -> usize;
 }
 
-/// Run the leader RPC server (called in background task)
-async fn run_leader_server(
-    context: Arc<RwLock<IndexContext>>,
-    socket_path: &Path,
-) -> std::result::Result<(), std::io::Error> {
-    use futures::StreamExt;
-    use tarpc::server::{self, Channel};
-    use tokio_serde::formats::Bincode;
+/// Trait for converting items to ChunkResult
+trait ToChunkResult {
+    /// Convert this item to a ChunkResult
+    fn to_chunk_result(&self) -> ChunkResult;
+}
 
-    // Remove any stale socket file
-    let _ = std::fs::remove_file(socket_path);
+impl Clusterable for SemanticChunk {
+    fn embedding(&self) -> Option<&[f32]> {
+        self.embedding.as_deref()
+    }
+    fn file_path(&self) -> Option<&Path> {
+        self.path()
+    }
+    fn byte_len(&self) -> usize {
+        SemanticChunk::byte_len(self)
+    }
+}
 
-    let listener = UnixListener::bind(socket_path)?;
-    tracing::info!("Index leader listening on {}", socket_path.display());
+impl ToChunkResult for SemanticChunk {
+    fn to_chunk_result(&self) -> ChunkResult {
+        let (start_line, end_line) = self
+            .node()
+            .map(|n| (n.start_position().row, n.end_position().row))
+            .unwrap_or((0, 0));
 
-    loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
-                let context = context.clone();
-                tokio::spawn(async move {
-                    let codec_builder = Bincode::default;
-                    let framed = tokio_util::codec::Framed::new(
-                        stream,
-                        tarpc::tokio_util::codec::LengthDelimitedCodec::new(),
-                    );
-                    let transport = tarpc::serde_transport::new(framed, codec_builder());
+        let (start_byte, end_byte) = match &self.source {
+            crate::chunk::ChunkSource::Parsed {
+                start_byte,
+                end_byte,
+                ..
+            } => (*start_byte, *end_byte),
+            crate::chunk::ChunkSource::Text(s) => (0, s.len()),
+        };
 
-                    let server = IndexServiceServer::new(context);
-                    let channel = server::BaseChannel::with_defaults(transport);
+        ChunkResult {
+            file: self.path().unwrap_or(Path::new("")).to_path_buf(),
+            text: self.content().unwrap_or("").to_string(),
+            start_byte,
+            end_byte,
+            start_line,
+            end_line,
+        }
+    }
+}
 
-                    channel
-                        .execute(server.serve())
-                        .for_each(|response| async move {
-                            tokio::spawn(response);
-                        })
-                        .await;
+impl Clusterable for EmbeddedChunkRecord {
+    fn embedding(&self) -> Option<&[f32]> {
+        Some(&self.embedding)
+    }
+    fn file_path(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
+    fn byte_len(&self) -> usize {
+        self.end_byte - self.start_byte
+    }
+}
+
+impl ToChunkResult for EmbeddedChunkRecord {
+    fn to_chunk_result(&self) -> ChunkResult {
+        ChunkResult {
+            file: self.path.clone(),
+            text: String::new(), // Text not stored in database
+            start_byte: self.start_byte,
+            end_byte: self.end_byte,
+            start_line: 0, // Line info not stored in database
+            end_line: 0,
+        }
+    }
+}
+
+/// Union-find helper: find root with path compression
+fn union_find_root(parent: &mut [usize], i: usize) -> usize {
+    if parent[i] != i {
+        parent[i] = union_find_root(parent, parent[i]);
+    }
+    parent[i]
+}
+
+/// Union-find helper: merge two sets
+fn union_find_merge(parent: &mut [usize], i: usize, j: usize) {
+    let pi = union_find_root(parent, i);
+    let pj = union_find_root(parent, j);
+    if pi != pj {
+        parent[pi] = pj;
+    }
+}
+
+/// Check if index is ready for queries, allowing empty workspaces
+///
+/// Empty workspaces (0 files) are considered ready since there's nothing to process.
+fn check_index_ready(status: &crate::index::IndexStatus) -> std::result::Result<(), QueryError> {
+    if status.files_total > 0 {
+        check_ready(status.is_complete())
+    } else {
+        Ok(())
+    }
+}
+
+/// Sort similarity results by similarity score in descending order
+fn sort_by_similarity_desc(results: &mut [SimilarChunkResult]) {
+    results.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+/// Convert database error to QueryError
+fn db_to_query_error<E: std::fmt::Display>(e: E) -> QueryError {
+    QueryError::internal(e.to_string())
+}
+
+/// Filter records matching a specific file path
+fn filter_records_for_file<'a>(
+    chunks: &'a [EmbeddedChunkRecord],
+    file: &Path,
+) -> Vec<&'a EmbeddedChunkRecord> {
+    chunks.iter().filter(|c| c.path == file).collect()
+}
+
+/// Filter records NOT matching a specific file path
+fn filter_records_excluding_file<'a>(
+    chunks: &'a [EmbeddedChunkRecord],
+    file: &Path,
+) -> Vec<&'a EmbeddedChunkRecord> {
+    chunks.iter().filter(|c| c.path != file).collect()
+}
+
+/// Find clusters of similar items using union-find algorithm
+fn cluster_by_similarity<T: Clusterable>(items: &[&T], min_similarity: f32) -> Vec<Vec<usize>> {
+    let n = items.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut parent: Vec<usize> = (0..n).collect();
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if let (Some(emb_i), Some(emb_j)) = (items[i].embedding(), items[j].embedding()) {
+                let sim = cosine_similarity(emb_i, emb_j);
+                // Only cluster items from different files
+                if sim >= min_similarity && items[i].file_path() != items[j].file_path() {
+                    union_find_merge(&mut parent, i, j);
+                }
+            }
+        }
+    }
+
+    let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for i in 0..n {
+        let root = union_find_root(&mut parent, i);
+        groups.entry(root).or_default().push(i);
+    }
+
+    groups.into_values().collect()
+}
+
+/// Compute average pairwise similarity within a cluster
+fn compute_cluster_similarity<T: Clusterable>(items: &[&T]) -> f32 {
+    if items.len() < 2 {
+        return 1.0;
+    }
+
+    let mut total_sim = 0.0;
+    let mut count = 0;
+
+    for i in 0..items.len() {
+        for j in (i + 1)..items.len() {
+            if let (Some(emb_i), Some(emb_j)) = (items[i].embedding(), items[j].embedding()) {
+                total_sim += cosine_similarity(emb_i, emb_j);
+                count += 1;
+            }
+        }
+    }
+
+    if count > 0 {
+        total_sim / count as f32
+    } else {
+        0.0
+    }
+}
+
+/// Generic function to find all duplicate clusters from a collection of items
+///
+/// This works with any type that implements both Clusterable and ToChunkResult.
+fn find_all_duplicates_generic<T: Clusterable + ToChunkResult>(
+    items: Vec<&T>,
+    min_similarity: f32,
+) -> Vec<DuplicateCluster> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let cluster_indices = cluster_by_similarity(&items, min_similarity);
+
+    cluster_indices
+        .into_iter()
+        .filter(|indices| indices.len() > 1)
+        .map(|indices| {
+            let cluster_items: Vec<&T> = indices.iter().map(|&i| items[i]).collect();
+            let avg_sim = compute_cluster_similarity(&cluster_items);
+            DuplicateCluster {
+                chunks: cluster_items.iter().map(|c| c.to_chunk_result()).collect(),
+                avg_similarity: avg_sim,
+            }
+        })
+        .collect()
+}
+
+/// Find all duplicate clusters from the in-memory chunk graph
+fn find_all_duplicates_from_graph(
+    graph: &crate::chunk::ChunkGraph,
+    min_similarity: f32,
+    min_chunk_bytes: usize,
+) -> Vec<DuplicateCluster> {
+    let chunks: Vec<&SemanticChunk> = graph
+        .chunks()
+        .iter()
+        .filter(|c| c.byte_len() >= min_chunk_bytes && c.has_embedding())
+        .collect();
+
+    find_all_duplicates_generic(chunks, min_similarity)
+}
+
+/// Find all duplicate clusters from database records
+fn find_all_duplicates_from_records(
+    chunks: &[EmbeddedChunkRecord],
+    min_similarity: f32,
+    min_chunk_bytes: usize,
+) -> Vec<DuplicateCluster> {
+    let filtered: Vec<&EmbeddedChunkRecord> = chunks
+        .iter()
+        .filter(|c| c.byte_len() >= min_chunk_bytes)
+        .collect();
+
+    find_all_duplicates_generic(filtered, min_similarity)
+}
+
+/// Finalize similarity results: sort by similarity and optionally truncate
+fn finalize_similarity_results(results: &mut Vec<SimilarChunkResult>, limit: Option<usize>) {
+    sort_by_similarity_desc(results);
+    if let Some(max) = limit {
+        results.truncate(max);
+    }
+}
+
+/// Find duplicates for a specific file from the chunk graph
+fn find_duplicates_in_file_from_graph(
+    graph: &crate::chunk::ChunkGraph,
+    file: &Path,
+    min_similarity: f32,
+) -> std::result::Result<Vec<SimilarChunkResult>, QueryError> {
+    let file_chunks = graph.chunks_for_file(file);
+    if file_chunks.is_empty() {
+        return Err(QueryError::file_not_found(file));
+    }
+
+    let mut results = Vec::new();
+    for chunk in file_chunks {
+        if !chunk.has_embedding() {
+            continue;
+        }
+
+        let query = SimilarityQuery::chunk(chunk.clone())
+            .min_similarity(min_similarity)
+            .top_k(DUPLICATES_TOP_K);
+
+        for sim_chunk in graph.query(query) {
+            if sim_chunk.chunk.path() == Some(file) {
+                continue;
+            }
+
+            results.push(SimilarChunkResult {
+                chunk: sim_chunk.chunk.to_chunk_result(),
+                similarity: sim_chunk.similarity,
+            });
+        }
+    }
+
+    finalize_similarity_results(&mut results, None);
+    Ok(results)
+}
+
+/// Find duplicates for a specific file from database records
+fn find_duplicates_in_file_from_records(
+    all_chunks: &[EmbeddedChunkRecord],
+    file: &Path,
+    min_similarity: f32,
+) -> std::result::Result<Vec<SimilarChunkResult>, QueryError> {
+    let file_chunks = filter_records_for_file(all_chunks, file);
+
+    if file_chunks.is_empty() {
+        return Err(QueryError::file_not_found(file));
+    }
+
+    let other_chunks = filter_records_excluding_file(all_chunks, file);
+
+    let mut results = Vec::new();
+    for file_chunk in &file_chunks {
+        for other in &other_chunks {
+            let sim = cosine_similarity(&file_chunk.embedding, &other.embedding);
+            if sim >= min_similarity {
+                results.push(SimilarChunkResult {
+                    chunk: other.to_chunk_result(),
+                    similarity: sim,
                 });
             }
-            Err(e) => {
-                tracing::warn!("Failed to accept connection: {}", e);
+        }
+    }
+
+    finalize_similarity_results(&mut results, Some(DUPLICATES_TOP_K));
+    Ok(results)
+}
+
+/// Semantic search using the chunk graph
+fn semantic_search_from_graph(
+    graph: &crate::chunk::ChunkGraph,
+    query_embedding: Vec<f32>,
+    top_k: usize,
+    min_similarity: f32,
+) -> Vec<SimilarChunkResult> {
+    let query = SimilarityQuery::embedding(query_embedding)
+        .top_k(top_k)
+        .min_similarity(min_similarity);
+
+    graph
+        .query(query)
+        .into_iter()
+        .map(|sim_chunk| SimilarChunkResult {
+            chunk: sim_chunk.chunk.to_chunk_result(),
+            similarity: sim_chunk.similarity,
+        })
+        .collect()
+}
+
+/// Execute a tree-sitter query
+fn tree_sitter_query_impl(
+    index: &IndexContext,
+    query: &str,
+    files: Option<Vec<PathBuf>>,
+    language: Option<String>,
+) -> std::result::Result<Vec<QueryMatch>, QueryError> {
+    use tree_sitter::StreamingIterator;
+
+    let file_paths = files.unwrap_or_else(|| index.files());
+    let registry = crate::language::LanguageRegistry::global();
+
+    let mut results = Vec::new();
+
+    for path in file_paths {
+        if let Some(parsed) = index.get(&path) {
+            if let Some(lang_config) = registry.detect_language(&path) {
+                if language.as_ref().is_some_and(|l| l != lang_config.name) {
+                    continue;
+                }
+
+                let ts_query = tree_sitter::Query::new(&lang_config.language(), query)
+                    .map_err(|e| QueryError::invalid_query(format!("Query error: {}", e)))?;
+
+                let mut cursor = tree_sitter::QueryCursor::new();
+                let mut matches =
+                    cursor.matches(&ts_query, parsed.root_node(), parsed.source.as_bytes());
+
+                while let Some(m) = matches.next() {
+                    let captures: Vec<crate::query::Capture> = m
+                        .captures
+                        .iter()
+                        .map(|cap| {
+                            let node = cap.node;
+                            crate::query::Capture {
+                                name: ts_query.capture_names()[cap.index as usize].to_string(),
+                                kind: node.kind().to_string(),
+                                text: parsed
+                                    .get_text(node.start_byte(), node.end_byte())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                start_byte: node.start_byte(),
+                                end_byte: node.end_byte(),
+                                start_line: node.start_position().row,
+                                end_line: node.end_position().row,
+                            }
+                        })
+                        .collect();
+
+                    if !captures.is_empty() {
+                        results.push(QueryMatch {
+                            file: path.clone(),
+                            captures,
+                        });
+                    }
+                }
             }
         }
     }
+
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -433,96 +1023,523 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// High similarity threshold for duplicate detection tests
+    const TEST_HIGH_SIMILARITY_THRESHOLD: f32 = 0.9;
+    /// Medium similarity threshold for duplicate detection tests
+    const TEST_MEDIUM_SIMILARITY_THRESHOLD: f32 = 0.5;
+    /// Minimum chunk size for duplicate detection tests
+    const TEST_MIN_CHUNK_BYTES: usize = 10;
+    /// Small minimum chunk size for tests with small code samples
+    const TEST_SMALL_MIN_CHUNK_BYTES: usize = 5;
+
     // =========================================================================
-    // Constants tests
+    // Tests for clustering helper functions
     // =========================================================================
 
     #[test]
-    fn test_constants() {
-        assert!(LEADER_STARTUP_DELAY.as_millis() > 0);
-        assert!(LEADER_ELECTION_RETRY_DELAY.as_millis() > 0);
+    fn test_union_find_root_single_element() {
+        let mut parent = vec![0];
+        assert_eq!(union_find_root(&mut parent, 0), 0);
     }
 
     #[test]
-    fn test_leader_startup_delay_reasonable() {
-        assert!(LEADER_STARTUP_DELAY.as_millis() >= 50);
-        assert!(LEADER_STARTUP_DELAY.as_millis() <= 1000);
+    fn test_union_find_root_finds_root() {
+        let mut parent = vec![1, 2, 2]; // 0 -> 1 -> 2, 2 is root
+        assert_eq!(union_find_root(&mut parent, 0), 2);
+        // After path compression, 0 should point directly to 2
+        assert_eq!(parent[0], 2);
     }
 
     #[test]
-    fn test_election_retry_delay_reasonable() {
-        assert!(LEADER_ELECTION_RETRY_DELAY.as_millis() >= 100);
-        assert!(LEADER_ELECTION_RETRY_DELAY.as_millis() <= 5000);
+    fn test_union_find_merge_separate_sets() {
+        let mut parent = vec![0, 1, 2]; // Three separate sets
+        union_find_merge(&mut parent, 0, 1);
+        // 0 and 1 should now be in the same set
+        assert_eq!(
+            union_find_root(&mut parent, 0),
+            union_find_root(&mut parent, 1)
+        );
+    }
+
+    #[test]
+    fn test_union_find_merge_same_set() {
+        let mut parent = vec![1, 1]; // Both in same set
+        union_find_merge(&mut parent, 0, 1);
+        // Should not change anything
+        assert_eq!(
+            union_find_root(&mut parent, 0),
+            union_find_root(&mut parent, 1)
+        );
+    }
+
+    /// Test item for clustering tests
+    struct TestClusterable {
+        embedding: Vec<f32>,
+        path: PathBuf,
+        size: usize,
+    }
+
+    impl Clusterable for TestClusterable {
+        fn embedding(&self) -> Option<&[f32]> {
+            Some(&self.embedding)
+        }
+        fn file_path(&self) -> Option<&Path> {
+            Some(&self.path)
+        }
+        fn byte_len(&self) -> usize {
+            self.size
+        }
     }
 
     // =========================================================================
-    // Workspace::open tests
+    // Tests for Clusterable and ToChunkResult traits
     // =========================================================================
+
+    #[test]
+    fn test_clusterable_byte_len() {
+        let item = TestClusterable {
+            embedding: vec![1.0, 0.0],
+            path: PathBuf::from("/test.rs"),
+            size: 100,
+        };
+        assert_eq!(item.byte_len(), 100);
+    }
+
+    #[test]
+    fn test_embedded_chunk_record_clusterable() {
+        let record = EmbeddedChunkRecord {
+            path: PathBuf::from("/test.rs"),
+            start_byte: 10,
+            end_byte: 50,
+            embedding: vec![1.0, 0.0, 0.0],
+            symbol_path: "test::func".to_string(),
+        };
+        assert_eq!(record.byte_len(), 40);
+        assert_eq!(record.file_path(), Some(Path::new("/test.rs")));
+        assert!(record.embedding().is_some());
+    }
+
+    #[test]
+    fn test_embedded_chunk_record_to_chunk_result() {
+        let record = EmbeddedChunkRecord {
+            path: PathBuf::from("/test.rs"),
+            start_byte: 10,
+            end_byte: 50,
+            embedding: vec![1.0, 0.0, 0.0],
+            symbol_path: "test::func".to_string(),
+        };
+        let result = record.to_chunk_result();
+        assert_eq!(result.file, PathBuf::from("/test.rs"));
+        assert_eq!(result.start_byte, 10);
+        assert_eq!(result.end_byte, 50);
+        assert_eq!(result.start_line, 0); // Not stored in database
+        assert_eq!(result.end_line, 0);
+        assert!(result.text.is_empty()); // Text not stored in database
+    }
+
+    #[test]
+    fn test_finalize_similarity_results_sorts_descending() {
+        let mut results = vec![
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/a.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.5,
+            },
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/b.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.9,
+            },
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/c.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.7,
+            },
+        ];
+
+        finalize_similarity_results(&mut results, None);
+
+        assert_eq!(results[0].similarity, 0.9);
+        assert_eq!(results[1].similarity, 0.7);
+        assert_eq!(results[2].similarity, 0.5);
+    }
+
+    #[test]
+    fn test_finalize_similarity_results_truncates() {
+        let mut results = vec![
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/a.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.9,
+            },
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/b.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.8,
+            },
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/c.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.7,
+            },
+        ];
+
+        finalize_similarity_results(&mut results, Some(2));
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].similarity, 0.9);
+        assert_eq!(results[1].similarity, 0.8);
+    }
+
+    #[test]
+    fn test_cluster_by_similarity_empty() {
+        let items: Vec<&TestClusterable> = vec![];
+        let clusters = cluster_by_similarity(&items, 0.9);
+        assert!(clusters.is_empty());
+    }
+
+    #[test]
+    fn test_cluster_by_similarity_single_item() {
+        let item = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let items = vec![&item];
+        let clusters = cluster_by_similarity(&items, 0.9);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0], vec![0]);
+    }
+
+    #[test]
+    fn test_cluster_by_similarity_identical_embeddings_different_files() {
+        let item1 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let item2 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/b.rs"),
+            size: 50,
+        };
+        let items = vec![&item1, &item2];
+        let clusters = cluster_by_similarity(&items, 0.9);
+        // Should be clustered together (similarity = 1.0)
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].len(), 2);
+    }
+
+    #[test]
+    fn test_cluster_by_similarity_same_file_not_clustered() {
+        let item1 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let item2 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"), // Same file
+            size: 50,
+        };
+        let items = vec![&item1, &item2];
+        let clusters = cluster_by_similarity(&items, 0.9);
+        // Should NOT be clustered (same file)
+        assert_eq!(clusters.len(), 2);
+    }
+
+    #[test]
+    fn test_cluster_by_similarity_orthogonal_not_clustered() {
+        let item1 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let item2 = TestClusterable {
+            embedding: vec![0.0, 1.0, 0.0], // Orthogonal
+            path: PathBuf::from("/b.rs"),
+            size: 50,
+        };
+        let items = vec![&item1, &item2];
+        let clusters = cluster_by_similarity(&items, 0.9);
+        // Should NOT be clustered (similarity = 0)
+        assert_eq!(clusters.len(), 2);
+    }
+
+    #[test]
+    fn test_compute_cluster_similarity_single_item() {
+        let item = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let items = vec![&item];
+        let sim = compute_cluster_similarity(&items);
+        assert_eq!(sim, 1.0); // Single item returns 1.0
+    }
+
+    #[test]
+    fn test_compute_cluster_similarity_identical() {
+        let item1 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let item2 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/b.rs"),
+            size: 50,
+        };
+        let items = vec![&item1, &item2];
+        let sim = compute_cluster_similarity(&items);
+        assert!((sim - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_compute_cluster_similarity_orthogonal() {
+        let item1 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let item2 = TestClusterable {
+            embedding: vec![0.0, 1.0, 0.0],
+            path: PathBuf::from("/b.rs"),
+            size: 50,
+        };
+        let items = vec![&item1, &item2];
+        let sim = compute_cluster_similarity(&items);
+        assert!(sim.abs() < 0.001); // Orthogonal = 0 similarity
+    }
+
+    #[test]
+    fn test_clusterable_trait_embedded_chunk_record() {
+        let record = EmbeddedChunkRecord {
+            path: PathBuf::from("/test.rs"),
+            start_byte: 0,
+            end_byte: 100,
+            embedding: vec![1.0, 2.0, 3.0],
+            symbol_path: "test::func".to_string(),
+        };
+        assert_eq!(record.embedding(), Some([1.0, 2.0, 3.0].as_slice()));
+        assert_eq!(record.file_path(), Some(Path::new("/test.rs")));
+    }
+
+    // =========================================================================
+    // Tests for query helper functions
+    // =========================================================================
+
+    #[test]
+    fn test_check_index_ready_empty_workspace() {
+        let status = crate::index::IndexStatus::new(PathBuf::from("/test"));
+        // Empty workspace (0 files) should be considered ready
+        assert!(check_index_ready(&status).is_ok());
+    }
+
+    #[test]
+    fn test_check_index_ready_incomplete() {
+        let mut status = crate::index::IndexStatus::new(PathBuf::from("/test"));
+        status.files_total = 10;
+        status.files_parsed = 5;
+        // Incomplete workspace should return error
+        assert!(check_index_ready(&status).is_err());
+    }
+
+    #[test]
+    fn test_check_index_ready_complete() {
+        let mut status = crate::index::IndexStatus::new(PathBuf::from("/test"));
+        status.files_total = 10;
+        status.files_parsed = 10;
+        // Complete workspace should be ready
+        assert!(check_index_ready(&status).is_ok());
+    }
+
+    #[test]
+    fn test_sort_by_similarity_desc() {
+        let mut results = vec![
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/a.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.5,
+            },
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/b.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.9,
+            },
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/c.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.7,
+            },
+        ];
+        sort_by_similarity_desc(&mut results);
+        assert!((results[0].similarity - 0.9).abs() < 0.001);
+        assert!((results[1].similarity - 0.7).abs() < 0.001);
+        assert!((results[2].similarity - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_db_to_query_error() {
+        let error = db_to_query_error("test error message");
+        assert!(error.to_string().contains("test error message"));
+    }
+
+    #[test]
+    fn test_filter_records_for_file() {
+        let records = vec![
+            EmbeddedChunkRecord {
+                path: PathBuf::from("/a.rs"),
+                start_byte: 0,
+                end_byte: 10,
+                embedding: vec![1.0],
+                symbol_path: String::new(),
+            },
+            EmbeddedChunkRecord {
+                path: PathBuf::from("/b.rs"),
+                start_byte: 0,
+                end_byte: 10,
+                embedding: vec![1.0],
+                symbol_path: String::new(),
+            },
+            EmbeddedChunkRecord {
+                path: PathBuf::from("/a.rs"),
+                start_byte: 10,
+                end_byte: 20,
+                embedding: vec![1.0],
+                symbol_path: String::new(),
+            },
+        ];
+        let filtered = filter_records_for_file(&records, Path::new("/a.rs"));
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.path == Path::new("/a.rs")));
+    }
+
+    #[test]
+    fn test_filter_records_excluding_file() {
+        let records = vec![
+            EmbeddedChunkRecord {
+                path: PathBuf::from("/a.rs"),
+                start_byte: 0,
+                end_byte: 10,
+                embedding: vec![1.0],
+                symbol_path: String::new(),
+            },
+            EmbeddedChunkRecord {
+                path: PathBuf::from("/b.rs"),
+                start_byte: 0,
+                end_byte: 10,
+                embedding: vec![1.0],
+                symbol_path: String::new(),
+            },
+            EmbeddedChunkRecord {
+                path: PathBuf::from("/c.rs"),
+                start_byte: 0,
+                end_byte: 10,
+                embedding: vec![1.0],
+                symbol_path: String::new(),
+            },
+        ];
+        let filtered = filter_records_excluding_file(&records, Path::new("/a.rs"));
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.path != Path::new("/a.rs")));
+    }
+
+    // =========================================================================
+    // Tests for Workspace and other functionality
+    // =========================================================================
+
+    #[test]
+    fn test_database_path() {
+        let root = PathBuf::from("/test/workspace");
+        let db_path = database_path(&root);
+        assert!(db_path.to_string_lossy().contains(".treesitter-index.db"));
+    }
 
     #[tokio::test]
-    async fn test_index_open_becomes_leader() {
+    async fn test_workspace_open_becomes_leader() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        let index = Workspace::open(dir.path()).await.unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
 
-        assert!(index.is_leader());
-        assert_eq!(index.workspace_root(), dir.path());
+        assert!(workspace.is_leader());
+        assert!(workspace.is_built());
+        assert_eq!(workspace.workspace_root(), dir.path());
     }
 
     #[tokio::test]
-    async fn test_index_open_empty_directory() {
+    async fn test_workspace_open_empty_directory() {
         let dir = TempDir::new().unwrap();
 
-        let index = Workspace::open(dir.path()).await.unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
 
-        assert!(index.is_leader());
-        let files = index.list_files().await.unwrap();
+        assert!(workspace.is_leader());
+        let files = workspace.list_files().await.unwrap();
         assert!(files.is_empty());
     }
 
     #[tokio::test]
-    async fn test_index_open_with_config() {
+    async fn test_workspace_status() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        let election_config = ElectionConfig::new().with_prefix("test");
-        let index = Workspace::open_with_config(dir.path(), election_config, None)
-            .await
-            .unwrap();
-
-        assert!(index.is_leader());
-        assert!(index.socket_path().to_string_lossy().contains("test-ts-"));
-    }
-
-    #[tokio::test]
-    async fn test_index_open_with_index_config() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
-
-        let index_config = IndexConfig {
-            max_file_size: 1024 * 1024, // 1MB
-            ..Default::default()
-        };
-        let index =
-            Workspace::open_with_config(dir.path(), ElectionConfig::default(), Some(index_config))
-                .await
-                .unwrap();
-
-        assert!(index.is_leader());
-    }
-
-    // =========================================================================
-    // Index metadata tests
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_index_status() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let status = index.status().await.unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let status = workspace.status().await.unwrap();
 
         assert!(status.is_ready);
         assert!(status.files_indexed >= 1);
@@ -530,59 +1547,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_index_list_files() {
+    async fn test_workspace_list_files() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let files = index.list_files().await.unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let files = workspace.list_files().await.unwrap();
 
         assert!(!files.is_empty());
-        assert!(files
-            .iter()
-            .any(|f| f.to_string_lossy().contains("test.rs")));
+        assert!(files.iter().any(|f| f.to_string_lossy().contains("test.rs")));
     }
 
     #[tokio::test]
-    async fn test_index_socket_path() {
-        let dir = TempDir::new().unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-
-        assert!(index.socket_path().to_string_lossy().contains("sah"));
-        assert!(index.socket_path().to_string_lossy().ends_with(".sock"));
-    }
-
-    #[tokio::test]
-    async fn test_index_workspace_root() {
-        let dir = TempDir::new().unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-
-        assert_eq!(index.workspace_root(), dir.path());
-    }
-
-    #[tokio::test]
-    async fn test_index_is_leader() {
-        let dir = TempDir::new().unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-
-        // First opener should be leader
-        assert!(index.is_leader());
-    }
-
-    // =========================================================================
-    // Query method tests (leader mode)
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_index_tree_sitter_query() {
+    async fn test_workspace_tree_sitter_query() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() { let x = 1; }").unwrap();
 
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let results = index
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let results = workspace
             .tree_sitter_query("(identifier) @name".to_string(), None, None)
             .await
             .unwrap();
@@ -591,190 +1573,177 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_index_tree_sitter_query_with_language_filter() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
-        std::fs::write(dir.path().join("test.py"), "def main(): pass").unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let results = index
-            .tree_sitter_query(
-                "(function_item) @fn".to_string(),
-                None,
-                Some("rust".to_string()),
-            )
-            .await
-            .unwrap();
-
-        // Should only match Rust files
-        for result in &results {
-            assert!(result.file.to_string_lossy().ends_with(".rs"));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_index_find_all_duplicates() {
-        let dir = TempDir::new().unwrap();
-        // Create two files with similar code
-        std::fs::write(
-            dir.path().join("a.rs"),
-            "fn duplicate_function() { let x = 1; let y = 2; let z = x + y; }",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("b.rs"),
-            "fn duplicate_function() { let x = 1; let y = 2; let z = x + y; }",
-        )
-        .unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let clusters = index.find_all_duplicates(0.8, 10).await.unwrap();
-
-        // May or may not find duplicates depending on chunking
-        // Just verify the call succeeds
-        let _ = clusters;
-    }
-
-    #[tokio::test]
-    async fn test_index_find_duplicates_in_file() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("test.rs"), "fn main() { let x = 1; }").unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let file_path = dir.path().join("test.rs");
-        let results = index.find_duplicates_in_file(file_path, 0.8).await;
-
-        // May succeed or fail with FileNotFound depending on path resolution
-        // Just verify the call completes
-        let _ = results;
-    }
-
-    #[tokio::test]
-    async fn test_index_semantic_search() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("test.rs"),
-            "fn calculate_sum(a: i32, b: i32) -> i32 { a + b }",
-        )
-        .unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let results = index
-            .semantic_search("sum function".to_string(), 10, 0.5)
-            .await
-            .unwrap();
-
-        // Should find something
-        // Results depend on embedding model
-        let _ = results;
-    }
-
-    #[tokio::test]
-    async fn test_index_invalidate_file() {
+    async fn test_workspace_invalidate_file() {
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {}").unwrap();
 
-        let index = Workspace::open(dir.path()).await.unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
 
         // Modify the file
         std::fs::write(&file_path, "fn main() { println!(\"updated\"); }").unwrap();
 
         // Invalidate to re-index
-        let result = index.invalidate_file(file_path).await;
+        let result = workspace.invalidate_file(file_path).await;
         assert!(result.is_ok());
     }
 
-    // =========================================================================
-    // try_connect tests
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_try_connect_no_leader() {
-        let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
-
-        let result = Workspace::try_connect(&election).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No leader"));
-    }
-
-    #[tokio::test]
-    async fn test_try_connect_stale_socket() {
-        let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
-
-        // Create a fake socket file
-        std::fs::write(election.socket_path(), "").unwrap();
-
-        let result = Workspace::try_connect(&election).await;
-        // Should fail because socket isn't a real Unix socket
-        assert!(result.is_err());
-    }
-
-    // =========================================================================
-    // connect_to_socket tests
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_connect_to_socket_nonexistent() {
-        let result = connect_to_socket(Path::new("/nonexistent/socket.sock")).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_connect_to_socket_not_a_socket() {
-        let dir = TempDir::new().unwrap();
-        let fake_socket = dir.path().join("fake.sock");
-        std::fs::write(&fake_socket, "not a socket").unwrap();
-
-        let result = connect_to_socket(&fake_socket).await;
-        assert!(result.is_err());
-    }
-
-    // =========================================================================
-    // Workspace Send/Sync bounds tests
-    // =========================================================================
-
     #[test]
-    fn test_workspace_is_send() {
-        fn assert_send<T: Send>() {}
-        assert_send::<Workspace>();
-    }
+    fn test_semantic_chunk_to_chunk_result() {
+        let chunk = SemanticChunk::from_text("test code");
+        let result = chunk.to_chunk_result();
 
-    #[test]
-    fn test_workspace_is_sync() {
-        fn assert_sync<T: Sync>() {}
-        assert_sync::<Workspace>();
-    }
-
-    // =========================================================================
-    // Multiple files tests
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_index_multiple_rust_files() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
-        std::fs::write(dir.path().join("lib.rs"), "pub fn lib_fn() {}").unwrap();
-        std::fs::write(dir.path().join("utils.rs"), "pub fn util() {}").unwrap();
-
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let files = index.list_files().await.unwrap();
-
-        assert_eq!(files.len(), 3);
+        assert_eq!(result.text, "test code");
+        assert_eq!(result.start_byte, 0);
+        assert_eq!(result.end_byte, 9);
     }
 
     #[tokio::test]
-    async fn test_index_mixed_languages() {
+    async fn test_open_returns_workspace() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
-        std::fs::write(dir.path().join("script.py"), "def main(): pass").unwrap();
-        std::fs::write(dir.path().join("app.js"), "function main() {}").unwrap();
+        let result = Workspace::open(dir.path()).await;
+        assert!(result.is_ok());
+    }
 
-        let index = Workspace::open(dir.path()).await.unwrap();
-        let files = index.list_files().await.unwrap();
+    #[tokio::test]
+    async fn test_open_with_config_custom_election() {
+        let dir = TempDir::new().unwrap();
+        let election_config = ElectionConfig::default();
+        let result = Workspace::open_with_config(dir.path(), election_config, None).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_leader());
+    }
 
-        assert!(files.len() >= 3);
+    #[tokio::test]
+    async fn test_is_leader_returns_true_for_leader() {
+        let dir = TempDir::new().unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        // First opener becomes leader
+        assert!(workspace.is_leader());
+    }
+
+    #[tokio::test]
+    async fn test_workspace_root_returns_correct_path() {
+        let dir = TempDir::new().unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        assert_eq!(workspace.workspace_root(), dir.path());
+    }
+
+    #[tokio::test]
+    async fn test_socket_path_returns_path() {
+        let dir = TempDir::new().unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let socket_path = workspace.socket_path();
+        // Socket path should be a valid path
+        assert!(!socket_path.as_os_str().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_database_path_returns_correct_location() {
+        let dir = TempDir::new().unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let db_path = workspace.database_path();
+        assert!(db_path.to_string_lossy().contains(".treesitter-index.db"));
+        assert!(db_path.starts_with(dir.path()));
+    }
+
+    #[tokio::test]
+    async fn test_find_all_duplicates_empty_workspace() {
+        let dir = TempDir::new().unwrap();
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let result = workspace
+            .find_all_duplicates(TEST_HIGH_SIMILARITY_THRESHOLD, TEST_MIN_CHUNK_BYTES)
+            .await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_all_duplicates_with_files() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("a.rs"),
+            "fn foo() { println!(\"hello\"); }",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("b.rs"),
+            "fn bar() { println!(\"world\"); }",
+        )
+        .unwrap();
+
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let result = workspace
+            .find_all_duplicates(TEST_HIGH_SIMILARITY_THRESHOLD, TEST_SMALL_MIN_CHUNK_BYTES)
+            .await;
+        assert!(result.is_ok());
+        // May or may not find duplicates depending on embeddings
+    }
+
+    #[tokio::test]
+    async fn test_find_duplicates_in_file_not_found() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let result = workspace
+            .find_duplicates_in_file(
+                PathBuf::from("/nonexistent.rs"),
+                TEST_HIGH_SIMILARITY_THRESHOLD,
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_find_duplicates_in_file_with_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        std::fs::write(&file_path, "fn main() { let x = 1; }").unwrap();
+
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let result = workspace
+            .find_duplicates_in_file(file_path, TEST_MEDIUM_SIMILARITY_THRESHOLD)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_progress_callback() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let progress_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let progress_called_clone = progress_called.clone();
+
+        let workspace = Workspace::new(dir.path())
+            .with_progress(move |_status| {
+                progress_called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+            .open()
+            .await
+            .unwrap();
+
+        // Build the index
+        workspace.build().await.unwrap();
+
+        // Progress callback should have been called
+        assert!(progress_called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_builder_without_auto_build() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let workspace = Workspace::new(dir.path()).open().await.unwrap();
+
+        // Should be leader but not built
+        assert!(workspace.is_leader());
+        assert!(!workspace.is_built());
+
+        // Now build
+        workspace.build().await.unwrap();
+        assert!(workspace.is_built());
     }
 }

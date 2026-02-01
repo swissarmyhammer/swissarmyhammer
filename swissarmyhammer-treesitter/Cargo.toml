@@ -69,11 +69,8 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# RPC and IPC for leader/client architecture
-tarpc = { version = "0.35", features = ["tokio1", "serde-transport"] }
-tokio-serde = { version = "0.9", features = ["bincode"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-futures = { workspace = true }
+# SQLite for persistent index storage
+rusqlite = { version = "0.33", features = ["bundled"] }
 
 # Leader election
 swissarmyhammer-leader-election = { workspace = true }

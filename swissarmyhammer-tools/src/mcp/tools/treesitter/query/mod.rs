@@ -106,7 +106,7 @@ impl McpTool for TreesitterQueryTool {
 mod tests {
     use super::*;
     use crate::mcp::tools::treesitter::shared::test_helpers::{
-        assert_execute_fails_no_leader, assert_schema_has_properties, assert_schema_has_required,
+        assert_execute_succeeds_on_empty_workspace, assert_schema_has_properties, assert_schema_has_required,
         assert_schema_is_object, assert_tool_basics,
     };
 
@@ -163,6 +163,6 @@ mod tests {
         let tool = TreesitterQueryTool::new();
         let mut extra_args = serde_json::Map::new();
         extra_args.insert("query".to_string(), json!("(function_item)"));
-        assert_execute_fails_no_leader(&tool, Some(extra_args)).await;
+        assert_execute_succeeds_on_empty_workspace(&tool, Some(extra_args)).await;
     }
 }

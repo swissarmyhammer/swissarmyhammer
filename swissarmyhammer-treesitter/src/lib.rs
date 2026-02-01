@@ -76,10 +76,10 @@
 //! - Data: SQL
 
 pub mod chunk;
+pub mod db;
 pub mod error;
 pub mod index;
 pub mod language;
-mod leader;
 pub mod parsed_file;
 pub mod query;
 mod unified;
@@ -98,18 +98,17 @@ pub use language::{LanguageConfig, LanguageRegistry};
 pub use parsed_file::ParsedFile;
 pub use watcher::{WorkspaceWatcher, WorkspaceWatcherCallback};
 
-// Query protocol for leader/client architecture
+// Query types and leader election for workspace architecture
 pub use query::{
-    ChunkResult, ClientError, DuplicateCluster, ElectionConfig, ElectionError, IndexClient,
-    IndexService, IndexStatusInfo, LeaderElection, LeaderGuard, QueryError,
-    QueryErrorKind, QueryMatch, SimilarChunkResult,
+    ChunkResult, DuplicateCluster, ElectionConfig, ElectionError, IndexStatusInfo,
+    LeaderElection, LeaderGuard, QueryError, QueryErrorKind, QueryMatch, SimilarChunkResult,
 };
 
-// Workspace leader process
-pub use leader::WorkspaceLeader;
+// Database types
+pub use db::{ChunkRecord, EmbeddedChunkRecord, IndexDatabase};
 
-// Workspace with automatic leader/client mode
-pub use unified::Workspace;
+// Workspace with automatic leader/client mode using SQLite storage
+pub use unified::{Workspace, WorkspaceBuilder};
 
 #[cfg(test)]
 mod tests {
