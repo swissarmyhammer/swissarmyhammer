@@ -782,10 +782,21 @@ mod tests {
         }
     }
 
+    /// Helper to parse JSON response
+    fn parse_json(result: &CallToolResult) -> Value {
+        let text = extract_text(result);
+        serde_json::from_str(text).expect("Expected valid JSON")
+    }
+
     /// Helper to extract task ID from a result
     fn extract_task_id(result: &CallToolResult) -> String {
-        let text = extract_text(result);
-        let data: Value = serde_json::from_str(text).expect("Expected valid JSON");
+        let data = parse_json(result);
+        data["id"].as_str().expect("Expected id field").to_string()
+    }
+
+    /// Helper to extract ID from result (generic)
+    fn extract_id(result: &CallToolResult) -> String {
+        let data = parse_json(result);
         data["id"].as_str().expect("Expected id field").to_string()
     }
 
@@ -799,8 +810,15 @@ mod tests {
         args.insert("op".to_string(), json!("init board"));
         args.insert("name".to_string(), json!("Test Board"));
 
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Verify board was created with correct name
+        assert_eq!(data["name"], "Test Board");
+        // Verify default columns exist
+        assert!(data["columns"].is_array());
+        let columns = data["columns"].as_array().unwrap();
+        assert_eq!(columns.len(), 3); // To Do, Doing, Done
     }
 
     #[tokio::test]
@@ -820,8 +838,155 @@ mod tests {
         add_args.insert("op".to_string(), json!("add task"));
         add_args.insert("title".to_string(), json!("Test Task"));
 
-        let result = tool.execute(add_args, &context).await;
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Verify task was created with correct title
+        assert_eq!(data["title"], "Test Task");
+        // Verify task has an ID
+        assert!(data["id"].is_string());
+        // Verify task is in first column (To Do) via position.column
+        assert!(data["position"]["column"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_get_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Test Task"));
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&add_result);
+
+        // Get the task
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get task"));
+        get_args.insert("id".to_string(), json!(task_id));
+
+        let result = tool.execute(get_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], task_id);
+        assert_eq!(data["title"], "Test Task");
+    }
+
+    #[tokio::test]
+    async fn test_update_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Original Title"));
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&add_result);
+
+        // Update the task
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update task"));
+        update_args.insert("id".to_string(), json!(task_id));
+        update_args.insert("title".to_string(), json!("Updated Title"));
+
+        let result = tool.execute(update_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["title"], "Updated Title");
+    }
+
+    #[tokio::test]
+    async fn test_delete_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Task to delete"));
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&add_result);
+
+        // Delete the task
+        let mut delete_args = serde_json::Map::new();
+        delete_args.insert("op".to_string(), json!("delete task"));
+        delete_args.insert("id".to_string(), json!(task_id));
+
+        let result = tool.execute(delete_args, &context).await;
         assert!(result.is_ok());
+
+        // Verify task is gone by trying to get it
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get task"));
+        get_args.insert("id".to_string(), json!(task_id));
+
+        let get_result = tool.execute(get_args, &context).await;
+        assert!(get_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add two tasks
+        for title in ["Task 1", "Task 2"] {
+            let mut add_args = serde_json::Map::new();
+            add_args.insert("op".to_string(), json!("add task"));
+            add_args.insert("title".to_string(), json!(title));
+            tool.execute(add_args, &context).await.unwrap();
+        }
+
+        // List tasks
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list tasks"));
+
+        let result = tool.execute(list_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"tasks": [...], "count": N}
+        assert_eq!(data["count"], 2);
+        assert!(data["tasks"].is_array());
+        assert_eq!(data["tasks"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_move_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task (goes to first column)
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Task to move"));
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&add_result);
+        let original_column = parse_json(&add_result)["position"]["column"].as_str().unwrap().to_string();
+
+        // Move to "doing" column
+        let mut move_args = serde_json::Map::new();
+        move_args.insert("op".to_string(), json!("move task"));
+        move_args.insert("id".to_string(), json!(task_id));
+        move_args.insert("column".to_string(), json!("doing"));
+
+        let result = tool.execute(move_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Verify column changed (position.column)
+        assert_ne!(data["position"]["column"].as_str().unwrap(), original_column);
+        assert_eq!(data["position"]["column"], "doing");
     }
 
     #[tokio::test]
@@ -840,8 +1005,10 @@ mod tests {
         let mut add_args = serde_json::Map::new();
         add_args.insert("title".to_string(), json!("Inferred Task"));
 
-        let result = tool.execute(add_args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["title"], "Inferred Task");
     }
 
     // Helper to init a board for tests
@@ -868,8 +1035,37 @@ mod tests {
         args.insert("id".to_string(), json!("urgent"));
         args.insert("name".to_string(), json!("Urgent"));
 
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "urgent");
+        assert_eq!(data["name"], "Urgent");
+    }
+
+    #[tokio::test]
+    async fn test_get_swimlane() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a swimlane
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add swimlane"));
+        add_args.insert("id".to_string(), json!("urgent"));
+        add_args.insert("name".to_string(), json!("Urgent"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // Get the swimlane
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get swimlane"));
+        get_args.insert("id".to_string(), json!("urgent"));
+
+        let result = tool.execute(get_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "urgent");
+        assert_eq!(data["name"], "Urgent");
     }
 
     #[tokio::test]
@@ -879,19 +1075,57 @@ mod tests {
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
-        // Add a swimlane first
+        // Add swimlanes
+        for (id, name) in [("urgent", "Urgent"), ("normal", "Normal")] {
+            let mut add_args = serde_json::Map::new();
+            add_args.insert("op".to_string(), json!("add swimlane"));
+            add_args.insert("id".to_string(), json!(id));
+            add_args.insert("name".to_string(), json!(name));
+            tool.execute(add_args, &context).await.unwrap();
+        }
+
+        // List swimlanes
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list swimlanes"));
+
+        let result = tool.execute(list_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"swimlanes": [...], "count": N}
+        assert_eq!(data["count"], 2);
+        assert!(data["swimlanes"].is_array());
+        assert_eq!(data["swimlanes"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_swimlane() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a swimlane
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add swimlane"));
         add_args.insert("id".to_string(), json!("urgent"));
         add_args.insert("name".to_string(), json!("Urgent"));
         tool.execute(add_args, &context).await.unwrap();
 
-        // List swimlanes
-        let mut list_args = serde_json::Map::new();
-        list_args.insert("op".to_string(), json!("list swimlanes"));
+        // Delete it
+        let mut delete_args = serde_json::Map::new();
+        delete_args.insert("op".to_string(), json!("delete swimlane"));
+        delete_args.insert("id".to_string(), json!("urgent"));
 
-        let result = tool.execute(list_args, &context).await;
+        let result = tool.execute(delete_args, &context).await;
         assert!(result.is_ok());
+
+        // Verify it's gone
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get swimlane"));
+        get_args.insert("id".to_string(), json!("urgent"));
+
+        let get_result = tool.execute(get_args, &context).await;
+        assert!(get_result.is_err());
     }
 
     // =========================================================================
@@ -911,8 +1145,11 @@ mod tests {
         args.insert("name".to_string(), json!("Alice Smith"));
         args.insert("type".to_string(), json!("human"));
 
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "alice");
+        assert_eq!(data["name"], "Alice Smith");
     }
 
     #[tokio::test]
@@ -928,8 +1165,37 @@ mod tests {
         args.insert("name".to_string(), json!("Claude"));
         args.insert("type".to_string(), json!("agent"));
 
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "claude");
+        assert_eq!(data["name"], "Claude");
+    }
+
+    #[tokio::test]
+    async fn test_get_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add an actor
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add actor"));
+        add_args.insert("id".to_string(), json!("alice"));
+        add_args.insert("name".to_string(), json!("Alice"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // Get the actor
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get actor"));
+        get_args.insert("id".to_string(), json!("alice"));
+
+        let result = tool.execute(get_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "alice");
+        assert_eq!(data["name"], "Alice");
     }
 
     #[tokio::test]
@@ -939,19 +1205,57 @@ mod tests {
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
-        // Add an actor first
+        // Add actors
+        for (id, name) in [("alice", "Alice"), ("bob", "Bob")] {
+            let mut add_args = serde_json::Map::new();
+            add_args.insert("op".to_string(), json!("add actor"));
+            add_args.insert("id".to_string(), json!(id));
+            add_args.insert("name".to_string(), json!(name));
+            tool.execute(add_args, &context).await.unwrap();
+        }
+
+        // List actors
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list actors"));
+
+        let result = tool.execute(list_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"actors": [...], "count": N}
+        assert_eq!(data["count"], 2);
+        assert!(data["actors"].is_array());
+        assert_eq!(data["actors"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add an actor
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add actor"));
         add_args.insert("id".to_string(), json!("alice"));
         add_args.insert("name".to_string(), json!("Alice"));
         tool.execute(add_args, &context).await.unwrap();
 
-        // List actors
-        let mut list_args = serde_json::Map::new();
-        list_args.insert("op".to_string(), json!("list actors"));
+        // Delete the actor
+        let mut delete_args = serde_json::Map::new();
+        delete_args.insert("op".to_string(), json!("delete actor"));
+        delete_args.insert("id".to_string(), json!("alice"));
 
-        let result = tool.execute(list_args, &context).await;
+        let result = tool.execute(delete_args, &context).await;
         assert!(result.is_ok());
+
+        // Verify it's gone
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get actor"));
+        get_args.insert("id".to_string(), json!("alice"));
+
+        let get_result = tool.execute(get_args, &context).await;
+        assert!(get_result.is_err());
     }
 
     // =========================================================================
@@ -971,8 +1275,39 @@ mod tests {
         args.insert("name".to_string(), json!("Bug"));
         args.insert("color".to_string(), json!("ff0000"));
 
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "bug");
+        assert_eq!(data["name"], "Bug");
+        assert_eq!(data["color"], "ff0000");
+    }
+
+    #[tokio::test]
+    async fn test_get_tag() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a tag
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add tag"));
+        add_args.insert("id".to_string(), json!("bug"));
+        add_args.insert("name".to_string(), json!("Bug"));
+        add_args.insert("color".to_string(), json!("ff0000"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // Get the tag
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get tag"));
+        get_args.insert("id".to_string(), json!("bug"));
+
+        let result = tool.execute(get_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "bug");
+        assert_eq!(data["name"], "Bug");
     }
 
     #[tokio::test]
@@ -982,7 +1317,37 @@ mod tests {
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
-        // Add a tag first
+        // Add tags
+        for (id, name, color) in [("bug", "Bug", "ff0000"), ("feature", "Feature", "00ff00")] {
+            let mut add_args = serde_json::Map::new();
+            add_args.insert("op".to_string(), json!("add tag"));
+            add_args.insert("id".to_string(), json!(id));
+            add_args.insert("name".to_string(), json!(name));
+            add_args.insert("color".to_string(), json!(color));
+            tool.execute(add_args, &context).await.unwrap();
+        }
+
+        // List tags
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list tags"));
+
+        let result = tool.execute(list_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"tags": [...], "count": N}
+        assert_eq!(data["count"], 2);
+        assert!(data["tags"].is_array());
+        assert_eq!(data["tags"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_tag() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a tag
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add tag"));
         add_args.insert("id".to_string(), json!("bug"));
@@ -990,12 +1355,21 @@ mod tests {
         add_args.insert("color".to_string(), json!("ff0000"));
         tool.execute(add_args, &context).await.unwrap();
 
-        // List tags
-        let mut list_args = serde_json::Map::new();
-        list_args.insert("op".to_string(), json!("list tags"));
+        // Delete it
+        let mut delete_args = serde_json::Map::new();
+        delete_args.insert("op".to_string(), json!("delete tag"));
+        delete_args.insert("id".to_string(), json!("bug"));
 
-        let result = tool.execute(list_args, &context).await;
+        let result = tool.execute(delete_args, &context).await;
         assert!(result.is_ok());
+
+        // Verify it's gone
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get tag"));
+        get_args.insert("id".to_string(), json!("bug"));
+
+        let get_result = tool.execute(get_args, &context).await;
+        assert!(get_result.is_err());
     }
 
     // =========================================================================
@@ -1030,8 +1404,25 @@ mod tests {
         tag_task_args.insert("id".to_string(), json!(task_id));
         tag_task_args.insert("tag".to_string(), json!("bug"));
 
-        let result = tool.execute(tag_task_args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(tag_task_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"tagged": true, "task_id": ..., "tag_id": ...}
+        assert_eq!(data["tagged"], true);
+        assert_eq!(data["task_id"], task_id);
+        assert_eq!(data["tag_id"], "bug");
+
+        // Verify by getting the task
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get task"));
+        get_args.insert("id".to_string(), json!(task_id));
+        let get_result = tool.execute(get_args, &context).await.unwrap();
+        let task_data = parse_json(&get_result);
+
+        // Task should now have the tag
+        assert!(task_data["tags"].is_array());
+        let tags = task_data["tags"].as_array().unwrap();
+        assert!(!tags.is_empty(), "Task should have at least one tag");
     }
 
     #[tokio::test]
@@ -1069,8 +1460,25 @@ mod tests {
         untag_args.insert("id".to_string(), json!(task_id));
         untag_args.insert("tag".to_string(), json!("bug"));
 
-        let result = tool.execute(untag_args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(untag_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"untagged": true, "task_id": ..., "tag_id": ...}
+        assert_eq!(data["untagged"], true);
+        assert_eq!(data["task_id"], task_id);
+        assert_eq!(data["tag_id"], "bug");
+
+        // Verify by getting the task
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get task"));
+        get_args.insert("id".to_string(), json!(task_id));
+        let get_result = tool.execute(get_args, &context).await.unwrap();
+        let task_data = parse_json(&get_result);
+
+        // Task should now have no tags
+        assert!(task_data["tags"].is_array());
+        let tags = task_data["tags"].as_array().unwrap();
+        assert!(tags.is_empty(), "Task should have no tags after untag");
     }
 
     // =========================================================================
@@ -1090,10 +1498,38 @@ mod tests {
         task_args.insert("title".to_string(), json!("Task to complete"));
         let result = tool.execute(task_args, &context).await.unwrap();
         let task_id = extract_task_id(&result);
+        let original_column = parse_json(&result)["position"]["column"].as_str().unwrap().to_string();
 
         // Complete the task
         let mut complete_args = serde_json::Map::new();
         complete_args.insert("op".to_string(), json!("complete task"));
+        complete_args.insert("id".to_string(), json!(task_id));
+
+        let result = tool.execute(complete_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Verify task moved to the done column (position.column)
+        assert_ne!(data["position"]["column"].as_str().unwrap(), original_column);
+        assert_eq!(data["position"]["column"], "done");
+    }
+
+    #[tokio::test]
+    async fn test_complete_task_with_done_alias() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task to complete"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Complete using "done task" alias
+        let mut complete_args = serde_json::Map::new();
+        complete_args.insert("op".to_string(), json!("done task"));
         complete_args.insert("id".to_string(), json!(task_id));
 
         let result = tool.execute(complete_args, &context).await;
@@ -1125,12 +1561,16 @@ mod tests {
         comment_args.insert("body".to_string(), json!("This is a comment"));
         comment_args.insert("author".to_string(), json!("alice"));
 
-        let result = tool.execute(comment_args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(comment_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["body"], "This is a comment");
+        assert_eq!(data["author"], "alice");
+        assert!(data["id"].is_string());
     }
 
     #[tokio::test]
-    async fn test_list_comments() {
+    async fn test_get_comment() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
@@ -1147,17 +1587,102 @@ mod tests {
         let mut comment_args = serde_json::Map::new();
         comment_args.insert("op".to_string(), json!("add comment"));
         comment_args.insert("task_id".to_string(), json!(task_id));
-        comment_args.insert("body".to_string(), json!("Comment 1"));
+        comment_args.insert("body".to_string(), json!("Test comment"));
         comment_args.insert("author".to_string(), json!("alice"));
-        tool.execute(comment_args, &context).await.unwrap();
+        let add_result = tool.execute(comment_args, &context).await.unwrap();
+        let comment_id = extract_id(&add_result);
+
+        // Get the comment
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get comment"));
+        get_args.insert("task_id".to_string(), json!(task_id));
+        get_args.insert("comment_id".to_string(), json!(comment_id));
+
+        let result = tool.execute(get_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], comment_id);
+        assert_eq!(data["body"], "Test comment");
+    }
+
+    #[tokio::test]
+    async fn test_list_comments() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task with comments"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Add comments
+        for body in ["Comment 1", "Comment 2"] {
+            let mut comment_args = serde_json::Map::new();
+            comment_args.insert("op".to_string(), json!("add comment"));
+            comment_args.insert("task_id".to_string(), json!(task_id));
+            comment_args.insert("body".to_string(), json!(body));
+            comment_args.insert("author".to_string(), json!("alice"));
+            tool.execute(comment_args, &context).await.unwrap();
+        }
 
         // List comments
         let mut list_args = serde_json::Map::new();
         list_args.insert("op".to_string(), json!("list comments"));
         list_args.insert("task_id".to_string(), json!(task_id));
 
-        let result = tool.execute(list_args, &context).await;
+        let result = tool.execute(list_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"comments": [...], "count": N}
+        assert_eq!(data["count"], 2);
+        assert!(data["comments"].is_array());
+        assert_eq!(data["comments"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_comment() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task with comment"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Add a comment
+        let mut comment_args = serde_json::Map::new();
+        comment_args.insert("op".to_string(), json!("add comment"));
+        comment_args.insert("task_id".to_string(), json!(task_id));
+        comment_args.insert("body".to_string(), json!("Test comment"));
+        comment_args.insert("author".to_string(), json!("alice"));
+        let add_result = tool.execute(comment_args, &context).await.unwrap();
+        let comment_id = extract_id(&add_result);
+
+        // Delete the comment
+        let mut delete_args = serde_json::Map::new();
+        delete_args.insert("op".to_string(), json!("delete comment"));
+        delete_args.insert("task_id".to_string(), json!(task_id));
+        delete_args.insert("comment_id".to_string(), json!(comment_id));
+
+        let result = tool.execute(delete_args, &context).await;
         assert!(result.is_ok());
+
+        // Verify it's gone
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get comment"));
+        get_args.insert("task_id".to_string(), json!(task_id));
+        get_args.insert("comment_id".to_string(), json!(comment_id));
+
+        let get_result = tool.execute(get_args, &context).await;
+        assert!(get_result.is_err());
     }
 
     // =========================================================================
@@ -1181,7 +1706,205 @@ mod tests {
         let mut list_args = serde_json::Map::new();
         list_args.insert("op".to_string(), json!("list activity"));
 
-        let result = tool.execute(list_args, &context).await;
-        assert!(result.is_ok());
+        let result = tool.execute(list_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"entries": [...], "count": N}
+        assert!(data["entries"].is_array());
+        // Should have at least some activity entries
+        assert!(data["count"].as_i64().unwrap_or(0) >= 0);
+    }
+
+    // =========================================================================
+    // Column operations
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_add_column() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add column"));
+        args.insert("id".to_string(), json!("review"));
+        args.insert("name".to_string(), json!("Review"));
+
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "review");
+        assert_eq!(data["name"], "Review");
+    }
+
+    #[tokio::test]
+    async fn test_get_column() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Get one of the default columns
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get column"));
+        get_args.insert("id".to_string(), json!("todo"));
+
+        let result = tool.execute(get_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "todo");
+    }
+
+    #[tokio::test]
+    async fn test_list_columns() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list columns"));
+
+        let result = tool.execute(list_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"columns": [...], "count": N}
+        assert_eq!(data["count"], 3);
+        assert!(data["columns"].is_array());
+        // Default board has 3 columns
+        assert_eq!(data["columns"].as_array().unwrap().len(), 3);
+    }
+
+    // =========================================================================
+    // Error cases
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_get_nonexistent_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get task"));
+        get_args.insert("id".to_string(), json!("nonexistent-id"));
+
+        let result = tool.execute(get_args, &context).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_operation() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("invalid operation"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_add_task_missing_title() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add task"));
+        // Missing title
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_operation_without_board() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        // Don't init board
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add task"));
+        args.insert("title".to_string(), json!("Test"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Next task operation
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_next_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add some tasks
+        for title in ["Task 1", "Task 2"] {
+            let mut add_args = serde_json::Map::new();
+            add_args.insert("op".to_string(), json!("add task"));
+            add_args.insert("title".to_string(), json!(title));
+            tool.execute(add_args, &context).await.unwrap();
+        }
+
+        // Get next task
+        let mut next_args = serde_json::Map::new();
+        next_args.insert("op".to_string(), json!("next task"));
+
+        let result = tool.execute(next_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Should return a task
+        assert!(data["id"].is_string());
+        assert!(data["title"].is_string());
+    }
+
+    // =========================================================================
+    // Board operations
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_get_board() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("get board"));
+
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["name"], "Test Board");
+        assert!(data["columns"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_update_board() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("update board"));
+        args.insert("name".to_string(), json!("Updated Board Name"));
+
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["name"], "Updated Board Name");
     }
 }
