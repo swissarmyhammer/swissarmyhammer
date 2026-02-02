@@ -13,7 +13,6 @@ members = [
     "swissarmyhammer-build",
     "swissarmyhammer-git",
     "swissarmyhammer-shell",
-    "swissarmyhammer-todo",
     "swissarmyhammer-templating",
     "swissarmyhammer-prompts",
     "swissarmyhammer-modes",

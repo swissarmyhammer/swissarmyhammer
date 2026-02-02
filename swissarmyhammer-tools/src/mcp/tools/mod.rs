@@ -42,7 +42,6 @@ pub mod git;
 pub mod kanban;
 pub mod questions;
 pub mod shell;
-pub mod todo;
 pub mod treesitter;
 pub mod web_fetch;
 pub mod web_search;

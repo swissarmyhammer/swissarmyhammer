@@ -1152,9 +1152,9 @@ dependencies = [
  "serial_test",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
+ "swissarmyhammer-kanban",
  "swissarmyhammer-modes",
  "swissarmyhammer-prompts",
- "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -3565,8 +3565,8 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer-common",
+ "swissarmyhammer-kanban",
  "swissarmyhammer-modes",
- "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -6573,23 +6573,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swissarmyhammer-todo"
-version = "0.5.0"
-dependencies = [
- "chrono",
- "fs2",
- "serde",
- "serde_json",
- "serde_yaml",
- "swissarmyhammer-common",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "ulid",
-]
-
-[[package]]
 name = "swissarmyhammer-tools"
 version = "0.5.0"
 dependencies = [
@@ -6643,7 +6626,6 @@ dependencies = [
  "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
  "swissarmyhammer-shell",
- "swissarmyhammer-todo",
  "swissarmyhammer-treesitter",
  "swissarmyhammer-workflow",
  "tempfile",

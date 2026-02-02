@@ -46,19 +46,14 @@ impl Board {
                 order: 0,
             },
             Column {
-                id: ColumnId::from_string("in_progress"),
-                name: "In Progress".into(),
+                id: ColumnId::from_string("doing"),
+                name: "Doing".into(),
                 order: 1,
-            },
-            Column {
-                id: ColumnId::from_string("review"),
-                name: "Review".into(),
-                order: 2,
             },
             Column {
                 id: ColumnId::from_string("done"),
                 name: "Done".into(),
-                order: 3,
+                order: 2,
             },
         ]
     }
@@ -199,7 +194,7 @@ mod tests {
     fn test_board_creation() {
         let board = Board::new("Test Board");
         assert_eq!(board.name, "Test Board");
-        assert_eq!(board.columns.len(), 4);
+        assert_eq!(board.columns.len(), 3);
         assert!(board.description.is_none());
     }
 

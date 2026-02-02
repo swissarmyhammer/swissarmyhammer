@@ -1,6 +1,7 @@
 //! Task commands
 
 mod add;
+mod complete;
 mod delete;
 mod get;
 mod list;
@@ -11,6 +12,7 @@ mod untag;
 mod update;
 
 pub use add::AddTask;
+pub use complete::CompleteTask;
 pub use delete::DeleteTask;
 pub use get::GetTask;
 pub use list::ListTasks;

@@ -1303,25 +1303,6 @@ impl AgentAPI for AgentServer {
         // Execute the tool call with retry logic for transient failures
         let tool_result = self.execute_tool_with_retry(&tool_call, session).await;
 
-        // Sync session todos if this was a todo-related tool call and it succeeded
-
-        if tool_result.error.is_none()
-            && (tool_call.name == "mcp__swissarmyhammer__todo_create"
-                || tool_call.name == "mcp__swissarmyhammer__todo_mark_complete")
-        {
-            debug!(
-                "Tool '{}' affects todos, syncing session todos",
-                tool_call.name
-            );
-            if let Err(e) = self.sync_session_todos(&session.id).await {
-                warn!(
-                    "Failed to sync session todos after '{}': {}",
-                    tool_call.name, e
-                );
-                // Don't fail the tool call if sync fails - the tool itself succeeded
-            }
-        }
-
         Ok(tool_result)
     }
 
@@ -1784,7 +1765,6 @@ impl AgentServer {
                     compaction_history: Vec::new(),
                     transcript_path: None,
                     context_state: None,
-                    todos: Vec::new(),
                     available_commands: Vec::new(),
                     current_mode: None,
                     client_capabilities: None,
@@ -1858,73 +1838,6 @@ impl AgentServer {
                     })?
             })
         })
-    }
-
-    /// Synchronize session todos with TodoStorage
-    ///
-    /// Loads all todos from the TodoStorage and updates the session's todos vector.
-    /// This ensures the session has the latest todo state from the filesystem.
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - The session ID to sync todos for
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` if sync succeeds, `Err` if the session doesn't exist or sync fails
-    async fn sync_session_todos(&self, session_id: &SessionId) -> Result<(), AgentError> {
-        use swissarmyhammer_todo::TodoStorage;
-
-        debug!("Syncing todos for session: {}", session_id);
-
-        // Create TodoStorage instance
-        let storage = TodoStorage::new_default().map_err(|e| {
-            AgentError::Session(crate::types::SessionError::InvalidState(format!(
-                "Failed to create todo storage: {}",
-                e
-            )))
-        })?;
-
-        // Load all todos from storage
-        let todo_list = storage.get_todo_list().await.map_err(|e| {
-            AgentError::Session(crate::types::SessionError::InvalidState(format!(
-                "Failed to load todo list: {}",
-                e
-            )))
-        })?;
-
-        // Get the session, update its todos, and save it back
-        let mut session = self
-            .session_manager
-            .get_session(session_id)
-            .await?
-            .ok_or_else(|| {
-                AgentError::Session(crate::types::SessionError::NotFound(session_id.to_string()))
-            })?;
-
-        // Update session todos
-        if let Some(list) = todo_list {
-            session.todos = list.todo;
-            debug!(
-                "Updated session {} with {} todos",
-                session_id,
-                session.todos.len()
-            );
-        } else {
-            session.todos.clear();
-            debug!(
-                "Cleared todos for session {} (no todo list found)",
-                session_id
-            );
-        }
-
-        // Save the updated session back
-        self.session_manager
-            .update_session(session)
-            .await
-            .map_err(AgentError::Session)?;
-
-        Ok(())
     }
 
     /// Execute a tool call with retry logic for transient failures

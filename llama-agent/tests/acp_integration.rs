@@ -479,13 +479,8 @@ mod acp_tests {
         );
 
         // 7. ACP-specific fields (when feature is enabled)
-
+        // Note: todos are now stored in the kanban board, not in the session
         {
-            assert_eq!(
-                restored_session.todos.len(),
-                original_session.todos.len(),
-                "Todos list should be preserved"
-            );
             assert_eq!(
                 restored_session.available_commands.len(),
                 original_session.available_commands.len(),

@@ -1,6 +1,6 @@
 ---
 title: generate-todos
-description: Generate todos (implementation steps) from a draft plan.
+description: Generate tasks (implementation steps) from a draft plan.
 parameters:
   - name: plan_filename
     description: Path to the original specification file
@@ -9,22 +9,23 @@ parameters:
 
 ## Goal
 
-Read the draft plan and create detailed, incremental todos for implementation.
+Read the draft plan and create detailed, incremental tasks for implementation.
 
 Use the draft plan from: {{ plan_filename }}
 
-Generate todos using the `todo_create` tool for each implementation step.
+Generate tasks using the `kanban` tool with `op: "add task"` for each implementation step.
 
 ## Guidelines
 
-### Creating Todos
+### Creating Tasks
 
 For each implementation step:
-- Use the `todo_create` tool with parameters:
-  - `task`: Brief description of what needs to be done (e.g., "Implement user authentication endpoint")
-  - `context`: Rich markdown content with implementation guidance
+- Use the `kanban` tool with parameters:
+  - `op`: "add task"
+  - `title`: Brief description of what needs to be done (e.g., "Implement user authentication endpoint")
+  - `description`: Rich markdown content with implementation guidance
 
-- The `context` field supports full markdown including:
+- The `description` field supports full markdown including:
   - **Mermaid diagrams** for architecture and flow
   - **Code examples** showing implementation patterns
   - **Multi-paragraph explanations** of the approach
@@ -33,8 +34,8 @@ For each implementation step:
 
 - Each task needs a reference to the spec file: "Refer to {{ plan_filename }}"
 - Break work into small, focused tasks that build incrementally
-- Each todo should result in less than 250 lines of code changed
-- Todos should build on each other incrementally
+- Each task should result in less than 250 lines of code changed
+- Tasks should build on each other incrementally
 - No hanging or orphaned code - each step should integrate with previous work
 
 ## Process
@@ -47,9 +48,9 @@ For each implementation step:
    - Ensure steps build incrementally
    - Ensure no orphaned code
 
-3. **Create todos**:
-   - For each step, use `todo_create` tool
-   - Include rich context with:
+3. **Create tasks**:
+   - For each step, use `kanban` tool with `op: "add task"`
+   - Include rich context in description with:
      - What needs to be done
      - How it fits with previous steps
      - Relevant code examples or patterns
@@ -57,11 +58,11 @@ For each implementation step:
      - Any important considerations
 
 4. **Review and refine**:
-   - Review the created todos
+   - Review the created tasks
    - Make sure they're right-sized for the project
    - Make sure they build incrementally
    - Iterate if needed
 
 ## Output
 
-Create todos using the `todo_create` tool for each implementation step from the draft plan.
+Create tasks using the `kanban` tool for each implementation step from the draft plan.

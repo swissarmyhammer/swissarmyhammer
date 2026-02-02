@@ -16,7 +16,6 @@ pub mod agent_prompt_handling;
 pub mod agent_raw_messages;
 pub mod agent_reasoning;
 pub mod agent_terminal_handlers;
-pub mod agent_todo_handlers;
 pub mod agent_trait_impl;
 pub mod agent_validation;
 pub mod base64_processor;

@@ -1,38 +1,38 @@
 ---
 title: do_todo
-description: Complete the next pending todo item.
+description: Complete the next pending task from the kanban board.
 ---
 
 ## Goals
 
 The goal is to:
 
-- Complete the next todo item in the list
-- Follow the instructions in the task and context
-- Mark the todo as complete when done
+- Complete the next task from the todo column
+- Follow the instructions in the task title and description
+- Mark the task as complete when done
 
-Use the todo_show MCP tool with `item: "next"`. This will get the next pending todo item.
+Use the kanban MCP tool with `op: "next task"`. This will get the next pending task from the todo column.
 
-If there are any pending todos
+If there are any pending tasks
 - use the `cel_set` tool to set name `are_todos_done` to value `false`
-- exeute the TODO Process below
+- execute the Task Process below
 
-If there are no pending todos
+If there are no pending tasks
 - use the `cel_set` tool to set name `are_todos_done` to value `true`
-- you are done, report "No pending todos, all work complete!"
+- you are done, report "No pending tasks, all work complete!"
 
 ## Rules
 
-- NEVER skip todos
+- NEVER skip tasks
 - DO NOT commit to git
-- DO NOT run a `rules_check` except on individual files you have modified as part of the todo
+- DO NOT run a `rules_check` except on individual files you have modified as part of the task
 
-## TODO Process
+## Task Process
 
-- Use `todo_show` with `item: "next"` to get the next pending todo
-- Read the task description to understand what needs to be done
-- Perform the work described in the todo
+- Use `kanban` with `op: "next task"` to get the next pending task
+- Read the task title and description to understand what needs to be done
+- Perform the work described in the task
 - Verify the work is complete and correct
-- Use `todo_mark_complete` with the todo's id to mark it as done
-  - DO NOT set `are_todos_done` -- there might be more todos remaining that have been created dynamically 
+- Use `kanban` with `op: "complete task"` and the task's `id` to mark it as done
+  - DO NOT set `are_todos_done` -- there might be more tasks remaining that have been created dynamically
 - Report your progress

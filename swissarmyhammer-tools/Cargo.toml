@@ -20,7 +20,6 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
-swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }

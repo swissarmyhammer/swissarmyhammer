@@ -123,13 +123,15 @@ mod tests {
 
     #[test]
     fn test_description_content_quality() {
-        if let Some(create_todo_desc) = get_tool_description("todo", "create") {
+        // Note: The tool description system stores descriptions by domain/verb.
+        // Since kanban is a unified tool, use files/read as a test case instead.
+        if let Some(files_read_desc) = get_tool_description("files", "read") {
             assert!(
-                create_todo_desc.len() > 10,
+                files_read_desc.len() > 10,
                 "Description should be substantial"
             );
             assert!(
-                !create_todo_desc.trim().is_empty(),
+                !files_read_desc.trim().is_empty(),
                 "Description should not be empty"
             );
         }

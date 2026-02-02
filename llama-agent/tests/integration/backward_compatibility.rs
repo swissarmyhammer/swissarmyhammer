@@ -41,7 +41,6 @@ fn test_session_creation_without_acp() {
         compaction_history: Vec::new(),
         transcript_path: None,
         context_state: None,
-        todos: Vec::new(),
         available_commands: Vec::new(),
         current_mode: None,
         client_capabilities: None,
@@ -249,7 +248,7 @@ fn test_model_source_variants_without_acp() {
 ///
 /// This test ensures that the crate can be built as a library without
 /// pulling in ACP-specific dependencies like agent-client-protocol,
-/// swissarmyhammer-todo, or chrono (which are only needed for ACP).
+/// swissarmyhammer-kanban, or chrono (which are only needed for ACP).
 #[test]
 fn test_no_acp_dependencies_required() {
     // This test passes if it compiles, which proves that:
@@ -270,7 +269,6 @@ fn test_no_acp_dependencies_required() {
         compaction_history: vec![],
         transcript_path: None,
         context_state: None,
-        todos: Vec::new(),
         available_commands: Vec::new(),
         current_mode: None,
         client_capabilities: None,

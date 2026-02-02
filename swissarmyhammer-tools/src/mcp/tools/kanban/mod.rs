@@ -2,7 +2,18 @@
 //!
 //! This module provides a single MCP tool for kanban board operations.
 //! The tool exposes its operations via the Operation trait for CLI generation.
+//!
+//! # Plan Notifications
+//!
+//! When tasks are modified (add, update, delete, move, complete), the tool emits
+//! plan notifications through the `plan_sender` channel in `ToolContext`. These
+//! notifications contain the complete task list in a format compatible with ACP
+//! (Agent Client Protocol) plan updates.
+//!
+//! Per ACP spec: "Complete plan lists must be resent with each update; clients
+//! will replace prior plans entirely."
 
+use crate::mcp::plan_notifications::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -14,7 +25,7 @@ use swissarmyhammer_kanban::{
     board::{GetBoard, InitBoard, UpdateBoard},
     column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn},
     parse::parse_input,
-    task::{AddTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, UpdateTask},
+    task::{AddTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, UpdateTask},
     Execute, KanbanContext, KanbanOperation, Noun, Operation, Verb,
 };
 
@@ -36,6 +47,7 @@ static GET_TASK: Lazy<GetTask> = Lazy::new(|| GetTask::new(""));
 static UPDATE_TASK: Lazy<UpdateTask> = Lazy::new(|| UpdateTask::new(""));
 static DELETE_TASK: Lazy<DeleteTask> = Lazy::new(|| DeleteTask::new(""));
 static MOVE_TASK: Lazy<MoveTask> = Lazy::new(|| MoveTask::to_column("", ""));
+static COMPLETE_TASK: Lazy<CompleteTask> = Lazy::new(|| CompleteTask::new(""));
 static NEXT_TASK: Lazy<NextTask> = Lazy::new(NextTask::new);
 static LIST_TASKS: Lazy<ListTasks> = Lazy::new(ListTasks::new);
 
@@ -58,6 +70,7 @@ static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*UPDATE_TASK as &dyn Operation,
         &*DELETE_TASK as &dyn Operation,
         &*MOVE_TASK as &dyn Operation,
+        &*COMPLETE_TASK as &dyn Operation,
         &*NEXT_TASK as &dyn Operation,
         &*LIST_TASKS as &dyn Operation,
     ]
@@ -84,6 +97,106 @@ impl KanbanTool {
 
         Ok(KanbanContext::new(kanban_dir))
     }
+}
+
+/// Convert a kanban task JSON value to a PlanEntry
+///
+/// Maps kanban task structure to ACP-compatible plan entry format:
+/// - task.title → PlanEntry.content
+/// - task.position.column → PlanEntry.status (done → Completed, doing → InProgress, else → Pending)
+/// - All entries get Medium priority (kanban doesn't track priority)
+fn task_to_plan_entry(task: &Value) -> PlanEntry {
+    let column = task["position"]["column"].as_str().unwrap_or("todo");
+
+    let status = match column {
+        "done" => PlanEntryStatus::Completed,
+        "doing" => PlanEntryStatus::InProgress,
+        _ => PlanEntryStatus::Pending,
+    };
+
+    let id = task["id"].as_str().unwrap_or("").to_string();
+    let title = task["title"].as_str().unwrap_or("").to_string();
+
+    let mut entry = PlanEntry::new(id, title, status, PlanEntryPriority::Medium);
+
+    if let Some(desc) = task["description"].as_str() {
+        entry = entry.with_notes(desc);
+    }
+
+    entry.with_column(column)
+}
+
+/// Build plan data from current kanban tasks
+///
+/// Returns a JSON object containing the complete plan in a format that can be
+/// converted to ACP Plan by the agent. The plan is embedded in tool responses
+/// under the `_plan` key.
+///
+/// Per ACP spec: "Complete plan lists must be resent with each update"
+async fn build_plan_data(ctx: &KanbanContext, trigger: &str, affected_task_id: Option<&str>) -> Option<Value> {
+    // Fetch all tasks
+    let tasks_result = ListTasks::new().execute(ctx).await;
+    let tasks = match tasks_result {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to list tasks for plan: {}", e);
+            return None;
+        }
+    };
+
+    // Convert tasks to plan entries
+    let entries: Vec<Value> = tasks
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|task| {
+            let entry = task_to_plan_entry(task);
+            json!({
+                "content": entry.content,
+                "status": match entry.status {
+                    PlanEntryStatus::Pending => "pending",
+                    PlanEntryStatus::InProgress => "in_progress",
+                    PlanEntryStatus::Completed => "completed",
+                },
+                "priority": match entry.priority {
+                    PlanEntryPriority::High => "high",
+                    PlanEntryPriority::Medium => "medium",
+                    PlanEntryPriority::Low => "low",
+                },
+                "_meta": {
+                    "id": entry.id,
+                    "column": entry.column,
+                    "notes": entry.notes,
+                }
+            })
+        })
+        .collect();
+
+    let mut plan = json!({
+        "entries": entries,
+        "_meta": {
+            "source": "swissarmyhammer_kanban",
+            "trigger": trigger,
+        }
+    });
+
+    if let Some(id) = affected_task_id {
+        plan["_meta"]["affected_task_id"] = json!(id);
+    }
+
+    Some(plan)
+}
+
+/// Check if an operation modifies tasks (and should trigger plan notification)
+fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
+    matches!(
+        (verb, noun),
+        (Verb::Add, Noun::Task)
+            | (Verb::Update, Noun::Task)
+            | (Verb::Delete, Noun::Task)
+            | (Verb::Move, Noun::Task)
+            | (Verb::Complete, Noun::Task)
+    )
 }
 
 // No health checks needed
@@ -147,9 +260,9 @@ impl McpTool for KanbanTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
+        _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let ctx = Self::get_kanban_context(context)?;
+        let ctx = Self::get_kanban_context(_context)?;
 
         // Parse the input to get operations
         let input = Value::Object(arguments);
@@ -159,18 +272,50 @@ impl McpTool for KanbanTool {
 
         // Execute each operation and collect results
         let mut results = Vec::new();
+        let mut should_include_plan = false;
+        let mut last_affected_task_id: Option<String> = None;
+        let mut last_trigger = String::new();
 
-        for op in operations {
-            let result = execute_operation(&ctx, &op).await?;
+        for op in &operations {
+            let result = execute_operation(&ctx, op).await?;
+
+            // Track if we need to include plan in response
+            if is_task_modifying_operation(op.verb, op.noun) {
+                should_include_plan = true;
+                last_trigger = op.op_string();
+
+                // Extract the affected task ID from the result if available
+                if let Some(id) = result["id"].as_str() {
+                    last_affected_task_id = Some(id.to_string());
+                }
+            }
+
             results.push(result);
         }
 
-        // Return results
-        let response = if results.len() == 1 {
+        // Build response with plan data if any task-modifying operations were executed
+        let mut response = if results.len() == 1 {
             results.into_iter().next().unwrap()
         } else {
             json!(results)
         };
+
+        // Include plan data in response for task-modifying operations
+        // This enables ACP agents to emit Plan notifications
+        if should_include_plan {
+            if let Some(plan) = build_plan_data(&ctx, &last_trigger, last_affected_task_id.as_deref()).await {
+                // Wrap in object if needed and add _plan key
+                if let Value::Object(ref mut map) = response {
+                    map.insert("_plan".to_string(), plan);
+                } else {
+                    response = json!({
+                        "result": response,
+                        "_plan": plan
+                    });
+                }
+                tracing::debug!("Included plan data in kanban response: trigger={}", last_trigger);
+            }
+        }
 
         Ok(BaseToolImpl::create_success_response(
             serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()),
@@ -300,6 +445,12 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             DeleteTask::new(id).execute(ctx).await
+        }
+        (Complete, Task) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            CompleteTask::new(id).execute(ctx).await
         }
         (Next, Task) => {
             let cmd = NextTask::new();

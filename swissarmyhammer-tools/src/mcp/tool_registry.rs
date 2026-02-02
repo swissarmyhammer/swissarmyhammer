@@ -219,6 +219,7 @@
 //! ```
 
 use super::notifications::NotificationSender;
+use super::plan_notifications::PlanSender;
 use super::progress_notifications::ProgressSender;
 use super::tool_handlers::ToolHandlers;
 use owo_colors::OwoColorize;
@@ -310,6 +311,22 @@ pub struct ToolContext {
     /// ```
     pub progress_sender: Option<ProgressSender>,
 
+    /// Optional plan sender for task management operations
+    ///
+    /// When present, task management tools (like kanban) can send plan notifications
+    /// containing the complete task list after each mutation. These notifications
+    /// can be converted to ACP Plan format by agents for client communication.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(sender) = &context.plan_sender {
+    ///     let entries = vec![PlanEntry::new("task-1", "Do something", ...)];
+    ///     sender.send_plan(entries, "add task", Some("task-1"))?;
+    /// }
+    /// ```
+    pub plan_sender: Option<PlanSender>,
+
     /// MCP server port (for workflow executors that need to connect to the server)
     ///
     /// When workflows are executed via MCP tools and need to use LlamaAgent,
@@ -341,9 +358,10 @@ pub struct ToolContext {
     ///
     /// ```rust,ignore
     /// if let Some(registry) = &context.tool_registry {
-    ///     let result = context.call_tool("todo_create", json!({
-    ///         "task": "Fix issue",
-    ///         "context": "Details..."
+    ///     let result = context.call_tool("kanban", json!({
+    ///         "op": "add task",
+    ///         "title": "Fix issue",
+    ///         "description": "Details..."
     ///     })).await?;
     /// }
     /// ```
@@ -352,7 +370,7 @@ pub struct ToolContext {
     /// Working directory for tool operations
     ///
     /// This is the base directory where tools should operate. For example:
-    /// - Todo storage will be in `{working_dir}/.swissarmyhammer/todo/`
+    /// - Kanban storage will be in `{working_dir}/.swissarmyhammer/kanban/`
     ///
     /// If None, tools should use `std::env::current_dir()` or git root detection
     /// as a fallback. In tests, this should always be set to an isolated directory.
@@ -392,6 +410,7 @@ impl ToolContext {
             use_case_agents: Arc::new(HashMap::new()),
             notification_sender: None,
             progress_sender: None,
+            plan_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
             tool_registry: None,
@@ -457,6 +476,20 @@ impl ToolContext {
     /// A new `ToolContext` with the progress sender set
     pub fn with_progress_sender(mut self, sender: ProgressSender) -> Self {
         self.progress_sender = Some(sender);
+        self
+    }
+
+    /// Set the plan sender for plan notifications
+    ///
+    /// # Arguments
+    ///
+    /// * `sender` - The plan sender to use
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the plan sender set
+    pub fn with_plan_sender(mut self, sender: PlanSender) -> Self {
+        self.plan_sender = Some(sender);
         self
     }
 
@@ -551,10 +584,11 @@ impl ToolContext {
     ///
     /// ```rust,ignore
     /// async fn execute(&self, args: Args, context: &ToolContext) -> Result<CallToolResult, McpError> {
-    ///     // Call todo_create tool instead of direct storage access
-    ///     let result = context.call_tool("todo_create", json!({
-    ///         "task": "Fix violation",
-    ///         "context": "Details about the violation"
+    ///     // Call kanban tool instead of direct storage access
+    ///     let result = context.call_tool("kanban", json!({
+    ///         "op": "add task",
+    ///         "title": "Fix violation",
+    ///         "description": "Details about the violation"
     ///     })).await?;
     ///
     ///     // Extract data from result if needed
@@ -609,7 +643,7 @@ impl ToolContext {
 /// # Implementation Guidelines
 ///
 /// ## Tool Names
-/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `todo_list`).
+/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `files_read`).
 /// Names must be unique within the registry and should be stable across versions.
 ///
 /// ## Descriptions
@@ -649,7 +683,7 @@ pub trait McpTool: Doctorable + Send + Sync {
     /// Get the tool's unique identifier name
     ///
     /// The name must be unique within the registry and should follow the
-    /// `{domain}_{action}` pattern (e.g., `memo_create`, `todo_list`).
+    /// `{domain}_{action}` pattern (e.g., `memo_create`, `files_read`).
     /// Names should be stable across versions.
     fn name(&self) -> &'static str;
 
@@ -725,7 +759,7 @@ pub trait McpTool: Doctorable + Send + Sync {
     /// # Examples
     ///
     /// * `memo_create` → Some("memo")
-    /// * `todo_list` → Some("todo")
+    /// * `kanban` → Some("kanban")
     /// * `files_read` → Some("file")
     fn cli_category(&self) -> Option<&'static str> {
         // Extract category from tool name by taking prefix before first underscore
@@ -736,7 +770,6 @@ pub trait McpTool: Doctorable + Send + Sync {
             "file" | "files" => Some("file"),
             "web" => Some("web"),
             "shell" => Some("shell"),
-            "todo" => Some("todo"),
             "outline" => Some("outline"),
             "notify" => Some("notify"),
             "kanban" => Some("kanban"),
@@ -758,7 +791,7 @@ pub trait McpTool: Doctorable + Send + Sync {
     /// # Examples
     ///
     /// * `memo_create` → "create"
-    /// * `todo_list` → "list"
+    /// * `kanban` → "kanban"
     /// * `files_read` → "read"
     fn cli_name(&self) -> &'static str {
         // Extract action from tool name by taking suffix after first underscore
@@ -1735,11 +1768,6 @@ register_tool_category!(
     "Register all shell-related tools with the registry"
 );
 register_tool_category!(
-    register_todo_tools,
-    todo,
-    "Register all todo-related tools with the registry"
-);
-register_tool_category!(
     register_kanban_tools,
     kanban,
     "Register all kanban board tools with the registry"
@@ -1779,7 +1807,6 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_git_tools(&mut registry);
     register_questions_tools(&mut registry);
     register_shell_tools(&mut registry);
-    register_todo_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_treesitter_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
@@ -2085,9 +2112,9 @@ mod tests {
 
     // Test tools for CLI integration testing
     test_tool!(
-        TodoListTool,
-        "todo_list",
-        "List all available todo items with optional filtering"
+        KanbanTool,
+        "kanban",
+        "Kanban board operations for task management"
     );
     test_tool!(
         FilesReadTool,
@@ -2105,9 +2132,9 @@ mod tests {
         "Execute shell commands with timeout controls"
     );
     test_tool!(
-        TodoCreateTool,
-        "todo_create",
-        "Add a new item to a todo list"
+        GitStatusTool,
+        "git_status",
+        "Show the working tree status"
     );
     test_tool!(
         OutlineGenerateTool,
@@ -2132,8 +2159,6 @@ mod tests {
         assert_eq!(FilesReadTool.cli_category(), Some("file"));
         assert_eq!(WebSearchTool.cli_category(), Some("web"));
         assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
-        assert_eq!(TodoListTool.cli_category(), Some("todo"));
-        assert_eq!(TodoCreateTool.cli_category(), Some("todo"));
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
 
         // Test unknown category
@@ -2149,7 +2174,6 @@ mod tests {
         assert_eq!(FilesReadTool.cli_name(), "read");
         assert_eq!(WebSearchTool.cli_name(), "search");
         assert_eq!(ShellExecuteTool.cli_name(), "execute");
-        assert_eq!(TodoCreateTool.cli_name(), "create");
         assert_eq!(OutlineGenerateTool.cli_name(), "generate");
 
         // Test unknown category still extracts action

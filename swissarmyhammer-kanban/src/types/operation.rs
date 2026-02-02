@@ -19,6 +19,7 @@ pub enum Verb {
     Next,
     Tag,
     Untag,
+    Complete,
 }
 
 impl Verb {
@@ -35,6 +36,7 @@ impl Verb {
             Self::Next => "next",
             Self::Tag => "tag",
             Self::Untag => "untag",
+            Self::Complete => "complete",
         }
     }
 
@@ -51,6 +53,7 @@ impl Verb {
             "next" => Some(Self::Next),
             "tag" | "label" => Some(Self::Tag),
             "untag" | "unlabel" => Some(Self::Untag),
+            "complete" | "done" | "finish" | "close" => Some(Self::Complete),
             _ => None,
         }
     }
@@ -225,7 +228,7 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         // Task operations
         (Verb::Get, Noun::Task) | (Verb::Add, Noun::Task) | (Verb::Update, Noun::Task) |
         (Verb::Move, Noun::Task) | (Verb::Delete, Noun::Task) | (Verb::Next, Noun::Task) |
-        (Verb::Tag, Noun::Task) | (Verb::Untag, Noun::Task) |
+        (Verb::Tag, Noun::Task) | (Verb::Untag, Noun::Task) | (Verb::Complete, Noun::Task) |
         // Tasks listing
         (Verb::List, Noun::Tasks) |
         // Tag operations (board-level)

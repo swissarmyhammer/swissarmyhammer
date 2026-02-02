@@ -683,46 +683,56 @@ impl AcpServer {
         }
     }
 
-    /// Send Plan notification with current session todos
+    /// Send Plan notification from kanban tool result
     ///
-    /// Fetches all todos for the given session and broadcasts them as an ACP Plan notification.
-    /// This enables clients to track the agent's execution plan in real-time.
+    /// Extracts the `_plan` field from a kanban tool result and broadcasts it as an ACP Plan
+    /// notification. The kanban tool includes plan data in its responses when tasks are modified.
+    ///
+    /// Per ACP spec: "Complete plan lists must be resent with each update; clients will replace
+    /// prior plans entirely."
     ///
     /// # Arguments
     ///
     /// * `acp_session_id` - The ACP session ID to use in the notification
-    /// * `llama_session_id` - The llama session ID to fetch todos from
+    /// * `tool_result` - The tool result containing the `_plan` field
     ///
     /// # Returns
     ///
-    /// Returns Ok(()) if the notification was sent successfully, or an error if:
-    /// - Failed to get the session from storage
-    /// - Failed to retrieve todos
-    async fn send_plan_notification(
+    /// Returns Ok(()) if the plan was extracted and notification sent, or an error if:
+    /// - The tool result doesn't contain a `_plan` field
+    /// - The plan data is malformed
+    fn send_plan_notification_from_result(
         &self,
         acp_session_id: &agent_client_protocol::SessionId,
-        llama_session_id: &crate::types::SessionId,
+        tool_result: &crate::types::ToolResult,
     ) -> Result<(), agent_client_protocol::Error> {
-        // Get the session to access its todos
-        let _session = self
-            .agent_server
-            .session_manager()
-            .get_session(llama_session_id)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to get session: {}", e);
-                Self::convert_error(e)
-            })?
-            .ok_or_else(|| {
-                tracing::error!("Session not found: {}", llama_session_id);
-                agent_client_protocol::Error::invalid_params()
-            })?;
+        // Extract _plan from tool result
+        // The result may be a string (JSON) or a Value object
+        let plan_data = if let Some(plan) = tool_result.result.get("_plan") {
+            plan.clone()
+        } else if let Some(result_str) = tool_result.result.as_str() {
+            // Try to parse as JSON string
+            match serde_json::from_str::<serde_json::Value>(result_str) {
+                Ok(parsed) => {
+                    if let Some(plan) = parsed.get("_plan") {
+                        plan.clone()
+                    } else {
+                        tracing::debug!("No _plan field in kanban tool result (string parsed)");
+                        return Ok(());
+                    }
+                }
+                Err(_) => {
+                    tracing::debug!("Could not parse kanban tool result as JSON");
+                    return Ok(());
+                }
+            }
+        } else {
+            tracing::debug!("No _plan field in kanban tool result");
+            return Ok(());
+        };
 
-        // Get todos from the session
-        let todos = vec![]; // TODO: Get todos from _session when available
-
-        // Convert todos to ACP Plan format
-        let plan = super::plan::todos_to_acp_plan(todos);
+        // Convert plan data to ACP Plan format
+        let plan = super::plan::plan_data_to_acp_plan(&plan_data);
 
         // Create and broadcast Plan notification
         let plan_notification = agent_client_protocol::SessionNotification::new(
@@ -732,7 +742,17 @@ impl AcpServer {
 
         self.broadcast_notification(plan_notification);
 
-        tracing::debug!("Sent Plan notification for session {}", acp_session_id.0);
+        let entry_count = plan_data
+            .get("entries")
+            .and_then(|e| e.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+
+        tracing::info!(
+            "Sent Plan notification for session {} with {} entries",
+            acp_session_id.0,
+            entry_count
+        );
 
         Ok(())
     }
@@ -1553,21 +1573,17 @@ impl agent_client_protocol::Agent for AcpServer {
                                 Self::convert_error(e)
                             })?;
 
-                        // Send Plan notification if this was a todo-related tool call
-                        if tool_name == "mcp__swissarmyhammer__todo_create"
-                            || tool_name == "mcp__swissarmyhammer__todo_mark_complete"
-                        {
+                        // Send Plan notification if this was a kanban-related tool call
+                        // The kanban tool includes _plan data in its response when tasks are modified
+                        if tool_name == "mcp__sah__kanban" {
                             tracing::debug!(
-                                "Todo modified via '{}', sending Plan notification",
+                                "Kanban tool call '{}', checking for Plan data",
                                 tool_name
                             );
-                            if let Err(e) = self
-                                .send_plan_notification(
-                                    &request.session_id,
-                                    &acp_session.llama_session_id,
-                                )
-                                .await
-                            {
+                            if let Err(e) = self.send_plan_notification_from_result(
+                                &request.session_id,
+                                &result,
+                            ) {
                                 tracing::warn!(
                                     "Failed to send Plan notification after '{}': {}",
                                     tool_name,

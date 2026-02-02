@@ -18,6 +18,14 @@ async fn create_test_context_with_git() -> Result<(IsolatedTestEnvironment, CliT
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Initialize kanban board (required before adding tasks)
+    let init_args = context.create_arguments(vec![
+        ("op", json!("init board")),
+        ("name", json!("Test Board")),
+    ]);
+    context.execute_tool("kanban", init_args).await.ok();
+
     Ok((env, context))
 }
 
@@ -31,13 +39,17 @@ async fn create_test_context() -> Result<(IsolatedTestEnvironment, CliToolContex
     Ok((env, context))
 }
 
-/// Helper to create todo arguments
-fn create_todo_args(
+/// Helper to create kanban task arguments
+fn create_kanban_add_task_args(
     context: &CliToolContext,
-    task: &str,
-    content: &str,
+    title: &str,
+    description: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
-    context.create_arguments(vec![("task", json!(task)), ("context", json!(content))])
+    context.create_arguments(vec![
+        ("op", json!("add task")),
+        ("title", json!(title)),
+        ("description", json!(description)),
+    ])
 }
 
 /// Helper to assert error contains expected phrases
@@ -65,31 +77,33 @@ macro_rules! assert_tool_success {
 async fn test_mcp_error_propagation() -> Result<()> {
     let (_env, context) = create_test_context().await?;
 
-    // Test invalid arguments error
+    // Test invalid arguments error (missing required op field)
     let invalid_args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
-    let result = context.execute_tool("todo_create", invalid_args).await;
+    let result = context.execute_tool("kanban", invalid_args).await;
     assert!(result.is_err(), "Invalid arguments should cause error");
 
     // Test missing required arguments error
     let empty_args = context.create_arguments(vec![]);
-    let result = context.execute_tool("todo_create", empty_args).await;
+    let result = context.execute_tool("kanban", empty_args).await;
     assert!(
         result.is_err(),
         "Missing required arguments should cause error"
     );
 
-    // Test non-existent resource handling with todo_show
-    let nonexistent_args =
-        context.create_arguments(vec![("item", json!("01NONEXISTENT000000000000"))]);
-    let result = context.execute_tool("todo_show", nonexistent_args).await;
+    // Test non-existent resource handling with kanban get task
+    let nonexistent_args = context.create_arguments(vec![
+        ("op", json!("get task")),
+        ("id", json!("01NONEXISTENT000000000000")),
+    ]);
+    let result = context.execute_tool("kanban", nonexistent_args).await;
 
-    // The todo_show tool may return either success with "not found" message or error
+    // The kanban tool may return either success with "not found" message or error
     // depending on the integration layer. Both behaviors are acceptable.
     match result {
         Ok(response) => {
             let text = response.content[0].as_text().unwrap().text.as_str();
             assert!(
-                text.contains("not found") || text.contains("No todo"),
+                text.contains("not found") || text.contains("No task"),
                 "Should contain not found message, got: {}",
                 text
             );
@@ -126,8 +140,8 @@ pub fn test_function() -> String { "test".to_string() }"#,
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Test correct argument types
-    let valid_args = create_todo_args(&context, "String Title", "String content");
-    let result = context.execute_tool("todo_create", valid_args).await;
+    let valid_args = create_kanban_add_task_args(&context, "String Title", "String content");
+    let result = context.execute_tool("kanban", valid_args).await;
     assert_tool_success!(result, "Valid arguments should succeed");
 
     Ok(())
@@ -138,9 +152,9 @@ pub fn test_function() -> String { "test".to_string() }"#,
 async fn test_response_formatting() -> Result<()> {
     let (_env, context) = create_test_context_with_git().await?;
 
-    // Test successful response formatting with todo_create
-    let args = create_todo_args(&context, "Format Test Task", "Testing response formatting");
-    let result = context.execute_tool("todo_create", args).await?;
+    // Test successful response formatting with kanban add task
+    let args = create_kanban_add_task_args(&context, "Format Test Task", "Testing response formatting");
+    let result = context.execute_tool("kanban", args).await?;
 
     let success_response =
         swissarmyhammer_cli::mcp_integration::response_formatting::format_success_response(&result);
@@ -181,18 +195,18 @@ async fn test_concurrent_tool_execution() -> Result<()> {
     // Execute multiple tools concurrently
     let mut handles = vec![];
 
-    // Create multiple todos concurrently
+    // Create multiple tasks concurrently
     for i in 0..3 {
         let context_clone = CliToolContext::new_with_dir(&temp_path)
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         let handle = tokio::spawn(async move {
-            let args = create_todo_args(
+            let args = create_kanban_add_task_args(
                 &context_clone,
                 &format!("Concurrent Test Task {}", i),
                 &format!("Context for task {}", i),
             );
-            context_clone.execute_tool("todo_create", args).await
+            context_clone.execute_tool("kanban", args).await
         });
         handles.push(handle);
     }
@@ -215,14 +229,19 @@ async fn test_concurrent_tool_execution() -> Result<()> {
 async fn test_error_message_formatting() -> Result<()> {
     let (_env, context) = create_test_context().await?;
 
-    // Test missing required field error
+    // Test missing required field error or board not initialized error
+    // (Without git repo, kanban operations fail with initialization error)
     let result = context
-        .execute_tool("todo_create", context.create_arguments(vec![]))
+        .execute_tool("kanban", context.create_arguments(vec![]))
         .await;
     assert!(result.is_err(), "Should error on missing required fields");
 
     if let Err(error) = result {
-        assert_error_contains_any(&error, &["required", "missing", "task"]);
+        // Accept either schema validation errors or board initialization errors
+        assert_error_contains_any(
+            &error,
+            &["required", "missing", "op", "not initialized", "board"],
+        );
     }
 
     // Test invalid tool name error
@@ -250,11 +269,11 @@ async fn test_tool_context_configurations() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Both should work independently
-    let args1 = create_todo_args(&context1, "Context 1 Task", "From context 1");
-    let args2 = create_todo_args(&context2, "Context 2 Task", "From context 2");
+    let args1 = create_kanban_add_task_args(&context1, "Context 1 Task", "From context 1");
+    let args2 = create_kanban_add_task_args(&context2, "Context 2 Task", "From context 2");
 
-    let result1 = context1.execute_tool("todo_create", args1).await;
-    let result2 = context2.execute_tool("todo_create", args2).await;
+    let result1 = context1.execute_tool("kanban", args1).await;
+    let result2 = context2.execute_tool("kanban", args2).await;
 
     assert_tool_success!(result1, "Context 1 should work independently");
     assert_tool_success!(result2, "Context 2 should work independently");
@@ -267,17 +286,29 @@ async fn test_tool_context_configurations() -> Result<()> {
 async fn test_mcp_error_boundaries() -> Result<()> {
     let (_env, context) = create_test_context_with_git().await?;
 
-    // Test malformed arguments (empty arguments when required fields are missing)
-    let empty_args = serde_json::Map::new();
-    let result = context.execute_tool("todo_create", empty_args).await;
+    // Test invalid operation (get task with non-existent ID)
+    let invalid_args = context.create_arguments(vec![
+        ("op", json!("get task")),
+        ("id", json!("01NONEXISTENT000000000000")),
+    ]);
+    let result = context.execute_tool("kanban", invalid_args).await;
+    // This should either error or return a not-found response
+    let is_error_or_not_found = match result {
+        Err(_) => true,
+        Ok(response) => {
+            let text = response.content[0].as_text().map(|t| t.text.as_str()).unwrap_or("");
+            text.contains("not found") || text.contains("No task")
+        }
+    };
     assert!(
-        result.is_err(),
-        "Missing required arguments should be rejected"
+        is_error_or_not_found,
+        "Invalid task ID should be rejected or return not found"
     );
 
     // Test context recovery after error
-    let valid_args = create_todo_args(&context, "Recovery Test", "Testing recovery after error");
-    let result = context.execute_tool("todo_create", valid_args).await;
+    let valid_args =
+        create_kanban_add_task_args(&context, "Recovery Test", "Testing recovery after error");
+    let result = context.execute_tool("kanban", valid_args).await;
     assert_tool_success!(result, "Context should recover after error");
 
     Ok(())

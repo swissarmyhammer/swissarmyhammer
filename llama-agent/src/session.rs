@@ -147,7 +147,6 @@ impl SessionManager {
             compaction_history: Vec::new(),
             transcript_path: transcript_path.clone(),
             context_state: None,
-            todos: Vec::new(),
             available_commands: Vec::new(),
             current_mode: None,
             client_capabilities: None,

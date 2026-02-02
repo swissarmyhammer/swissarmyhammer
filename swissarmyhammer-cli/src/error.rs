@@ -101,7 +101,7 @@ fn format_directory_creation_error(details: &str) -> String {
         \n\
         SwissArmyHammer requires a .swissarmyhammer directory to store:\n\
         • Memos in .swissarmyhammer/memos/\n\
-        • Todo lists in .swissarmyhammer/todo/\n\
+        • Kanban boards in .swissarmyhammer/kanban/\n\
         • Search index in .swissarmyhammer/semantic.db\n\
         • Workflow runs in .swissarmyhammer/runs/\n\
         \n\

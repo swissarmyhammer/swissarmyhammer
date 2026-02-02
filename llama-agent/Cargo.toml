@@ -71,9 +71,8 @@ md5 = { workspace = true }
 # Agent Client Protocol (always enabled)
 agent-client-protocol = { workspace = true }
 
-# Todo system integration for ACP (always enabled)
-swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 
 # Modes system for ACP session modes
 swissarmyhammer-modes = { path = "../swissarmyhammer-modes" }

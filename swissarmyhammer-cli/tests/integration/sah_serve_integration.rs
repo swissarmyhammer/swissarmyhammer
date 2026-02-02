@@ -58,9 +58,7 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "files_glob",
     "files_grep",
     "shell_execute",
-    "todo_create",
-    "todo_show",
-    "todo_mark_complete",
+    "kanban",
     "web_fetch",
     "web_search",
 ];
@@ -232,7 +230,7 @@ async fn test_minimal_tool_executions(
     _tools: &[Value],
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Test only one fast, safe tool to verify execution works
-    test_single_tool_execution(stdin, reader, 3, "todo_list", json!({})).await?;
+    test_single_tool_execution(stdin, reader, 3, "kanban", json!({"op": "list tasks"})).await?;
 
     println!("✓ Tool execution test completed successfully");
     Ok(())

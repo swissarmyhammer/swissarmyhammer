@@ -85,7 +85,7 @@ mod tests {
         assert_eq!(result["name"], "Test Board");
         assert_eq!(result["description"], "A test board");
         assert!(result["columns"].is_array());
-        assert_eq!(result["columns"].as_array().unwrap().len(), 4);
+        assert_eq!(result["columns"].as_array().unwrap().len(), 3);
     }
 
     #[tokio::test]

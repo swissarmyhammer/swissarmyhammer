@@ -38,7 +38,7 @@ infer = { workspace = true }
 once_cell = { workspace = true }
 typed-builder = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
+swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-modes = { path = "../swissarmyhammer-modes" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }

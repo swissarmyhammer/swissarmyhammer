@@ -14,7 +14,7 @@ use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
     register_cel_tools, register_file_tools, register_flow_tools, register_git_tools,
-    register_kanban_tools, register_questions_tools, register_shell_tools, register_todo_tools,
+    register_kanban_tools, register_questions_tools, register_shell_tools,
     register_treesitter_tools, register_web_fetch_tools, register_web_search_tools,
 };
 use tokio::sync::RwLock;
@@ -109,7 +109,6 @@ impl CliToolContext {
         register_kanban_tools(&mut tool_registry);
         register_questions_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
-        register_todo_tools(&mut tool_registry);
         register_treesitter_tools(&mut tool_registry);
         register_web_fetch_tools(&mut tool_registry);
         register_web_search_tools(&mut tool_registry);
@@ -273,11 +272,12 @@ mod tests {
         // Test that the rate limiter allows normal operations
         // by checking that we can execute a tool (this will use the rate limiter internally)
         let mut args = Map::new();
-        args.insert("task".to_string(), json!("Test task"));
-        args.insert("context".to_string(), json!("Test context"));
+        args.insert("op".to_string(), json!("add task"));
+        args.insert("title".to_string(), json!("Test task"));
+        args.insert("description".to_string(), json!("Test context"));
 
         // This should succeed if rate limiter is working properly
-        let result = context.execute_tool("todo_create", args).await;
+        let result = context.execute_tool("kanban", args).await;
 
         // We expect this to either succeed or fail with a normal error (not a rate limit error)
         // Rate limit errors would be specific MCP errors about rate limiting

@@ -1,13 +1,15 @@
 ---
 title: are_todos_done
-description: "Check if all todo items have been completed."
+description: "Check if all tasks on the kanban board have been completed."
 ---
 
 ## Goal
 
-We want to know if all todo items are complete.
+We want to know if all tasks are complete (in the done column).
 
-Use the todo_list MCP tool with `completed: false` to check for incomplete todos.
+Use the kanban MCP tool with `op: "list tasks"` to get all tasks.
 
-If there are any incomplete todos, `cel_set` are_todos_done to `false`
-If all todos are complete (no incomplete todos returned), `cel_set` are_todos_done to `true`
+Check if any tasks are NOT in the "done" column.
+
+If there are tasks not in the done column, `cel_set` are_todos_done to `false`
+If all tasks are in the done column (or there are no tasks), `cel_set` are_todos_done to `true`

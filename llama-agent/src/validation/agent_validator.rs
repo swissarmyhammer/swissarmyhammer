@@ -142,8 +142,6 @@ mod tests {
             transcript_path: None,
             context_state: None,
 
-            todos: Vec::new(),
-
             available_commands: Vec::new(),
             current_mode: None,
 

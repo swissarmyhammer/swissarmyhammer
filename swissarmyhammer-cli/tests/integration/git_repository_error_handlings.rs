@@ -11,20 +11,21 @@ use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 use crate::in_process_test_utils::run_sah_command_in_process_with_dir;
 
-/// Test that todo commands require Git repository
+/// Test that kanban commands require Git repository
 #[tokio::test]
-async fn test_todo_commands_require_git_repository() {
+async fn test_kanban_commands_require_git_repository() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["tool", "todo_list"], &temp_dir).await;
+    let result =
+        run_sah_command_in_process_with_dir(&["tool", "kanban", "tasks", "list"], &temp_dir).await;
 
     // Restore original directory
 
     let output = result.unwrap();
-    // Todo commands require git repositories
+    // Kanban commands require git repositories
     assert_ne!(
         output.exit_code, 0,
         "Command should fail without git repository"
@@ -32,7 +33,7 @@ async fn test_todo_commands_require_git_repository() {
     assert!(
         output
             .stderr
-            .contains("Todo operations require a Git repository")
+            .contains("Kanban operations require a Git repository")
             || output.stderr.contains("Git repository")
             || output.stderr.contains("git"),
         "Should show git repository error: {}",
@@ -56,8 +57,9 @@ async fn test_commands_work_in_git_repository() {
 
     // Use explicit working directory instead of global directory change
 
-    // Test that todo list command now works (or at least doesn't fail with Git repository error)
-    let result = run_sah_command_in_process_with_dir(&["tool", "todo_list"], &temp_dir).await;
+    // Test that kanban list command now works (or at least doesn't fail with Git repository error)
+    let result =
+        run_sah_command_in_process_with_dir(&["tool", "kanban", "tasks", "list"], &temp_dir).await;
 
     // Restore original directory
 
@@ -78,7 +80,8 @@ async fn test_git_repository_error_exit_codes() {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["tool", "todo_list"], &temp_dir).await;
+    let result =
+        run_sah_command_in_process_with_dir(&["tool", "kanban", "tasks", "list"], &temp_dir).await;
 
     // Restore original directory
 
@@ -95,10 +98,10 @@ async fn test_git_repository_error_exit_codes() {
         "DEBUG test_git_repository_error_exit_codes: exit_code: {}",
         output.exit_code
     );
-    // Todo commands require git repositories
+    // Kanban commands require git repositories
     assert_ne!(
         output.exit_code, 0,
-        "Todo commands should fail without git repository"
+        "Kanban commands should fail without git repository"
     );
 }
 
@@ -129,7 +132,7 @@ async fn test_web_search_works_without_git() {
     );
 }
 
-/// Test error message actionability with todo commands
+/// Test error message actionability with kanban commands
 #[tokio::test]
 async fn test_error_messages_are_actionable() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -139,11 +142,27 @@ async fn test_error_messages_are_actionable() {
     use git2::Repository;
     Repository::init(&temp_dir).expect("Failed to initialize git repository");
 
+    // Initialize kanban board first (required before adding tasks)
+    let init_result = run_sah_command_in_process_with_dir(
+        &["tool", "kanban", "board", "init", "--name", "Test Board"],
+        &temp_dir,
+    )
+    .await;
+
+    let init_output = init_result.unwrap();
+    assert_eq!(
+        init_output.exit_code, 0,
+        "Board init should succeed with git repository: {}",
+        init_output.stderr
+    );
+
     // Use explicit working directory instead of global directory change
 
-    let result =
-        run_sah_command_in_process_with_dir(&["tool", "todo_create", "--task", "Test task"], &temp_dir)
-            .await;
+    let result = run_sah_command_in_process_with_dir(
+        &["tool", "kanban", "task", "add", "--title", "Test task"],
+        &temp_dir,
+    )
+    .await;
 
     // Restore original directory
 
@@ -161,9 +180,9 @@ async fn test_error_messages_are_actionable() {
         output.exit_code
     );
 
-    // Todo create commands should succeed with git repository
+    // Task add commands should succeed with git repository and initialized board
     assert_eq!(
         output.exit_code, 0,
-        "Todo create should succeed with git repository"
+        "Task add should succeed with git repository and initialized board"
     );
 }
