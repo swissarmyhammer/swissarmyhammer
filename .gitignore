@@ -146,6 +146,7 @@ doc/book
 
 # Claude Code configuration
 .claude/
+CLAUDE.md
 
 # ACP transcript recordings
 .acp/

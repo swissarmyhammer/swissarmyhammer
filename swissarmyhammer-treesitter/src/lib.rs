@@ -93,7 +93,10 @@ pub use chunk::{
     chunk_file, ChunkGraph, ChunkSource, QuerySource, SemanticChunk, SimilarChunk, SimilarityQuery,
 };
 pub use error::{Result, TreeSitterError};
-pub use index::{IndexConfig, IndexContext, IndexStats, IndexStatus, ScanResult};
+pub use index::{
+    IndexAction, IndexConfig, IndexContext, IndexPhase, IndexStats, IndexStatus, ScanResult,
+    SkipReason,
+};
 pub use language::{LanguageConfig, LanguageRegistry};
 pub use parsed_file::ParsedFile;
 pub use watcher::{WorkspaceWatcher, WorkspaceWatcherCallback};

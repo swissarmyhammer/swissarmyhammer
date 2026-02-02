@@ -12,8 +12,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use swissarmyhammer_treesitter::Workspace;
+use swissarmyhammer_treesitter::{IndexPhase, Workspace};
 use tracing::info;
+
+/// Log progress every N items to avoid flooding output
+const PROGRESS_LOG_INTERVAL: usize = 10;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -54,27 +57,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let processed = status.files_processed();
             let last = last_printed_clone.load(Ordering::Relaxed);
 
-            // Log every 10 files or when complete
-            if processed >= last + 10 || status.is_complete() {
-                last_printed_clone.store(processed, Ordering::Relaxed);
-
-                if status.chunks_total > 0 {
-                    info!(
-                        embedded = status.chunks_embedded,
-                        total = status.chunks_total,
-                        progress = format!("{:.1}%", status.progress().unwrap_or(0.0) * 100.0),
-                        "Embedding chunks"
-                    );
-                } else {
+            // Log based on phase
+            match status.phase {
+                IndexPhase::Discovering => {
+                    if status.files_skipped > 0 && status.files_skipped > last {
+                        last_printed_clone.store(status.files_skipped, Ordering::Relaxed);
+                        info!(
+                            skipped = status.files_skipped,
+                            current = ?status.current_file,
+                            "Skipping unchanged"
+                        );
+                    }
+                }
+                IndexPhase::Parsing => {
+                    if processed >= last + PROGRESS_LOG_INTERVAL || status.is_complete() {
+                        last_printed_clone.store(processed, Ordering::Relaxed);
+                        info!(
+                            parsed = status.files_parsed,
+                            total = status.files_total,
+                            skipped = status.files_skipped,
+                            errors = status.files_errored,
+                            current = ?status.current_file,
+                            "Parsing files"
+                        );
+                    }
+                }
+                IndexPhase::Embedding => {
+                    if status.chunks_embedded >= last + PROGRESS_LOG_INTERVAL || status.is_complete() {
+                        last_printed_clone.store(status.chunks_embedded, Ordering::Relaxed);
+                        info!(
+                            embedded = status.chunks_embedded,
+                            total = status.chunks_total,
+                            progress = format!("{:.1}%", status.progress().unwrap_or(0.0) * 100.0),
+                            "Embedding chunks"
+                        );
+                    }
+                }
+                IndexPhase::Complete => {
                     info!(
                         parsed = status.files_parsed,
-                        total = status.files_total,
                         skipped = status.files_skipped,
-                        errors = status.files_errored,
-                        current = ?status.current_file,
-                        "Parsing files"
+                        "Build complete"
                     );
                 }
+                IndexPhase::Idle => {}
             }
         })
         .open()

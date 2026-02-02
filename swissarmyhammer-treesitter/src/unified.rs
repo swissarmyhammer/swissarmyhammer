@@ -31,16 +31,18 @@
 //! let results = workspace.semantic_search("fn main", 10, 0.7).await?;
 //! ```
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ignore::WalkBuilder;
 use tokio::sync::RwLock as TokioRwLock;
 
 use swissarmyhammer_leader_election::{ElectionConfig, ElectionError, LeaderElection, LeaderGuard};
 
 use crate::chunk::{cosine_similarity, SemanticChunk, SimilarityQuery};
 use crate::db::{database_path, EmbeddedChunkRecord, IndexDatabase};
-use crate::index::{IndexConfig, IndexContext, IndexStatus, ProgressCallback};
+use crate::index::{compute_file_hash, IndexConfig, IndexContext, IndexStatus, ProgressCallback};
 use crate::query::{
     check_ready, ChunkResult, DuplicateCluster, IndexStatusInfo, QueryError, QueryMatch,
     SimilarChunkResult,
@@ -298,6 +300,9 @@ impl Workspace {
     /// - Generates embeddings
     /// - Writes results to the database
     ///
+    /// Uses incremental indexing: files that haven't changed since the last
+    /// index build (based on content hash) are skipped.
+    ///
     /// Progress is reported through the callback set with `with_progress()`.
     ///
     /// # Errors
@@ -314,9 +319,16 @@ impl Workspace {
             }
         };
 
-        // Scan and parse files
+        // Compute skip set: files that haven't changed since last index
+        let skip_paths = self.compute_unchanged_files(&db)?;
+        let skip_count = skip_paths.len();
+        if skip_count > 0 {
+            tracing::info!("{} files unchanged, skipping re-index", skip_count);
+        }
+
+        // Scan and parse files, skipping unchanged ones
         let mut context = self.context.write().await;
-        let result = context.scan().await?;
+        let result = context.scan_with_skip(skip_paths).await?;
 
         tracing::info!(
             "Index scan complete: {} files parsed, {} skipped, {} errors in {}ms",
@@ -333,6 +345,46 @@ impl Workspace {
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
         Ok(())
+    }
+
+    /// Compute the set of files that haven't changed since the last index build
+    ///
+    /// Walks the workspace, computes content hashes, and checks against the database.
+    /// Returns canonical paths of unchanged files to skip during scanning.
+    fn compute_unchanged_files(&self, db: &Arc<IndexDatabase>) -> Result<HashSet<PathBuf>> {
+        let mut skip_paths = HashSet::new();
+        let registry = crate::language::LanguageRegistry::global();
+
+        let walker = WalkBuilder::new(&self.workspace_root)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .hidden(false)
+            .build();
+
+        for entry in walker.flatten() {
+            let path = entry.path();
+            if !path.is_file() || registry.detect_language(path).is_none() {
+                continue;
+            }
+
+            if let Some(canonical) = Self::check_file_unchanged(path, db) {
+                skip_paths.insert(canonical);
+            }
+        }
+
+        Ok(skip_paths)
+    }
+
+    /// Check if a file is unchanged in the database, returning its canonical path if so
+    fn check_file_unchanged(path: &Path, db: &Arc<IndexDatabase>) -> Option<PathBuf> {
+        let hash = compute_file_hash(path).ok()?;
+        let is_current = db.file_is_current(path, &hash).unwrap_or(false);
+        if is_current {
+            Some(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+        } else {
+            None
+        }
     }
 
     /// Sync the in-memory index to the database
@@ -1384,6 +1436,7 @@ mod tests {
     #[test]
     fn test_check_index_ready_complete() {
         let mut status = crate::index::IndexStatus::new(PathBuf::from("/test"));
+        status.phase = crate::index::IndexPhase::Complete;
         status.files_total = 10;
         status.files_parsed = 10;
         // Complete workspace should be ready
@@ -1745,5 +1798,172 @@ mod tests {
         // Now build
         workspace.build().await.unwrap();
         assert!(workspace.is_built());
+    }
+
+    // =========================================================================
+    // Incremental indexing tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_incremental_indexing_skips_unchanged_files() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        // First build - should parse the file
+        let workspace = Workspace::new(dir.path()).open().await.unwrap();
+        workspace.build().await.unwrap();
+
+        let status1 = workspace.status().await.unwrap();
+        assert_eq!(status1.files_indexed, 1);
+
+        // Drop workspace to release lock
+        drop(workspace);
+
+        // Second build - file is unchanged, should skip
+        let parse_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let parse_count_clone = parse_count.clone();
+
+        let workspace2 = Workspace::new(dir.path())
+            .with_progress(move |status| {
+                // Track when files are being parsed (not skipped)
+                if status.files_parsed > 0 {
+                    parse_count_clone.store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
+            .open()
+            .await
+            .unwrap();
+        workspace2.build().await.unwrap();
+
+        // File was unchanged, so should not have been re-parsed
+        let parsed = parse_count.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(parsed, 0, "Unchanged file should be skipped, not re-parsed");
+    }
+
+    #[tokio::test]
+    async fn test_incremental_indexing_reparses_changed_files() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        std::fs::write(&file_path, "fn main() {}").unwrap();
+
+        // First build
+        let workspace = Workspace::new(dir.path()).open().await.unwrap();
+        workspace.build().await.unwrap();
+        drop(workspace);
+
+        // Modify the file
+        std::fs::write(&file_path, "fn main() { println!(\"changed\"); }").unwrap();
+
+        // Second build - file changed, should re-parse
+        let parse_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let parse_count_clone = parse_count.clone();
+
+        let workspace2 = Workspace::new(dir.path())
+            .with_progress(move |status| {
+                parse_count_clone.store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
+            })
+            .open()
+            .await
+            .unwrap();
+        workspace2.build().await.unwrap();
+
+        // File was changed, so should have been re-parsed
+        let parsed = parse_count.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(parsed, 1, "Changed file should be re-parsed");
+    }
+
+    #[tokio::test]
+    async fn test_incremental_indexing_mixed_changed_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let file1 = dir.path().join("unchanged.rs");
+        let file2 = dir.path().join("changed.rs");
+        std::fs::write(&file1, "fn unchanged() {}").unwrap();
+        std::fs::write(&file2, "fn changed() {}").unwrap();
+
+        // First build
+        let workspace = Workspace::new(dir.path()).open().await.unwrap();
+        workspace.build().await.unwrap();
+        let status1 = workspace.status().await.unwrap();
+        assert_eq!(status1.files_indexed, 2);
+        drop(workspace);
+
+        // Modify only one file
+        std::fs::write(&file2, "fn changed() { println!(\"modified\"); }").unwrap();
+
+        // Second build
+        let max_parsed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_parsed_clone = max_parsed.clone();
+
+        let workspace2 = Workspace::new(dir.path())
+            .with_progress(move |status| {
+                let current = max_parsed_clone.load(std::sync::atomic::Ordering::SeqCst);
+                if status.files_parsed > current {
+                    max_parsed_clone.store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
+            .open()
+            .await
+            .unwrap();
+        workspace2.build().await.unwrap();
+
+        // Only the changed file should be re-parsed
+        let parsed = max_parsed.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(parsed, 1, "Only the changed file should be re-parsed");
+    }
+
+    #[tokio::test]
+    async fn test_incremental_indexing_new_file_added() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("existing.rs"), "fn existing() {}").unwrap();
+
+        // First build
+        let workspace = Workspace::new(dir.path()).open().await.unwrap();
+        workspace.build().await.unwrap();
+        drop(workspace);
+
+        // Add a new file
+        std::fs::write(dir.path().join("new.rs"), "fn new_func() {}").unwrap();
+
+        // Second build
+        let workspace2 = Workspace::new(dir.path()).open().await.unwrap();
+        workspace2.build().await.unwrap();
+
+        // Both files should now be indexed
+        let status = workspace2.status().await.unwrap();
+        assert_eq!(status.files_indexed, 2, "Both files should be indexed");
+    }
+
+    #[tokio::test]
+    async fn test_check_file_unchanged_returns_none_for_new_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        std::fs::write(&file_path, "fn main() {}").unwrap();
+
+        // Open database without indexing
+        let db_path = database_path(dir.path());
+        let db = Arc::new(IndexDatabase::open_readwrite(&db_path).unwrap());
+
+        // File not in database - should return None
+        let result = Workspace::check_file_unchanged(&file_path, &db);
+        assert!(result.is_none(), "New file should not be marked as unchanged");
+    }
+
+    #[tokio::test]
+    async fn test_check_file_unchanged_returns_path_for_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        std::fs::write(&file_path, "fn main() {}").unwrap();
+
+        // Build index first
+        let workspace = Workspace::new(dir.path()).open().await.unwrap();
+        workspace.build().await.unwrap();
+
+        // Get the database
+        let db_path = database_path(dir.path());
+        let db = Arc::new(IndexDatabase::open_readwrite(&db_path).unwrap());
+
+        // File in database with same hash - should return Some
+        let result = Workspace::check_file_unchanged(&file_path, &db);
+        assert!(result.is_some(), "Unchanged file should return canonical path");
     }
 }

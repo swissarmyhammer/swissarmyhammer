@@ -32,10 +32,30 @@ use ignore::WalkBuilder;
 use llama_embedding::{EmbeddingConfig, EmbeddingModel};
 use llama_loader::ModelSource;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+
+/// Compute the content hash for a file without parsing it
+///
+/// This is useful for checking if a file has changed before re-parsing.
+pub fn compute_file_hash(path: &Path) -> std::io::Result<[u8; 16]> {
+    let content = std::fs::read(path)?;
+    Ok(md5::compute(&content).into())
+}
+
+/// Result of checking whether a file should be parsed
+enum FileCheckResult {
+    /// File should be parsed
+    Parse,
+    /// File is unchanged from database, skip it
+    SkipUnchanged,
+    /// File is too large, skip it
+    SkipTooLarge,
+    /// Error accessing file
+    Error(String),
+}
 
 /// Default maximum file size to parse (10 MB)
 pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
@@ -43,21 +63,22 @@ pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Default parse timeout in milliseconds
 pub const DEFAULT_PARSE_TIMEOUT_MS: u64 = 5000;
 
+
 /// Configuration for embedding model
 #[derive(Debug, Clone)]
 pub struct EmbeddingModelConfig {
-    /// HuggingFace repo (default: "nomic-ai/nomic-embed-code-GGUF")
+    /// HuggingFace repo (default: "nomic-ai/nomic-embed-text-v1.5-GGUF")
     pub repo: String,
 
-    /// Model filename (default: "nomic-embed-code.Q4_0.gguf")
+    /// Model filename (default: "nomic-embed-text-v1.5.Q4_K_M.gguf")
     pub filename: String,
 }
 
 impl Default for EmbeddingModelConfig {
     fn default() -> Self {
         Self {
-            repo: "nomic-ai/nomic-embed-code-GGUF".to_string(),
-            filename: "nomic-embed-code.Q4_0.gguf".to_string(),
+            repo: "nomic-ai/nomic-embed-text-v1.5-GGUF".to_string(),
+            filename: "nomic-embed-text-v1.5.Q4_K_M.gguf".to_string(),
         }
     }
 }
@@ -89,6 +110,105 @@ impl Default for IndexConfig {
     }
 }
 
+/// Phase of the indexing operation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum IndexPhase {
+    /// Initial state, not yet started
+    #[default]
+    Idle,
+    /// Discovering files to process
+    Discovering,
+    /// Parsing discovered files
+    Parsing,
+    /// Embedding parsed chunks
+    Embedding,
+    /// Indexing complete
+    Complete,
+}
+
+/// Reason a file was skipped
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SkipReason {
+    /// File content unchanged from last index
+    Unchanged,
+    /// File too large to parse
+    TooLarge,
+    /// Unsupported language/file type
+    Unsupported,
+}
+
+/// Action that just occurred, triggering this status update.
+///
+/// Notification cadence:
+/// 1. `BuildStarted` - indexing begins
+/// 2. `FileStarted` - starting to process a file (parse + embed)
+/// 3. `FileSkipped` - file skipped (unchanged/too large) instead of FileStarted
+/// 4. `ChunkStarted` - starting to embed a chunk within current file
+/// 5. `ChunkComplete` - finished embedding a chunk
+/// 6. `FileComplete` - finished processing file (all chunks embedded)
+/// 7. `BuildComplete` - all files processed
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IndexAction {
+    /// No specific action
+    None,
+    /// Build started
+    BuildStarted,
+    /// Started processing a file (will parse and embed)
+    FileStarted {
+        /// Path to the file
+        path: PathBuf,
+    },
+    /// File skipped
+    FileSkipped {
+        /// Path to the file
+        path: PathBuf,
+        /// Why it was skipped
+        reason: SkipReason,
+    },
+    /// File processing failed
+    FileError {
+        /// Path to the file
+        path: PathBuf,
+        /// Error message
+        error: String,
+    },
+    /// Started embedding a chunk
+    ChunkStarted {
+        /// Path to the file containing the chunk
+        path: PathBuf,
+        /// Symbol path of the chunk (e.g. "module::function")
+        symbol: String,
+        /// Chunk index (1-based) within the file
+        index: usize,
+        /// Total chunks in the file
+        total: usize,
+    },
+    /// Finished embedding a chunk
+    ChunkComplete {
+        /// Path to the file containing the chunk
+        path: PathBuf,
+        /// Symbol path of the chunk
+        symbol: String,
+        /// Chunk index (1-based) within the file
+        index: usize,
+        /// Total chunks in the file
+        total: usize,
+    },
+    /// Finished processing a file (all chunks embedded)
+    FileComplete {
+        /// Path to the file
+        path: PathBuf,
+    },
+    /// Build complete
+    BuildComplete,
+}
+
+impl Default for IndexAction {
+    fn default() -> Self {
+        IndexAction::None
+    }
+}
+
 /// Current status of the index during scan operations
 ///
 /// A simple snapshot of counters that grow during scanning:
@@ -102,13 +222,19 @@ impl Default for IndexConfig {
 /// Done can be derived: `parsed + skipped + errored == total` (and `embedded == parsed` if embedding)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IndexStatus {
+    /// Current phase of the indexing operation
+    pub phase: IndexPhase,
+
+    /// Action that triggered this status update
+    pub action: IndexAction,
+
     /// Total files discovered that need parsing (grows during discovery)
     pub files_total: usize,
 
     /// Files successfully parsed so far (grows during parsing)
     pub files_parsed: usize,
 
-    /// Files skipped - unsupported language, too large, etc. (grows during parsing)
+    /// Files skipped - unsupported language, too large, unchanged, etc. (grows during parsing)
     pub files_skipped: usize,
 
     /// Files that encountered parse errors (grows during parsing)
@@ -140,61 +266,42 @@ impl IndexStatus {
         }
     }
 
-    /// Number of files processed so far
+    /// Number of files processed so far (parsed + skipped + errored)
     pub fn files_processed(&self) -> usize {
         self.files_parsed + self.files_skipped + self.files_errored
     }
 
-    /// Progress as a fraction (0.0 to 1.0), None if total is 0
+    /// Progress within current phase as a fraction (0.0 to 1.0), None if not applicable
     ///
-    /// When embedding has started (files_embedded > 0), this considers both phases.
+    /// - Discovering: None (count grows, no total yet)
+    /// - Parsing: files_processed / files_total
+    /// - Embedding: chunks_embedded / chunks_total
+    /// - Complete/Idle: Some(1.0) / None
     pub fn progress(&self) -> Option<f64> {
-        if self.files_total == 0 {
-            return None;
+        match self.phase {
+            IndexPhase::Idle => None,
+            IndexPhase::Discovering => None, // No total known yet
+            IndexPhase::Parsing => {
+                if self.files_total == 0 {
+                    None
+                } else {
+                    Some(self.files_processed() as f64 / self.files_total as f64)
+                }
+            }
+            IndexPhase::Embedding => {
+                if self.chunks_total == 0 {
+                    None
+                } else {
+                    Some(self.chunks_embedded as f64 / self.chunks_total as f64)
+                }
+            }
+            IndexPhase::Complete => Some(1.0),
         }
-
-        let parse_progress = self.files_processed() as f64 / self.files_total as f64;
-
-        // If embedding has started, factor it into progress
-        if self.files_embedded > 0 {
-            // Two phases: parsing (50%) + embedding (50%)
-            let embed_progress = if self.files_parsed > 0 {
-                self.files_embedded as f64 / self.files_parsed as f64
-            } else {
-                0.0
-            };
-            Some((parse_progress + embed_progress) / 2.0)
-        } else {
-            Some(parse_progress)
-        }
     }
 
-    /// Check if a phase is complete: total > 0 and processed == total
-    fn is_phase_complete(processed: usize, total: usize) -> bool {
-        total > 0 && processed == total
-    }
-
-    /// Whether parsing phase is complete
-    pub fn is_parsing_complete(&self) -> bool {
-        Self::is_phase_complete(self.files_processed(), self.files_total)
-    }
-
-    /// Whether embedding phase is complete
-    ///
-    /// Returns true when all parsed files have been embedded.
-    /// If no embedding is happening (files_embedded == 0), returns false.
-    pub fn is_embedding_complete(&self) -> bool {
-        Self::is_phase_complete(self.files_embedded, self.files_parsed)
-    }
-
-    /// Whether all processing is complete
-    ///
-    /// Complete when parsing is done AND either:
-    /// - No embedding was started (files_embedded == 0)
-    /// - Or all embedding is done (files_embedded == files_parsed)
+    /// Whether all processing is complete (phase is Complete)
     pub fn is_complete(&self) -> bool {
-        self.is_parsing_complete()
-            && (self.files_embedded == 0 || self.is_embedding_complete())
+        self.phase == IndexPhase::Complete
     }
 }
 
@@ -263,7 +370,7 @@ pub struct IndexContext {
     chunk_graph: ChunkGraph,
 
     /// Embedding model (lazy-loaded on first scan with embedding enabled)
-    embedding_model: Option<Arc<EmbeddingModel>>,
+    embedding_model: Option<EmbeddingModel>,
 
     /// Last scan status (updated during and after scan)
     last_status: IndexStatus,
@@ -340,113 +447,65 @@ impl IndexContext {
         }
     }
 
+    /// Send a progress update with a specific action
+    fn notify(&mut self, action: IndexAction) {
+        self.last_status.action = action;
+        self.send_progress(self.last_status.clone());
+        self.last_status.action = IndexAction::None; // Reset for next update
+    }
+
     /// Scan the root path and parse all supported files
     ///
     /// This is an async operation that discovers files and parses them.
     /// Progress updates are sent via the callback if configured.
     pub async fn scan(&mut self) -> Result<ScanResult> {
+        self.scan_with_skip(HashSet::new()).await
+    }
+
+    /// Scan the root path, skipping files in the provided set
+    ///
+    /// Files in `skip_paths` are counted as "skipped" and not parsed.
+    /// This is useful for incremental indexing where unchanged files
+    /// don't need to be re-parsed.
+    pub async fn scan_with_skip(&mut self, skip_paths: HashSet<PathBuf>) -> Result<ScanResult> {
         let start = Instant::now();
 
-        // Validate root path
         if !self.root_path.exists() {
             return Err(TreeSitterError::FileNotFound(self.root_path.clone()));
         }
 
-        // Reset status for this scan
         self.last_status = IndexStatus::new(self.root_path.clone());
+        self.last_status.phase = IndexPhase::Discovering;
+        self.notify(IndexAction::BuildStarted);
 
-        // Send starting status
-        self.send_progress(self.last_status.clone());
-
-        let registry = LanguageRegistry::global();
         let mut errors = Vec::new();
 
-        // First pass: discover all files to get total count
-        let mut files_to_parse: Vec<PathBuf> = Vec::new();
-
-        let walker = WalkBuilder::new(&self.root_path)
-            .git_ignore(self.config.respect_gitignore)
-            .git_global(self.config.respect_gitignore)
-            .git_exclude(self.config.respect_gitignore)
-            .hidden(false) // Don't skip hidden files - let gitignore handle it
-            .build();
-
-        for entry in walker.flatten() {
-            let path = entry.path();
-
-            // Skip directories
-            if !path.is_file() {
-                continue;
-            }
-
-            // Check if language is supported - unsupported files are simply ignored
-            if registry.detect_language(path).is_none() {
-                continue;
-            }
-
-            // Check file size - files we can't access or are too large are skipped
-            let metadata = match std::fs::metadata(path) {
-                Ok(m) => m,
-                Err(e) => {
-                    errors.push((path.to_path_buf(), e.to_string()));
-                    self.record_skipped_file();
-                    continue;
-                }
-            };
-
-            if metadata.len() > self.config.max_file_size {
-                self.record_skipped_file();
-                continue;
-            }
-
-            files_to_parse.push(path.to_path_buf());
-            self.last_status.files_total += 1;
-
-            // Send discovery progress
-            self.send_progress(self.last_status.clone());
-        }
+        // Phase 1: discover files
+        let (files_to_parse, skipped_unchanged) =
+            self.discover_files(&skip_paths, &mut errors);
 
         tracing::info!(
-            "Discovered {} files to parse in {}",
+            "Discovered {} files to parse, {} unchanged in {}",
             files_to_parse.len(),
+            skipped_unchanged,
             self.root_path.display()
         );
 
-        // Second pass: parse files
-        for path in files_to_parse {
-            self.last_status.current_file = Some(path.clone());
-            self.send_progress(self.last_status.clone());
+        // Phase 2: parse files
+        self.last_status.phase = IndexPhase::Parsing;
+        self.parse_discovered_files(&files_to_parse, &mut errors)
+            .await;
 
-            // Get language config
-            let Some(lang_config) = registry.detect_language(&path) else {
-                self.last_status.files_skipped += 1;
-                continue;
-            };
-
-            // Parse the file
-            match self.parse_file_internal(&path, lang_config) {
-                Ok(parsed) => {
-                    self.files.insert(path.clone(), Arc::new(parsed));
-                    self.last_status.files_parsed += 1;
-                }
-                Err(e) => {
-                    errors.push((path.clone(), e.to_string()));
-                    self.last_status.files_errored += 1;
-                }
-            }
-
-            // Yield to allow other tasks to run
-            tokio::task::yield_now().await;
-        }
-
-        // Third pass: embed chunks
+        // Phase 3: embed chunks
+        self.last_status.phase = IndexPhase::Embedding;
         let embedding_config = self.config.embedding.clone();
         self.run_embedding_phase(&embedding_config, &mut errors)
             .await?;
 
         // Send final status
+        self.last_status.phase = IndexPhase::Complete;
         self.last_status.current_file = None;
-        self.send_progress(self.last_status.clone());
+        self.notify(IndexAction::BuildComplete);
 
         let total_time_ms = start.elapsed().as_millis() as u64;
 
@@ -486,12 +545,12 @@ impl IndexContext {
 
         for path in paths_to_embed {
             self.last_status.current_file = Some(path.clone());
-            self.send_progress(self.last_status.clone());
+            self.notify(IndexAction::FileStarted { path: path.clone() });
 
             self.embed_file_chunks(&path, errors).await;
 
             self.last_status.files_embedded += 1;
-            self.send_progress(self.last_status.clone());
+            self.notify(IndexAction::FileComplete { path: path.clone() });
 
             tokio::task::yield_now().await;
         }
@@ -506,40 +565,59 @@ impl IndexContext {
     }
 
     /// Embed all chunks for a single file and add to graph.
-    /// Updates `last_status.chunks_embedded` as chunks are processed.
+    /// Sends ChunkStarted/ChunkComplete notifications for each chunk.
     async fn embed_file_chunks(&mut self, path: &Path, errors: &mut Vec<(PathBuf, String)>) {
-        let Some(parsed) = self.files.get(path) else {
+        let Some(parsed) = self.files.get(path).cloned() else {
             return;
         };
 
-        let Some(ref model) = self.embedding_model else {
+        if self.embedding_model.is_none() {
             return;
-        };
+        }
 
         // Remove old chunks for this file before adding new ones
         self.chunk_graph.remove_file(path);
 
-        let chunks = chunk_file(parsed.clone());
+        // Pre-calculate chunks to know total for this file
+        let chunks: Vec<_> = chunk_file(parsed);
+        let file_chunk_count = chunks.len();
 
-        for mut chunk in chunks {
+        for (chunk_index, mut chunk) in chunks.into_iter().enumerate() {
             let Some(content) = chunk.content() else {
                 continue;
             };
 
-            // Log progress using IndexStatus (1-indexed for display)
-            let current = self.last_status.chunks_embedded + 1;
-            let total = self.last_status.chunks_total;
-            let symbol_path = chunk.symbol_path();
-            tracing::info!("Embedding {}/{}: {}", current, total, symbol_path);
+            let symbol = chunk.symbol_path();
+            let index = chunk_index + 1; // 1-based for display
 
+            // Notify chunk started
+            self.notify(IndexAction::ChunkStarted {
+                path: path.to_path_buf(),
+                symbol: symbol.clone(),
+                index,
+                total: file_chunk_count,
+            });
+
+            // Get mutable reference to model for embedding
+            let model = self.embedding_model.as_mut().unwrap();
             match model.embed_text(content).await {
                 Ok(result) => {
                     chunk.embedding = Some(result.embedding);
                     self.chunk_graph.add(chunk);
                     self.last_status.chunks_embedded += 1;
+
+                    // Notify chunk complete
+                    self.notify(IndexAction::ChunkComplete {
+                        path: path.to_path_buf(),
+                        symbol,
+                        index,
+                        total: file_chunk_count,
+                    });
                 }
                 Err(e) => {
-                    errors.push((path.to_path_buf(), format!("Embedding error: {}", e)));
+                    let msg = format!("Embedding error for {}: {}", symbol, e);
+                    tracing::warn!("{}", msg);
+                    errors.push((path.to_path_buf(), msg));
                 }
             }
         }
@@ -570,8 +648,123 @@ impl IndexContext {
             TreeSitterError::embedding_error(format!("Failed to load embedding model: {}", e))
         })?;
 
-        self.embedding_model = Some(Arc::new(model));
+        self.embedding_model = Some(model);
         Ok(())
+    }
+
+    /// Discover files to parse, filtering out skip_paths
+    ///
+    /// Returns (files_to_parse, count_of_skipped_unchanged_files)
+    fn discover_files(
+        &mut self,
+        skip_paths: &HashSet<PathBuf>,
+        errors: &mut Vec<(PathBuf, String)>,
+    ) -> (Vec<PathBuf>, usize) {
+        let registry = LanguageRegistry::global();
+        let mut files_to_parse = Vec::new();
+        let mut skipped_unchanged = 0;
+
+        let walker = WalkBuilder::new(&self.root_path)
+            .git_ignore(self.config.respect_gitignore)
+            .git_global(self.config.respect_gitignore)
+            .git_exclude(self.config.respect_gitignore)
+            .hidden(false)
+            .build();
+
+        for entry in walker.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if registry.detect_language(path).is_none() {
+                continue;
+            }
+
+            match self.check_file_for_parsing(path, skip_paths) {
+                FileCheckResult::Parse => {
+                    files_to_parse.push(path.to_path_buf());
+                    self.last_status.files_total += 1;
+                }
+                FileCheckResult::SkipUnchanged => {
+                    skipped_unchanged += 1;
+                    self.handle_file_skip(path, SkipReason::Unchanged, false);
+                }
+                FileCheckResult::SkipTooLarge => {
+                    self.handle_file_skip(path, SkipReason::TooLarge, true);
+                }
+                FileCheckResult::Error(msg) => {
+                    self.handle_file_error(path, msg, errors);
+                }
+            }
+        }
+
+        (files_to_parse, skipped_unchanged)
+    }
+
+    /// Check if a file should be parsed, skipped, or has an error
+    fn check_file_for_parsing(&self, path: &Path, skip_paths: &HashSet<PathBuf>) -> FileCheckResult {
+        let metadata = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) => return FileCheckResult::Error(e.to_string()),
+        };
+
+        if metadata.len() > self.config.max_file_size {
+            return FileCheckResult::SkipTooLarge;
+        }
+
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if skip_paths.contains(&canonical) {
+            return FileCheckResult::SkipUnchanged;
+        }
+
+        FileCheckResult::Parse
+    }
+
+    /// Parse a list of discovered files
+    async fn parse_discovered_files(
+        &mut self,
+        files: &[PathBuf],
+        errors: &mut Vec<(PathBuf, String)>,
+    ) {
+        let registry = LanguageRegistry::global();
+
+        for path in files {
+            self.last_status.current_file = Some(path.clone());
+
+            let Some(lang_config) = registry.detect_language(path) else {
+                tracing::debug!(path = %path.display(), reason = "unsupported", "Skipping file");
+                self.last_status.files_skipped += 1;
+                self.notify(IndexAction::FileSkipped {
+                    path: path.clone(),
+                    reason: SkipReason::Unsupported,
+                });
+                continue;
+            };
+
+            tracing::debug!(path = %path.display(), "Parsing file");
+            self.notify(IndexAction::FileStarted { path: path.clone() });
+
+            match self.parse_file_internal(path, lang_config) {
+                Ok(parsed) => {
+                    self.files.insert(path.clone(), Arc::new(parsed));
+                    self.last_status.files_parsed += 1;
+                    tracing::debug!(path = %path.display(), "Parsed file");
+                    self.notify(IndexAction::FileComplete { path: path.clone() });
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::warn!(path = %path.display(), error = %error_msg, "Parse error");
+                    errors.push((path.clone(), error_msg.clone()));
+                    self.last_status.files_errored += 1;
+                    self.notify(IndexAction::FileError {
+                        path: path.clone(),
+                        error: error_msg,
+                    });
+                }
+            }
+
+            tokio::task::yield_now().await;
+        }
     }
 
     /// Parse a single file
@@ -610,10 +803,40 @@ impl IndexContext {
     /// Record a file as skipped during discovery
     ///
     /// Increments both files_total and files_skipped, then sends progress update.
+    /// Record a skipped file in the status counters and send progress
     fn record_skipped_file(&mut self) {
         self.last_status.files_total += 1;
         self.last_status.files_skipped += 1;
         self.send_progress(self.last_status.clone());
+    }
+
+    /// Handle file skip: set current file, optionally update counters, and send notification
+    ///
+    /// If `count_as_new` is true, calls `record_skipped_file()` to increment both
+    /// files_total and files_skipped. If false, only increments files_skipped
+    /// (used for unchanged files that were already counted in a previous index).
+    fn handle_file_skip(&mut self, path: &Path, reason: SkipReason, count_as_new: bool) {
+        tracing::debug!(path = %path.display(), reason = ?reason, "Skipping file");
+        self.last_status.current_file = Some(path.to_path_buf());
+        if count_as_new {
+            self.record_skipped_file();
+        } else {
+            self.last_status.files_skipped += 1;
+        }
+        self.notify(IndexAction::FileSkipped {
+            path: path.to_path_buf(),
+            reason,
+        });
+    }
+
+    /// Handle file error: record error, update counters, and send notification
+    fn handle_file_error(&mut self, path: &Path, error: String, errors: &mut Vec<(PathBuf, String)>) {
+        errors.push((path.to_path_buf(), error.clone()));
+        self.record_skipped_file();
+        self.notify(IndexAction::FileError {
+            path: path.to_path_buf(),
+            error,
+        });
     }
 
     /// Get a parsed file by path
@@ -732,7 +955,7 @@ impl IndexContext {
 
         let model = self
             .embedding_model
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| TreeSitterError::embedding_error("Embedding model not loaded"))?;
 
         let result = model.embed_text(text).await.map_err(|e| {
@@ -746,7 +969,7 @@ impl IndexContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{run_progress_test, setup_test_dir, ProgressCollector};
+    use crate::test_utils::{run_progress_test, setup_minimal_test_dir, setup_test_dir, ProgressCollector};
     use tempfile::TempDir;
 
     /// Minimum expected embedding dimensions from typical embedding models.
@@ -1149,10 +1372,11 @@ mod tests {
     fn test_index_status_progress() {
         let mut status = IndexStatus::new(PathBuf::from("/test"));
 
-        // No files yet - progress is None
+        // Idle phase - progress is None
         assert_eq!(status.progress(), None);
 
-        // Set total and some parsed
+        // Set to Parsing phase with total and some parsed
+        status.phase = IndexPhase::Parsing;
         status.files_total = 10;
         status.files_parsed = 5;
 
@@ -1169,104 +1393,72 @@ mod tests {
     fn test_index_status_is_complete() {
         let mut status = IndexStatus::new(PathBuf::from("/test"));
 
-        // No files - not complete
+        // Idle phase - not complete
         assert!(!status.is_complete());
 
-        // Has files but not all processed
+        // Has files but in parsing phase
+        status.phase = IndexPhase::Parsing;
         status.files_total = 10;
         status.files_parsed = 5;
         assert!(!status.is_complete());
 
-        // All processed (no embedding)
-        status.files_parsed = 8;
-        status.files_skipped = 2;
+        // Set to Complete phase
+        status.phase = IndexPhase::Complete;
         assert!(status.is_complete());
     }
 
     #[test]
-    fn test_index_status_is_parsing_complete() {
-        let mut status = IndexStatus::new(PathBuf::from("/test"));
-
-        // No files - not complete
-        assert!(!status.is_parsing_complete());
-
-        // Has files but not all processed
-        status.files_total = 10;
-        status.files_parsed = 5;
-        assert!(!status.is_parsing_complete());
-
-        // All processed
-        status.files_parsed = 8;
-        status.files_skipped = 2;
-        assert!(status.is_parsing_complete());
-    }
-
-    #[test]
-    fn test_index_status_is_embedding_complete() {
-        let mut status = IndexStatus::new(PathBuf::from("/test"));
-
-        // No files parsed yet - not complete
-        status.files_parsed = 0;
-        assert!(!status.is_embedding_complete());
-
-        // Some files parsed but not embedded
-        status.files_parsed = 5;
-        status.files_embedded = 2;
-        assert!(!status.is_embedding_complete());
-
-        // All parsed files embedded
-        status.files_embedded = 5;
-        assert!(status.is_embedding_complete());
-    }
-
-    #[test]
-    fn test_index_status_is_complete_with_embedding() {
+    fn test_index_status_is_complete_with_phases() {
         let mut status = IndexStatus::new(PathBuf::from("/test"));
         status.files_total = 10;
         status.files_parsed = 8;
         status.files_skipped = 2;
 
-        // Parsing complete, no embedding started - complete
-        assert!(status.is_parsing_complete());
-        assert!(status.is_complete());
-
-        // Start embedding (now in progress, not complete)
-        status.files_embedded = 4;
+        // Parsing phase - not complete yet
+        status.phase = IndexPhase::Parsing;
         assert!(!status.is_complete());
 
-        // Embedding finished
-        status.files_embedded = 8;
-        assert!(status.is_embedding_complete());
+        // Embedding phase - not complete yet
+        status.phase = IndexPhase::Embedding;
+        assert!(!status.is_complete());
+
+        // Complete phase
+        status.phase = IndexPhase::Complete;
         assert!(status.is_complete());
     }
 
     #[test]
-    fn test_index_status_progress_with_embedding() {
+    fn test_index_status_progress_by_phase() {
         let mut status = IndexStatus::new(PathBuf::from("/test"));
+
+        // Idle phase - no progress
+        status.phase = IndexPhase::Idle;
+        assert_eq!(status.progress(), None);
+
+        // Discovering phase - no progress (total unknown)
+        status.phase = IndexPhase::Discovering;
+        assert_eq!(status.progress(), None);
+
+        // Parsing phase - tracks file progress
+        status.phase = IndexPhase::Parsing;
         status.files_total = 10;
-
-        // No progress yet
-        assert_eq!(status.progress(), Some(0.0));
-
-        // Half parsed, no embedding started yet
         status.files_parsed = 5;
         assert_eq!(status.progress(), Some(0.5));
 
-        // All parsed, no embedding started (100% of parse phase)
         status.files_parsed = 10;
         assert_eq!(status.progress(), Some(1.0));
 
-        // Start embedding (50% parse + 0% embed = 50%)
-        status.files_embedded = 1;
-        // (1.0 + 0.1) / 2 = 0.55
-        assert!((status.progress().unwrap() - 0.55).abs() < 0.01);
+        // Embedding phase - tracks chunk progress
+        status.phase = IndexPhase::Embedding;
+        status.chunks_total = 100;
+        status.chunks_embedded = 50;
+        assert_eq!(status.progress(), Some(0.5));
 
-        // Half embedded (75% overall)
-        status.files_embedded = 5;
-        assert_eq!(status.progress(), Some(0.75));
+        status.chunks_embedded = 100;
+        assert_eq!(status.progress(), Some(1.0));
 
-        // All embedded (100% overall)
-        status.files_embedded = 10;
+        // Complete phase - 100%
+        status.phase = IndexPhase::Complete;
         assert_eq!(status.progress(), Some(1.0));
     }
 
@@ -1525,26 +1717,29 @@ mod tests {
 
     #[test]
     fn test_index_status_progress_edge_cases() {
-        // Zero total returns None
+        // Idle phase returns None
         let status = IndexStatus::new(PathBuf::from("/test"));
         assert_eq!(status.progress(), None);
 
-        // Partial progress
+        // Parsing phase - partial progress
         let mut status = IndexStatus::new(PathBuf::from("/test"));
+        status.phase = IndexPhase::Parsing;
         status.files_total = 100;
         status.files_parsed = 25;
         assert_eq!(status.progress(), Some(0.25));
 
-        // 75% with mixed parsed/skipped/errored
+        // Parsing phase - 75% with mixed parsed/skipped/errored
         let mut status = IndexStatus::new(PathBuf::from("/test"));
+        status.phase = IndexPhase::Parsing;
         status.files_total = 100;
         status.files_parsed = 50;
         status.files_skipped = 20;
         status.files_errored = 5;
         assert_eq!(status.progress(), Some(0.75));
 
-        // 100% complete
+        // Parsing phase - 100% complete
         let mut status = IndexStatus::new(PathBuf::from("/test"));
+        status.phase = IndexPhase::Parsing;
         status.files_total = 100;
         status.files_parsed = 100;
         assert_eq!(status.progress(), Some(1.0));
@@ -1552,29 +1747,31 @@ mod tests {
 
     #[test]
     fn test_index_status_is_complete_edge_cases() {
-        // Empty status is not complete (needs scanning first)
+        // Idle phase is not complete
         let status = IndexStatus::new(PathBuf::from("/test"));
         assert!(!status.is_complete());
 
-        // Has total but nothing processed
+        // Parsing phase - not complete
         let mut status = IndexStatus::new(PathBuf::from("/test"));
+        status.phase = IndexPhase::Parsing;
         status.files_total = 10;
         assert!(!status.is_complete());
 
-        // Partial processing
+        // Embedding phase - not complete
         let mut status = IndexStatus::new(PathBuf::from("/test"));
+        status.phase = IndexPhase::Embedding;
         status.files_total = 10;
         status.files_parsed = 5;
         assert!(!status.is_complete());
 
-        // Complete with all parsed
+        // Complete phase - is complete regardless of counters
         let mut status = IndexStatus::new(PathBuf::from("/test"));
-        status.files_total = 10;
-        status.files_parsed = 10;
+        status.phase = IndexPhase::Complete;
         assert!(status.is_complete());
 
-        // Complete with mix of parsed/skipped/errored
+        // Complete phase with counters
         let mut status = IndexStatus::new(PathBuf::from("/test"));
+        status.phase = IndexPhase::Complete;
         status.files_total = 10;
         status.files_parsed = 6;
         status.files_skipped = 3;
@@ -1620,5 +1817,156 @@ mod tests {
         assert_eq!(status.files_errored, 0);
         assert!(status.current_file.is_none());
         assert_eq!(status.root_path, PathBuf::new());
+    }
+
+    // =============================================================================
+    // IndexAction notification tests
+    // =============================================================================
+
+    #[tokio::test]
+    async fn test_parsing_sends_file_started_notifications() {
+        let dir = setup_test_dir();
+        let collector = ProgressCollector::new();
+
+        let mut context = IndexContext::new(dir.path()).with_progress(collector.callback());
+        context.scan().await.unwrap();
+
+        let updates = collector.updates();
+
+        // Count FileStarted actions during parsing phase
+        let file_started_count = updates
+            .iter()
+            .filter(|u| u.phase == IndexPhase::Parsing)
+            .filter(|u| matches!(u.action, IndexAction::FileStarted { .. }))
+            .count();
+
+        // Should have at least one FileStarted for each parsed file
+        assert!(
+            file_started_count >= 1,
+            "Expected FileStarted notifications during parsing, got {}",
+            file_started_count
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parsing_sends_file_complete_notifications() {
+        let dir = setup_test_dir();
+        let collector = ProgressCollector::new();
+
+        let mut context = IndexContext::new(dir.path()).with_progress(collector.callback());
+        context.scan().await.unwrap();
+
+        let updates = collector.updates();
+
+        // Count FileComplete actions during parsing phase
+        let file_complete_count = updates
+            .iter()
+            .filter(|u| u.phase == IndexPhase::Parsing)
+            .filter(|u| matches!(u.action, IndexAction::FileComplete { .. }))
+            .count();
+
+        // Should have FileComplete for each successfully parsed file
+        assert!(
+            file_complete_count >= 1,
+            "Expected FileComplete notifications during parsing, got {}",
+            file_complete_count
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_started_before_file_complete() {
+        let dir = setup_minimal_test_dir();
+        let collector = ProgressCollector::new();
+
+        let mut context = IndexContext::new(dir.path()).with_progress(collector.callback());
+        context.scan().await.unwrap();
+
+        let updates = collector.updates();
+
+        // Find the main.rs FileStarted and FileComplete indices
+        let main_rs = dir.path().join("main.rs");
+
+        let started_idx = updates.iter().position(|u| {
+            matches!(&u.action, IndexAction::FileStarted { path } if path == &main_rs)
+        });
+
+        let complete_idx = updates.iter().position(|u| {
+            matches!(&u.action, IndexAction::FileComplete { path } if path == &main_rs)
+        });
+
+        assert!(
+            started_idx.is_some(),
+            "Should have FileStarted for main.rs"
+        );
+        assert!(
+            complete_idx.is_some(),
+            "Should have FileComplete for main.rs"
+        );
+        assert!(
+            started_idx.unwrap() < complete_idx.unwrap(),
+            "FileStarted should come before FileComplete"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_skip_sends_file_skipped_notification() {
+        let dir = TempDir::new().unwrap();
+        // Create a file that's too large
+        let config = IndexConfig {
+            max_file_size: 5, // Only 5 bytes allowed
+            ..Default::default()
+        };
+        std::fs::write(dir.path().join("large.rs"), "fn main() { /* too large */ }").unwrap();
+
+        let collector = ProgressCollector::new();
+        let mut context = IndexContext::new(dir.path())
+            .with_config(config)
+            .with_progress(collector.callback());
+        context.scan().await.unwrap();
+
+        let updates = collector.updates();
+
+        // Should have a FileSkipped with TooLarge reason
+        let skipped = updates.iter().find(|u| {
+            matches!(
+                &u.action,
+                IndexAction::FileSkipped {
+                    reason: SkipReason::TooLarge,
+                    ..
+                }
+            )
+        });
+
+        assert!(
+            skipped.is_some(),
+            "Should have FileSkipped notification for too-large file"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_started_and_complete_notifications() {
+        let dir = setup_test_dir();
+        let collector = ProgressCollector::new();
+
+        let mut context = IndexContext::new(dir.path()).with_progress(collector.callback());
+        context.scan().await.unwrap();
+
+        let updates = collector.updates();
+
+        // First action should be BuildStarted
+        let first_action = updates.first().map(|u| &u.action);
+        assert!(
+            matches!(first_action, Some(IndexAction::BuildStarted)),
+            "First notification should be BuildStarted, got {:?}",
+            first_action
+        );
+
+        // Last action should be BuildComplete
+        let last_action = updates.last().map(|u| &u.action);
+        assert!(
+            matches!(last_action, Some(IndexAction::BuildComplete)),
+            "Last notification should be BuildComplete, got {:?}",
+            last_action
+        );
     }
 }

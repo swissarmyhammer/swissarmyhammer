@@ -1,11 +1,17 @@
 use llama_embedding::{BatchProcessor, EmbeddingConfig, EmbeddingModel};
 use llama_loader::ModelSource;
+use serial_test::serial;
 use std::io::Write;
-use std::sync::Arc;
 use tempfile::NamedTempFile;
+
+/// Initial batch size for processor creation test
+const TEST_INITIAL_BATCH_SIZE: usize = 32;
+/// Modified batch size for testing set_batch_size
+const TEST_MODIFIED_BATCH_SIZE: usize = 64;
 
 /// Test basic embedding model creation and configuration
 #[tokio::test]
+#[serial]
 async fn test_embedding_model_creation() {
     let config = EmbeddingConfig {
         model_source: ModelSource::HuggingFace {
@@ -91,24 +97,24 @@ fn test_embedding_result() {
 
 /// Test batch processor creation and basic functionality
 #[tokio::test]
+#[serial]
 async fn test_batch_processor_creation() {
     // This is a structural test since we can't create a real model in tests
     let config = EmbeddingConfig::default();
 
     // Try to create model - might fail in test environment
     match EmbeddingModel::new(config).await {
-        Ok(model) => {
-            let processor = BatchProcessor::new(Arc::new(model), 32);
-            assert_eq!(processor.batch_size(), 32);
+        Ok(mut model) => {
+            let mut processor = BatchProcessor::new(&mut model, TEST_INITIAL_BATCH_SIZE);
+            assert_eq!(processor.batch_size(), TEST_INITIAL_BATCH_SIZE);
 
             // Test batch size modification
-            let mut processor = processor;
-            processor.set_batch_size(64);
-            assert_eq!(processor.batch_size(), 64);
+            processor.set_batch_size(TEST_MODIFIED_BATCH_SIZE);
+            assert_eq!(processor.batch_size(), TEST_MODIFIED_BATCH_SIZE);
 
             // Test invalid batch size (should be ignored)
             processor.set_batch_size(0);
-            assert_eq!(processor.batch_size(), 64); // Should remain unchanged
+            assert_eq!(processor.batch_size(), TEST_MODIFIED_BATCH_SIZE); // Should remain unchanged
         }
         Err(_) => {
             // Expected in test environment without proper setup
@@ -119,6 +125,7 @@ async fn test_batch_processor_creation() {
 
 /// Test file processing simulation
 #[tokio::test]
+#[serial]
 async fn test_file_processing_structure() {
     use std::path::Path;
 
@@ -184,7 +191,7 @@ fn test_embedding_dimensions() {
 /// Integration test structure for actual model loading
 /// This would be used when testing with real models
 #[tokio::test]
-
+#[serial]
 async fn test_real_model_integration() {
     // This test would be enabled when running with actual models
     // Check if test-models folder exists, if not skip test
