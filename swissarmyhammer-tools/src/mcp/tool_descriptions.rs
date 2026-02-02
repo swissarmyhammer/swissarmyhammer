@@ -101,24 +101,25 @@ mod tests {
     #[test]
     fn test_get_tool_description() {
         // Test that we can get descriptions for known tools
-        assert!(get_tool_description("todo", "create").is_some());
+        // Note: todo tools were removed, use files/read instead
+        assert!(get_tool_description("files", "read").is_some());
     }
 
     #[test]
     fn test_has_tool_description() {
-        assert!(has_tool_description("todo", "create"));
+        assert!(has_tool_description("files", "read"));
         assert!(!has_tool_description("nonexistent", "tool"));
     }
 
     #[test]
     fn test_get_descriptions_by_noun() {
         let grouped = get_descriptions_by_noun();
-        assert!(grouped.contains_key("todo"));
+        assert!(grouped.contains_key("files"));
 
-        // Check that todo has expected verbs
-        let todo = &grouped["todo"];
-        let verbs: Vec<&str> = todo.iter().map(|(v, _)| v.as_str()).collect();
-        assert!(verbs.contains(&"create"));
+        // Check that files has expected verbs
+        let files = &grouped["files"];
+        let verbs: Vec<&str> = files.iter().map(|(v, _)| v.as_str()).collect();
+        assert!(verbs.contains(&"read"));
     }
 
     #[test]
