@@ -553,7 +553,7 @@ Which combinations are valid:
 | `tag` | | | | | | | | ✓ | | | | | | |
 | `untag` | | | | | | | | ✓ | | | | | | |
 
-**Valid operations (37 total):**
+**Valid operations (39 total):**
 - Board: `init board`, `get board`, `update board`
 - Column: `get column`, `add column`, `update column`, `delete column`, `list columns`
 - Swimlane: `get swimlane`, `add swimlane`, `update swimlane`, `delete swimlane`, `list swimlanes`
