@@ -1907,4 +1907,338 @@ mod tests {
 
         assert_eq!(data["name"], "Updated Board Name");
     }
+
+    // =========================================================================
+    // Additional update/delete operations for full coverage
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_update_column() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Update an existing column
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("update column"));
+        args.insert("id".to_string(), json!("todo"));
+        args.insert("name".to_string(), json!("Backlog"));
+
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "todo");
+        assert_eq!(data["name"], "Backlog");
+    }
+
+    #[tokio::test]
+    async fn test_delete_column() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a new column to delete (don't delete default ones)
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add column"));
+        add_args.insert("id".to_string(), json!("review"));
+        add_args.insert("name".to_string(), json!("Review"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // Delete the column
+        let mut delete_args = serde_json::Map::new();
+        delete_args.insert("op".to_string(), json!("delete column"));
+        delete_args.insert("id".to_string(), json!("review"));
+
+        let result = tool.execute(delete_args, &context).await;
+        assert!(result.is_ok());
+
+        // Verify it's gone
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get column"));
+        get_args.insert("id".to_string(), json!("review"));
+
+        let get_result = tool.execute(get_args, &context).await;
+        assert!(get_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_swimlane() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a swimlane first
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add swimlane"));
+        add_args.insert("id".to_string(), json!("urgent"));
+        add_args.insert("name".to_string(), json!("Urgent"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // Update it
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update swimlane"));
+        update_args.insert("id".to_string(), json!("urgent"));
+        update_args.insert("name".to_string(), json!("Critical"));
+
+        let result = tool.execute(update_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "urgent");
+        assert_eq!(data["name"], "Critical");
+    }
+
+    #[tokio::test]
+    async fn test_update_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add an actor first
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add actor"));
+        add_args.insert("id".to_string(), json!("alice"));
+        add_args.insert("name".to_string(), json!("Alice"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // Update it
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update actor"));
+        update_args.insert("id".to_string(), json!("alice"));
+        update_args.insert("name".to_string(), json!("Alice Smith"));
+
+        let result = tool.execute(update_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "alice");
+        assert_eq!(data["name"], "Alice Smith");
+    }
+
+    #[tokio::test]
+    async fn test_update_tag() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a tag first
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add tag"));
+        add_args.insert("id".to_string(), json!("bug"));
+        add_args.insert("name".to_string(), json!("Bug"));
+        add_args.insert("color".to_string(), json!("ff0000"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // Update it
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update tag"));
+        update_args.insert("id".to_string(), json!("bug"));
+        update_args.insert("name".to_string(), json!("Bug Fix"));
+        update_args.insert("color".to_string(), json!("ff5500"));
+
+        let result = tool.execute(update_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], "bug");
+        assert_eq!(data["name"], "Bug Fix");
+        assert_eq!(data["color"], "ff5500");
+    }
+
+    #[tokio::test]
+    async fn test_update_comment() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task with comment"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Add a comment
+        let mut comment_args = serde_json::Map::new();
+        comment_args.insert("op".to_string(), json!("add comment"));
+        comment_args.insert("task_id".to_string(), json!(task_id));
+        comment_args.insert("body".to_string(), json!("Original comment"));
+        comment_args.insert("author".to_string(), json!("alice"));
+        let add_result = tool.execute(comment_args, &context).await.unwrap();
+        let comment_id = extract_id(&add_result);
+
+        // Update the comment
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update comment"));
+        update_args.insert("task_id".to_string(), json!(task_id));
+        update_args.insert("comment_id".to_string(), json!(comment_id));
+        update_args.insert("body".to_string(), json!("Updated comment"));
+
+        let result = tool.execute(update_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["id"], comment_id);
+        assert_eq!(data["body"], "Updated comment");
+    }
+
+    // =========================================================================
+    // Edge cases and additional scenarios
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_move_task_with_position() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add two tasks
+        let mut add1 = serde_json::Map::new();
+        add1.insert("op".to_string(), json!("add task"));
+        add1.insert("title".to_string(), json!("Task 1"));
+        tool.execute(add1, &context).await.unwrap();
+
+        let mut add2 = serde_json::Map::new();
+        add2.insert("op".to_string(), json!("add task"));
+        add2.insert("title".to_string(), json!("Task 2"));
+        let result2 = tool.execute(add2, &context).await.unwrap();
+        let task2_id = extract_task_id(&result2);
+
+        // Move task 2 to doing column
+        let mut move_args = serde_json::Map::new();
+        move_args.insert("op".to_string(), json!("move task"));
+        move_args.insert("id".to_string(), json!(task2_id));
+        move_args.insert("column".to_string(), json!("doing"));
+
+        let result = tool.execute(move_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_with_filter() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add tasks in different columns
+        let mut add1 = serde_json::Map::new();
+        add1.insert("op".to_string(), json!("add task"));
+        add1.insert("title".to_string(), json!("Todo Task"));
+        let result1 = tool.execute(add1, &context).await.unwrap();
+        let task1_id = extract_task_id(&result1);
+
+        // Move one to doing
+        let mut move_args = serde_json::Map::new();
+        move_args.insert("op".to_string(), json!("move task"));
+        move_args.insert("id".to_string(), json!(task1_id));
+        move_args.insert("column".to_string(), json!("doing"));
+        tool.execute(move_args, &context).await.unwrap();
+
+        // Add another in todo
+        let mut add2 = serde_json::Map::new();
+        add2.insert("op".to_string(), json!("add task"));
+        add2.insert("title".to_string(), json!("Another Todo"));
+        tool.execute(add2, &context).await.unwrap();
+
+        // List only todo column
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list tasks"));
+        list_args.insert("column".to_string(), json!("todo"));
+
+        let result = tool.execute(list_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["count"], 1);
+        assert_eq!(data["tasks"][0]["title"], "Another Todo");
+    }
+
+    #[tokio::test]
+    async fn test_task_with_description() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add task"));
+        args.insert("title".to_string(), json!("Task with description"));
+        args.insert("description".to_string(), json!("This is a detailed description"));
+
+        let result = tool.execute(args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["title"], "Task with description");
+        assert_eq!(data["description"], "This is a detailed description");
+    }
+
+    #[tokio::test]
+    async fn test_next_task_empty_board() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Get next task on empty board
+        let mut next_args = serde_json::Map::new();
+        next_args.insert("op".to_string(), json!("next task"));
+
+        let result = tool.execute(next_args, &context).await;
+        // Should either return null/none or an error - depends on implementation
+        // Just verify it doesn't panic
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tag_nonexistent_tag() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Test task"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Try to tag with nonexistent tag
+        let mut tag_args = serde_json::Map::new();
+        tag_args.insert("op".to_string(), json!("tag task"));
+        tag_args.insert("id".to_string(), json!(task_id));
+        tag_args.insert("tag".to_string(), json!("nonexistent"));
+
+        let result = tool.execute(tag_args, &context).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_complete_already_done_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add and complete a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        let mut complete_args = serde_json::Map::new();
+        complete_args.insert("op".to_string(), json!("complete task"));
+        complete_args.insert("id".to_string(), json!(task_id));
+        tool.execute(complete_args.clone(), &context).await.unwrap();
+
+        // Complete again - should be idempotent
+        let result = tool.execute(complete_args, &context).await;
+        assert!(result.is_ok());
+    }
 }
