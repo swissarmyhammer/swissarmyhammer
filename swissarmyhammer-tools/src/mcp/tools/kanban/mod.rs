@@ -22,10 +22,15 @@ use rmcp::ErrorData as McpError;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use swissarmyhammer_kanban::{
+    activity::ListActivity,
+    actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor},
     board::{GetBoard, InitBoard, UpdateBoard},
     column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn},
+    comment::{AddComment, DeleteComment, GetComment, ListComments, UpdateComment},
     parse::parse_input,
-    task::{AddTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, UpdateTask},
+    swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
+    tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
+    task::{AddTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask, UntagTask, UpdateTask},
     Execute, KanbanContext, KanbanOperation, Noun, Operation, Verb,
 };
 
@@ -42,6 +47,18 @@ static UPDATE_COLUMN: Lazy<UpdateColumn> = Lazy::new(|| UpdateColumn::new(""));
 static DELETE_COLUMN: Lazy<DeleteColumn> = Lazy::new(|| DeleteColumn::new(""));
 static LIST_COLUMNS: Lazy<ListColumns> = Lazy::new(ListColumns::default);
 
+static ADD_SWIMLANE: Lazy<AddSwimlane> = Lazy::new(|| AddSwimlane::new("", ""));
+static GET_SWIMLANE: Lazy<GetSwimlane> = Lazy::new(|| GetSwimlane::new(""));
+static UPDATE_SWIMLANE: Lazy<UpdateSwimlane> = Lazy::new(|| UpdateSwimlane::new(""));
+static DELETE_SWIMLANE: Lazy<DeleteSwimlane> = Lazy::new(|| DeleteSwimlane::new(""));
+static LIST_SWIMLANES: Lazy<ListSwimlanes> = Lazy::new(ListSwimlanes::default);
+
+static ADD_ACTOR: Lazy<AddActor> = Lazy::new(|| AddActor::human("", ""));
+static GET_ACTOR: Lazy<GetActor> = Lazy::new(|| GetActor::new(""));
+static UPDATE_ACTOR: Lazy<UpdateActor> = Lazy::new(|| UpdateActor::new(""));
+static DELETE_ACTOR: Lazy<DeleteActor> = Lazy::new(|| DeleteActor::new(""));
+static LIST_ACTORS: Lazy<ListActors> = Lazy::new(ListActors::default);
+
 static ADD_TASK: Lazy<AddTask> = Lazy::new(|| AddTask::new(""));
 static GET_TASK: Lazy<GetTask> = Lazy::new(|| GetTask::new(""));
 static UPDATE_TASK: Lazy<UpdateTask> = Lazy::new(|| UpdateTask::new(""));
@@ -49,7 +66,23 @@ static DELETE_TASK: Lazy<DeleteTask> = Lazy::new(|| DeleteTask::new(""));
 static MOVE_TASK: Lazy<MoveTask> = Lazy::new(|| MoveTask::to_column("", ""));
 static COMPLETE_TASK: Lazy<CompleteTask> = Lazy::new(|| CompleteTask::new(""));
 static NEXT_TASK: Lazy<NextTask> = Lazy::new(NextTask::new);
+static TAG_TASK: Lazy<TagTask> = Lazy::new(|| TagTask::new("", ""));
+static UNTAG_TASK: Lazy<UntagTask> = Lazy::new(|| UntagTask::new("", ""));
 static LIST_TASKS: Lazy<ListTasks> = Lazy::new(ListTasks::new);
+
+static ADD_TAG: Lazy<AddTag> = Lazy::new(|| AddTag::new("", "", ""));
+static GET_TAG: Lazy<GetTag> = Lazy::new(|| GetTag::new(""));
+static UPDATE_TAG: Lazy<UpdateTag> = Lazy::new(|| UpdateTag::new(""));
+static DELETE_TAG: Lazy<DeleteTag> = Lazy::new(|| DeleteTag::new(""));
+static LIST_TAGS: Lazy<ListTags> = Lazy::new(ListTags::default);
+
+static ADD_COMMENT: Lazy<AddComment> = Lazy::new(|| AddComment::new("", "", ""));
+static GET_COMMENT: Lazy<GetComment> = Lazy::new(|| GetComment::new("", ""));
+static UPDATE_COMMENT: Lazy<UpdateComment> = Lazy::new(|| UpdateComment::new("", ""));
+static DELETE_COMMENT: Lazy<DeleteComment> = Lazy::new(|| DeleteComment::new("", ""));
+static LIST_COMMENTS: Lazy<ListComments> = Lazy::new(|| ListComments::new(""));
+
+static LIST_ACTIVITY: Lazy<ListActivity> = Lazy::new(ListActivity::default);
 
 /// All kanban operations for CLI generation
 static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
@@ -64,6 +97,18 @@ static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*UPDATE_COLUMN as &dyn Operation,
         &*DELETE_COLUMN as &dyn Operation,
         &*LIST_COLUMNS as &dyn Operation,
+        // Swimlane operations
+        &*ADD_SWIMLANE as &dyn Operation,
+        &*GET_SWIMLANE as &dyn Operation,
+        &*UPDATE_SWIMLANE as &dyn Operation,
+        &*DELETE_SWIMLANE as &dyn Operation,
+        &*LIST_SWIMLANES as &dyn Operation,
+        // Actor operations
+        &*ADD_ACTOR as &dyn Operation,
+        &*GET_ACTOR as &dyn Operation,
+        &*UPDATE_ACTOR as &dyn Operation,
+        &*DELETE_ACTOR as &dyn Operation,
+        &*LIST_ACTORS as &dyn Operation,
         // Task operations
         &*ADD_TASK as &dyn Operation,
         &*GET_TASK as &dyn Operation,
@@ -72,7 +117,23 @@ static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*MOVE_TASK as &dyn Operation,
         &*COMPLETE_TASK as &dyn Operation,
         &*NEXT_TASK as &dyn Operation,
+        &*TAG_TASK as &dyn Operation,
+        &*UNTAG_TASK as &dyn Operation,
         &*LIST_TASKS as &dyn Operation,
+        // Tag operations (board-level)
+        &*ADD_TAG as &dyn Operation,
+        &*GET_TAG as &dyn Operation,
+        &*UPDATE_TAG as &dyn Operation,
+        &*DELETE_TAG as &dyn Operation,
+        &*LIST_TAGS as &dyn Operation,
+        // Comment operations
+        &*ADD_COMMENT as &dyn Operation,
+        &*GET_COMMENT as &dyn Operation,
+        &*UPDATE_COMMENT as &dyn Operation,
+        &*DELETE_COMMENT as &dyn Operation,
+        &*LIST_COMMENTS as &dyn Operation,
+        // Activity operations
+        &*LIST_ACTIVITY as &dyn Operation,
     ]
 });
 
@@ -325,12 +386,11 @@ impl McpTool for KanbanTool {
 
 /// Execute a single kanban operation
 async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<Value, McpError> {
-    use Noun::*;
-    use Verb::*;
+    // Note: Can't use glob imports due to Verb::Tag and Noun::Tag collision
 
     let result = match (op.verb, op.noun) {
         // Board operations
-        (Init, Board) => {
+        (Verb::Init, Noun::Board) => {
             let name = op
                 .get_string("name")
                 .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
@@ -342,8 +402,8 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             }
             cmd.execute(ctx).await
         }
-        (Get, Board) => GetBoard.execute(ctx).await,
-        (Update, Board) => {
+        (Verb::Get, Noun::Board) => GetBoard.execute(ctx).await,
+        (Verb::Update, Noun::Board) => {
             let mut cmd = UpdateBoard::new();
             if let Some(name) = op.get_string("name") {
                 cmd = cmd.with_name(name);
@@ -355,7 +415,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
         }
 
         // Column operations
-        (Add, Column) => {
+        (Verb::Add, Noun::Column) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
@@ -369,13 +429,13 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             }
             cmd.execute(ctx).await
         }
-        (Get, Column) => {
+        (Verb::Get, Noun::Column) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             GetColumn::new(id).execute(ctx).await
         }
-        (Update, Column) => {
+        (Verb::Update, Noun::Column) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
@@ -389,16 +449,16 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             }
             cmd.execute(ctx).await
         }
-        (Delete, Column) => {
+        (Verb::Delete, Noun::Column) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             DeleteColumn::new(id).execute(ctx).await
         }
-        (List, Columns) => ListColumns.execute(ctx).await,
+        (Verb::List, Noun::Columns) => ListColumns.execute(ctx).await,
 
         // Task operations
-        (Add, Task) => {
+        (Verb::Add, Noun::Task) => {
             let title = op
                 .get_string("title")
                 .ok_or_else(|| McpError::invalid_params("missing required field: title", None))?;
@@ -410,13 +470,13 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             // Could add position, tags, assignees, depends_on parsing here
             cmd.execute(ctx).await
         }
-        (Get, Task) => {
+        (Verb::Get, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             GetTask::new(id).execute(ctx).await
         }
-        (Update, Task) => {
+        (Verb::Update, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
@@ -430,7 +490,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             }
             cmd.execute(ctx).await
         }
-        (Move, Task) => {
+        (Verb::Move, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
@@ -440,30 +500,252 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
 
             MoveTask::to_column(id, column).execute(ctx).await
         }
-        (Delete, Task) => {
+        (Verb::Delete, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             DeleteTask::new(id).execute(ctx).await
         }
-        (Complete, Task) => {
+        (Verb::Complete, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             CompleteTask::new(id).execute(ctx).await
         }
-        (Next, Task) => {
+        (Verb::Next, Noun::Task) => {
             let cmd = NextTask::new();
             // Could add swimlane/assignee filtering here
             cmd.execute(ctx).await
         }
-        (List, Tasks) => {
+        (Verb::List, Noun::Tasks) => {
             let mut cmd = ListTasks::new();
             if let Some(column) = op.get_string("column") {
                 cmd = cmd.with_column(column);
             }
             if let Some(ready) = op.get_param("ready").and_then(|v| v.as_bool()) {
                 cmd = cmd.with_ready(ready);
+            }
+            cmd.execute(ctx).await
+        }
+        (Verb::Tag, Noun::Task) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            let tag = op
+                .get_string("tag")
+                .ok_or_else(|| McpError::invalid_params("missing required field: tag", None))?;
+            TagTask::new(id, tag).execute(ctx).await
+        }
+        (Verb::Untag, Noun::Task) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            let tag = op
+                .get_string("tag")
+                .ok_or_else(|| McpError::invalid_params("missing required field: tag", None))?;
+            UntagTask::new(id, tag).execute(ctx).await
+        }
+
+        // Swimlane operations
+        (Verb::Add, Noun::Swimlane) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            let name = op
+                .get_string("name")
+                .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
+
+            let mut cmd = AddSwimlane::new(id, name);
+            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_order(order as usize);
+            }
+            cmd.execute(ctx).await
+        }
+        (Verb::Get, Noun::Swimlane) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            GetSwimlane::new(id).execute(ctx).await
+        }
+        (Verb::Update, Noun::Swimlane) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+
+            let mut cmd = UpdateSwimlane::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_order(order as usize);
+            }
+            cmd.execute(ctx).await
+        }
+        (Verb::Delete, Noun::Swimlane) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            DeleteSwimlane::new(id).execute(ctx).await
+        }
+        (Verb::List, Noun::Swimlanes) => ListSwimlanes.execute(ctx).await,
+
+        // Actor operations
+        (Verb::Add, Noun::Actor) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            let name = op
+                .get_string("name")
+                .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
+            let actor_type = op.get_string("type").unwrap_or("human");
+
+            let cmd = if actor_type == "agent" {
+                AddActor::agent(id, name)
+            } else {
+                AddActor::human(id, name)
+            };
+            cmd.execute(ctx).await
+        }
+        (Verb::Get, Noun::Actor) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            GetActor::new(id).execute(ctx).await
+        }
+        (Verb::Update, Noun::Actor) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+
+            let mut cmd = UpdateActor::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            cmd.execute(ctx).await
+        }
+        (Verb::Delete, Noun::Actor) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            DeleteActor::new(id).execute(ctx).await
+        }
+        (Verb::List, Noun::Actors) => ListActors::default().execute(ctx).await,
+
+        // Tag operations (board-level)
+        (Verb::Add, Noun::Tag) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            let name = op
+                .get_string("name")
+                .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
+            let color = op
+                .get_string("color")
+                .ok_or_else(|| McpError::invalid_params("missing required field: color", None))?;
+
+            let mut cmd = AddTag::new(id, name, color);
+            if let Some(desc) = op.get_string("description") {
+                cmd = cmd.with_description(desc);
+            }
+            cmd.execute(ctx).await
+        }
+        (Verb::Get, Noun::Tag) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            GetTag::new(id).execute(ctx).await
+        }
+        (Verb::Update, Noun::Tag) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+
+            let mut cmd = UpdateTag::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(color) = op.get_string("color") {
+                cmd = cmd.with_color(color);
+            }
+            if let Some(desc) = op.get_string("description") {
+                cmd = cmd.with_description(desc);
+            }
+            cmd.execute(ctx).await
+        }
+        (Verb::Delete, Noun::Tag) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            DeleteTag::new(id).execute(ctx).await
+        }
+        (Verb::List, Noun::Tags) => ListTags::default().execute(ctx).await,
+
+        // Comment operations
+        // Note: For comments, we need both task_id and comment_id. The parser aliases
+        // task_id->id, so we use different param names to avoid collision.
+        (Verb::Add, Noun::Comment) => {
+            // task_id gets aliased to id by parser, so check both
+            let task_id = op
+                .get_string("task_id")
+                .or_else(|| op.get_string("id"))
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            let body = op
+                .get_string("body")
+                .or_else(|| op.get_string("description"))
+                .ok_or_else(|| McpError::invalid_params("missing required field: body", None))?;
+            let author = op
+                .get_string("author")
+                .ok_or_else(|| McpError::invalid_params("missing required field: author", None))?;
+            AddComment::new(task_id, body, author).execute(ctx).await
+        }
+        (Verb::Get, Noun::Comment) => {
+            let task_id = op
+                .get_string("task_id")
+                .or_else(|| op.get_string("id"))
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            let comment_id = op
+                .get_string("comment_id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: comment_id", None))?;
+            GetComment::new(task_id, comment_id).execute(ctx).await
+        }
+        (Verb::Update, Noun::Comment) => {
+            let task_id = op
+                .get_string("task_id")
+                .or_else(|| op.get_string("id"))
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            let comment_id = op
+                .get_string("comment_id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: comment_id", None))?;
+
+            let mut cmd = UpdateComment::new(task_id, comment_id);
+            if let Some(body) = op.get_string("body").or_else(|| op.get_string("description")) {
+                cmd = cmd.with_body(body);
+            }
+            cmd.execute(ctx).await
+        }
+        (Verb::Delete, Noun::Comment) => {
+            let task_id = op
+                .get_string("task_id")
+                .or_else(|| op.get_string("id"))
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            let comment_id = op
+                .get_string("comment_id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: comment_id", None))?;
+            DeleteComment::new(task_id, comment_id).execute(ctx).await
+        }
+        (Verb::List, Noun::Comments) => {
+            let task_id = op
+                .get_string("task_id")
+                .or_else(|| op.get_string("id"))
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            ListComments::new(task_id).execute(ctx).await
+        }
+
+        // Activity operations
+        (Verb::List, Noun::Activity) => {
+            let mut cmd = ListActivity::default();
+            if let Some(limit) = op.get_param("limit").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_limit(limit as usize);
             }
             cmd.execute(ctx).await
         }
@@ -489,7 +771,23 @@ pub fn register_kanban_tools(registry: &mut ToolRegistry) {
 mod tests {
     use super::*;
     use crate::test_utils::create_test_context;
+    use rmcp::model::RawContent;
     use tempfile::TempDir;
+
+    /// Helper to extract text content from a CallToolResult
+    fn extract_text(result: &CallToolResult) -> &str {
+        match &result.content[0].raw {
+            RawContent::Text(text) => &text.text,
+            _ => panic!("Expected text content"),
+        }
+    }
+
+    /// Helper to extract task ID from a result
+    fn extract_task_id(result: &CallToolResult) -> String {
+        let text = extract_text(result);
+        let data: Value = serde_json::from_str(text).expect("Expected valid JSON");
+        data["id"].as_str().expect("Expected id field").to_string()
+    }
 
     #[tokio::test]
     async fn test_init_board() {
@@ -543,6 +841,347 @@ mod tests {
         add_args.insert("title".to_string(), json!("Inferred Task"));
 
         let result = tool.execute(add_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    // Helper to init a board for tests
+    async fn init_test_board(tool: &KanbanTool, context: &ToolContext) {
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("init board"));
+        args.insert("name".to_string(), json!("Test Board"));
+        tool.execute(args, context).await.unwrap();
+    }
+
+    // =========================================================================
+    // Swimlane operations
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_add_swimlane() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add swimlane"));
+        args.insert("id".to_string(), json!("urgent"));
+        args.insert("name".to_string(), json!("Urgent"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_swimlanes() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a swimlane first
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add swimlane"));
+        add_args.insert("id".to_string(), json!("urgent"));
+        add_args.insert("name".to_string(), json!("Urgent"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // List swimlanes
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list swimlanes"));
+
+        let result = tool.execute(list_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Actor operations
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_add_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add actor"));
+        args.insert("id".to_string(), json!("alice"));
+        args.insert("name".to_string(), json!("Alice Smith"));
+        args.insert("type".to_string(), json!("human"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_agent_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add actor"));
+        args.insert("id".to_string(), json!("claude"));
+        args.insert("name".to_string(), json!("Claude"));
+        args.insert("type".to_string(), json!("agent"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_actors() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add an actor first
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add actor"));
+        add_args.insert("id".to_string(), json!("alice"));
+        add_args.insert("name".to_string(), json!("Alice"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // List actors
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list actors"));
+
+        let result = tool.execute(list_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Tag operations (board-level)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_add_tag() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add tag"));
+        args.insert("id".to_string(), json!("bug"));
+        args.insert("name".to_string(), json!("Bug"));
+        args.insert("color".to_string(), json!("ff0000"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_tags() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a tag first
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add tag"));
+        add_args.insert("id".to_string(), json!("bug"));
+        add_args.insert("name".to_string(), json!("Bug"));
+        add_args.insert("color".to_string(), json!("ff0000"));
+        tool.execute(add_args, &context).await.unwrap();
+
+        // List tags
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list tags"));
+
+        let result = tool.execute(list_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Task tag/untag operations
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_tag_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a tag
+        let mut tag_args = serde_json::Map::new();
+        tag_args.insert("op".to_string(), json!("add tag"));
+        tag_args.insert("id".to_string(), json!("bug"));
+        tag_args.insert("name".to_string(), json!("Bug"));
+        tag_args.insert("color".to_string(), json!("ff0000"));
+        tool.execute(tag_args, &context).await.unwrap();
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Fix bug"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Tag the task
+        let mut tag_task_args = serde_json::Map::new();
+        tag_task_args.insert("op".to_string(), json!("tag task"));
+        tag_task_args.insert("id".to_string(), json!(task_id));
+        tag_task_args.insert("tag".to_string(), json!("bug"));
+
+        let result = tool.execute(tag_task_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_untag_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a tag
+        let mut tag_args = serde_json::Map::new();
+        tag_args.insert("op".to_string(), json!("add tag"));
+        tag_args.insert("id".to_string(), json!("bug"));
+        tag_args.insert("name".to_string(), json!("Bug"));
+        tag_args.insert("color".to_string(), json!("ff0000"));
+        tool.execute(tag_args, &context).await.unwrap();
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Fix bug"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Tag the task first
+        let mut tag_task_args = serde_json::Map::new();
+        tag_task_args.insert("op".to_string(), json!("tag task"));
+        tag_task_args.insert("id".to_string(), json!(task_id));
+        tag_task_args.insert("tag".to_string(), json!("bug"));
+        tool.execute(tag_task_args, &context).await.unwrap();
+
+        // Untag the task
+        let mut untag_args = serde_json::Map::new();
+        untag_args.insert("op".to_string(), json!("untag task"));
+        untag_args.insert("id".to_string(), json!(task_id));
+        untag_args.insert("tag".to_string(), json!("bug"));
+
+        let result = tool.execute(untag_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Complete task operation
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_complete_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task to complete"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Complete the task
+        let mut complete_args = serde_json::Map::new();
+        complete_args.insert("op".to_string(), json!("complete task"));
+        complete_args.insert("id".to_string(), json!(task_id));
+
+        let result = tool.execute(complete_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Comment operations
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_add_comment() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task first
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task with comment"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Add a comment
+        let mut comment_args = serde_json::Map::new();
+        comment_args.insert("op".to_string(), json!("add comment"));
+        comment_args.insert("task_id".to_string(), json!(task_id));
+        comment_args.insert("body".to_string(), json!("This is a comment"));
+        comment_args.insert("author".to_string(), json!("alice"));
+
+        let result = tool.execute(comment_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_comments() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task with comment"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Add a comment
+        let mut comment_args = serde_json::Map::new();
+        comment_args.insert("op".to_string(), json!("add comment"));
+        comment_args.insert("task_id".to_string(), json!(task_id));
+        comment_args.insert("body".to_string(), json!("Comment 1"));
+        comment_args.insert("author".to_string(), json!("alice"));
+        tool.execute(comment_args, &context).await.unwrap();
+
+        // List comments
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list comments"));
+        list_args.insert("task_id".to_string(), json!(task_id));
+
+        let result = tool.execute(list_args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Activity operations
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_list_activity() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task to generate some activity
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Test task"));
+        tool.execute(task_args, &context).await.unwrap();
+
+        // List activity
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list activity"));
+
+        let result = tool.execute(list_args, &context).await;
         assert!(result.is_ok());
     }
 }
