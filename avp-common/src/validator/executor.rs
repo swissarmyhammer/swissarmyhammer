@@ -421,8 +421,7 @@ fn extract_reason_from_response(response: &str) -> Option<String> {
         let after_key = &response[idx + pattern.len()..];
         if let Some(colon_idx) = after_key.find(':') {
             let after_colon = after_key[colon_idx + 1..].trim_start();
-            if after_colon.starts_with('"') {
-                let content = &after_colon[1..];
+            if let Some(content) = after_colon.strip_prefix('"') {
                 if let Some(end_quote) = content.find('"') {
                     return Some(content[..end_quote].to_string());
                 }

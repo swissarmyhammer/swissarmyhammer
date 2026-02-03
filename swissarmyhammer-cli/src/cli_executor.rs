@@ -243,7 +243,7 @@ impl CliExecutor {
         match type_str {
             Some("boolean") => matches
                 .get_flag(name)
-                .then(|| Value::Bool(true)),
+                .then_some(Value::Bool(true)),
             Some("integer") => matches
                 .get_one::<i64>(name)
                 .map(|v| Value::Number((*v).into())),

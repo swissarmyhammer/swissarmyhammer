@@ -31,10 +31,21 @@ fn parse_single(input: Value) -> Result<Operation> {
     // Try to extract verb and noun
     let (verb, noun, mut params) = extract_operation(&obj)?;
 
+    // Extract actor if present (before normalizing params)
+    let actor = obj
+        .get("actor")
+        .and_then(|v| v.as_str())
+        .map(crate::types::ActorId::from_string);
+
     // Normalize parameters (resolve aliases, snake_case keys)
     normalize_params(&mut params);
 
-    Ok(Operation::new(verb, noun, params))
+    let mut operation = Operation::new(verb, noun, params);
+    if let Some(actor) = actor {
+        operation = operation.with_actor(actor);
+    }
+
+    Ok(operation)
 }
 
 /// Extract verb and noun from the input object
@@ -55,7 +66,7 @@ fn extract_operation(obj: &Map<String, Value>) -> Result<(Verb, Noun, Map<String
 
     if let (Some(v), Some(n)) = (verb_value, noun_value) {
         if let (Some(verb_str), Some(noun_str)) = (v.as_str(), n.as_str()) {
-            if let (Some(verb), Some(noun)) = (Verb::from_alias(verb_str), Noun::from_str(noun_str)) {
+            if let (Some(verb), Some(noun)) = (Verb::from_alias(verb_str), Noun::parse(noun_str)) {
                 let params = filter_verb_noun_keys(obj);
                 return Ok((verb, noun, params));
             }
@@ -66,7 +77,7 @@ fn extract_operation(obj: &Map<String, Value>) -> Result<(Verb, Noun, Map<String
     for (key, value) in obj {
         if let Some(verb) = Verb::from_alias(key) {
             if let Some(noun_str) = value.as_str() {
-                if let Some(noun) = Noun::from_str(noun_str) {
+                if let Some(noun) = Noun::parse(noun_str) {
                     let params = filter_shorthand_keys(obj, key);
                     return Ok((verb, noun, params));
                 }
@@ -85,13 +96,13 @@ fn extract_operation(obj: &Map<String, Value>) -> Result<(Verb, Noun, Map<String
 
 /// Parse an "op" string like "add task" into (Verb, Noun)
 fn parse_op_string(s: &str) -> Option<(Verb, Noun)> {
-    let parts: Vec<&str> = s.trim().split_whitespace().collect();
+    let parts: Vec<&str> = s.split_whitespace().collect();
     if parts.len() != 2 {
         return None;
     }
 
     let verb = Verb::from_alias(parts[0])?;
-    let noun = Noun::from_str(parts[1])?;
+    let noun = Noun::parse(parts[1])?;
     Some((verb, noun))
 }
 
@@ -134,26 +145,26 @@ fn infer_operation(obj: &Map<String, Value>) -> Option<(Verb, Noun)> {
     None
 }
 
-/// Filter out op/operation/action keys
+/// Filter out op/operation/action/actor/note keys
 fn filter_op_keys(obj: &Map<String, Value>) -> Map<String, Value> {
     obj.iter()
-        .filter(|(k, _)| !matches!(k.as_str(), "op" | "operation" | "action"))
+        .filter(|(k, _)| !matches!(k.as_str(), "op" | "operation" | "action" | "actor" | "note"))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
 
-/// Filter out verb/noun/action/target keys
+/// Filter out verb/noun/action/target/actor/note keys
 fn filter_verb_noun_keys(obj: &Map<String, Value>) -> Map<String, Value> {
     obj.iter()
-        .filter(|(k, _)| !matches!(k.as_str(), "verb" | "noun" | "action" | "target"))
+        .filter(|(k, _)| !matches!(k.as_str(), "verb" | "noun" | "action" | "target" | "actor" | "note"))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
 
-/// Filter out the shorthand key
+/// Filter out the shorthand key and metadata keys (actor, note)
 fn filter_shorthand_keys(obj: &Map<String, Value>, shorthand_key: &str) -> Map<String, Value> {
     obj.iter()
-        .filter(|(k, _)| k.as_str() != shorthand_key)
+        .filter(|(k, _)| !matches!(k.as_str(), k if k == shorthand_key || k == "actor" || k == "note"))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
@@ -292,5 +303,20 @@ mod tests {
         assert_eq!(to_snake_case("dependsOn"), "depends_on");
         assert_eq!(to_snake_case("taskId"), "task_id");
         assert_eq!(to_snake_case("already_snake"), "already_snake");
+    }
+
+    #[test]
+    fn test_parse_with_actor() {
+        let input = json!({ "op": "add task", "title": "Test", "actor": "user123" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].actor, Some(crate::types::ActorId::from_string("user123")));
+        assert_eq!(ops[0].params.get("title").unwrap(), "Test");
+    }
+
+    #[test]
+    fn test_parse_without_actor() {
+        let input = json!({ "op": "add task", "title": "Test" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].actor, None);
     }
 }

@@ -2,11 +2,11 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::{Comment, TaskId};
 use serde::Deserialize;
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all comments on a task
 #[operation(verb = "list", noun = "comments", description = "List all comments on a task")]
@@ -26,14 +26,24 @@ impl ListComments {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for ListComments {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let task = ctx.read_task(&self.task_id).await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        match async {
+            let task = ctx.read_task(&self.task_id).await?;
 
-        let comments: Vec<&Comment> = task.comments.iter().collect();
+            let comments: Vec<&Comment> = task.comments.iter().collect();
 
-        Ok(serde_json::json!({
-            "comments": comments,
-            "count": comments.len()
-        }))
+            Ok(serde_json::json!({
+                "comments": comments,
+                "count": comments.len()
+            }))
+        }
+        .await
+        {
+            Ok(value) => ExecutionResult::Unlogged { value },
+            Err(error) => ExecutionResult::Failed {
+                error,
+                log_entry: None,
+            },
+        }
     }
 }

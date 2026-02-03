@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_tool_default_creates_valid_instance() {
-        let tool = TreesitterDuplicatesTool::default();
+        let tool = TreesitterDuplicatesTool;
         assert_tool_basics(&tool, "treesitter_duplicates", "duplicate");
     }
 

@@ -2,15 +2,15 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::TagId;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
 
 /// Update a tag
 #[operation(verb = "update", noun = "tag", description = "Update a tag's name, color, or description")]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateTag {
     /// The tag ID to update
     pub id: TagId,
@@ -50,30 +50,58 @@ impl UpdateTag {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateTag {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let mut board = ctx.read_board().await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        let start = std::time::Instant::now();
+        let input = serde_json::to_value(self).unwrap();
 
-        let tag = board
-            .tags
-            .iter_mut()
-            .find(|t| &t.id == &self.id)
-            .ok_or_else(|| KanbanError::TagNotFound {
-                id: self.id.to_string(),
-            })?;
+        let result: std::result::Result<Value, KanbanError> = async {
+            let mut board = ctx.read_board().await?;
 
-        if let Some(name) = &self.name {
-            tag.name = name.clone();
+            let tag = board
+                .tags
+                .iter_mut()
+                .find(|t| t.id == self.id)
+                .ok_or_else(|| KanbanError::TagNotFound {
+                    id: self.id.to_string(),
+                })?;
+
+            if let Some(name) = &self.name {
+                tag.name = name.clone();
+            }
+            if let Some(color) = &self.color {
+                tag.color = color.clone();
+            }
+            if let Some(description) = &self.description {
+                tag.description = Some(description.clone());
+            }
+
+            let updated_tag = serde_json::to_value(&*tag)?;
+            ctx.write_board(&board).await?;
+
+            Ok(updated_tag)
         }
-        if let Some(color) = &self.color {
-            tag.color = color.clone();
-        }
-        if let Some(description) = &self.description {
-            tag.description = Some(description.clone());
-        }
+        .await;
 
-        let result = serde_json::to_value(&*tag)?;
-        ctx.write_board(&board).await?;
+        let duration_ms = start.elapsed().as_millis() as u64;
 
-        Ok(result)
+        match result {
+            Ok(value) => ExecutionResult::Logged {
+                value: value.clone(),
+                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
+            },
+            Err(error) => {
+                let error_msg = error.to_string();
+                ExecutionResult::Failed {
+                    error,
+                    log_entry: Some(LogEntry::new(
+                        self.op_string(),
+                        input,
+                        serde_json::json!({"error": error_msg}),
+                        None,
+                        duration_ms,
+                    )),
+                }
+            }
+        }
     }
 }

@@ -19,17 +19,23 @@
 //!
 //! #[async_trait]
 //! impl Execute<KanbanContext, KanbanError> for AddTask {
-//!     async fn execute(&self, ctx: &KanbanContext) -> Result<Value, KanbanError> {
-//!         // implementation
+//!     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+//!         // implementation returns ExecutionResult::Logged or Unlogged
 //!     }
 //! }
 //! ```
 
+mod execution_result;
+mod log;
 mod operation;
 mod parameter;
+mod processor;
 
+pub use execution_result::ExecutionResult;
+pub use log::LogEntry;
 pub use operation::{Execute, Operation};
 pub use parameter::{ParamMeta, ParamType};
+pub use processor::OperationProcessor;
 
 // Re-export proc macros
 pub use swissarmyhammer_operations_macros::{operation, param};

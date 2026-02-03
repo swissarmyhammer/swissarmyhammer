@@ -2,11 +2,11 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::{ActorId, SwimlaneId, Task};
 use serde::Deserialize;
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Get the next actionable task
 #[operation(verb = "next", noun = "task", description = "Get the oldest ready task from the first column")]
@@ -42,7 +42,8 @@ impl NextTask {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for NextTask {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        match async {
         let board = ctx.read_board().await?;
         let all_tasks = ctx.read_all_tasks().await?;
 
@@ -110,6 +111,15 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
             }
             None => Ok(Value::Null),
         }
+        }
+        .await
+        {
+            Ok(value) => ExecutionResult::Unlogged { value },
+            Err(error) => ExecutionResult::Failed {
+                error,
+                log_entry: None,
+            },
+        }
     }
 }
 
@@ -125,7 +135,7 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.unwrap();
+        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
 
         (temp, ctx)
     }
@@ -134,7 +144,7 @@ mod tests {
     async fn test_next_task_empty() {
         let (_temp, ctx) = setup().await;
 
-        let result = NextTask::new().execute(&ctx).await.unwrap();
+        let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert!(result.is_null());
     }
 
@@ -142,10 +152,10 @@ mod tests {
     async fn test_next_task_returns_first() {
         let (_temp, ctx) = setup().await;
 
-        AddTask::new("Task 1").execute(&ctx).await.unwrap();
-        AddTask::new("Task 2").execute(&ctx).await.unwrap();
+        AddTask::new("Task 1").execute(&ctx).await.into_result().unwrap();
+        AddTask::new("Task 2").execute(&ctx).await.into_result().unwrap();
 
-        let result = NextTask::new().execute(&ctx).await.unwrap();
+        let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Task 1");
     }
 
@@ -156,7 +166,7 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Create a task that blocks another
-        let result1 = AddTask::new("Blocker").execute(&ctx).await.unwrap();
+        let result1 = AddTask::new("Blocker").execute(&ctx).await.into_result().unwrap();
         let id1 = result1["id"].as_str().unwrap();
 
         // Create a blocked task
@@ -164,10 +174,10 @@ mod tests {
             .with_depends_on(vec![TaskId::from_string(id1)])
             .execute(&ctx)
             .await
-            .unwrap();
+            .into_result().unwrap();
 
         // Next should return the blocker (the blocked one isn't ready)
-        let result = NextTask::new().execute(&ctx).await.unwrap();
+        let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Blocker");
     }
 
@@ -175,19 +185,19 @@ mod tests {
     async fn test_next_task_ignores_done() {
         let (_temp, ctx) = setup().await;
 
-        let result1 = AddTask::new("Done task").execute(&ctx).await.unwrap();
+        let result1 = AddTask::new("Done task").execute(&ctx).await.into_result().unwrap();
         let id1 = result1["id"].as_str().unwrap();
 
-        AddTask::new("Todo task").execute(&ctx).await.unwrap();
+        AddTask::new("Todo task").execute(&ctx).await.into_result().unwrap();
 
         // Move first task to done
         MoveTask::to_column(id1, "done")
             .execute(&ctx)
             .await
-            .unwrap();
+            .into_result().unwrap();
 
         // Next should return the todo task
-        let result = NextTask::new().execute(&ctx).await.unwrap();
+        let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Todo task");
     }
 }

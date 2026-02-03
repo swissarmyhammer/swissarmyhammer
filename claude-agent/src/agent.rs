@@ -1599,7 +1599,7 @@ impl ClaudeAgent {
         &self,
         session_id: &crate::session::SessionId,
         protocol_session_id: &SessionId,
-        cwd: &std::path::PathBuf,
+        cwd: &std::path::Path,
         mode_id: &str,
     ) -> crate::claude_process::SpawnConfig {
         use crate::claude_process::SpawnConfig;
@@ -1623,7 +1623,7 @@ impl ClaudeAgent {
         SpawnConfig::builder()
             .session_id(*session_id)
             .acp_session_id(protocol_session_id.clone())
-            .cwd(cwd.clone())
+            .cwd(cwd.to_path_buf())
             .mcp_servers(self.config.mcp_servers.clone())
             .agent_mode(agent_mode)
             .system_prompt(system_prompt)

@@ -4,13 +4,13 @@
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, Attachment, SwimlaneId, Subtask, TagId, TaskId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
 
 /// Update an existing task
 #[operation(verb = "update", noun = "task", description = "Update task properties")]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateTask {
     /// The task ID to update
     pub id: TaskId,
@@ -99,37 +99,73 @@ impl UpdateTask {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateTask {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let mut task = ctx.read_task(&self.id).await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        let start = std::time::Instant::now();
+        let input = serde_json::to_value(self).unwrap();
 
-        // Apply updates
-        if let Some(title) = &self.title {
-            task.title = title.clone();
-        }
-        if let Some(desc) = &self.description {
-            task.description = desc.clone();
-        }
-        if let Some(swimlane) = &self.swimlane {
-            task.position.swimlane = swimlane.clone();
-        }
-        if let Some(tags) = &self.tags {
-            task.tags = tags.clone();
-        }
-        if let Some(assignees) = &self.assignees {
-            task.assignees = assignees.clone();
-        }
-        if let Some(deps) = &self.depends_on {
-            task.depends_on = deps.clone();
-        }
-        if let Some(subtasks) = &self.subtasks {
-            task.subtasks = subtasks.clone();
-        }
-        if let Some(attachments) = &self.attachments {
-            task.attachments = attachments.clone();
-        }
+        let result: Result<Value> = async {
+            let mut task = ctx.read_task(&self.id).await?;
 
-        ctx.write_task(&task).await?;
-        Ok(serde_json::to_value(&task)?)
+            // Apply updates
+            if let Some(title) = &self.title {
+                task.title = title.clone();
+            }
+            if let Some(desc) = &self.description {
+                task.description = desc.clone();
+            }
+            if let Some(swimlane) = &self.swimlane {
+                task.position.swimlane = swimlane.clone();
+            }
+            if let Some(tags) = &self.tags {
+                task.tags = tags.clone();
+            }
+            if let Some(assignees) = &self.assignees {
+                task.assignees = assignees.clone();
+            }
+            if let Some(deps) = &self.depends_on {
+                task.depends_on = deps.clone();
+            }
+            if let Some(subtasks) = &self.subtasks {
+                task.subtasks = subtasks.clone();
+            }
+            if let Some(attachments) = &self.attachments {
+                task.attachments = attachments.clone();
+            }
+
+            ctx.write_task(&task).await?;
+            Ok(serde_json::to_value(&task)?)
+        }
+        .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(value) => ExecutionResult::Logged {
+                value: value.clone(),
+                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
+            },
+            Err(error) => {
+                let error_msg = error.to_string();
+                ExecutionResult::Failed {
+                    error,
+                    log_entry: Some(LogEntry::new(
+                        self.op_string(),
+                        input,
+                        serde_json::json!({"error": error_msg}),
+                        None,
+                        duration_ms,
+                    )),
+                }
+            }
+        }
+    }
+
+    fn affected_resource_ids(&self, result: &Value) -> Vec<String> {
+        result
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|id| vec![id.to_string()])
+            .unwrap_or_default()
     }
 }
 
@@ -145,7 +181,7 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.unwrap();
+        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
 
         (temp, ctx)
     }
@@ -154,13 +190,14 @@ mod tests {
     async fn test_update_task_title() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTask::new("Original").execute(&ctx).await.unwrap();
+        let add_result = AddTask::new("Original").execute(&ctx).await.into_result().unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         let result = UpdateTask::new(task_id)
             .with_title("Updated")
             .execute(&ctx)
             .await
+            .into_result()
             .unwrap();
 
         assert_eq!(result["title"], "Updated");
@@ -170,13 +207,14 @@ mod tests {
     async fn test_update_task_description() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTask::new("Task").execute(&ctx).await.unwrap();
+        let add_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         let result = UpdateTask::new(task_id)
             .with_description("New description")
             .execute(&ctx)
             .await
+            .into_result()
             .unwrap();
 
         assert_eq!(result["description"], "New description");

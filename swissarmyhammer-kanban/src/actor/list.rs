@@ -2,11 +2,11 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::Actor;
 use serde::Deserialize;
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all actors
 #[operation(verb = "list", noun = "actors", description = "List all actors with optional type filter")]
@@ -37,23 +37,33 @@ impl ListActors {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for ListActors {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let all_actors = ctx.read_all_actors().await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        match async {
+            let all_actors = ctx.read_all_actors().await?;
 
-        let actors: Vec<&Actor> = all_actors
-            .iter()
-            .filter(|a| match &self.actor_type {
-                None => true,
-                Some(t) if t == "human" => matches!(a, Actor::Human { .. }),
-                Some(t) if t == "agent" => matches!(a, Actor::Agent { .. }),
-                Some(_) => true, // Unknown type, include all
-            })
-            .collect();
+            let actors: Vec<&Actor> = all_actors
+                .iter()
+                .filter(|a| match &self.actor_type {
+                    None => true,
+                    Some(t) if t == "human" => matches!(a, Actor::Human { .. }),
+                    Some(t) if t == "agent" => matches!(a, Actor::Agent { .. }),
+                    Some(_) => true, // Unknown type, include all
+                })
+                .collect();
 
-        Ok(serde_json::json!({
-            "actors": actors,
-            "count": actors.len()
-        }))
+            Ok(serde_json::json!({
+                "actors": actors,
+                "count": actors.len()
+            }))
+        }
+        .await
+        {
+            Ok(value) => ExecutionResult::Unlogged { value },
+            Err(error) => ExecutionResult::Failed {
+                error,
+                log_entry: None,
+            },
+        }
     }
 }
 
@@ -69,7 +79,7 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.unwrap();
+        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
 
         (temp, ctx)
     }
@@ -78,7 +88,11 @@ mod tests {
     async fn test_list_actors_empty() {
         let (_temp, ctx) = setup().await;
 
-        let result = ListActors::new().execute(&ctx).await.unwrap();
+        let result = ListActors::new()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         assert_eq!(result["count"], 0);
         assert!(result["actors"].as_array().unwrap().is_empty());
@@ -88,10 +102,22 @@ mod tests {
     async fn test_list_actors() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
-        AddActor::agent("assistant", "Assistant").execute(&ctx).await.unwrap();
+        AddActor::human("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddActor::agent("assistant", "Assistant")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
-        let result = ListActors::new().execute(&ctx).await.unwrap();
+        let result = ListActors::new()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         assert_eq!(result["count"], 2);
     }
@@ -100,10 +126,22 @@ mod tests {
     async fn test_list_actors_filter_humans() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
-        AddActor::agent("assistant", "Assistant").execute(&ctx).await.unwrap();
+        AddActor::human("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddActor::agent("assistant", "Assistant")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
-        let result = ListActors::humans().execute(&ctx).await.unwrap();
+        let result = ListActors::humans()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         assert_eq!(result["count"], 1);
         assert_eq!(result["actors"][0]["type"], "human");
@@ -113,10 +151,22 @@ mod tests {
     async fn test_list_actors_filter_agents() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
-        AddActor::agent("assistant", "Assistant").execute(&ctx).await.unwrap();
+        AddActor::human("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddActor::agent("assistant", "Assistant")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
-        let result = ListActors::agents().execute(&ctx).await.unwrap();
+        let result = ListActors::agents()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         assert_eq!(result["count"], 1);
         assert_eq!(result["actors"][0]["type"], "agent");

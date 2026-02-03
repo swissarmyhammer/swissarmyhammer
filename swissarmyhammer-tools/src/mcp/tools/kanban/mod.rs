@@ -31,7 +31,8 @@ use swissarmyhammer_kanban::{
     swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
     tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
     task::{AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask, UntagTask, UpdateTask},
-    Execute, KanbanContext, KanbanOperation, Noun, Operation, Verb,
+    Execute, KanbanContext, KanbanOperation, KanbanOperationProcessor, Noun, Operation,
+    OperationProcessor, Verb,
 };
 
 // Static operation instances for metadata access
@@ -198,7 +199,7 @@ fn task_to_plan_entry(task: &Value) -> PlanEntry {
 /// Per ACP spec: "Complete plan lists must be resent with each update"
 async fn build_plan_data(ctx: &KanbanContext, trigger: &str, affected_task_id: Option<&str>) -> Option<Value> {
     // Fetch all tasks
-    let tasks_result = ListTasks::new().execute(ctx).await;
+    let tasks_result = ListTasks::new().execute(ctx).await.into_result();
     let tasks = match tasks_result {
         Ok(v) => v,
         Err(e) => {
@@ -391,6 +392,12 @@ impl McpTool for KanbanTool {
 async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<Value, McpError> {
     // Note: Can't use glob imports due to Verb::Tag and Noun::Tag collision
 
+    // Create processor with actor from operation context
+    let processor = match &op.actor {
+        Some(actor) => KanbanOperationProcessor::with_actor(actor.to_string()),
+        None => KanbanOperationProcessor::new(),
+    };
+
     let result = match (op.verb, op.noun) {
         // Board operations
         (Verb::Init, Noun::Board) => {
@@ -403,9 +410,9 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(desc) = description {
                 cmd = cmd.with_description(desc);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
-        (Verb::Get, Noun::Board) => GetBoard.execute(ctx).await,
+        (Verb::Get, Noun::Board) => processor.process(&GetBoard, ctx).await,
         (Verb::Update, Noun::Board) => {
             let mut cmd = UpdateBoard::new();
             if let Some(name) = op.get_string("name") {
@@ -414,7 +421,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
 
         // Column operations
@@ -430,13 +437,13 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
                 cmd = cmd.with_order(order as usize);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Column) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            GetColumn::new(id).execute(ctx).await
+            processor.process(&GetColumn::new(id), ctx).await
         }
         (Verb::Update, Noun::Column) => {
             let id = op
@@ -450,15 +457,15 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
                 cmd = cmd.with_order(order as usize);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Column) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            DeleteColumn::new(id).execute(ctx).await
+            processor.process(&DeleteColumn::new(id), ctx).await
         }
-        (Verb::List, Noun::Columns) => ListColumns.execute(ctx).await,
+        (Verb::List, Noun::Columns) => processor.process(&ListColumns, ctx).await,
 
         // Task operations
         (Verb::Add, Noun::Task) => {
@@ -471,13 +478,13 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 cmd = cmd.with_description(desc);
             }
             // Could add position, tags, assignees, depends_on parsing here
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            GetTask::new(id).execute(ctx).await
+            processor.process(&GetTask::new(id), ctx).await
         }
         (Verb::Update, Noun::Task) => {
             let id = op
@@ -491,7 +498,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Move, Noun::Task) => {
             let id = op
@@ -501,19 +508,19 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .get_string("column")
                 .ok_or_else(|| McpError::invalid_params("missing required field: column", None))?;
 
-            MoveTask::to_column(id, column).execute(ctx).await
+            processor.process(&MoveTask::to_column(id, column), ctx).await
         }
         (Verb::Delete, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            DeleteTask::new(id).execute(ctx).await
+            processor.process(&DeleteTask::new(id), ctx).await
         }
         (Verb::Complete, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            CompleteTask::new(id).execute(ctx).await
+            processor.process(&CompleteTask::new(id), ctx).await
         }
         (Verb::Assign, Noun::Task) => {
             let id = op
@@ -522,12 +529,12 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let assignee = op
                 .get_string("assignee")
                 .ok_or_else(|| McpError::invalid_params("missing required field: assignee", None))?;
-            AssignTask::new(id, assignee).execute(ctx).await
+            processor.process(&AssignTask::new(id, assignee), ctx).await
         }
         (Verb::Next, Noun::Task) => {
             let cmd = NextTask::new();
             // Could add swimlane/assignee filtering here
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::List, Noun::Tasks) => {
             let mut cmd = ListTasks::new();
@@ -537,7 +544,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(ready) = op.get_param("ready").and_then(|v| v.as_bool()) {
                 cmd = cmd.with_ready(ready);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Tag, Noun::Task) => {
             let id = op
@@ -546,7 +553,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let tag = op
                 .get_string("tag")
                 .ok_or_else(|| McpError::invalid_params("missing required field: tag", None))?;
-            TagTask::new(id, tag).execute(ctx).await
+            processor.process(&TagTask::new(id, tag), ctx).await
         }
         (Verb::Untag, Noun::Task) => {
             let id = op
@@ -555,7 +562,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let tag = op
                 .get_string("tag")
                 .ok_or_else(|| McpError::invalid_params("missing required field: tag", None))?;
-            UntagTask::new(id, tag).execute(ctx).await
+            processor.process(&UntagTask::new(id, tag), ctx).await
         }
 
         // Swimlane operations
@@ -571,13 +578,13 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
                 cmd = cmd.with_order(order as usize);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Swimlane) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            GetSwimlane::new(id).execute(ctx).await
+            processor.process(&GetSwimlane::new(id), ctx).await
         }
         (Verb::Update, Noun::Swimlane) => {
             let id = op
@@ -591,15 +598,15 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
                 cmd = cmd.with_order(order as usize);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Swimlane) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            DeleteSwimlane::new(id).execute(ctx).await
+            processor.process(&DeleteSwimlane::new(id), ctx).await
         }
-        (Verb::List, Noun::Swimlanes) => ListSwimlanes.execute(ctx).await,
+        (Verb::List, Noun::Swimlanes) => processor.process(&ListSwimlanes, ctx).await,
 
         // Actor operations
         (Verb::Add, Noun::Actor) => {
@@ -622,13 +629,13 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 cmd = cmd.with_ensure();
             }
 
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Actor) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            GetActor::new(id).execute(ctx).await
+            processor.process(&GetActor::new(id), ctx).await
         }
         (Verb::Update, Noun::Actor) => {
             let id = op
@@ -639,15 +646,15 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(name) = op.get_string("name") {
                 cmd = cmd.with_name(name);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Actor) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            DeleteActor::new(id).execute(ctx).await
+            processor.process(&DeleteActor::new(id), ctx).await
         }
-        (Verb::List, Noun::Actors) => ListActors::default().execute(ctx).await,
+        (Verb::List, Noun::Actors) => processor.process(&ListActors::default(), ctx).await,
 
         // Tag operations (board-level)
         (Verb::Add, Noun::Tag) => {
@@ -665,13 +672,13 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Tag) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            GetTag::new(id).execute(ctx).await
+            processor.process(&GetTag::new(id), ctx).await
         }
         (Verb::Update, Noun::Tag) => {
             let id = op
@@ -688,15 +695,15 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Tag) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            DeleteTag::new(id).execute(ctx).await
+            processor.process(&DeleteTag::new(id), ctx).await
         }
-        (Verb::List, Noun::Tags) => ListTags::default().execute(ctx).await,
+        (Verb::List, Noun::Tags) => processor.process(&ListTags::default(), ctx).await,
 
         // Comment operations
         // Note: For comments, we need both task_id and comment_id. The parser aliases
@@ -714,7 +721,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let author = op
                 .get_string("author")
                 .ok_or_else(|| McpError::invalid_params("missing required field: author", None))?;
-            AddComment::new(task_id, body, author).execute(ctx).await
+            processor.process(&AddComment::new(task_id, body, author), ctx).await
         }
         (Verb::Get, Noun::Comment) => {
             let task_id = op
@@ -724,7 +731,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let comment_id = op
                 .get_string("comment_id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: comment_id", None))?;
-            GetComment::new(task_id, comment_id).execute(ctx).await
+            processor.process(&GetComment::new(task_id, comment_id), ctx).await
         }
         (Verb::Update, Noun::Comment) => {
             let task_id = op
@@ -739,7 +746,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(body) = op.get_string("body").or_else(|| op.get_string("description")) {
                 cmd = cmd.with_body(body);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Comment) => {
             let task_id = op
@@ -749,14 +756,14 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let comment_id = op
                 .get_string("comment_id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: comment_id", None))?;
-            DeleteComment::new(task_id, comment_id).execute(ctx).await
+            processor.process(&DeleteComment::new(task_id, comment_id), ctx).await
         }
         (Verb::List, Noun::Comments) => {
             let task_id = op
                 .get_string("task_id")
                 .or_else(|| op.get_string("id"))
                 .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            ListComments::new(task_id).execute(ctx).await
+            processor.process(&ListComments::new(task_id), ctx).await
         }
 
         // Activity operations
@@ -765,7 +772,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(limit) = op.get_param("limit").and_then(|v| v.as_u64()) {
                 cmd = cmd.with_limit(limit as usize);
             }
-            cmd.execute(ctx).await
+            processor.process(&cmd, ctx).await
         }
 
         // Unsupported operations
@@ -2354,5 +2361,66 @@ mod tests {
         // Complete again - should be idempotent
         let result = tool.execute(complete_args, &context).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_activity_logging_via_mcp() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add task with actor
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Test Task"));
+        add_args.insert("actor".to_string(), json!("alice"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Update task with different actor
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update task"));
+        update_args.insert("id".to_string(), json!(task_id));
+        update_args.insert("title".to_string(), json!("Updated Task"));
+        update_args.insert("actor".to_string(), json!("bob"));
+
+        tool.execute(update_args, &context).await.unwrap();
+
+        // Read operation (should not log)
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get task"));
+        get_args.insert("id".to_string(), json!(task_id));
+
+        tool.execute(get_args, &context).await.unwrap();
+
+        // Verify activity log via list activity
+        let mut list_activity_args = serde_json::Map::new();
+        list_activity_args.insert("op".to_string(), json!("list activity"));
+
+        let result = tool.execute(list_activity_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        let entries = data["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3); // init, add, update (not get)
+
+        // Verify actor attribution
+        assert_eq!(entries[0]["op"], "update task");
+        assert_eq!(entries[0]["actor"], "bob");
+        assert_eq!(entries[1]["op"], "add task");
+        assert_eq!(entries[1]["actor"], "alice");
+        assert_eq!(entries[2]["op"], "init board");
+        assert!(entries[2]["actor"].is_null());
+
+        // Verify per-task log file exists
+        let kanban_ctx = KanbanContext::find(temp.path()).unwrap();
+        let task_id_type = swissarmyhammer_kanban::types::TaskId::from_string(&task_id);
+        let task_log_path = kanban_ctx.task_log_path(&task_id_type);
+        assert!(task_log_path.exists());
+
+        let task_log = std::fs::read_to_string(task_log_path).unwrap();
+        let log_lines: Vec<&str> = task_log.lines().collect();
+        assert_eq!(log_lines.len(), 2); // add + update (not get)
     }
 }

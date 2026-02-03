@@ -2,15 +2,15 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::ActorId;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
 
 /// Delete an actor (removes from all task assignee lists)
 #[operation(verb = "delete", noun = "actor", description = "Delete an actor and remove from all task assignments")]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteActor {
     /// The actor ID to delete
     pub id: ActorId,
@@ -24,31 +24,59 @@ impl DeleteActor {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for DeleteActor {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        // Check actor exists
-        if !ctx.actor_exists(&self.id).await {
-            return Err(KanbanError::ActorNotFound {
-                id: self.id.to_string(),
-            });
-        }
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        let start = std::time::Instant::now();
+        let input = serde_json::to_value(self).unwrap();
 
-        // Remove actor from all task assignee lists
-        let task_ids = ctx.list_task_ids().await?;
-        for id in task_ids {
-            let mut task = ctx.read_task(&id).await?;
-            if task.assignees.contains(&self.id) {
-                task.assignees.retain(|a| a != &self.id);
-                ctx.write_task(&task).await?;
+        let result = async {
+            // Check actor exists
+            if !ctx.actor_exists(&self.id).await {
+                return Err(KanbanError::ActorNotFound {
+                    id: self.id.to_string(),
+                });
+            }
+
+            // Remove actor from all task assignee lists
+            let task_ids = ctx.list_task_ids().await?;
+            for id in task_ids {
+                let mut task = ctx.read_task(&id).await?;
+                if task.assignees.contains(&self.id) {
+                    task.assignees.retain(|a| a != &self.id);
+                    ctx.write_task(&task).await?;
+                }
+            }
+
+            // Delete the actor file
+            ctx.delete_actor_file(&self.id).await?;
+
+            Ok(serde_json::json!({
+                "deleted": true,
+                "id": self.id.to_string()
+            }))
+        }
+        .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(value) => ExecutionResult::Logged {
+                value: value.clone(),
+                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
+            },
+            Err(error) => {
+                let error_msg = error.to_string();
+                ExecutionResult::Failed {
+                    error,
+                    log_entry: Some(LogEntry::new(
+                        self.op_string(),
+                        input,
+                        serde_json::json!({"error": error_msg}),
+                        None,
+                        duration_ms,
+                    )),
+                }
             }
         }
-
-        // Delete the actor file
-        ctx.delete_actor_file(&self.id).await?;
-
-        Ok(serde_json::json!({
-            "deleted": true,
-            "id": self.id.to_string()
-        }))
     }
 }
 
@@ -65,7 +93,7 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.unwrap();
+        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
 
         (temp, ctx)
     }
@@ -74,9 +102,17 @@ mod tests {
     async fn test_delete_actor() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
+        AddActor::human("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
-        let result = DeleteActor::new("alice").execute(&ctx).await.unwrap();
+        let result = DeleteActor::new("alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         assert_eq!(result["deleted"], true);
         assert_eq!(result["id"], "alice");
@@ -89,7 +125,10 @@ mod tests {
     async fn test_delete_nonexistent_actor() {
         let (_temp, ctx) = setup().await;
 
-        let result = DeleteActor::new("nonexistent").execute(&ctx).await;
+        let result = DeleteActor::new("nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
 
         assert!(matches!(result, Err(KanbanError::ActorNotFound { .. })));
     }
@@ -102,15 +141,21 @@ mod tests {
         AddActor::agent("assistant", "Assistant")
             .execute(&ctx)
             .await
+            .into_result()
             .unwrap();
 
         // Create task and assign
-        let task_result = AddTask::new("Test task").execute(&ctx).await.unwrap();
+        let task_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         AssignTask::new(task_id, "assistant")
             .execute(&ctx)
             .await
+            .into_result()
             .unwrap();
 
         // Verify assignment
@@ -118,7 +163,11 @@ mod tests {
         assert!(task.assignees.contains(&"assistant".into()));
 
         // Delete actor
-        DeleteActor::new("assistant").execute(&ctx).await.unwrap();
+        DeleteActor::new("assistant")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         // Verify task no longer has assignment
         let task = ctx.read_task(&task_id.into()).await.unwrap();

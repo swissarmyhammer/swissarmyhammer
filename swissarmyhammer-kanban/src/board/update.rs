@@ -3,13 +3,13 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
 
 /// Update board metadata
 #[operation(verb = "update", noun = "board", description = "Update board name or description")]
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct UpdateBoard {
     /// New board name
     pub name: Option<String>,
@@ -41,18 +41,46 @@ impl UpdateBoard {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateBoard {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let mut board = ctx.read_board().await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        let start = std::time::Instant::now();
+        let input = serde_json::to_value(self).unwrap();
 
-        if let Some(name) = &self.name {
-            board.name = name.clone();
-        }
-        if let Some(desc) = &self.description {
-            board.description = Some(desc.clone());
-        }
+        let result: Result<Value> = async {
+            let mut board = ctx.read_board().await?;
 
-        ctx.write_board(&board).await?;
-        Ok(serde_json::to_value(&board)?)
+            if let Some(name) = &self.name {
+                board.name = name.clone();
+            }
+            if let Some(desc) = &self.description {
+                board.description = Some(desc.clone());
+            }
+
+            ctx.write_board(&board).await?;
+            Ok(serde_json::to_value(&board)?)
+        }
+        .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(value) => ExecutionResult::Logged {
+                value: value.clone(),
+                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
+            },
+            Err(error) => {
+                let error_msg = error.to_string();
+                ExecutionResult::Failed {
+                    error,
+                    log_entry: Some(LogEntry::new(
+                        self.op_string(),
+                        input,
+                        serde_json::json!({"error": error_msg}),
+                        None,
+                        duration_ms,
+                    )),
+                }
+            }
+        }
     }
 }
 
@@ -67,7 +95,7 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Original").execute(&ctx).await.unwrap();
+        InitBoard::new("Original").execute(&ctx).await.into_result().unwrap();
 
         (temp, ctx)
     }
@@ -77,7 +105,7 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         let cmd = UpdateBoard::new().with_name("Updated Name");
-        let result = cmd.execute(&ctx).await.unwrap();
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
 
         assert_eq!(result["name"], "Updated Name");
     }
@@ -87,7 +115,7 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         let cmd = UpdateBoard::new().with_description("New description");
-        let result = cmd.execute(&ctx).await.unwrap();
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
 
         assert_eq!(result["description"], "New description");
     }

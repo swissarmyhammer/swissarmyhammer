@@ -2,14 +2,14 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::{Actor, ActorId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
 
 /// Actor type for creation
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActorType {
     Human,
@@ -21,7 +21,7 @@ pub enum ActorType {
 /// Actors are stored as separate files in `.kanban/actors/`.
 /// Use `ensure: true` for idempotent registration (returns existing actor if found).
 #[operation(verb = "add", noun = "actor", description = "Add a new actor (person or agent)")]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct AddActor {
     /// The actor ID (slug)
     pub id: ActorId,
@@ -65,38 +65,66 @@ impl AddActor {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for AddActor {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        // Check if actor already exists
-        if ctx.actor_exists(&self.id).await {
-            if self.ensure {
-                // Idempotent mode: return existing actor
-                let actor = ctx.read_actor(&self.id).await?;
-                return Ok(serde_json::json!({
-                    "actor": actor,
-                    "created": false,
-                    "message": "Actor already exists"
-                }));
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        let start = std::time::Instant::now();
+        let input = serde_json::to_value(self).unwrap();
+
+        let result = async {
+            // Check if actor already exists
+            if ctx.actor_exists(&self.id).await {
+                if self.ensure {
+                    // Idempotent mode: return existing actor
+                    let actor = ctx.read_actor(&self.id).await?;
+                    return Ok(serde_json::json!({
+                        "actor": actor,
+                        "created": false,
+                        "message": "Actor already exists"
+                    }));
+                }
+                return Err(KanbanError::duplicate_id("actor", self.id.to_string()));
             }
-            return Err(KanbanError::duplicate_id("actor", self.id.to_string()));
+
+            let actor = match self.actor_type {
+                ActorType::Human => Actor::Human {
+                    id: self.id.clone(),
+                    name: self.name.clone(),
+                },
+                ActorType::Agent => Actor::Agent {
+                    id: self.id.clone(),
+                    name: self.name.clone(),
+                },
+            };
+
+            ctx.write_actor(&actor).await?;
+
+            Ok(serde_json::json!({
+                "actor": actor,
+                "created": true
+            }))
         }
+        .await;
 
-        let actor = match self.actor_type {
-            ActorType::Human => Actor::Human {
-                id: self.id.clone(),
-                name: self.name.clone(),
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(value) => ExecutionResult::Logged {
+                value: value.clone(),
+                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
             },
-            ActorType::Agent => Actor::Agent {
-                id: self.id.clone(),
-                name: self.name.clone(),
-            },
-        };
-
-        ctx.write_actor(&actor).await?;
-
-        Ok(serde_json::json!({
-            "actor": actor,
-            "created": true
-        }))
+            Err(error) => {
+                let error_msg = error.to_string();
+                ExecutionResult::Failed {
+                    error,
+                    log_entry: Some(LogEntry::new(
+                        self.op_string(),
+                        input,
+                        serde_json::json!({"error": error_msg}),
+                        None,
+                        duration_ms,
+                    )),
+                }
+            }
+        }
     }
 }
 
@@ -111,7 +139,7 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.unwrap();
+        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
 
         (temp, ctx)
     }
@@ -123,6 +151,7 @@ mod tests {
         let result = AddActor::human("alice", "Alice Smith")
             .execute(&ctx)
             .await
+            .into_result()
             .unwrap();
 
         assert_eq!(result["created"], true);
@@ -138,6 +167,7 @@ mod tests {
         let result = AddActor::agent("assistant", "AI Assistant")
             .execute(&ctx)
             .await
+            .into_result()
             .unwrap();
 
         assert_eq!(result["created"], true);
@@ -149,11 +179,16 @@ mod tests {
     async fn test_add_duplicate_actor_errors() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
+        AddActor::human("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         let result = AddActor::human("alice", "Alice Duplicate")
             .execute(&ctx)
-            .await;
+            .await
+            .into_result();
 
         assert!(matches!(result, Err(KanbanError::DuplicateId { .. })));
     }
@@ -167,6 +202,7 @@ mod tests {
             .with_ensure()
             .execute(&ctx)
             .await
+            .into_result()
             .unwrap();
 
         assert_eq!(result1["created"], true);
@@ -176,6 +212,7 @@ mod tests {
             .with_ensure()
             .execute(&ctx)
             .await
+            .into_result()
             .unwrap();
 
         assert_eq!(result2["created"], false);

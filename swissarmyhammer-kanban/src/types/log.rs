@@ -1,78 +1,11 @@
 //! Log entry types for activity tracking
 
 use super::ids::LogEntryId;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// A log entry recording an operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry {
-    /// Unique ID for this log entry
-    pub id: LogEntryId,
-
-    /// When the operation occurred
-    pub timestamp: DateTime<Utc>,
-
-    /// Canonical op string (e.g., "add task")
-    pub op: String,
-
-    /// The normalized input parameters
-    pub input: Value,
-
-    /// The result (or error)
-    pub output: Value,
-
-    /// Who performed the operation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub actor: Option<String>,
-
-    /// How long the operation took
-    pub duration_ms: u64,
-}
-
-impl LogEntry {
-    /// Create a new log entry
-    pub fn new(
-        op: impl Into<String>,
-        input: Value,
-        output: Value,
-        actor: Option<String>,
-        duration_ms: u64,
-    ) -> Self {
-        Self {
-            id: LogEntryId::new(),
-            timestamp: Utc::now(),
-            op: op.into(),
-            input,
-            output,
-            actor,
-            duration_ms,
-        }
-    }
-
-    /// Create a log entry for a successful operation
-    pub fn success(op: impl Into<String>, input: Value, output: Value, duration_ms: u64) -> Self {
-        Self::new(op, input, output, None, duration_ms)
-    }
-
-    /// Create a log entry for a failed operation
-    pub fn failure(op: impl Into<String>, input: Value, error: &str, duration_ms: u64) -> Self {
-        Self::new(
-            op,
-            input,
-            serde_json::json!({ "error": error }),
-            None,
-            duration_ms,
-        )
-    }
-
-    /// Set the actor
-    pub fn with_actor(mut self, actor: impl Into<String>) -> Self {
-        self.actor = Some(actor.into());
-        self
-    }
-}
+// Re-export LogEntry from operations crate
+pub use swissarmyhammer_operations::LogEntry;
 
 /// Result of an operation execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,10 +74,11 @@ mod tests {
 
     #[test]
     fn test_log_entry_creation() {
-        let entry = LogEntry::success(
+        let entry = LogEntry::new(
             "add task",
             serde_json::json!({"title": "Test"}),
             serde_json::json!({"id": "abc123"}),
+            None,
             50,
         );
 
@@ -155,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_log_entry_with_actor() {
-        let entry = LogEntry::success("add task", Value::Null, Value::Null, 10)
+        let entry = LogEntry::new("add task", Value::Null, Value::Null, None, 10)
             .with_actor("claude[session123]");
 
         assert_eq!(entry.actor, Some("claude[session123]".into()));

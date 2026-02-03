@@ -2,15 +2,15 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::{Swimlane, SwimlaneId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
 
 /// Add a new swimlane to the board
 #[operation(verb = "add", noun = "swimlane", description = "Add a new swimlane to the board")]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct AddSwimlane {
     /// The swimlane ID (slug)
     pub id: SwimlaneId,
@@ -39,34 +39,62 @@ impl AddSwimlane {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for AddSwimlane {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let mut board = ctx.read_board().await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        let start = std::time::Instant::now();
+        let input = serde_json::to_value(self).unwrap();
 
-        // Check for duplicate ID
-        if board.find_swimlane(&self.id).is_some() {
-            return Err(KanbanError::duplicate_id("swimlane", self.id.to_string()));
+        let result = async {
+            let mut board = ctx.read_board().await?;
+
+            // Check for duplicate ID
+            if board.find_swimlane(&self.id).is_some() {
+                return Err(KanbanError::duplicate_id("swimlane", self.id.to_string()));
+            }
+
+            // Determine order
+            let order = self.order.unwrap_or_else(|| {
+                board
+                    .swimlanes
+                    .iter()
+                    .map(|s| s.order)
+                    .max()
+                    .map(|o| o + 1)
+                    .unwrap_or(0)
+            });
+
+            let swimlane = Swimlane {
+                id: self.id.clone(),
+                name: self.name.clone(),
+                order,
+            };
+
+            board.swimlanes.push(swimlane.clone());
+            ctx.write_board(&board).await?;
+
+            Ok(serde_json::to_value(&swimlane)?)
         }
+        .await;
 
-        // Determine order
-        let order = self.order.unwrap_or_else(|| {
-            board
-                .swimlanes
-                .iter()
-                .map(|s| s.order)
-                .max()
-                .map(|o| o + 1)
-                .unwrap_or(0)
-        });
+        let duration_ms = start.elapsed().as_millis() as u64;
 
-        let swimlane = Swimlane {
-            id: self.id.clone(),
-            name: self.name.clone(),
-            order,
-        };
-
-        board.swimlanes.push(swimlane.clone());
-        ctx.write_board(&board).await?;
-
-        Ok(serde_json::to_value(&swimlane)?)
+        match result {
+            Ok(value) => ExecutionResult::Logged {
+                value: value.clone(),
+                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
+            },
+            Err(error) => {
+                let error_msg = error.to_string();
+                ExecutionResult::Failed {
+                    error,
+                    log_entry: Some(LogEntry::new(
+                        self.op_string(),
+                        input,
+                        serde_json::json!({"error": error_msg}),
+                        None,
+                        duration_ms,
+                    )),
+                }
+            }
+        }
     }
 }

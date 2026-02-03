@@ -1,11 +1,11 @@
 //! InitBoard command
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::Board;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
 
 /// Initialize a new kanban board
 #[operation(
@@ -13,7 +13,7 @@ use swissarmyhammer_operations::{async_trait, operation, Execute};
     noun = "board",
     description = "Initialize a new kanban board"
 )]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct InitBoard {
     /// The board name
     pub name: String,
@@ -39,27 +39,55 @@ impl InitBoard {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for InitBoard {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        // Check if already initialized
-        if ctx.is_initialized() {
-            return Err(KanbanError::AlreadyExists {
-                path: ctx.root().to_path_buf(),
-            });
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        let start = std::time::Instant::now();
+        let input = serde_json::to_value(self).unwrap();
+
+        let result = async {
+            // Check if already initialized
+            if ctx.is_initialized() {
+                return Err(KanbanError::AlreadyExists {
+                    path: ctx.root().to_path_buf(),
+                });
+            }
+
+            // Create directory structure
+            ctx.create_directories().await?;
+
+            // Build board with default columns
+            let mut board = Board::new(&self.name);
+            if let Some(desc) = &self.description {
+                board = board.with_description(desc);
+            }
+
+            // Write board file
+            ctx.write_board(&board).await?;
+
+            Ok(serde_json::to_value(&board)?)
         }
+        .await;
 
-        // Create directory structure
-        ctx.create_directories().await?;
+        let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Build board with default columns
-        let mut board = Board::new(&self.name);
-        if let Some(desc) = &self.description {
-            board = board.with_description(desc);
+        match result {
+            Ok(value) => ExecutionResult::Logged {
+                value: value.clone(),
+                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
+            },
+            Err(error) => {
+                let error_msg = error.to_string();
+                ExecutionResult::Failed {
+                    error,
+                    log_entry: Some(LogEntry::new(
+                        self.op_string(),
+                        input,
+                        serde_json::json!({"error": error_msg}),
+                        None,
+                        duration_ms,
+                    )),
+                }
+            }
         }
-
-        // Write board file
-        ctx.write_board(&board).await?;
-
-        Ok(serde_json::to_value(&board)?)
     }
 }
 
@@ -80,7 +108,7 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         let cmd = InitBoard::new("Test Board").with_description("A test board");
-        let result = cmd.execute(&ctx).await.unwrap();
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
 
         assert_eq!(result["name"], "Test Board");
         assert_eq!(result["description"], "A test board");
@@ -94,10 +122,10 @@ mod tests {
 
         // First init should succeed
         let cmd = InitBoard::new("Test");
-        cmd.execute(&ctx).await.unwrap();
+        cmd.execute(&ctx).await.into_result().unwrap();
 
         // Second init should fail
-        let result = cmd.execute(&ctx).await;
+        let result = cmd.execute(&ctx).await.into_result();
         assert!(matches!(result, Err(KanbanError::AlreadyExists { .. })));
     }
 

@@ -97,7 +97,7 @@ mod tests {
     fn test_hash_file_binary() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("binary.bin");
-        fs::write(&file_path, &[0u8, 1, 2, 3, 255, 254, 253]).unwrap();
+        fs::write(&file_path, [0u8, 1, 2, 3, 255, 254, 253]).unwrap();
 
         let hash = hash_file(&file_path);
         assert!(hash.is_some());

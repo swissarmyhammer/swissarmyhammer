@@ -49,6 +49,7 @@
 mod context;
 mod error;
 pub mod parse;
+mod processor;
 pub mod types;
 
 // Command modules
@@ -61,11 +62,14 @@ pub mod swimlane;
 pub mod tag;
 pub mod task;
 
-// Re-export Execute trait from operations crate
-pub use swissarmyhammer_operations::{async_trait, Execute, Operation};
+// Re-export Execute trait and types from operations crate
+pub use swissarmyhammer_operations::{
+    async_trait, Execute, ExecutionResult, Operation, OperationProcessor,
+};
 
 pub use context::{KanbanContext, KanbanLock};
 pub use error::{KanbanError, Result};
+pub use processor::KanbanOperationProcessor;
 
 // Re-export commonly used types
 pub use types::{

@@ -2,10 +2,10 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use serde::Deserialize;
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List activity log entries
 #[operation(verb = "list", noun = "activity", description = "List activity log entries (most recent first)")]
@@ -28,12 +28,22 @@ impl ListActivity {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for ListActivity {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let entries = ctx.read_activity(self.limit).await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        match async {
+            let entries = ctx.read_activity(self.limit).await?;
 
-        Ok(serde_json::json!({
-            "entries": entries,
-            "count": entries.len()
-        }))
+            Ok(serde_json::json!({
+                "entries": entries,
+                "count": entries.len()
+            }))
+        }
+        .await
+        {
+            Ok(value) => ExecutionResult::Unlogged { value },
+            Err(error) => ExecutionResult::Failed {
+                error,
+                log_entry: None,
+            },
+        }
     }
 }

@@ -6482,9 +6482,12 @@ name = "swissarmyhammer-operations"
 version = "0.5.0"
 dependencies = [
  "async-trait",
+ "chrono",
+ "serde",
  "serde_json",
  "swissarmyhammer-operations-macros",
  "tokio",
+ "ulid",
 ]
 
 [[package]]

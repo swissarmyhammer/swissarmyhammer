@@ -1,6 +1,6 @@
 //! The core Operation and Execute traits
 
-use crate::ParamMeta;
+use crate::{ExecutionResult, ParamMeta};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -48,8 +48,21 @@ pub trait Execute<C, E>: Operation
 where
     C: Send + Sync,
 {
-    /// Execute the operation with the given context
-    async fn execute(&self, ctx: &C) -> Result<Value, E>;
+    /// Execute the operation and return result + logging intent
+    ///
+    /// Returns ExecutionResult which indicates:
+    /// - Logged: Mutation operations that should be audited
+    /// - Unlogged: Read-only operations with no side effects
+    /// - Failed: Errors (optionally logged)
+    async fn execute(&self, ctx: &C) -> ExecutionResult<Value, E>;
+
+    /// Extract affected resource IDs for targeted logging
+    ///
+    /// Used for per-resource logs (e.g., per-task logs in kanban).
+    /// Default returns empty (most operations don't affect specific resources).
+    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -82,10 +95,12 @@ mod tests {
 
     #[async_trait]
     impl Execute<TestContext, TestError> for AddTask {
-        async fn execute(&self, _ctx: &TestContext) -> Result<Value, TestError> {
-            Ok(serde_json::json!({
-                "title": self.title
-            }))
+        async fn execute(&self, _ctx: &TestContext) -> ExecutionResult<Value, TestError> {
+            ExecutionResult::Unlogged {
+                value: serde_json::json!({
+                    "title": self.title
+                }),
+            }
         }
     }
 
@@ -107,7 +122,7 @@ mod tests {
             description: None,
         };
         let ctx = TestContext;
-        let result = op.execute(&ctx).await.unwrap();
+        let result = op.execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Test");
     }
 }

@@ -110,7 +110,7 @@ impl Noun {
     }
 
     /// Parse from string
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "board" => Some(Self::Board),
             "task" => Some(Self::Task),
@@ -261,9 +261,9 @@ mod tests {
 
     #[test]
     fn test_noun_parsing() {
-        assert_eq!(Noun::from_str("board"), Some(Noun::Board));
-        assert_eq!(Noun::from_str("TASK"), Some(Noun::Task));
-        assert_eq!(Noun::from_str("tasks"), Some(Noun::Tasks));
+        assert_eq!(Noun::parse("board"), Some(Noun::Board));
+        assert_eq!(Noun::parse("TASK"), Some(Noun::Task));
+        assert_eq!(Noun::parse("tasks"), Some(Noun::Tasks));
     }
 
     #[test]

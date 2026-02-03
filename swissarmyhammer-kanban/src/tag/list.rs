@@ -2,11 +2,11 @@
 
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
+use crate::error::KanbanError;
 use crate::types::Tag;
 use serde::Deserialize;
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all tags
 #[operation(verb = "list", noun = "tags", description = "List all tags on the board")]
@@ -21,14 +21,24 @@ impl ListTags {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for ListTags {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let board = ctx.read_board().await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        match async {
+            let board = ctx.read_board().await?;
 
-        let tags: Vec<&Tag> = board.tags.iter().collect();
+            let tags: Vec<&Tag> = board.tags.iter().collect();
 
-        Ok(serde_json::json!({
-            "tags": tags,
-            "count": tags.len()
-        }))
+            Ok(serde_json::json!({
+                "tags": tags,
+                "count": tags.len()
+            }))
+        }
+        .await
+        {
+            Ok(value) => ExecutionResult::Unlogged { value },
+            Err(error) => ExecutionResult::Failed {
+                error,
+                log_entry: None,
+            },
+        }
     }
 }

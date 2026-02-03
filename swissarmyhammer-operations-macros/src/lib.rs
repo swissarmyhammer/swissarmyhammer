@@ -43,7 +43,7 @@ pub fn operation(attr: TokenStream, item: TokenStream) -> TokenStream {
             syn::Fields::Named(fields) => fields
                 .named
                 .iter()
-                .map(|field| generate_param_meta(field))
+                .map(generate_param_meta)
                 .collect(),
             syn::Fields::Unit => Vec::new(), // Unit struct has no fields
             syn::Fields::Unnamed(_) => panic!("operation macro does not support tuple structs"),

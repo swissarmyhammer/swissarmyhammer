@@ -4,13 +4,13 @@
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::SwimlaneId;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
 
 /// Update a swimlane
 #[operation(verb = "update", noun = "swimlane", description = "Update a swimlane's name or order")]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateSwimlane {
     /// The swimlane ID to update
     pub id: SwimlaneId,
@@ -42,27 +42,55 @@ impl UpdateSwimlane {
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateSwimlane {
-    async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let mut board = ctx.read_board().await?;
+    async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
+        let start = std::time::Instant::now();
+        let input = serde_json::to_value(self).unwrap();
 
-        let swimlane = board
-            .swimlanes
-            .iter_mut()
-            .find(|s| s.id == self.id)
-            .ok_or_else(|| KanbanError::SwimlaneNotFound {
-                id: self.id.to_string(),
-            })?;
+        let result: Result<Value> = async {
+            let mut board = ctx.read_board().await?;
 
-        if let Some(name) = &self.name {
-            swimlane.name = name.clone();
+            let swimlane = board
+                .swimlanes
+                .iter_mut()
+                .find(|s| s.id == self.id)
+                .ok_or_else(|| KanbanError::SwimlaneNotFound {
+                    id: self.id.to_string(),
+                })?;
+
+            if let Some(name) = &self.name {
+                swimlane.name = name.clone();
+            }
+            if let Some(order) = self.order {
+                swimlane.order = order;
+            }
+
+            let result = serde_json::to_value(&*swimlane)?;
+            ctx.write_board(&board).await?;
+
+            Ok(result)
         }
-        if let Some(order) = self.order {
-            swimlane.order = order;
+        .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(value) => ExecutionResult::Logged {
+                value: value.clone(),
+                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
+            },
+            Err(error) => {
+                let error_msg = error.to_string();
+                ExecutionResult::Failed {
+                    error,
+                    log_entry: Some(LogEntry::new(
+                        self.op_string(),
+                        input,
+                        serde_json::json!({"error": error_msg}),
+                        None,
+                        duration_ms,
+                    )),
+                }
+            }
         }
-
-        let result = serde_json::to_value(&*swimlane)?;
-        ctx.write_board(&board).await?;
-
-        Ok(result)
     }
 }
