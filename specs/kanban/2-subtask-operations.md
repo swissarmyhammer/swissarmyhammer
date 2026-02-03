@@ -1,6 +1,6 @@
 # Subtask Operations
 
-## Status: Not Implemented
+## Status: ✅ Implemented
 
 ## Problem
 

@@ -58,6 +58,7 @@ pub mod actor;
 pub mod board;
 pub mod column;
 pub mod comment;
+pub mod subtask;
 pub mod swimlane;
 pub mod tag;
 pub mod task;

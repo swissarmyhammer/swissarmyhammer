@@ -41,6 +41,10 @@ pub enum KanbanError {
     #[error("comment not found: {id}")]
     CommentNotFound { id: String },
 
+    /// Generic resource not found (for subtasks, attachments, etc.)
+    #[error("{resource} not found: {id}")]
+    NotFound { resource: String, id: String },
+
     /// Column has tasks and cannot be deleted
     #[error("column '{id}' has {count} tasks and cannot be deleted")]
     ColumnNotEmpty { id: String, count: usize },
