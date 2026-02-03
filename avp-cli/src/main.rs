@@ -18,6 +18,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use avp::auth;
 use avp::doctor;
 use avp::install::{self, InstallTarget};
 use avp::list;
@@ -67,6 +68,12 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Authenticate with the AVP registry
+    Login,
+    /// Log out from the AVP registry
+    Logout,
+    /// Show current authenticated user
+    Whoami,
 }
 
 #[tokio::main]
@@ -103,6 +110,27 @@ async fn main() {
         },
         Some(Commands::Doctor { verbose }) => doctor::run_doctor(verbose),
         Some(Commands::List { verbose }) => list::run_list(verbose, cli.debug),
+        Some(Commands::Login) => match auth::login().await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                1
+            }
+        },
+        Some(Commands::Logout) => match auth::logout().await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                1
+            }
+        },
+        Some(Commands::Whoami) => match auth::whoami().await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                1
+            }
+        },
         None => {
             // Default behavior: process hook from stdin
             match run_hook_processor(&cli).await {
@@ -132,18 +160,21 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
         println!();
         println!("Usage:");
         println!("  avp                           Process hook from stdin (pipe JSON)");
-        println!("  avp init [project|local|user]      Install hooks (default: project)");
-        println!(
-            "  avp deinit [project|local|user]    Remove hooks and .avp dir (default: project)"
-        );
+        println!("  avp init [project|local|user] Install hooks (default: project)");
+        println!("  avp deinit [project|local|user] Remove hooks and .avp dir (default: project)");
         println!("  avp list [-v]                 List all available validators");
         println!("  avp doctor [-v]               Diagnose AVP setup");
+        println!("  avp login                     Authenticate with AVP registry");
+        println!("  avp logout                    Log out from AVP registry");
+        println!("  avp whoami                    Show current authenticated user");
         println!();
         println!("Examples:");
         println!("  avp init                      Install to .claude/settings.json");
         println!("  avp init user                 Install to ~/.claude/settings.json");
         println!("  avp list                      Show all validators");
         println!("  avp list -v                   Show validators with descriptions");
+        println!("  avp login                     Log in to registry");
+        println!("  avp whoami                    Check login status");
         println!("  echo '{{...}}' | avp           Process a hook event");
         println!();
         println!("Run 'avp --help' for more information.");
@@ -317,5 +348,30 @@ mod tests {
             cli.command,
             Some(Commands::List { verbose: true })
         ));
+    }
+
+    #[test]
+    fn test_cli_parsing_login() {
+        let cli = Cli::parse_from(["avp", "login"]);
+        assert!(matches!(cli.command, Some(Commands::Login)));
+    }
+
+    #[test]
+    fn test_cli_parsing_logout() {
+        let cli = Cli::parse_from(["avp", "logout"]);
+        assert!(matches!(cli.command, Some(Commands::Logout)));
+    }
+
+    #[test]
+    fn test_cli_parsing_whoami() {
+        let cli = Cli::parse_from(["avp", "whoami"]);
+        assert!(matches!(cli.command, Some(Commands::Whoami)));
+    }
+
+    #[test]
+    fn test_cli_parsing_debug_with_login() {
+        let cli = Cli::parse_from(["avp", "--debug", "login"]);
+        assert!(cli.debug);
+        assert!(matches!(cli.command, Some(Commands::Login)));
     }
 }

@@ -63,6 +63,7 @@
 //! // dispatcher.register(ClaudeCodeHookStrategy::new(context));
 //! ```
 
+pub mod auth;
 pub mod doctor;
 pub mod install;
 pub mod list;
