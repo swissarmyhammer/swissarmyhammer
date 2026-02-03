@@ -36,7 +36,6 @@ struct TokenResponse {
     name: String,
 }
 
-
 /// Callback query parameters
 #[derive(Debug, Deserialize)]
 struct CallbackParams {
@@ -171,9 +170,7 @@ async fn handle_callback(
 
     // Check for OAuth error
     if let Some(error) = params.error {
-        let msg = params
-            .error_description
-            .unwrap_or_else(|| error.clone());
+        let msg = params.error_description.unwrap_or_else(|| error.clone());
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(Err(msg.clone()));
         }
@@ -281,7 +278,8 @@ pub async fn login() -> Result<(), String> {
     let registry_url = get_registry_url();
 
     // Find available port
-    let port = find_available_port().map_err(|e| format!("Failed to find available port: {}", e))?;
+    let port =
+        find_available_port().map_err(|e| format!("Failed to find available port: {}", e))?;
 
     // Generate state for CSRF protection
     let state_param = generate_state();
@@ -377,11 +375,13 @@ pub async fn login() -> Result<(), String> {
 
     save_credentials(&creds).map_err(|e| format!("Failed to save credentials: {}", e))?;
 
-    println!("Logged in as {} ({})", token_response.name, token_response.email);
+    println!(
+        "Logged in as {} ({})",
+        token_response.name, token_response.email
+    );
 
     Ok(())
 }
-
 
 /// Token verification response
 #[derive(Debug, Deserialize)]
@@ -452,7 +452,10 @@ pub async fn logout() -> Result<(), String> {
 
     // Check if using environment variable token
     if std::env::var("AVP_TOKEN").is_ok() {
-        return Err("Cannot logout when using AVP_TOKEN environment variable. Unset the variable instead.".to_string());
+        return Err(
+            "Cannot logout when using AVP_TOKEN environment variable. Unset the variable instead."
+                .to_string(),
+        );
     }
 
     // Revoke token on server
@@ -511,7 +514,9 @@ mod tests {
         let state = generate_state();
         assert_eq!(state.len(), 32);
         // Should only contain URL-safe characters
-        assert!(state.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
+        assert!(state
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
@@ -595,7 +600,10 @@ mod tests {
         let json = r#"{"valid":false,"error":"invalid_token","error_description":"Token revoked"}"#;
         let response: VerifyResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.valid, Some(false));
-        assert_eq!(response.error_description, Some("Token revoked".to_string()));
+        assert_eq!(
+            response.error_description,
+            Some("Token revoked".to_string())
+        );
     }
 
     #[test]
@@ -640,7 +648,10 @@ mod tests {
 
     #[test]
     fn test_default_registry_url_constant() {
-        assert_eq!(DEFAULT_REGISTRY_URL, "https://registry.agentvalidatorprotocol.com");
+        assert_eq!(
+            DEFAULT_REGISTRY_URL,
+            "https://registry.agentvalidatorprotocol.com"
+        );
     }
 
     // Environment variable tests - serialized to avoid race conditions
