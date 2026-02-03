@@ -5,8 +5,7 @@ use llama_cpp_2::{
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::LlamaModel,
-    send_logs_to_tracing,
-    LogOptions,
+    send_logs_to_tracing, LogOptions,
 };
 use llama_loader::{ModelConfig, ModelLoader, ModelMetadata, RetryConfig};
 use std::num::NonZeroU32;
@@ -53,7 +52,11 @@ const DEFAULT_EMBEDDING_DIMENSION: usize = 384;
 /// (zero or negative) dimension value.
 fn get_embedding_dimension(model: &LlamaModel) -> usize {
     let n = model.n_embd();
-    if n > 0 { n as usize } else { DEFAULT_EMBEDDING_DIMENSION }
+    if n > 0 {
+        n as usize
+    } else {
+        DEFAULT_EMBEDDING_DIMENSION
+    }
 }
 
 extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {}
@@ -119,7 +122,10 @@ impl EmbeddingModel {
             return Ok(());
         }
 
-        info!("Loading embedding model from {:?}", self.config.model_source);
+        info!(
+            "Loading embedding model from {:?}",
+            self.config.model_source
+        );
         let start = Instant::now();
 
         let model_config = ModelConfig {
@@ -135,13 +141,20 @@ impl EmbeddingModel {
 
         // Use the global backend for the loader
         let loader = ModelLoader::new(self.backend.clone());
-        let loaded = loader.load_model(&model_config).await.map_err(EmbeddingError::ModelLoader)?;
+        let loaded = loader
+            .load_model(&model_config)
+            .await
+            .map_err(EmbeddingError::ModelLoader)?;
 
         let ctx_size = loaded.metadata.context_size;
         self.metadata = Some(loaded.metadata);
         self.model = Some(loaded.model);
 
-        info!("Model loaded in {}, context: {} tokens", Pretty(&start.elapsed()), ctx_size);
+        info!(
+            "Model loaded in {}, context: {} tokens",
+            Pretty(&start.elapsed()),
+            ctx_size
+        );
         Ok(())
     }
 
@@ -152,7 +165,10 @@ impl EmbeddingModel {
         }
 
         let model = self.model.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
-        let metadata = self.metadata.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(EmbeddingError::ModelNotLoaded)?;
 
         info!("Creating LlamaContext");
         let batch_size = metadata.context_size as u32;
@@ -163,7 +179,8 @@ impl EmbeddingModel {
             .with_n_batch(batch_size)
             .with_n_ubatch(batch_size);
 
-        let ctx = model.new_context(&self.backend, params)
+        let ctx = model
+            .new_context(&self.backend, params)
             .map_err(|e| EmbeddingError::model(format!("Context creation failed: {}", e)))?;
 
         // SAFETY: We own the model and it won't be dropped before context
@@ -175,16 +192,30 @@ impl EmbeddingModel {
     /// Generate embedding for text
     pub async fn embed_text(&mut self, text: &str) -> Result<EmbeddingResult> {
         if text.is_empty() {
-            return Err(EmbeddingError::text_processing("Input text cannot be empty"));
+            return Err(EmbeddingError::text_processing(
+                "Input text cannot be empty",
+            ));
         }
 
         self.ensure_context()?;
 
         let model = self.model.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
-        let metadata = self.metadata.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
-        let ctx = self.context.as_mut().ok_or(EmbeddingError::ModelNotLoaded)?;
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(EmbeddingError::ModelNotLoaded)?;
+        let ctx = self
+            .context
+            .as_mut()
+            .ok_or(EmbeddingError::ModelNotLoaded)?;
 
-        embed_single(ctx, model, text, metadata.context_size, self.config.normalize_embeddings)
+        embed_single(
+            ctx,
+            model,
+            text,
+            metadata.context_size,
+            self.config.normalize_embeddings,
+        )
     }
 
     /// Get embedding dimension
@@ -217,7 +248,9 @@ fn embed_single(
     // Clear KV cache before each embedding to ensure independent processing
     ctx.clear_kv_cache();
 
-    let tokens = ctx.model.str_to_token(text, AddBos::Never)
+    let tokens = ctx
+        .model
+        .str_to_token(text, AddBos::Never)
         .map_err(|e| EmbeddingError::text_encoding(format!("Tokenize failed: {}", e)))?;
 
     if tokens.is_empty() {
@@ -234,18 +267,22 @@ fn embed_single(
     let dim = get_embedding_dimension(model);
 
     let mut batch = LlamaBatch::new(tokens.len(), 1);
-    batch.add_sequence(&tokens, 0, false)
+    batch
+        .add_sequence(&tokens, 0, false)
         .map_err(|e| EmbeddingError::text_processing(format!("Batch failed: {}", e)))?;
 
     ctx.decode(&mut batch)
         .map_err(|e| EmbeddingError::text_processing(format!("Decode failed: {}", e)))?;
 
-    let emb = ctx.embeddings_seq_ith(0)
+    let emb = ctx
+        .embeddings_seq_ith(0)
         .map_err(|e| EmbeddingError::text_processing(format!("Extract failed: {}", e)))?;
 
     if emb.len() != dim {
         return Err(EmbeddingError::text_processing(format!(
-            "Dimension mismatch: {} vs {}", dim, emb.len()
+            "Dimension mismatch: {} vs {}",
+            dim,
+            emb.len()
         )));
     }
 

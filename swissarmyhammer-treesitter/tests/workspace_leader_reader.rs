@@ -96,7 +96,10 @@ async fn test_leader_creates_database() {
 
     // Database should be created by background task
     let db_path = database_path(dir.path());
-    assert!(db_path.exists(), "Database file should be created by background indexer");
+    assert!(
+        db_path.exists(),
+        "Database file should be created by background indexer"
+    );
 }
 
 #[tokio::test]
@@ -113,7 +116,10 @@ async fn test_leader_indexes_files() {
 
     // Background task should have indexed the files
     let status = workspace.status().await.unwrap();
-    assert!(status.files_total > 0, "Background indexer should have found files to index");
+    assert!(
+        status.files_total > 0,
+        "Background indexer should have found files to index"
+    );
     assert!(
         status.is_ready,
         "Background indexer should complete indexing"
@@ -121,7 +127,10 @@ async fn test_leader_indexes_files() {
 
     // Should be able to list indexed files
     let files = workspace.list_files().await.unwrap();
-    assert!(!files.is_empty(), "Background indexer should have indexed files");
+    assert!(
+        !files.is_empty(),
+        "Background indexer should have indexed files"
+    );
 
     // Verify specific files are indexed
     let file_names: Vec<String> = files
@@ -199,7 +208,10 @@ async fn test_reader_can_open_database_readonly() {
     // Now open the database in read-only mode (simulating a reader)
     let db_path = database_path(dir.path());
     let db = IndexDatabase::open_readonly(&db_path);
-    assert!(db.is_ok(), "Should be able to open database in read-only mode");
+    assert!(
+        db.is_ok(),
+        "Should be able to open database in read-only mode"
+    );
 }
 
 #[tokio::test]
@@ -223,11 +235,7 @@ async fn test_reader_can_query_chunks() {
     assert!(chunks.is_ok(), "Reader should be able to query chunks");
 
     // Extract unique file paths from chunks
-    let file_paths: HashSet<PathBuf> = chunks
-        .unwrap()
-        .iter()
-        .map(|c| c.path.clone())
-        .collect();
+    let file_paths: HashSet<PathBuf> = chunks.unwrap().iter().map(|c| c.path.clone()).collect();
 
     // Verify files are present (may be empty if no embeddings computed)
     // The important thing is the query succeeded
@@ -239,7 +247,10 @@ async fn test_reader_can_query_chunks() {
             .collect();
         // Check if any expected files are present
         let has_rust_files = file_names.iter().any(|n| n.ends_with(".rs"));
-        assert!(has_rust_files || file_names.is_empty(), "Should have Rust files if any");
+        assert!(
+            has_rust_files || file_names.is_empty(),
+            "Should have Rust files if any"
+        );
     }
 }
 
@@ -260,7 +271,10 @@ async fn test_database_persists_after_leader_drops() {
 
     // Database should still exist
     let db_path = database_path(dir.path());
-    assert!(db_path.exists(), "Database should persist after leader drops");
+    assert!(
+        db_path.exists(),
+        "Database should persist after leader drops"
+    );
 
     // New leader should see the same files
     let workspace = Workspace::open(dir.path()).await.unwrap();
@@ -318,7 +332,10 @@ async fn test_leader_detects_file_changes() {
     // invalidate_file is not supported with background indexing
     let new_file = dir.path().join("new_file.rs");
     let result = workspace.invalidate_file(new_file.clone()).await;
-    assert!(result.is_err(), "invalidate_file should return error with background indexing");
+    assert!(
+        result.is_err(),
+        "invalidate_file should return error with background indexing"
+    );
 
     // File changes will be picked up on next process start when content hash differs
     // For now, verify the workspace is still queryable

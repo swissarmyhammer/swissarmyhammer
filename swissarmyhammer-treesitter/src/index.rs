@@ -64,7 +64,6 @@ pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Default parse timeout in milliseconds
 pub const DEFAULT_PARSE_TIMEOUT_MS: u64 = 5000;
 
-
 /// Configuration for embedding model
 #[derive(Debug, Clone)]
 pub struct EmbeddingModelConfig {
@@ -481,8 +480,7 @@ impl IndexContext {
         let mut errors = Vec::new();
 
         // Phase 1: discover files
-        let (files_to_parse, skipped_unchanged) =
-            self.discover_files(&skip_paths, &mut errors);
+        let (files_to_parse, skipped_unchanged) = self.discover_files(&skip_paths, &mut errors);
 
         tracing::info!(
             "Discovered {} files to parse, {} unchanged in {}",
@@ -627,7 +625,10 @@ impl IndexContext {
         };
 
         if let Err(e) = db.begin_transaction() {
-            errors.push((path.to_path_buf(), format!("Failed to begin transaction: {}", e)));
+            errors.push((
+                path.to_path_buf(),
+                format!("Failed to begin transaction: {}", e),
+            ));
             return;
         }
 
@@ -635,7 +636,12 @@ impl IndexContext {
         if let Err(e) = db.remove_file(path).and_then(|_| {
             let file_id = db.upsert_file(path, content_hash)?;
             for (chunk, embedding, symbol) in &embedded_chunks {
-                if let crate::chunk::ChunkSource::Parsed { start_byte, end_byte, .. } = &chunk.source {
+                if let crate::chunk::ChunkSource::Parsed {
+                    start_byte,
+                    end_byte,
+                    ..
+                } = &chunk.source
+                {
                     db.insert_chunk(&file_id, *start_byte, *end_byte, Some(embedding), symbol)?;
                 }
             }
@@ -756,7 +762,11 @@ impl IndexContext {
     }
 
     /// Check if a file should be parsed, skipped, or has an error
-    fn check_file_for_parsing(&self, path: &Path, skip_paths: &HashSet<PathBuf>) -> FileCheckResult {
+    fn check_file_for_parsing(
+        &self,
+        path: &Path,
+        skip_paths: &HashSet<PathBuf>,
+    ) -> FileCheckResult {
         let metadata = match std::fs::metadata(path) {
             Ok(m) => m,
             Err(e) => return FileCheckResult::Error(e.to_string()),
@@ -884,7 +894,12 @@ impl IndexContext {
     }
 
     /// Handle file error: record error, update counters, and send notification
-    fn handle_file_error(&mut self, path: &Path, error: String, errors: &mut Vec<(PathBuf, String)>) {
+    fn handle_file_error(
+        &mut self,
+        path: &Path,
+        error: String,
+        errors: &mut Vec<(PathBuf, String)>,
+    ) {
         errors.push((path.to_path_buf(), error.clone()));
         self.record_skipped_file();
         self.notify(IndexAction::FileError {
@@ -1034,7 +1049,9 @@ impl IndexContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{run_progress_test, setup_minimal_test_dir, setup_test_dir, ProgressCollector};
+    use crate::test_utils::{
+        run_progress_test, setup_minimal_test_dir, setup_test_dir, ProgressCollector,
+    };
     use tempfile::TempDir;
 
     /// Minimum expected embedding dimensions from typical embedding models.
@@ -1930,18 +1947,15 @@ mod tests {
         // Find the main.rs FileStarted and FileComplete indices
         let main_rs = dir.path().join("main.rs");
 
-        let started_idx = updates.iter().position(|u| {
-            matches!(&u.action, IndexAction::FileStarted { path } if path == &main_rs)
-        });
-
-        let complete_idx = updates.iter().position(|u| {
-            matches!(&u.action, IndexAction::FileComplete { path } if path == &main_rs)
-        });
-
-        assert!(
-            started_idx.is_some(),
-            "Should have FileStarted for main.rs"
+        let started_idx = updates.iter().position(
+            |u| matches!(&u.action, IndexAction::FileStarted { path } if path == &main_rs),
         );
+
+        let complete_idx = updates.iter().position(
+            |u| matches!(&u.action, IndexAction::FileComplete { path } if path == &main_rs),
+        );
+
+        assert!(started_idx.is_some(), "Should have FileStarted for main.rs");
         assert!(
             complete_idx.is_some(),
             "Should have FileComplete for main.rs"

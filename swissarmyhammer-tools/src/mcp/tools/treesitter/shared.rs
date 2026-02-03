@@ -67,9 +67,9 @@ pub fn resolve_workspace_path(path: Option<&String>, context: &ToolContext) -> P
 /// The returned `Workspace` can be used for queries regardless of whether
 /// this process is the leader or a client.
 pub async fn open_workspace(workspace_path: &PathBuf) -> Result<Workspace, McpError> {
-    Workspace::open(workspace_path).await.map_err(|e| {
-        McpError::internal_error(format!("Failed to open workspace: {}", e), None)
-    })
+    Workspace::open(workspace_path)
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to open workspace: {}", e), None))
 }
 
 /// Format a code block with proper newline handling.
@@ -303,10 +303,7 @@ pub mod test_helpers {
         extra_args: Option<serde_json::Map<String, serde_json::Value>>,
     ) {
         let (result, _temp_dir) = execute_tool_with_temp_path(tool, extra_args).await;
-        assert!(
-            result.is_ok(),
-            "Tool should succeed on empty workspace"
-        );
+        assert!(result.is_ok(), "Tool should succeed on empty workspace");
     }
 }
 

@@ -2,7 +2,7 @@
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::treesitter::shared::{
-    build_tool_schema, open_workspace, format_query_matches, resolve_workspace_path,
+    build_tool_schema, format_query_matches, open_workspace, resolve_workspace_path,
     schema_workspace_path_property,
 };
 use async_trait::async_trait;
@@ -106,8 +106,8 @@ impl McpTool for TreesitterQueryTool {
 mod tests {
     use super::*;
     use crate::mcp::tools::treesitter::shared::test_helpers::{
-        assert_schema_has_properties, assert_schema_has_required,
-        assert_schema_is_object, assert_tool_basics, execute_tool_with_temp_path,
+        assert_schema_has_properties, assert_schema_has_required, assert_schema_is_object,
+        assert_tool_basics, execute_tool_with_temp_path,
     };
 
     #[test]

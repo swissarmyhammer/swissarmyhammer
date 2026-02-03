@@ -78,9 +78,8 @@ impl ChunkSource {
 
     /// Tree-sitter node for this chunk (None for text sources)
     pub fn node(&self) -> Option<tree_sitter::Node<'_>> {
-        self.parsed_fields().and_then(|(pf, start, end)| {
-            pf.tree.root_node().descendant_for_byte_range(start, end)
-        })
+        self.parsed_fields()
+            .and_then(|(pf, start, end)| pf.tree.root_node().descendant_for_byte_range(start, end))
     }
 
     /// Parent node of this chunk's node (None for text sources)
@@ -670,7 +669,11 @@ fn is_valid_symbol_text(text: &str, max_len: usize) -> bool {
     !text.contains('\n') && text.len() < max_len
 }
 
-fn try_extract_name_field(node: tree_sitter::Node<'_>, field: &str, source: &[u8]) -> Option<String> {
+fn try_extract_name_field(
+    node: tree_sitter::Node<'_>,
+    field: &str,
+    source: &[u8],
+) -> Option<String> {
     let name_node = node.child_by_field_name(field)?;
     let text = name_node.utf8_text(source).ok()?;
     // Only accept simple identifiers (no whitespace, reasonable length)
@@ -709,7 +712,8 @@ fn extract_chunks_recursive(
 ) {
     // Only add this node as a chunk if it's a meaningful semantic unit
     if is_embeddable_kind(node.kind()) {
-        let chunk = SemanticChunk::from_parsed(parsed_file.clone(), node.start_byte(), node.end_byte());
+        let chunk =
+            SemanticChunk::from_parsed(parsed_file.clone(), node.start_byte(), node.end_byte());
         chunks.push(chunk);
     }
 
@@ -935,10 +939,7 @@ impl Foo {
         // Should find: impl_item + 2 function_items
         assert_eq!(chunks.len(), 3, "Expected impl_item and 2 function_items");
 
-        let kinds: Vec<_> = chunks
-            .iter()
-            .map(|c| c.node().unwrap().kind())
-            .collect();
+        let kinds: Vec<_> = chunks.iter().map(|c| c.node().unwrap().kind()).collect();
         assert!(kinds.contains(&"impl_item"));
         assert_eq!(kinds.iter().filter(|k| **k == "function_item").count(), 2);
     }
@@ -964,15 +965,19 @@ impl Foo {
         let parsed = create_parsed_file(source);
         // Find the function_item within the impl
         let chunks = chunk_file(parsed);
-        let method_chunk = chunks.iter().find(|c| {
-            c.node().map(|n| n.kind()) == Some("function_item")
-        });
+        let method_chunk = chunks
+            .iter()
+            .find(|c| c.node().map(|n| n.kind()) == Some("function_item"));
         assert!(method_chunk.is_some());
         let path = method_chunk.unwrap().symbol_path();
         // Should have both the impl type AND the method name
         assert!(path.contains("Foo"), "Should contain impl type: {}", path);
         assert!(path.contains("bar"), "Should contain method name: {}", path);
         // Full path should be like "test.rs::impl Foo::bar"
-        assert!(path.contains("impl Foo::bar"), "Should have full path: {}", path);
+        assert!(
+            path.contains("impl Foo::bar"),
+            "Should have full path: {}",
+            path
+        );
     }
 }

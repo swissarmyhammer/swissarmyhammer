@@ -183,8 +183,11 @@ impl IndexDatabase {
 
     /// Get count of chunks with embeddings
     pub fn embedded_chunk_count(&self) -> SqliteResult<usize> {
-        self.conn()
-            .query_row("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL", [], |row| row.get(0))
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
     }
 
     /// Begin a transaction for batch operations
@@ -537,8 +540,14 @@ mod tests {
         assert_eq!(db.embedded_chunk_count().unwrap(), 1);
 
         // Insert another chunk with embedding
-        db.insert_chunk(&file_id, 200, 300, Some(&embedding), "test.rs::also_embedded")
-            .unwrap();
+        db.insert_chunk(
+            &file_id,
+            200,
+            300,
+            Some(&embedding),
+            "test.rs::also_embedded",
+        )
+        .unwrap();
         assert_eq!(db.chunk_count().unwrap(), 3);
         assert_eq!(db.embedded_chunk_count().unwrap(), 2);
     }
@@ -593,7 +602,8 @@ mod tests {
         let path = Path::new("/test/file.rs");
 
         let file_id = db.upsert_file(path, &ZERO_HASH).unwrap();
-        db.insert_chunk(&file_id, 0, 100, None, "old_chunk").unwrap();
+        db.insert_chunk(&file_id, 0, 100, None, "old_chunk")
+            .unwrap();
 
         assert_eq!(db.chunk_count().unwrap(), 1);
 

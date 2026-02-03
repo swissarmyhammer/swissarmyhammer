@@ -323,7 +323,10 @@ impl Workspace {
 
                 // Open our own readonly database for Reader mode
                 let reader_db = IndexDatabase::open_readonly(&db_path).map_err(|e| {
-                    TreeSitterError::database_error(format!("Failed to open reader database: {}", e))
+                    TreeSitterError::database_error(format!(
+                        "Failed to open reader database: {}",
+                        e
+                    ))
                 })?;
 
                 let ctx = IndexContext::new(&workspace_root);
@@ -355,9 +358,7 @@ impl Workspace {
                 let ctx = IndexContext::new(&workspace_root);
 
                 Ok(Self {
-                    mode: WorkspaceMode::Reader {
-                        db: Arc::new(db),
-                    },
+                    mode: WorkspaceMode::Reader { db: Arc::new(db) },
                     election,
                     workspace_root,
                     context: Arc::new(TokioRwLock::new(ctx)),
@@ -530,6 +531,9 @@ impl Workspace {
     }
 
     /// Find all duplicate code clusters across the project.
+    ///
+    /// Searches the indexed codebase for semantically similar code chunks using
+    /// cosine similarity of embeddings. Returns clusters of duplicate code.
     ///
     /// # Arguments
     /// * `min_similarity` - Minimum cosine similarity threshold (0.0 to 1.0)
@@ -1551,7 +1555,10 @@ mod tests {
 
         // Verify indexing is complete by checking status
         let status = workspace.status().await.unwrap();
-        assert!(status.is_ready, "Workspace should be ready after background indexing");
+        assert!(
+            status.is_ready,
+            "Workspace should be ready after background indexing"
+        );
 
         assert_eq!(workspace.workspace_root(), dir.path());
     }
@@ -1601,7 +1608,9 @@ mod tests {
         let files = workspace.list_files().await.unwrap();
 
         assert!(!files.is_empty());
-        assert!(files.iter().any(|f| f.to_string_lossy().contains("test.rs")));
+        assert!(files
+            .iter()
+            .any(|f| f.to_string_lossy().contains("test.rs")));
     }
 
     #[tokio::test]
@@ -1641,7 +1650,10 @@ mod tests {
 
         // invalidate_file is not supported with background indexing (Reader mode)
         let result = workspace.invalidate_file(file_path).await;
-        assert!(result.is_err(), "invalidate_file should fail in Reader mode");
+        assert!(
+            result.is_err(),
+            "invalidate_file should fail in Reader mode"
+        );
     }
 
     #[test]
@@ -1726,16 +1738,8 @@ mod tests {
     #[tokio::test]
     async fn test_find_all_duplicates_with_files() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("a.rs"),
-            "fn foo() { println!(\"hello\"); }",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("b.rs"),
-            "fn bar() { println!(\"world\"); }",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn foo() { println!(\"hello\"); }").unwrap();
+        std::fs::write(dir.path().join("b.rs"), "fn bar() { println!(\"world\"); }").unwrap();
 
         let workspace = Workspace::open(dir.path()).await.unwrap();
         let result = workspace
@@ -1842,7 +1846,8 @@ mod tests {
             .with_progress(move |status| {
                 // Track when files are being parsed (not skipped)
                 if status.files_parsed > 0 {
-                    parse_count_clone.store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
+                    parse_count_clone
+                        .store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
                 }
             })
             .open()
@@ -1913,7 +1918,8 @@ mod tests {
             .with_progress(move |status| {
                 let current = max_parsed_clone.load(std::sync::atomic::Ordering::SeqCst);
                 if status.files_parsed > current {
-                    max_parsed_clone.store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
+                    max_parsed_clone
+                        .store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
                 }
             })
             .open()
@@ -1960,7 +1966,10 @@ mod tests {
 
         // File not in database - should return None
         let result = Workspace::check_file_unchanged(&file_path, &db);
-        assert!(result.is_none(), "New file should not be marked as unchanged");
+        assert!(
+            result.is_none(),
+            "New file should not be marked as unchanged"
+        );
     }
 
     #[tokio::test]
@@ -1981,7 +1990,10 @@ mod tests {
 
         // File in database with same hash - should return Some
         let result = Workspace::check_file_unchanged(&file_path, &db);
-        assert!(result.is_some(), "Unchanged file should return canonical path");
+        assert!(
+            result.is_some(),
+            "Unchanged file should return canonical path"
+        );
     }
 
     #[test]
@@ -2110,7 +2122,8 @@ mod tests {
         let _db = IndexDatabase::open_readwrite(&db_path).unwrap();
 
         // Should return immediately since database exists
-        let result = Workspace::wait_for_database_ready(&db_path, TEST_DB_READY_TIMEOUT_SUCCESS).await;
+        let result =
+            Workspace::wait_for_database_ready(&db_path, TEST_DB_READY_TIMEOUT_SUCCESS).await;
         assert!(result.is_ok());
     }
 
@@ -2137,7 +2150,8 @@ mod tests {
         });
 
         // Should succeed after retrying
-        let result = Workspace::wait_for_database_ready(&db_path, TEST_DB_READY_TIMEOUT_RETRY).await;
+        let result =
+            Workspace::wait_for_database_ready(&db_path, TEST_DB_READY_TIMEOUT_RETRY).await;
         assert!(result.is_ok());
     }
 
@@ -2160,7 +2174,10 @@ mod tests {
 
         // Check that file was indexed
         let status = workspace.status().await.unwrap();
-        assert!(status.files_indexed > 0, "Background indexer should have indexed files");
+        assert!(
+            status.files_indexed > 0,
+            "Background indexer should have indexed files"
+        );
     }
 
     #[tokio::test]
@@ -2191,6 +2208,9 @@ mod tests {
         // Should be able to become leader again (lock released)
         let election = LeaderElection::new(dir.path());
         let result = election.try_become_leader();
-        assert!(result.is_ok(), "Lock should be released after background indexing completes");
+        assert!(
+            result.is_ok(),
+            "Lock should be released after background indexing completes"
+        );
     }
 }

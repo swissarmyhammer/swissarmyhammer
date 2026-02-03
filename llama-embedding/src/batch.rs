@@ -443,7 +443,13 @@ impl<'a> BatchProcessor<'a> {
             .map(|dim| (dim, self.model.is_loaded()))
     }
 
-    fn report_progress(&mut self, batch_idx: usize, total_batches: usize, total_texts: usize, start_time: &Instant) {
+    fn report_progress(
+        &mut self,
+        batch_idx: usize,
+        total_batches: usize,
+        total_texts: usize,
+        start_time: &Instant,
+    ) {
         if let Some(ref mut callback) = self.progress_callback {
             let elapsed_ms = start_time.elapsed().as_millis() as u64;
             let current_throughput = if elapsed_ms > 0 {
@@ -480,7 +486,7 @@ impl<'a> BatchProcessor<'a> {
     fn estimate_current_memory_usage(&self, texts: &[String]) -> usize {
         let text_memory: usize = texts.iter().map(|t| t.len()).sum();
         let embeddings_memory = if let Some(dim) = self.model.get_embedding_dimension() {
-            texts.len() * dim * 4  // f32 = 4 bytes
+            texts.len() * dim * 4 // f32 = 4 bytes
         } else {
             // Default assumption
             texts.len() * 384 * 4
@@ -564,9 +570,16 @@ mod tests {
         assert_eq!(stats.average_time_per_text_ms, REPORT_AVG_TIME_PER_TEXT_MS);
         assert_eq!(stats.batches_processed, 1);
 
-        stats.update(TEST_BATCH_SIZE, TEST_SECOND_PROCESSING_TIME_MS, TEST_FAILURES);
+        stats.update(
+            TEST_BATCH_SIZE,
+            TEST_SECOND_PROCESSING_TIME_MS,
+            TEST_FAILURES,
+        );
         assert_eq!(stats.total_texts, TEST_BATCH_SIZE * 2);
-        assert_eq!(stats.successful_embeddings, TEST_BATCH_SIZE * 2 - TEST_FAILURES);
+        assert_eq!(
+            stats.successful_embeddings,
+            TEST_BATCH_SIZE * 2 - TEST_FAILURES
+        );
         assert_eq!(stats.failed_embeddings, TEST_FAILURES);
         assert_eq!(stats.success_rate(), 0.9);
     }

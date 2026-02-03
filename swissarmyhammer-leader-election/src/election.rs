@@ -52,9 +52,7 @@ impl ElectionConfig {
 
     /// Get the base directory (uses system temp dir if not set)
     fn base_dir(&self) -> PathBuf {
-        self.base_dir
-            .clone()
-            .unwrap_or_else(std::env::temp_dir)
+        self.base_dir.clone().unwrap_or_else(std::env::temp_dir)
     }
 }
 

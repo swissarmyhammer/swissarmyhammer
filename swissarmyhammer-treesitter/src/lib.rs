@@ -103,8 +103,8 @@ pub use watcher::{WorkspaceWatcher, WorkspaceWatcherCallback};
 
 // Query types and leader election for workspace architecture
 pub use query::{
-    ChunkResult, DuplicateCluster, ElectionConfig, ElectionError, IndexStatusInfo,
-    LeaderElection, LeaderGuard, QueryError, QueryErrorKind, QueryMatch, SimilarChunkResult,
+    ChunkResult, DuplicateCluster, ElectionConfig, ElectionError, IndexStatusInfo, LeaderElection,
+    LeaderGuard, QueryError, QueryErrorKind, QueryMatch, SimilarChunkResult,
 };
 
 // Database types

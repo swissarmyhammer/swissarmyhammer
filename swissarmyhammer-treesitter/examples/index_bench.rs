@@ -83,7 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 IndexPhase::Embedding => {
-                    if status.chunks_embedded >= last + PROGRESS_LOG_INTERVAL || status.is_complete() {
+                    if status.chunks_embedded >= last + PROGRESS_LOG_INTERVAL
+                        || status.is_complete()
+                    {
                         last_printed_clone.store(status.chunks_embedded, Ordering::Relaxed);
                         info!(
                             embedded = status.chunks_embedded,

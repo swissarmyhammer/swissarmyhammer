@@ -2,7 +2,7 @@
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::treesitter::shared::{
-    build_tool_schema, open_workspace, format_duplicate_clusters, format_similar_chunks,
+    build_tool_schema, format_duplicate_clusters, format_similar_chunks, open_workspace,
     resolve_workspace_path, schema_workspace_path_property,
 };
 use async_trait::async_trait;
@@ -210,8 +210,7 @@ mod tests {
         let tool = TreesitterDuplicatesTool::new();
         let mut extra_args = serde_json::Map::new();
         extra_args.insert("file".to_string(), json!("nonexistent/file.rs"));
-        let (result, _temp_dir) =
-            execute_tool_with_temp_path(&tool, Some(extra_args)).await;
+        let (result, _temp_dir) = execute_tool_with_temp_path(&tool, Some(extra_args)).await;
         // Returns error because the file doesn't exist
         assert!(result.is_err());
     }

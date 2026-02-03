@@ -1,6 +1,14 @@
-Detect duplicate or similar code across the codebase using semantic similarity.
+Detect duplicate or similar code across the codebase using semantic similarity analysis.
 
-This tool identifies code duplication by comparing semantic embeddings of code chunks. It can find both exact duplicates and semantically similar code that may have been copy-pasted and slightly modified.
+**IMPORTANT: Use this tool for code quality validation to find duplication that manual analysis would miss.**
+
+This tool uses AI embeddings to identify code duplication by semantic meaning, not just textual similarity. It finds:
+- Exact duplicates
+- Refactored duplicates (same logic, different variable names)
+- Copy-pasted code with minor modifications
+- Similar algorithms implemented differently
+
+**When to use:** Always use when validating code changes for duplication, as it provides comprehensive project-wide analysis that's impossible to do manually.
 
 ## Examples
 
