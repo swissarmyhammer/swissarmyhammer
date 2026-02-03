@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
-use axum::response::Html;
+use axum::response::{IntoResponse, Redirect};
 use axum::routing::get;
 use axum::Router;
 use rand::Rng;
@@ -165,8 +165,9 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 async fn handle_callback(
     Query(params): Query<CallbackParams>,
     State(state): State<Arc<tokio::sync::Mutex<CallbackState>>>,
-) -> Html<String> {
+) -> impl IntoResponse {
     let mut state = state.lock().await;
+    let registry_url = get_registry_url();
 
     // Check for OAuth error
     if let Some(error) = params.error {
@@ -174,16 +175,8 @@ async fn handle_callback(
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(Err(msg.clone()));
         }
-        return Html(format!(
-            r#"<!DOCTYPE html>
-<html>
-<head><title>AVP</title></head>
-<body style="font-family: system-ui, sans-serif; max-width: 400px; margin: 80px auto; padding: 20px;">
-<p>Login failed: {}</p>
-</body>
-</html>"#,
-            html_escape(&msg)
-        ));
+        let error_url = format!("{}/cli/error?message={}", registry_url, urlencoding::encode(&msg));
+        return Redirect::to(&error_url).into_response();
     }
 
     // Validate state parameter
@@ -192,31 +185,15 @@ async fn handle_callback(
             if let Some(tx) = state.tx.take() {
                 let _ = tx.send(Err("Invalid state parameter".to_string()));
             }
-            return Html(
-                r#"<!DOCTYPE html>
-<html>
-<head><title>AVP</title></head>
-<body style="font-family: system-ui, sans-serif; max-width: 400px; margin: 80px auto; padding: 20px;">
-<p>Login failed: invalid state parameter.</p>
-</body>
-</html>"#
-                    .to_string(),
-            );
+            let error_url = format!("{}/cli/error?message={}", registry_url, urlencoding::encode("Invalid state parameter"));
+            return Redirect::to(&error_url).into_response();
         }
     } else {
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(Err("Missing state parameter".to_string()));
         }
-        return Html(
-            r#"<!DOCTYPE html>
-<html>
-<head><title>AVP</title></head>
-<body style="font-family: system-ui, sans-serif; max-width: 400px; margin: 80px auto; padding: 20px;">
-<p>Login failed: missing state parameter.</p>
-</body>
-</html>"#
-                .to_string(),
-        );
+        let error_url = format!("{}/cli/error?message={}", registry_url, urlencoding::encode("Missing state parameter"));
+        return Redirect::to(&error_url).into_response();
     }
 
     // Extract authorization code
@@ -224,40 +201,15 @@ async fn handle_callback(
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(Ok(code));
         }
-        Html(
-            r#"<!DOCTYPE html>
-<html>
-<head><title>AVP</title></head>
-<body style="font-family: system-ui, sans-serif; max-width: 400px; margin: 80px auto; padding: 20px;">
-<p>Authenticated. You can close this tab.</p>
-</body>
-</html>"#
-                .to_string(),
-        )
+        let success_url = format!("{}/cli/success", registry_url);
+        Redirect::to(&success_url).into_response()
     } else {
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(Err("Missing authorization code".to_string()));
         }
-        Html(
-            r#"<!DOCTYPE html>
-<html>
-<head><title>AVP</title></head>
-<body style="font-family: system-ui, sans-serif; max-width: 400px; margin: 80px auto; padding: 20px;">
-<p>Login failed: missing authorization code.</p>
-</body>
-</html>"#
-                .to_string(),
-        )
+        let error_url = format!("{}/cli/error?message={}", registry_url, urlencoding::encode("Missing authorization code"));
+        Redirect::to(&error_url).into_response()
     }
-}
-
-/// Escape HTML special characters
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
 }
 
 /// Run the login flow
@@ -524,15 +476,6 @@ mod tests {
         let state1 = generate_state();
         let state2 = generate_state();
         assert_ne!(state1, state2);
-    }
-
-    #[test]
-    fn test_html_escape() {
-        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
-        assert_eq!(html_escape("a & b"), "a &amp; b");
-        assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
-        assert_eq!(html_escape("it's"), "it&#x27;s");
-        assert_eq!(html_escape("normal text"), "normal text");
     }
 
     #[test]
