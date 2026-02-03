@@ -86,6 +86,8 @@ pub enum Noun {
     Comment,
     Comments,
     Subtask,
+    Attachment,
+    Attachments,
     Activity,
 }
 
@@ -107,6 +109,8 @@ impl Noun {
             Self::Comment => "comment",
             Self::Comments => "comments",
             Self::Subtask => "subtask",
+            Self::Attachment => "attachment",
+            Self::Attachments => "attachments",
             Self::Activity => "activity",
         }
     }
@@ -128,6 +132,8 @@ impl Noun {
             "comment" => Some(Self::Comment),
             "comments" => Some(Self::Comments),
             "subtask" => Some(Self::Subtask),
+            "attachment" => Some(Self::Attachment),
+            "attachments" => Some(Self::Attachments),
             "activity" => Some(Self::Activity),
             _ => None,
         }
@@ -247,6 +253,10 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         // Subtask operations
         (Verb::Add, Noun::Subtask) | (Verb::Update, Noun::Subtask) |
         (Verb::Complete, Noun::Subtask) | (Verb::Delete, Noun::Subtask) |
+        // Attachment operations
+        (Verb::Add, Noun::Attachment) | (Verb::Get, Noun::Attachment) |
+        (Verb::Update, Noun::Attachment) | (Verb::Delete, Noun::Attachment) |
+        (Verb::List, Noun::Attachments) |
         // Activity
         (Verb::List, Noun::Activity)
     )

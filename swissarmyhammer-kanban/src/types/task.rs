@@ -142,6 +142,16 @@ impl Task {
     pub fn find_subtask_mut(&mut self, id: &SubtaskId) -> Option<&mut Subtask> {
         self.subtasks.iter_mut().find(|s| &s.id == id)
     }
+
+    /// Find an attachment by ID
+    pub fn find_attachment(&self, id: &AttachmentId) -> Option<&Attachment> {
+        self.attachments.iter().find(|a| &a.id == id)
+    }
+
+    /// Find an attachment by ID (mutable)
+    pub fn find_attachment_mut(&mut self, id: &AttachmentId) -> Option<&mut Attachment> {
+        self.attachments.iter_mut().find(|a| &a.id == id)
+    }
 }
 
 /// A comment on a task - part of the discussion thread

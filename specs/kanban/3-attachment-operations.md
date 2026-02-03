@@ -1,6 +1,6 @@
 # Attachment Operations
 
-## Status: Not Implemented
+## Status: Implemented
 
 ## Problem
 
@@ -166,8 +166,8 @@ Add `Attachment` and `Attachments` to the `Noun` enum.
 
 ## Total Operations
 
-Current: 40 operations
-After attachments: 45 operations
+Current: 44 operations (after subtasks)
+After attachments: 49 operations
 
 ## File Structure
 
