@@ -139,9 +139,9 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert!(DEFAULT_MIN_SIMILARITY > 0.0);
-        assert!(DEFAULT_MIN_SIMILARITY <= 1.0);
-        assert!(DEFAULT_MIN_CHUNK_BYTES > 0);
+        const { assert!(DEFAULT_MIN_SIMILARITY > 0.0) };
+        const { assert!(DEFAULT_MIN_SIMILARITY <= 1.0) };
+        const { assert!(DEFAULT_MIN_CHUNK_BYTES > 0) };
     }
 
     #[test]

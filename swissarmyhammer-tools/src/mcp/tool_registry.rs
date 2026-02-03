@@ -2067,6 +2067,7 @@ mod tests {
     /// that differ only in their name and description.
     macro_rules! test_tool {
         ($name:ident, $tool_name:literal, $description:literal) => {
+            #[allow(dead_code)]
             struct $name;
 
             // Implement Doctorable for test tools (empty health checks)

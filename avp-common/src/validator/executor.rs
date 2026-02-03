@@ -329,9 +329,9 @@ fn try_parse_plain_text_status(response: &str) -> Option<ValidatorResult> {
     let trimmed = response.trim();
 
     // Check if response starts with PASS
-    if trimmed.starts_with("PASS") {
-        let message = if trimmed.len() > 4 {
-            trimmed[4..].trim().to_string()
+    if let Some(stripped) = trimmed.strip_prefix("PASS") {
+        let message = if !stripped.is_empty() {
+            stripped.trim().to_string()
         } else {
             "Validation passed".to_string()
         };
@@ -339,9 +339,9 @@ fn try_parse_plain_text_status(response: &str) -> Option<ValidatorResult> {
     }
 
     // Check if response starts with FAIL
-    if trimmed.starts_with("FAIL") {
-        let message = if trimmed.len() > 4 {
-            trimmed[4..].trim().to_string()
+    if let Some(stripped) = trimmed.strip_prefix("FAIL") {
+        let message = if !stripped.is_empty() {
+            stripped.trim().to_string()
         } else {
             "Validation failed".to_string()
         };
