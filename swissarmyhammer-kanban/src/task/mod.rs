@@ -9,6 +9,7 @@ mod list;
 mod mv;
 mod next;
 mod tag;
+mod unassign;
 mod untag;
 mod update;
 
@@ -21,5 +22,6 @@ pub use list::ListTasks;
 pub use mv::MoveTask;
 pub use next::NextTask;
 pub use tag::TagTask;
+pub use unassign::UnassignTask;
 pub use untag::UntagTask;
 pub use update::UpdateTask;

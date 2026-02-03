@@ -1,6 +1,6 @@
 # Unassign Task Operation
 
-## Status: Not Implemented
+## Status: Implemented
 
 ## Problem
 

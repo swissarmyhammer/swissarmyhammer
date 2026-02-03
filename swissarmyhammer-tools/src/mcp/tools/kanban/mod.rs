@@ -30,7 +30,7 @@ use swissarmyhammer_kanban::{
     parse::parse_input,
     swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
     tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
-    task::{AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask, UntagTask, UpdateTask},
+    task::{AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask, UnassignTask, UntagTask, UpdateTask},
     Execute, KanbanContext, KanbanOperation, KanbanOperationProcessor, Noun, Operation,
     OperationProcessor, Verb,
 };
@@ -67,6 +67,7 @@ static DELETE_TASK: Lazy<DeleteTask> = Lazy::new(|| DeleteTask::new(""));
 static MOVE_TASK: Lazy<MoveTask> = Lazy::new(|| MoveTask::to_column("", ""));
 static COMPLETE_TASK: Lazy<CompleteTask> = Lazy::new(|| CompleteTask::new(""));
 static ASSIGN_TASK: Lazy<AssignTask> = Lazy::new(|| AssignTask::new("", ""));
+static UNASSIGN_TASK: Lazy<UnassignTask> = Lazy::new(|| UnassignTask::new("", ""));
 static NEXT_TASK: Lazy<NextTask> = Lazy::new(NextTask::new);
 static TAG_TASK: Lazy<TagTask> = Lazy::new(|| TagTask::new("", ""));
 static UNTAG_TASK: Lazy<UntagTask> = Lazy::new(|| UntagTask::new("", ""));
@@ -119,6 +120,7 @@ static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*MOVE_TASK as &dyn Operation,
         &*COMPLETE_TASK as &dyn Operation,
         &*ASSIGN_TASK as &dyn Operation,
+        &*UNASSIGN_TASK as &dyn Operation,
         &*NEXT_TASK as &dyn Operation,
         &*TAG_TASK as &dyn Operation,
         &*UNTAG_TASK as &dyn Operation,
@@ -261,6 +263,7 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
             | (Verb::Move, Noun::Task)
             | (Verb::Complete, Noun::Task)
             | (Verb::Assign, Noun::Task)
+            | (Verb::Unassign, Noun::Task)
     )
 }
 
@@ -530,6 +533,15 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .get_string("assignee")
                 .ok_or_else(|| McpError::invalid_params("missing required field: assignee", None))?;
             processor.process(&AssignTask::new(id, assignee), ctx).await
+        }
+        (Verb::Unassign, Noun::Task) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            let assignee = op
+                .get_string("assignee")
+                .ok_or_else(|| McpError::invalid_params("missing required field: assignee", None))?;
+            processor.process(&UnassignTask::new(id, assignee), ctx).await
         }
         (Verb::Next, Noun::Task) => {
             let cmd = NextTask::new();
