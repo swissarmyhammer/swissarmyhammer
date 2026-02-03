@@ -16,6 +16,13 @@ const TEST_MIN_SIMILARITY: f32 = 0.5;
 /// Minimum chunk bytes for duplicate detection tests
 const TEST_MIN_CHUNK_BYTES: usize = 5;
 
+/// Timeout in seconds to wait for background indexing to complete in tests
+const BACKGROUND_INDEXING_TIMEOUT_SECS: u64 = 2;
+
+/// Time to wait for background indexing to complete in tests
+const WAIT_FOR_BACKGROUND_INDEXING: std::time::Duration =
+    std::time::Duration::from_secs(BACKGROUND_INDEXING_TIMEOUT_SECS);
+
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -80,11 +87,16 @@ async fn test_leader_creates_database() {
     let dir = create_test_workspace();
 
     let workspace = Workspace::open(dir.path()).await.unwrap();
-    assert!(workspace.is_leader());
 
-    // Database should be created
+    // Wait for background indexing to complete
+    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+
+    // With background indexing, open() returns Reader mode
+    assert!(!workspace.is_leader());
+
+    // Database should be created by background task
     let db_path = database_path(dir.path());
-    assert!(db_path.exists(), "Database file should be created by leader");
+    assert!(db_path.exists(), "Database file should be created by background indexer");
 }
 
 #[tokio::test]
@@ -92,19 +104,24 @@ async fn test_leader_indexes_files() {
     let dir = create_test_workspace();
 
     let workspace = Workspace::open(dir.path()).await.unwrap();
-    assert!(workspace.is_leader());
 
-    // Leader should have indexed the files
+    // Wait for background indexing to complete
+    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+
+    // With background indexing, open() returns Reader mode
+    assert!(!workspace.is_leader());
+
+    // Background task should have indexed the files
     let status = workspace.status().await.unwrap();
-    assert!(status.files_total > 0, "Leader should have found files to index");
+    assert!(status.files_total > 0, "Background indexer should have found files to index");
     assert!(
         status.is_ready,
-        "Leader should complete indexing during open"
+        "Background indexer should complete indexing"
     );
 
     // Should be able to list indexed files
     let files = workspace.list_files().await.unwrap();
-    assert!(!files.is_empty(), "Leader should have indexed files");
+    assert!(!files.is_empty(), "Background indexer should have indexed files");
 
     // Verify specific files are indexed
     let file_names: Vec<String> = files
@@ -121,23 +138,33 @@ async fn test_leader_can_query_duplicates() {
     let dir = create_test_workspace();
 
     let workspace = Workspace::open(dir.path()).await.unwrap();
-    assert!(workspace.is_leader());
 
-    // Leader should be able to query for duplicates
+    // Wait for background indexing to complete
+    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+
+    // With background indexing, open() returns Reader mode
+    assert!(!workspace.is_leader());
+
+    // Reader should be able to query for duplicates from indexed data
     let result = workspace
         .find_all_duplicates(TEST_MIN_SIMILARITY, TEST_MIN_CHUNK_BYTES)
         .await;
-    assert!(result.is_ok(), "Leader should be able to query duplicates");
+    assert!(result.is_ok(), "Reader should be able to query duplicates");
 }
 
 #[tokio::test]
-async fn test_leader_can_run_tree_sitter_queries() {
+async fn test_reader_cannot_run_tree_sitter_queries() {
     let dir = create_test_workspace();
 
     let workspace = Workspace::open(dir.path()).await.unwrap();
-    assert!(workspace.is_leader());
 
-    // Leader should be able to run tree-sitter queries
+    // Wait for background indexing to complete
+    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+
+    // With background indexing, open() returns Reader mode
+    assert!(!workspace.is_leader());
+
+    // Tree-sitter queries are not available in Reader mode (no parsed AST)
     let result = workspace
         .tree_sitter_query(
             "(function_item name: (identifier) @name)".to_string(),
@@ -146,12 +173,9 @@ async fn test_leader_can_run_tree_sitter_queries() {
         )
         .await;
     assert!(
-        result.is_ok(),
-        "Leader should be able to run tree-sitter queries"
+        result.is_err(),
+        "Tree-sitter queries should not be available in Reader mode"
     );
-
-    let matches = result.unwrap();
-    assert!(!matches.is_empty(), "Should find function definitions");
 }
 
 // =============================================================================
@@ -162,11 +186,14 @@ async fn test_leader_can_run_tree_sitter_queries() {
 async fn test_reader_can_open_database_readonly() {
     let dir = create_test_workspace();
 
-    // First, let a leader create and populate the database
+    // First, let background indexer create and populate the database
     {
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-        assert!(workspace.is_leader());
-        // Workspace dropped here, releasing the lock
+        let _workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Wait for background indexing to complete (database is created by background task)
+        tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+
+        // Workspace dropped here
     }
 
     // Now open the database in read-only mode (simulating a reader)
@@ -179,10 +206,12 @@ async fn test_reader_can_open_database_readonly() {
 async fn test_reader_can_query_chunks() {
     let dir = create_test_workspace();
 
-    // Leader creates and populates the database
+    // Background indexer creates and populates the database
     {
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-        assert!(workspace.is_leader());
+        let _workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
     }
 
     // Reader queries the database
@@ -247,22 +276,27 @@ async fn test_database_persists_after_leader_drops() {
 async fn test_new_leader_can_reopen_existing_database() {
     let dir = create_test_workspace();
 
-    // First leader indexes
+    // First background indexer populates database
     let original_file_count = {
         let workspace = Workspace::open(dir.path()).await.unwrap();
-        assert!(workspace.is_leader());
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+
         workspace.list_files().await.unwrap().len()
     };
 
-    // New leader opens existing database
+    // New workspace opens existing database
     let workspace = Workspace::open(dir.path()).await.unwrap();
-    assert!(workspace.is_leader());
+
+    // Wait for any background activity to settle
+    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
 
     let files = workspace.list_files().await.unwrap();
     assert_eq!(
         files.len(),
         original_file_count,
-        "New leader should see existing indexed files"
+        "New workspace should see existing indexed files"
     );
 }
 
@@ -281,19 +315,15 @@ async fn test_leader_detects_file_changes() {
     )
     .unwrap();
 
-    // Invalidate should trigger re-indexing
+    // invalidate_file is not supported with background indexing
     let new_file = dir.path().join("new_file.rs");
     let result = workspace.invalidate_file(new_file.clone()).await;
+    assert!(result.is_err(), "invalidate_file should return error with background indexing");
 
-    // Note: invalidate_file may fail if the file wasn't previously indexed
-    // What matters is that the leader can handle file changes
-    if result.is_ok() {
-        let updated_status = workspace.status().await.unwrap();
-        assert!(
-            updated_status.files_total >= initial_status.files_total,
-            "File count should not decrease after adding a file"
-        );
-    }
+    // File changes will be picked up on next process start when content hash differs
+    // For now, verify the workspace is still queryable
+    let status = workspace.status().await.unwrap();
+    assert_eq!(status.files_indexed, initial_status.files_indexed);
 }
 
 // =============================================================================
@@ -305,7 +335,9 @@ async fn test_empty_workspace_leader_succeeds() {
     let dir = TempDir::new().unwrap();
 
     let workspace = Workspace::open(dir.path()).await.unwrap();
-    assert!(workspace.is_leader());
+
+    // Wait for background indexing to complete
+    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
 
     // Empty workspace should be queryable
     let status = workspace.status().await.unwrap();
@@ -323,8 +355,10 @@ async fn test_empty_workspace_creates_database() {
     let dir = TempDir::new().unwrap();
 
     {
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-        assert!(workspace.is_leader());
+        let _workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
     }
 
     // Database should exist even for empty workspace

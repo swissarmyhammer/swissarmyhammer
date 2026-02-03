@@ -40,7 +40,7 @@ use tokio::sync::RwLock as TokioRwLock;
 
 use swissarmyhammer_leader_election::{ElectionConfig, ElectionError, LeaderElection, LeaderGuard};
 
-use crate::chunk::{cosine_similarity, SemanticChunk, SimilarityQuery};
+use crate::chunk::{cosine_similarity, SemanticChunk};
 use crate::db::{database_path, EmbeddedChunkRecord, IndexDatabase};
 use crate::index::{compute_file_hash, IndexConfig, IndexContext, IndexStatus, ProgressCallback};
 use crate::query::{
@@ -55,6 +55,9 @@ const DUPLICATES_TOP_K: usize = 100;
 /// Internal mode of the workspace
 enum WorkspaceMode {
     /// This process owns the index and writes to the database
+    /// Note: With background indexing, this variant is not currently constructed.
+    /// Leader work happens in a detached background task. Kept for future use.
+    #[allow(dead_code)]
     Leader {
         /// The database for persistent storage (internally thread-safe)
         db: Arc<IndexDatabase>,
@@ -180,42 +183,100 @@ impl Workspace {
 
     /// Open a workspace, automatically handling leader election.
     ///
-    /// This is a convenience method that opens and builds in one step.
-    /// For more control, use `Workspace::new().with_progress(...).open()` then `build()`.
+    /// Returns immediately as a Reader. If no leader exists, spawns a background
+    /// task to build the index. The index is eventually consistent - queries return
+    /// current database state which may be incomplete during initial indexing.
+    ///
+    /// For more control, use `Workspace::new().with_progress(...).open()`.
     pub async fn open(workspace_root: impl AsRef<Path>) -> Result<Self> {
-        let workspace = Self::open_internal(
+        Self::open_internal(
             workspace_root.as_ref().to_path_buf(),
             ElectionConfig::default(),
             IndexConfig::default(),
             None,
         )
-        .await?;
-
-        // Auto-build for backward compatibility
-        workspace.build().await?;
-        Ok(workspace)
+        .await
     }
 
     /// Open a workspace with custom configuration.
     ///
-    /// This is a convenience method that opens and builds in one step.
-    /// For more control, use the builder pattern.
+    /// Returns immediately as a Reader. If no leader exists, spawns a background
+    /// task to build the index.
     pub async fn open_with_config(
         workspace_root: impl AsRef<Path>,
         election_config: ElectionConfig,
         index_config: Option<IndexConfig>,
     ) -> Result<Self> {
-        let workspace = Self::open_internal(
+        Self::open_internal(
             workspace_root.as_ref().to_path_buf(),
             election_config,
             index_config.unwrap_or_default(),
             None,
         )
-        .await?;
+        .await
+    }
 
-        // Auto-build for backward compatibility
-        workspace.build().await?;
-        Ok(workspace)
+    /// Wait for database to be ready by attempting to open and query.
+    /// Uses exponential backoff with a maximum timeout.
+    async fn wait_for_database_ready(db_path: &Path, timeout: std::time::Duration) -> Result<()> {
+        let start = std::time::Instant::now();
+        let mut backoff = std::time::Duration::from_millis(50);
+
+        loop {
+            if start.elapsed() > timeout {
+                return Err(TreeSitterError::database_error(
+                    "Timeout waiting for database schema to be created",
+                ));
+            }
+
+            // Try to open readonly and verify schema
+            if let Ok(db) = IndexDatabase::open_readonly(db_path) {
+                // Verify schema exists by attempting a query
+                if db.file_count().is_ok() {
+                    tracing::debug!("Database schema verified ready");
+                    return Ok(());
+                }
+            }
+
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(std::time::Duration::from_millis(500));
+        }
+    }
+
+    /// Spawn a background indexer task that builds the index once and exits.
+    fn spawn_background_indexer(
+        workspace_root: PathBuf,
+        db: Arc<IndexDatabase>,
+        context: IndexContext,
+        skip_paths: HashSet<PathBuf>,
+        guard: LeaderGuard,
+    ) {
+        tokio::spawn(async move {
+            let _guard = guard; // Hold guard for duration of task
+
+            let mut ctx = context.with_database(db);
+
+            match ctx.scan_with_skip(skip_paths).await {
+                Ok(result) => {
+                    tracing::info!(
+                        "Background indexing complete for {}: {} files parsed, {} skipped",
+                        workspace_root.display(),
+                        result.files_parsed,
+                        result.files_skipped
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Background indexing failed for {}: {}",
+                        workspace_root.display(),
+                        e
+                    );
+                }
+            }
+
+            // Guard drops here, releasing leader lock
+            // Task exits
+        });
     }
 
     /// Internal open implementation
@@ -234,7 +295,7 @@ impl Workspace {
             context = context.with_progress_callback(callback);
         }
 
-        // Try to become the leader
+        // Try to become the leader (non-blocking)
         match election.try_become_leader() {
             Ok(guard) => {
                 tracing::info!(
@@ -242,30 +303,47 @@ impl Workspace {
                     workspace_root.display()
                 );
 
-                // Open database in read-write mode
-                let db = IndexDatabase::open_readwrite(&db_path).map_err(|e| {
-                    TreeSitterError::database_error(format!("Failed to open database: {}", e))
+                // Create database (file + schema) synchronously
+                let leader_db = IndexDatabase::open_readwrite(&db_path).map_err(|e| {
+                    TreeSitterError::database_error(format!("Failed to create database: {}", e))
+                })?;
+                let leader_db = Arc::new(leader_db);
+
+                // Compute skip set for background task
+                let skip_paths = Self::compute_unchanged_files_static(&workspace_root, &leader_db)?;
+
+                // Spawn background indexer (takes ownership of guard)
+                Self::spawn_background_indexer(
+                    workspace_root.clone(),
+                    leader_db.clone(),
+                    context,
+                    skip_paths,
+                    guard,
+                );
+
+                // Open our own readonly database for Reader mode
+                let reader_db = IndexDatabase::open_readonly(&db_path).map_err(|e| {
+                    TreeSitterError::database_error(format!("Failed to open reader database: {}", e))
                 })?;
 
+                let ctx = IndexContext::new(&workspace_root);
+
                 Ok(Self {
-                    mode: WorkspaceMode::Leader {
-                        db: Arc::new(db),
-                        _guard: guard,
+                    mode: WorkspaceMode::Reader {
+                        db: Arc::new(reader_db),
                     },
                     election,
                     workspace_root,
-                    context: Arc::new(TokioRwLock::new(context)),
+                    context: Arc::new(TokioRwLock::new(ctx)),
                     is_built: std::sync::atomic::AtomicBool::new(false),
                 })
             }
             Err(ElectionError::LockHeld) => {
-                // Another process is the leader - open database in read-only mode
-                tracing::debug!("Another process is leader, opening database in read-only mode");
+                // Another process is the leader
+                tracing::debug!("Another process is leader, waiting for database to be ready");
 
-                // Wait a bit for the leader to create the database if it's just starting
-                if !db_path.exists() {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
+                // Wait for database to be ready with timeout
+                Self::wait_for_database_ready(&db_path, std::time::Duration::from_secs(5)).await?;
 
                 let db = IndexDatabase::open_readonly(&db_path).map_err(|e| {
                     TreeSitterError::database_error(format!(
@@ -274,13 +352,15 @@ impl Workspace {
                     ))
                 })?;
 
+                let ctx = IndexContext::new(&workspace_root);
+
                 Ok(Self {
                     mode: WorkspaceMode::Reader {
                         db: Arc::new(db),
                     },
                     election,
                     workspace_root,
-                    context: Arc::new(TokioRwLock::new(context)),
+                    context: Arc::new(TokioRwLock::new(ctx)),
                     is_built: std::sync::atomic::AtomicBool::new(false),
                 })
             }
@@ -327,6 +407,7 @@ impl Workspace {
         }
 
         // Scan and parse files, skipping unchanged ones
+        // Database writes happen immediately during embedding in embed_file_chunks
         let mut context = self.context.write().await;
         let result = context.scan_with_skip(skip_paths).await?;
 
@@ -338,24 +419,21 @@ impl Workspace {
             result.total_time_ms
         );
 
-        // Write chunks to database
-        Self::sync_to_database(&context, &db)?;
-
         self.is_built
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
         Ok(())
     }
 
-    /// Compute the set of files that haven't changed since the last index build
-    ///
-    /// Walks the workspace, computes content hashes, and checks against the database.
-    /// Returns canonical paths of unchanged files to skip during scanning.
-    fn compute_unchanged_files(&self, db: &Arc<IndexDatabase>) -> Result<HashSet<PathBuf>> {
+    /// Static version of compute_unchanged_files for background indexer.
+    fn compute_unchanged_files_static(
+        workspace_root: &Path,
+        db: &Arc<IndexDatabase>,
+    ) -> Result<HashSet<PathBuf>> {
         let mut skip_paths = HashSet::new();
         let registry = crate::language::LanguageRegistry::global();
 
-        let walker = WalkBuilder::new(&self.workspace_root)
+        let walker = WalkBuilder::new(workspace_root)
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
@@ -376,6 +454,14 @@ impl Workspace {
         Ok(skip_paths)
     }
 
+    /// Compute the set of files that haven't changed since the last index build
+    ///
+    /// Walks the workspace, computes content hashes, and checks against the database.
+    /// Returns canonical paths of unchanged files to skip during scanning.
+    fn compute_unchanged_files(&self, db: &Arc<IndexDatabase>) -> Result<HashSet<PathBuf>> {
+        Self::compute_unchanged_files_static(&self.workspace_root, db)
+    }
+
     /// Check if a file is unchanged in the database, returning its canonical path if so
     fn check_file_unchanged(path: &Path, db: &Arc<IndexDatabase>) -> Option<PathBuf> {
         let hash = compute_file_hash(path).ok()?;
@@ -385,52 +471,6 @@ impl Workspace {
         } else {
             None
         }
-    }
-
-    /// Sync the in-memory index to the database
-    fn sync_to_database(context: &IndexContext, db: &Arc<IndexDatabase>) -> Result<()> {
-        db.begin_transaction().map_err(|e| {
-            TreeSitterError::database_error(format!("Failed to begin transaction: {}", e))
-        })?;
-
-        for path in context.files() {
-            if let Some(parsed) = context.get(&path) {
-                // Upsert file record
-                let file_id = db.upsert_file(&path, &parsed.content_hash).map_err(|e| {
-                    TreeSitterError::database_error(format!("Failed to upsert file: {}", e))
-                })?;
-
-                // Get chunks from the chunk graph
-                let chunks = context.chunk_graph().chunks_for_file(&path);
-                for chunk in chunks {
-                    let embedding = chunk.embedding.as_deref();
-                    let symbol_path = chunk.symbol_path();
-
-                    if let crate::chunk::ChunkSource::Parsed {
-                        start_byte,
-                        end_byte,
-                        ..
-                    } = &chunk.source
-                    {
-                        db.insert_chunk(&file_id, *start_byte, *end_byte, embedding, &symbol_path)
-                            .map_err(|e| {
-                                TreeSitterError::database_error(format!(
-                                    "Failed to insert chunk: {}",
-                                    e
-                                ))
-                            })?;
-                    }
-                }
-            }
-        }
-
-        db.commit_transaction().map_err(|e| {
-            TreeSitterError::database_error(format!("Failed to commit transaction: {}", e))
-        })?;
-
-        tracing::info!("Synced {} files to database", context.files().len());
-
-        Ok(())
     }
 
     /// Check if this instance is the leader
@@ -460,42 +500,33 @@ impl Workspace {
 
     /// Get current index status.
     pub async fn status(&self) -> std::result::Result<IndexStatusInfo, QueryError> {
+        // Always query the database - it's the source of truth for indexed data
+        let db = self.db();
+        let file_count = db.file_count().unwrap_or(0);
+        let embedded_count = db.embedded_chunk_count().unwrap_or(0);
+
+        Ok(IndexStatusInfo {
+            files_total: file_count,
+            files_indexed: file_count,
+            files_embedded: if embedded_count > 0 { file_count } else { 0 },
+            is_ready: file_count > 0,
+            root_path: self.workspace_root.clone(),
+        })
+    }
+
+    /// Get a reference to the database regardless of leader/reader mode.
+    fn db(&self) -> &Arc<IndexDatabase> {
         match &self.mode {
-            WorkspaceMode::Leader { db, .. } => {
-                let ctx = self.context.read().await;
-                let status = ctx.status();
-                Ok(IndexStatusInfo {
-                    files_total: status.files_total,
-                    files_indexed: db.file_count().unwrap_or(0),
-                    files_embedded: status.files_embedded,
-                    is_ready: status.is_complete(),
-                    root_path: ctx.root_path().to_path_buf(),
-                })
-            }
-            WorkspaceMode::Reader { db } => {
-                let file_count = db.file_count().unwrap_or(0);
-                let chunk_count = db.chunk_count().unwrap_or(0);
-                Ok(IndexStatusInfo {
-                    files_total: file_count,
-                    files_indexed: file_count,
-                    files_embedded: if chunk_count > 0 { file_count } else { 0 },
-                    is_ready: file_count > 0,
-                    root_path: self.workspace_root.clone(),
-                })
-            }
+            WorkspaceMode::Leader { db, .. } => db,
+            WorkspaceMode::Reader { db } => db,
         }
     }
 
     /// List all files in the index.
     pub async fn list_files(&self) -> std::result::Result<Vec<PathBuf>, QueryError> {
-        match &self.mode {
-            WorkspaceMode::Leader { db, .. } => db
-                .list_files()
-                .map_err(|e| QueryError::internal(e.to_string())),
-            WorkspaceMode::Reader { db } => db
-                .list_files()
-                .map_err(|e| QueryError::internal(e.to_string())),
-        }
+        let db = self.db();
+        db.list_files()
+            .map_err(|e| QueryError::internal(e.to_string()))
     }
 
     /// Find all duplicate code clusters across the project.
@@ -508,25 +539,14 @@ impl Workspace {
         min_similarity: f32,
         min_chunk_bytes: usize,
     ) -> std::result::Result<Vec<DuplicateCluster>, QueryError> {
-        match &self.mode {
-            WorkspaceMode::Leader { .. } => {
-                let ctx = self.context.read().await;
-                check_index_ready(&ctx.status())?;
-                Ok(find_all_duplicates_from_graph(
-                    ctx.chunk_graph(),
-                    min_similarity,
-                    min_chunk_bytes,
-                ))
-            }
-            WorkspaceMode::Reader { db } => {
-                let chunks = db.get_all_embedded_chunks().map_err(db_to_query_error)?;
-                Ok(find_all_duplicates_from_records(
-                    &chunks,
-                    min_similarity,
-                    min_chunk_bytes,
-                ))
-            }
-        }
+        // Always query from database - it's the source of truth for indexed data
+        let db = self.db();
+        let chunks = db.get_all_embedded_chunks().map_err(db_to_query_error)?;
+        Ok(find_all_duplicates_from_records(
+            &chunks,
+            min_similarity,
+            min_chunk_bytes,
+        ))
     }
 
     /// Find duplicates for chunks in a specific file.
@@ -537,22 +557,16 @@ impl Workspace {
         file: PathBuf,
         min_similarity: f32,
     ) -> std::result::Result<Vec<SimilarChunkResult>, QueryError> {
-        match &self.mode {
-            WorkspaceMode::Leader { .. } => {
-                let ctx = self.context.read().await;
-                check_index_ready(&ctx.status())?;
-                find_duplicates_in_file_from_graph(ctx.chunk_graph(), &file, min_similarity)
-            }
-            WorkspaceMode::Reader { db } => {
-                let all_chunks = db.get_all_embedded_chunks().map_err(db_to_query_error)?;
-                find_duplicates_in_file_from_records(&all_chunks, &file, min_similarity)
-            }
-        }
+        // Always query from database - it's the source of truth for indexed data
+        let db = self.db();
+        let all_chunks = db.get_all_embedded_chunks().map_err(db_to_query_error)?;
+        find_duplicates_in_file_from_records(&all_chunks, &file, min_similarity)
     }
 
     /// Semantic search - find chunks similar to the given text.
     ///
     /// Embeds the query and finds the most similar indexed chunks.
+    /// Note: This requires the embedding model, which is only available in leader mode.
     pub async fn semantic_search(
         &self,
         text: String,
@@ -570,16 +584,18 @@ impl Workspace {
                     .await
                     .map_err(|e| QueryError::embedding_error(e.to_string()))?;
 
-                Ok(semantic_search_from_graph(
-                    ctx.chunk_graph(),
-                    query_embedding,
+                // Query the database, not the in-memory graph
+                let db = self.db();
+                let chunks = db.get_all_embedded_chunks().map_err(db_to_query_error)?;
+                Ok(semantic_search_from_records(
+                    &chunks,
+                    &query_embedding,
                     top_k,
                     min_similarity,
                 ))
             }
             WorkspaceMode::Reader { .. } => {
                 // Reader mode cannot embed text (no model loaded)
-                // For now, return an error - in future we could load the model
                 Err(QueryError::embedding_error(
                     "Semantic search not available in reader mode (no embedding model)",
                 ))
@@ -614,46 +630,14 @@ impl Workspace {
     }
 
     /// Invalidate a file (force re-parse and re-embed).
-    pub async fn invalidate_file(&self, file: PathBuf) -> std::result::Result<(), QueryError> {
-        match &self.mode {
-            WorkspaceMode::Leader { db, .. } => {
-                let mut ctx = self.context.write().await;
-                ctx.refresh(&file)
-                    .await
-                    .map_err(|e| QueryError::internal(e.to_string()))?;
-
-                // Re-sync this file to the database
-                let parsed = ctx
-                    .get(&file)
-                    .ok_or_else(|| QueryError::file_not_found(&file))?;
-
-                let file_id = db
-                    .upsert_file(&file, &parsed.content_hash)
-                    .map_err(|e| QueryError::internal(e.to_string()))?;
-
-                // Get fresh chunks
-                let chunks = ctx.chunk_graph().chunks_for_file(&file);
-                for chunk in chunks {
-                    let embedding = chunk.embedding.as_deref();
-                    let symbol_path = chunk.symbol_path();
-
-                    if let crate::chunk::ChunkSource::Parsed {
-                        start_byte,
-                        end_byte,
-                        ..
-                    } = &chunk.source
-                    {
-                        db.insert_chunk(&file_id, *start_byte, *end_byte, embedding, &symbol_path)
-                            .map_err(|e| QueryError::internal(e.to_string()))?;
-                    }
-                }
-
-                Ok(())
-            }
-            WorkspaceMode::Reader { .. } => {
-                Err(QueryError::internal("Cannot invalidate files in reader mode"))
-            }
-        }
+    /// Invalidate a file is not supported with background indexing.
+    ///
+    /// The index is eventually consistent - file changes will be picked up
+    /// when a new process starts and detects the changed content hash.
+    pub async fn invalidate_file(&self, _file: PathBuf) -> std::result::Result<(), QueryError> {
+        Err(QueryError::internal(
+            "invalidate_file not supported with background indexing - index is eventually consistent",
+        ))
     }
 }
 
@@ -730,13 +714,35 @@ impl Clusterable for EmbeddedChunkRecord {
 
 impl ToChunkResult for EmbeddedChunkRecord {
     fn to_chunk_result(&self) -> ChunkResult {
+        // Try to read the file and extract the text range
+        let (text, start_line, end_line) = std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|content| {
+                // Extract the byte range
+                let text = content
+                    .get(self.start_byte..self.end_byte)
+                    .unwrap_or("")
+                    .to_string();
+
+                // Calculate line numbers by counting newlines before start_byte
+                let before_start = content.get(..self.start_byte).unwrap_or("");
+                let start_line = before_start.matches('\n').count();
+
+                // Count newlines in the chunk for end_line
+                let newlines_in_chunk = text.matches('\n').count();
+                let end_line = start_line + newlines_in_chunk;
+
+                Some((text, start_line, end_line))
+            })
+            .unwrap_or_else(|| (String::new(), 0, 0));
+
         ChunkResult {
             file: self.path.clone(),
-            text: String::new(), // Text not stored in database
+            text,
             start_byte: self.start_byte,
             end_byte: self.end_byte,
-            start_line: 0, // Line info not stored in database
-            end_line: 0,
+            start_line,
+            end_line,
         }
     }
 }
@@ -881,21 +887,6 @@ fn find_all_duplicates_generic<T: Clusterable + ToChunkResult>(
         .collect()
 }
 
-/// Find all duplicate clusters from the in-memory chunk graph
-fn find_all_duplicates_from_graph(
-    graph: &crate::chunk::ChunkGraph,
-    min_similarity: f32,
-    min_chunk_bytes: usize,
-) -> Vec<DuplicateCluster> {
-    let chunks: Vec<&SemanticChunk> = graph
-        .chunks()
-        .iter()
-        .filter(|c| c.byte_len() >= min_chunk_bytes && c.has_embedding())
-        .collect();
-
-    find_all_duplicates_generic(chunks, min_similarity)
-}
-
 /// Find all duplicate clusters from database records
 fn find_all_duplicates_from_records(
     chunks: &[EmbeddedChunkRecord],
@@ -916,43 +907,6 @@ fn finalize_similarity_results(results: &mut Vec<SimilarChunkResult>, limit: Opt
     if let Some(max) = limit {
         results.truncate(max);
     }
-}
-
-/// Find duplicates for a specific file from the chunk graph
-fn find_duplicates_in_file_from_graph(
-    graph: &crate::chunk::ChunkGraph,
-    file: &Path,
-    min_similarity: f32,
-) -> std::result::Result<Vec<SimilarChunkResult>, QueryError> {
-    let file_chunks = graph.chunks_for_file(file);
-    if file_chunks.is_empty() {
-        return Err(QueryError::file_not_found(file));
-    }
-
-    let mut results = Vec::new();
-    for chunk in file_chunks {
-        if !chunk.has_embedding() {
-            continue;
-        }
-
-        let query = SimilarityQuery::chunk(chunk.clone())
-            .min_similarity(min_similarity)
-            .top_k(DUPLICATES_TOP_K);
-
-        for sim_chunk in graph.query(query) {
-            if sim_chunk.chunk.path() == Some(file) {
-                continue;
-            }
-
-            results.push(SimilarChunkResult {
-                chunk: sim_chunk.chunk.to_chunk_result(),
-                similarity: sim_chunk.similarity,
-            });
-        }
-    }
-
-    finalize_similarity_results(&mut results, None);
-    Ok(results)
 }
 
 /// Find duplicates for a specific file from database records
@@ -986,25 +940,30 @@ fn find_duplicates_in_file_from_records(
     Ok(results)
 }
 
-/// Semantic search using the chunk graph
-fn semantic_search_from_graph(
-    graph: &crate::chunk::ChunkGraph,
-    query_embedding: Vec<f32>,
+/// Semantic search using database records
+fn semantic_search_from_records(
+    chunks: &[EmbeddedChunkRecord],
+    query_embedding: &[f32],
     top_k: usize,
     min_similarity: f32,
 ) -> Vec<SimilarChunkResult> {
-    let query = SimilarityQuery::embedding(query_embedding)
-        .top_k(top_k)
-        .min_similarity(min_similarity);
-
-    graph
-        .query(query)
-        .into_iter()
-        .map(|sim_chunk| SimilarChunkResult {
-            chunk: sim_chunk.chunk.to_chunk_result(),
-            similarity: sim_chunk.similarity,
+    let mut results: Vec<SimilarChunkResult> = chunks
+        .iter()
+        .filter_map(|chunk| {
+            let sim = cosine_similarity(query_embedding, &chunk.embedding);
+            if sim >= min_similarity {
+                Some(SimilarChunkResult {
+                    chunk: chunk.to_chunk_result(),
+                    similarity: sim,
+                })
+            } else {
+                None
+            }
         })
-        .collect()
+        .collect();
+
+    finalize_similarity_results(&mut results, Some(top_k));
+    results
 }
 
 /// Execute a tree-sitter query
@@ -1083,6 +1042,20 @@ mod tests {
     const TEST_MIN_CHUNK_BYTES: usize = 10;
     /// Small minimum chunk size for tests with small code samples
     const TEST_SMALL_MIN_CHUNK_BYTES: usize = 5;
+
+    // Test timeouts and delays for background indexing tests
+    /// Timeout for successful database verification (1 second)
+    const TEST_DB_READY_TIMEOUT_SUCCESS: std::time::Duration = std::time::Duration::from_secs(1);
+    /// Timeout for expected timeout failures (100 milliseconds)
+    const TEST_DB_READY_TIMEOUT_FAIL: std::time::Duration = std::time::Duration::from_millis(100);
+    /// Delay before creating database in retry test (200 milliseconds)
+    const TEST_DB_CREATE_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+    /// Timeout for retry test (2 seconds)
+    const TEST_DB_READY_TIMEOUT_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
+    /// Time to wait for background indexing to complete (2 seconds)
+    const TEST_BACKGROUND_INDEX_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+    /// Extended time to wait for background indexing and lock release (3 seconds)
+    const TEST_BACKGROUND_INDEX_WAIT_LONG: std::time::Duration = std::time::Duration::from_secs(3);
 
     // =========================================================================
     // Tests for clustering helper functions
@@ -1570,8 +1543,16 @@ mod tests {
 
         let workspace = Workspace::open(dir.path()).await.unwrap();
 
-        assert!(workspace.is_leader());
-        assert!(workspace.is_built());
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
+        // With background indexing, open() returns Reader mode
+        assert!(!workspace.is_leader());
+
+        // Verify indexing is complete by checking status
+        let status = workspace.status().await.unwrap();
+        assert!(status.is_ready, "Workspace should be ready after background indexing");
+
         assert_eq!(workspace.workspace_root(), dir.path());
     }
 
@@ -1581,7 +1562,11 @@ mod tests {
 
         let workspace = Workspace::open(dir.path()).await.unwrap();
 
-        assert!(workspace.is_leader());
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
+        // With background indexing, open() returns Reader mode
+        assert!(!workspace.is_leader());
         let files = workspace.list_files().await.unwrap();
         assert!(files.is_empty());
     }
@@ -1592,6 +1577,10 @@ mod tests {
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
         let workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
         let status = workspace.status().await.unwrap();
 
         assert!(status.is_ready);
@@ -1605,6 +1594,10 @@ mod tests {
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
         let workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
         let files = workspace.list_files().await.unwrap();
 
         assert!(!files.is_empty());
@@ -1612,17 +1605,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_workspace_tree_sitter_query() {
+    async fn test_workspace_tree_sitter_query_fails_in_reader_mode() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() { let x = 1; }").unwrap();
 
         let workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
+        // Tree-sitter queries are not available in Reader mode (no parsed AST)
         let results = workspace
             .tree_sitter_query("(identifier) @name".to_string(), None, None)
-            .await
-            .unwrap();
+            .await;
 
-        assert!(!results.is_empty());
+        assert!(
+            results.is_err(),
+            "Tree-sitter queries should not be available in Reader mode"
+        );
     }
 
     #[tokio::test]
@@ -1633,12 +1633,15 @@ mod tests {
 
         let workspace = Workspace::open(dir.path()).await.unwrap();
 
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
         // Modify the file
         std::fs::write(&file_path, "fn main() { println!(\"updated\"); }").unwrap();
 
-        // Invalidate to re-index
+        // invalidate_file is not supported with background indexing (Reader mode)
         let result = workspace.invalidate_file(file_path).await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "invalidate_file should fail in Reader mode");
     }
 
     #[test]
@@ -1664,15 +1667,24 @@ mod tests {
         let election_config = ElectionConfig::default();
         let result = Workspace::open_with_config(dir.path(), election_config, None).await;
         assert!(result.is_ok());
-        assert!(result.unwrap().is_leader());
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
+        // With background indexing, open() returns Reader mode
+        assert!(!result.unwrap().is_leader());
     }
 
     #[tokio::test]
-    async fn test_is_leader_returns_true_for_leader() {
+    async fn test_is_leader_returns_false_for_reader() {
         let dir = TempDir::new().unwrap();
         let workspace = Workspace::open(dir.path()).await.unwrap();
-        // First opener becomes leader
-        assert!(workspace.is_leader());
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
+        // With background indexing, open() returns Reader mode (leader is background task)
+        assert!(!workspace.is_leader());
     }
 
     #[tokio::test]
@@ -1755,6 +1767,10 @@ mod tests {
         std::fs::write(&file_path, "fn main() { let x = 1; }").unwrap();
 
         let workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
         let result = workspace
             .find_duplicates_in_file(file_path, TEST_MEDIUM_SIMILARITY_THRESHOLD)
             .await;
@@ -1769,7 +1785,7 @@ mod tests {
         let progress_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let progress_called_clone = progress_called.clone();
 
-        let workspace = Workspace::new(dir.path())
+        let _workspace = Workspace::new(dir.path())
             .with_progress(move |_status| {
                 progress_called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
             })
@@ -1777,10 +1793,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Build the index
-        workspace.build().await.unwrap();
+        // Wait for background indexing to run
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
 
-        // Progress callback should have been called
+        // Progress callback should have been called by background task
         assert!(progress_called.load(std::sync::atomic::Ordering::SeqCst));
     }
 
@@ -1791,13 +1807,12 @@ mod tests {
 
         let workspace = Workspace::new(dir.path()).open().await.unwrap();
 
-        // Should be leader but not built
-        assert!(workspace.is_leader());
-        assert!(!workspace.is_built());
+        // With background indexing, open() returns Reader mode immediately
+        assert!(!workspace.is_leader());
 
-        // Now build
-        workspace.build().await.unwrap();
-        assert!(workspace.is_built());
+        // build() should fail on Reader mode
+        let result = workspace.build().await;
+        assert!(result.is_err());
     }
 
     // =========================================================================
@@ -1809,9 +1824,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        // First build - should parse the file
+        // First indexing - background task will parse the file
         let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        workspace.build().await.unwrap();
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
 
         let status1 = workspace.status().await.unwrap();
         assert_eq!(status1.files_indexed, 1);
@@ -1819,11 +1834,11 @@ mod tests {
         // Drop workspace to release lock
         drop(workspace);
 
-        // Second build - file is unchanged, should skip
+        // Second indexing - file is unchanged, should skip
         let parse_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let parse_count_clone = parse_count.clone();
 
-        let workspace2 = Workspace::new(dir.path())
+        let _workspace2 = Workspace::new(dir.path())
             .with_progress(move |status| {
                 // Track when files are being parsed (not skipped)
                 if status.files_parsed > 0 {
@@ -1833,7 +1848,7 @@ mod tests {
             .open()
             .await
             .unwrap();
-        workspace2.build().await.unwrap();
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
 
         // File was unchanged, so should not have been re-parsed
         let parsed = parse_count.load(std::sync::atomic::Ordering::SeqCst);
@@ -1846,26 +1861,26 @@ mod tests {
         let file_path = dir.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {}").unwrap();
 
-        // First build
+        // First indexing
         let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        workspace.build().await.unwrap();
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
         drop(workspace);
 
         // Modify the file
         std::fs::write(&file_path, "fn main() { println!(\"changed\"); }").unwrap();
 
-        // Second build - file changed, should re-parse
+        // Second indexing - file changed, should re-parse
         let parse_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let parse_count_clone = parse_count.clone();
 
-        let workspace2 = Workspace::new(dir.path())
+        let _workspace2 = Workspace::new(dir.path())
             .with_progress(move |status| {
                 parse_count_clone.store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
             })
             .open()
             .await
             .unwrap();
-        workspace2.build().await.unwrap();
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
 
         // File was changed, so should have been re-parsed
         let parsed = parse_count.load(std::sync::atomic::Ordering::SeqCst);
@@ -1880,9 +1895,9 @@ mod tests {
         std::fs::write(&file1, "fn unchanged() {}").unwrap();
         std::fs::write(&file2, "fn changed() {}").unwrap();
 
-        // First build
+        // First indexing
         let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        workspace.build().await.unwrap();
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
         let status1 = workspace.status().await.unwrap();
         assert_eq!(status1.files_indexed, 2);
         drop(workspace);
@@ -1890,11 +1905,11 @@ mod tests {
         // Modify only one file
         std::fs::write(&file2, "fn changed() { println!(\"modified\"); }").unwrap();
 
-        // Second build
+        // Second indexing
         let max_parsed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let max_parsed_clone = max_parsed.clone();
 
-        let workspace2 = Workspace::new(dir.path())
+        let _workspace2 = Workspace::new(dir.path())
             .with_progress(move |status| {
                 let current = max_parsed_clone.load(std::sync::atomic::Ordering::SeqCst);
                 if status.files_parsed > current {
@@ -1904,7 +1919,7 @@ mod tests {
             .open()
             .await
             .unwrap();
-        workspace2.build().await.unwrap();
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
 
         // Only the changed file should be re-parsed
         let parsed = max_parsed.load(std::sync::atomic::Ordering::SeqCst);
@@ -1916,17 +1931,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("existing.rs"), "fn existing() {}").unwrap();
 
-        // First build
+        // First indexing
         let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        workspace.build().await.unwrap();
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
         drop(workspace);
 
         // Add a new file
         std::fs::write(dir.path().join("new.rs"), "fn new_func() {}").unwrap();
 
-        // Second build
+        // Second indexing
         let workspace2 = Workspace::new(dir.path()).open().await.unwrap();
-        workspace2.build().await.unwrap();
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
 
         // Both files should now be indexed
         let status = workspace2.status().await.unwrap();
@@ -1954,9 +1969,11 @@ mod tests {
         let file_path = dir.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {}").unwrap();
 
-        // Build index first
-        let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        workspace.build().await.unwrap();
+        // Open workspace (spawns background indexer)
+        let _workspace = Workspace::new(dir.path()).open().await.unwrap();
+
+        // Wait for background indexing to complete (using test constant defined above)
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
 
         // Get the database
         let db_path = database_path(dir.path());
@@ -1965,5 +1982,215 @@ mod tests {
         // File in database with same hash - should return Some
         let result = Workspace::check_file_unchanged(&file_path, &db);
         assert!(result.is_some(), "Unchanged file should return canonical path");
+    }
+
+    #[test]
+    fn test_embedded_chunk_record_to_chunk_result_with_valid_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        let content = "fn main() {\n    println!(\"hello\");\n}\n";
+        std::fs::write(&file_path, content).unwrap();
+
+        // Create a record for the println line (bytes 12-35)
+        let record = EmbeddedChunkRecord {
+            path: file_path.clone(),
+            start_byte: 12,
+            end_byte: 35,
+            embedding: vec![1.0, 2.0, 3.0],
+            symbol_path: "test.rs::main".to_string(),
+        };
+
+        let result = record.to_chunk_result();
+        assert_eq!(result.file, file_path);
+        assert_eq!(result.text, "    println!(\"hello\");\n");
+        assert_eq!(result.start_byte, 12);
+        assert_eq!(result.end_byte, 35);
+        assert_eq!(result.start_line, 1); // Second line (0-indexed)
+        assert_eq!(result.end_line, 2); // Ends on third line
+    }
+
+    #[test]
+    fn test_embedded_chunk_record_to_chunk_result_missing_file() {
+        let record = EmbeddedChunkRecord {
+            path: PathBuf::from("/nonexistent/file.rs"),
+            start_byte: 0,
+            end_byte: 10,
+            embedding: vec![1.0],
+            symbol_path: "missing".to_string(),
+        };
+
+        let result = record.to_chunk_result();
+        assert_eq!(result.text, ""); // Should return empty string
+        assert_eq!(result.start_line, 0);
+        assert_eq!(result.end_line, 0);
+    }
+
+    #[test]
+    fn test_embedded_chunk_record_to_chunk_result_invalid_byte_range() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        std::fs::write(&file_path, "short").unwrap();
+
+        // Byte range beyond file length
+        let record = EmbeddedChunkRecord {
+            path: file_path,
+            start_byte: 100,
+            end_byte: 200,
+            embedding: vec![1.0],
+            symbol_path: "test".to_string(),
+        };
+
+        let result = record.to_chunk_result();
+        assert_eq!(result.text, ""); // Should handle gracefully
+    }
+
+    #[test]
+    fn test_embedded_chunk_record_to_chunk_result_no_newlines() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        let content = "single line without newline";
+        std::fs::write(&file_path, content).unwrap();
+
+        let record = EmbeddedChunkRecord {
+            path: file_path,
+            start_byte: 0,
+            end_byte: content.len(),
+            embedding: vec![1.0],
+            symbol_path: "test".to_string(),
+        };
+
+        let result = record.to_chunk_result();
+        assert_eq!(result.text, content);
+        assert_eq!(result.start_line, 0);
+        assert_eq!(result.end_line, 0); // No newlines
+    }
+
+    #[test]
+    fn test_embedded_chunk_record_to_chunk_result_at_file_boundary() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.rs");
+        let content = "line1\nline2\nline3\n";
+        std::fs::write(&file_path, content).unwrap();
+
+        // Test chunk at start of file
+        let record = EmbeddedChunkRecord {
+            path: file_path.clone(),
+            start_byte: 0,
+            end_byte: 6,
+            embedding: vec![1.0],
+            symbol_path: "test".to_string(),
+        };
+
+        let result = record.to_chunk_result();
+        assert_eq!(result.text, "line1\n");
+        assert_eq!(result.start_line, 0);
+        assert_eq!(result.end_line, 1);
+
+        // Test chunk at end of file
+        let record = EmbeddedChunkRecord {
+            path: file_path,
+            start_byte: 12,
+            end_byte: content.len(),
+            embedding: vec![1.0],
+            symbol_path: "test".to_string(),
+        };
+
+        let result = record.to_chunk_result();
+        assert_eq!(result.text, "line3\n");
+        assert_eq!(result.start_line, 2);
+        assert_eq!(result.end_line, 3);
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_database_ready_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // Create database with schema
+        let _db = IndexDatabase::open_readwrite(&db_path).unwrap();
+
+        // Should return immediately since database exists
+        let result = Workspace::wait_for_database_ready(&db_path, TEST_DB_READY_TIMEOUT_SUCCESS).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_database_ready_timeout() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("nonexistent.db");
+
+        // Should timeout since database doesn't exist
+        let result = Workspace::wait_for_database_ready(&db_path, TEST_DB_READY_TIMEOUT_FAIL).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_database_ready_retries() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // Spawn a task that creates the database after a delay
+        let db_path_clone = db_path.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(TEST_DB_CREATE_DELAY).await;
+            let _db = IndexDatabase::open_readwrite(&db_path_clone).unwrap();
+        });
+
+        // Should succeed after retrying
+        let result = Workspace::wait_for_database_ready(&db_path, TEST_DB_READY_TIMEOUT_RETRY).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_open_spawns_background_indexer() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        // First open should spawn background indexer
+        let workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Should return as Reader mode immediately
+        assert!(!workspace.is_leader());
+
+        // Database should exist (created synchronously)
+        assert!(workspace.database_path().exists());
+
+        // Give background task time to index
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+
+        // Check that file was indexed
+        let status = workspace.status().await.unwrap();
+        assert!(status.files_indexed > 0, "Background indexer should have indexed files");
+    }
+
+    #[tokio::test]
+    async fn test_open_follower_waits_for_database() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        // First open starts background indexing
+        let _first = Workspace::open(dir.path()).await.unwrap();
+
+        // Second open should wait for database to be ready, then open as follower
+        let second = Workspace::open(dir.path()).await.unwrap();
+        assert!(!second.is_leader());
+        assert!(second.database_path().exists());
+    }
+
+    #[tokio::test]
+    async fn test_background_indexer_releases_lock() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        // Open workspace (spawns background indexer)
+        let _workspace = Workspace::open(dir.path()).await.unwrap();
+
+        // Wait for background indexing to complete
+        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT_LONG).await;
+
+        // Should be able to become leader again (lock released)
+        let election = LeaderElection::new(dir.path());
+        let result = election.try_become_leader();
+        assert!(result.is_ok(), "Lock should be released after background indexing completes");
     }
 }

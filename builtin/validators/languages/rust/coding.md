@@ -78,6 +78,7 @@ timeout: 30
 - Use `tracing::info!`, `tracing::warn!`, etc. instead of `println!`
 - Add context with `tracing::instrument` on functions
 - Use `tracing::error!` for errors, not `eprintln!`
+- NEVER `println` or `eprintln` in unit tests
 
 ## Validation Patterns
 
@@ -106,4 +107,3 @@ timeout: 30
 - Implement cleanup in `Drop` even if explicit cleanup exists
 - Use `scopeguard` crate for complex cleanup scenarios
 - Never assume destructors will run (they might not in panics)
-

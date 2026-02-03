@@ -181,6 +181,12 @@ impl IndexDatabase {
             .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
     }
 
+    /// Get count of chunks with embeddings
+    pub fn embedded_chunk_count(&self) -> SqliteResult<usize> {
+        self.conn()
+            .query_row("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL", [], |row| row.get(0))
+    }
+
     /// Begin a transaction for batch operations
     pub fn begin_transaction(&self) -> SqliteResult<()> {
         self.conn().execute("BEGIN IMMEDIATE", [])?;
@@ -505,6 +511,36 @@ mod tests {
         // Get all embedded chunks
         let embedded = db.get_all_embedded_chunks().unwrap();
         assert_eq!(embedded.len(), 2); // Only chunks with embeddings
+    }
+
+    #[test]
+    fn test_embedded_chunk_count() {
+        let (_dir, db) = setup_db();
+
+        // Empty database should have 0 embedded chunks
+        assert_eq!(db.embedded_chunk_count().unwrap(), 0);
+
+        let path = Path::new("/test/file.rs");
+        let file_id = db.upsert_file(path, &ZERO_HASH).unwrap();
+
+        // Insert chunk without embedding
+        db.insert_chunk(&file_id, 0, 100, None, "test.rs::no_embed")
+            .unwrap();
+        assert_eq!(db.chunk_count().unwrap(), 1);
+        assert_eq!(db.embedded_chunk_count().unwrap(), 0);
+
+        // Insert chunk with embedding
+        let embedding = vec![1.0f32, 2.0, 3.0];
+        db.insert_chunk(&file_id, 100, 200, Some(&embedding), "test.rs::with_embed")
+            .unwrap();
+        assert_eq!(db.chunk_count().unwrap(), 2);
+        assert_eq!(db.embedded_chunk_count().unwrap(), 1);
+
+        // Insert another chunk with embedding
+        db.insert_chunk(&file_id, 200, 300, Some(&embedding), "test.rs::also_embedded")
+            .unwrap();
+        assert_eq!(db.chunk_count().unwrap(), 3);
+        assert_eq!(db.embedded_chunk_count().unwrap(), 2);
     }
 
     #[test]

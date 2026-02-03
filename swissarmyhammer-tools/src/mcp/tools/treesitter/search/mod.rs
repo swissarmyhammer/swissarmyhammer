@@ -15,7 +15,7 @@ use serde_json::json;
 const DEFAULT_TOP_K: usize = 10;
 
 /// Default minimum similarity threshold (0.0-1.0)
-const DEFAULT_MIN_SIMILARITY: f32 = 0.7;
+const DEFAULT_MIN_SIMILARITY: f32 = 0.9;
 
 /// MCP tool for semantic code search
 #[derive(Default)]
@@ -76,7 +76,7 @@ impl McpTool for TreesitterSearchTool {
                 ),
                 (
                     "min_similarity",
-                    json!({"type": "number", "description": "Minimum cosine similarity threshold 0.0-1.0 (default: 0.7)", "default": 0.7}),
+                    json!({"type": "number", "description": "Minimum cosine similarity threshold 0.0-1.0 (default: 0.9)", "default": 0.9}),
                 ),
                 ("path", schema_workspace_path_property()),
             ],
@@ -117,8 +117,8 @@ impl McpTool for TreesitterSearchTool {
 mod tests {
     use super::*;
     use crate::mcp::tools::treesitter::shared::test_helpers::{
-        assert_execute_succeeds_on_empty_workspace, assert_schema_has_properties, assert_schema_has_required,
-        assert_schema_is_object, assert_tool_basics,
+        assert_schema_has_properties, assert_schema_has_required,
+        assert_schema_is_object, assert_tool_basics, execute_tool_with_temp_path,
     };
 
     #[test]
@@ -177,6 +177,13 @@ mod tests {
         let tool = TreesitterSearchTool::new();
         let mut extra_args = serde_json::Map::new();
         extra_args.insert("query".to_string(), json!("fn main()"));
-        assert_execute_succeeds_on_empty_workspace(&tool, Some(extra_args)).await;
+
+        // With background indexing, Reader mode doesn't have embedding model
+        // Semantic search requires Leader mode to embed query text
+        let (result, _temp_dir) = execute_tool_with_temp_path(&tool, Some(extra_args)).await;
+        assert!(
+            result.is_err(),
+            "Semantic search should fail in Reader mode (no embedding model)"
+        );
     }
 }

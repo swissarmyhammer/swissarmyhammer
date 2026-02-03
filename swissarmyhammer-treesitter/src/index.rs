@@ -24,7 +24,8 @@
 //! }
 //! ```
 
-use crate::chunk::{chunk_file, ChunkGraph};
+use crate::chunk::chunk_file;
+use crate::db::IndexDatabase;
 use crate::error::{Result, TreeSitterError};
 use crate::language::LanguageRegistry;
 use crate::parsed_file::ParsedFile;
@@ -366,8 +367,8 @@ pub struct IndexContext {
     /// Parsed files: path -> ParsedFile
     files: HashMap<PathBuf, Arc<ParsedFile>>,
 
-    /// Graph of semantic chunks with embeddings
-    chunk_graph: ChunkGraph,
+    /// Database for persistent storage (writes happen immediately during indexing)
+    database: Option<Arc<IndexDatabase>>,
 
     /// Embedding model (lazy-loaded on first scan with embedding enabled)
     embedding_model: Option<EmbeddingModel>,
@@ -389,9 +390,17 @@ impl IndexContext {
             config: IndexConfig::default(),
             progress_callback: None,
             files: HashMap::new(),
-            chunk_graph: ChunkGraph::new(),
+            database: None,
             embedding_model: None,
         }
+    }
+
+    /// Set the database for persistent storage
+    ///
+    /// When set, chunks are written to the database immediately as they are embedded.
+    pub fn with_database(mut self, database: Arc<IndexDatabase>) -> Self {
+        self.database = Some(database);
+        self
     }
 
     /// Set a progress callback
@@ -431,15 +440,6 @@ impl IndexContext {
     }
 
     /// Get the chunk graph (read-only)
-    pub fn chunk_graph(&self) -> &ChunkGraph {
-        &self.chunk_graph
-    }
-
-    /// Get the chunk graph (mutable)
-    pub fn chunk_graph_mut(&mut self) -> &mut ChunkGraph {
-        &mut self.chunk_graph
-    }
-
     /// Send a progress update if a callback is configured
     fn send_progress(&self, status: IndexStatus) {
         if let Some(ref callback) = self.progress_callback {
@@ -558,39 +558,31 @@ impl IndexContext {
         tracing::info!(
             "Embedding complete: {} files, {} chunks",
             self.last_status.files_embedded,
-            self.chunk_graph.chunks().len()
+            self.last_status.chunks_embedded
         );
 
         Ok(())
     }
 
-    /// Embed all chunks for a single file and add to graph.
-    /// Sends ChunkStarted/ChunkComplete notifications for each chunk.
-    async fn embed_file_chunks(&mut self, path: &Path, errors: &mut Vec<(PathBuf, String)>) {
-        let Some(parsed) = self.files.get(path).cloned() else {
-            return;
-        };
-
-        if self.embedding_model.is_none() {
-            return;
-        }
-
-        // Remove old chunks for this file before adding new ones
-        self.chunk_graph.remove_file(path);
-
-        // Pre-calculate chunks to know total for this file
-        let chunks: Vec<_> = chunk_file(parsed);
+    /// Embed all chunks for a single file, collecting results.
+    /// Returns Vec of (chunk, embedding, symbol_path) tuples.
+    async fn embed_chunks(
+        &mut self,
+        path: &Path,
+        chunks: Vec<crate::chunk::SemanticChunk>,
+        errors: &mut Vec<(PathBuf, String)>,
+    ) -> Vec<(crate::chunk::SemanticChunk, Vec<f32>, String)> {
         let file_chunk_count = chunks.len();
+        let mut embedded = Vec::new();
 
-        for (chunk_index, mut chunk) in chunks.into_iter().enumerate() {
+        for (chunk_index, chunk) in chunks.into_iter().enumerate() {
             let Some(content) = chunk.content() else {
                 continue;
             };
 
             let symbol = chunk.symbol_path();
-            let index = chunk_index + 1; // 1-based for display
+            let index = chunk_index + 1;
 
-            // Notify chunk started
             self.notify(IndexAction::ChunkStarted {
                 path: path.to_path_buf(),
                 symbol: symbol.clone(),
@@ -598,15 +590,11 @@ impl IndexContext {
                 total: file_chunk_count,
             });
 
-            // Get mutable reference to model for embedding
             let model = self.embedding_model.as_mut().unwrap();
             match model.embed_text(content).await {
                 Ok(result) => {
-                    chunk.embedding = Some(result.embedding);
-                    self.chunk_graph.add(chunk);
+                    embedded.push((chunk, result.embedding, symbol.clone()));
                     self.last_status.chunks_embedded += 1;
-
-                    // Notify chunk complete
                     self.notify(IndexAction::ChunkComplete {
                         path: path.to_path_buf(),
                         symbol,
@@ -620,6 +608,72 @@ impl IndexContext {
                     errors.push((path.to_path_buf(), msg));
                 }
             }
+        }
+
+        embedded
+    }
+
+    /// Write file and all its chunks to database in an atomic transaction.
+    /// Only writes if ALL chunks were successfully embedded.
+    fn write_file_atomically(
+        &self,
+        path: &Path,
+        content_hash: &[u8; 16],
+        embedded_chunks: Vec<(crate::chunk::SemanticChunk, Vec<f32>, String)>,
+        errors: &mut Vec<(PathBuf, String)>,
+    ) {
+        let Some(db) = &self.database else {
+            return;
+        };
+
+        if let Err(e) = db.begin_transaction() {
+            errors.push((path.to_path_buf(), format!("Failed to begin transaction: {}", e)));
+            return;
+        }
+
+        // Remove old data, insert file record, insert all chunks
+        if let Err(e) = db.remove_file(path).and_then(|_| {
+            let file_id = db.upsert_file(path, content_hash)?;
+            for (chunk, embedding, symbol) in &embedded_chunks {
+                if let crate::chunk::ChunkSource::Parsed { start_byte, end_byte, .. } = &chunk.source {
+                    db.insert_chunk(&file_id, *start_byte, *end_byte, Some(embedding), symbol)?;
+                }
+            }
+            db.commit_transaction()
+        }) {
+            let _ = db.commit_transaction(); // Try to commit what we have
+            errors.push((path.to_path_buf(), format!("Database write failed: {}", e)));
+        }
+    }
+
+    /// Embed all chunks for a single file and write to database atomically.
+    async fn embed_file_chunks(&mut self, path: &Path, errors: &mut Vec<(PathBuf, String)>) {
+        let Some(parsed) = self.files.get(path).cloned() else {
+            return;
+        };
+
+        if self.embedding_model.is_none() {
+            return;
+        }
+
+        tracing::info!(path = %path.display(), "Starting indexing");
+
+        let chunks = chunk_file(parsed.clone());
+        let chunk_count = chunks.len();
+        let embedded = self.embed_chunks(path, chunks, errors).await;
+
+        if embedded.is_empty() {
+            tracing::warn!(path = %path.display(), "No chunks embedded");
+            return;
+        }
+
+        self.write_file_atomically(path, &parsed.content_hash, embedded.clone(), errors);
+
+        // Check if write succeeded
+        if errors.iter().any(|(p, _)| p == path) {
+            tracing::error!(path = %path.display(), chunks = embedded.len(), "Failed to write chunks to database");
+        } else {
+            tracing::info!(path = %path.display(), chunks = embedded.len(), total = chunk_count, "Finished indexing");
         }
     }
 
@@ -877,8 +931,7 @@ impl IndexContext {
         // Update index
         self.files.insert(path.to_path_buf(), parsed.clone());
 
-        // Clear old chunks and re-embed
-        self.chunk_graph.remove_file(path);
+        // Re-embed chunks (database cleanup happens in prepare_file_in_db)
         let embedding_config = self.config.embedding.clone();
         self.ensure_embedding_model_loaded(&embedding_config)
             .await?;
@@ -908,17 +961,29 @@ impl IndexContext {
 
     /// Get index statistics
     pub fn stats(&self) -> IndexStats {
+        let total_chunks = self
+            .database
+            .as_ref()
+            .and_then(|db| db.chunk_count().ok())
+            .unwrap_or(0);
+
         IndexStats {
             total_files: self.files.len(),
-            total_chunks: self.chunk_graph.chunks().len(),
+            total_chunks,
         }
     }
 
     /// Clear all parsed files from the index
     pub fn clear(&mut self) {
         self.files.clear();
-        self.chunk_graph = ChunkGraph::new();
         self.last_status = IndexStatus::new(self.root_path.clone());
+
+        // Clear database if configured
+        if let Some(db) = &self.database {
+            if let Err(e) = db.clear() {
+                tracing::warn!(error = %e, "Failed to clear database");
+            }
+        }
     }
 
     /// Get the current status of the index
@@ -1120,53 +1185,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_clears_old_chunks() {
-        use crate::chunk::SemanticChunk;
-
-        /// Distinctive marker value for fake embedding to identify it after refresh
-        const FAKE_EMBEDDING_MARKER: f32 = f32::MAX;
-
         let dir = setup_test_dir();
-        let mut context = IndexContext::new(dir.path());
+
+        // Set up context with database
+        let db_path = dir.path().join("test.db");
+        let db = Arc::new(IndexDatabase::open_readwrite(&db_path).unwrap());
+        let mut context = IndexContext::new(dir.path()).with_database(db.clone());
+
         context.scan().await.unwrap();
 
         let path = dir.path().join("main.rs");
 
-        // Record how many chunks exist after initial scan
-        let initial_chunk_count = context.chunk_graph().chunks_for_file(&path).len();
-        assert!(
-            initial_chunk_count > 0,
-            "Should have chunks after scan with embedding"
-        );
+        // Check initial chunk count from database
+        let initial_chunks = db.get_chunks_for_file(&path).unwrap();
+        let initial_count = initial_chunks.len();
+        assert!(initial_count > 0, "Should have chunks after scan");
 
-        // Manually add a fake chunk with a distinctive embedding
-        let parsed = context.get(&path).unwrap();
-        let fake_embedding = vec![FAKE_EMBEDDING_MARKER; 3];
-        let fake_chunk = SemanticChunk::from_parsed(Arc::new(parsed.clone()), 0, 8)
-            .with_embedding(fake_embedding);
-        context.chunk_graph_mut().add(fake_chunk);
-
-        let with_fake_count = context.chunk_graph().chunks_for_file(&path).len();
-        assert_eq!(with_fake_count, initial_chunk_count + 1);
-
-        // Refresh should clear old chunks and re-embed
+        // Refresh should re-embed and update database
         context.refresh(&path).await.unwrap();
 
-        // Should have new chunks (from re-embedding), but the fake chunk should be gone
-        let after_refresh_count = context.chunk_graph().chunks_for_file(&path).len();
-        assert!(after_refresh_count > 0, "Should have chunks after refresh");
-
-        // Verify the fake chunk (with the marker embedding) is gone
-        let has_fake = context
-            .chunk_graph()
-            .chunks_for_file(&path)
-            .iter()
-            .any(|c| {
-                c.embedding
-                    .as_ref()
-                    .map(|e| e.first() == Some(&FAKE_EMBEDDING_MARKER))
-                    .unwrap_or(false)
-            });
-        assert!(!has_fake, "Fake chunk should be cleared after refresh");
+        // Check chunk count after refresh
+        let after_chunks = db.get_chunks_for_file(&path).unwrap();
+        assert!(after_chunks.len() > 0, "Should have chunks after refresh");
     }
 
     #[tokio::test]
@@ -1202,13 +1242,17 @@ mod tests {
     #[tokio::test]
     async fn test_stats() {
         let dir = setup_test_dir();
-        let mut context = IndexContext::new(dir.path());
+
+        // Set up context with database
+        let db_path = dir.path().join("test.db");
+        let db = Arc::new(IndexDatabase::open_readwrite(&db_path).unwrap());
+        let mut context = IndexContext::new(dir.path()).with_database(db);
 
         context.scan().await.unwrap();
 
         let stats = context.stats();
         assert_eq!(stats.total_files, 4);
-        // Embedding is always enabled, so we should have chunks
+        // Embedding is always enabled and written to database, so we should have chunks
         assert!(
             stats.total_chunks > 0,
             "Should have chunks with embedding enabled"

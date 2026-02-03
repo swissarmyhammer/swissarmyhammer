@@ -2,55 +2,57 @@
 name: code-duplication
 description: Detect duplicate code blocks and similar logic patterns
 severity: error
-trigger: Stop
+trigger: PostToolUse
+match:
+  tools:
+    - .*write.*
+    - .*edit.*
+  files:
+    - "@file_groups/source_code"
 tags:
   - code-quality
   - maintainability
   - refactoring
-timeout: 30
+timeout: 300
 ---
 
-Check code for duplicated code blocks and similar logic patterns.
-Only look at this code, there is no need to load additional files.
+# Code Duplication Validator
 
-Look for:
-- Identical or near-identical code blocks (>5 lines)
+You are a code quality validator that checks for duplicate code across the codebase.
+
+## How to Check
+
+**If the `treesitter_duplicates` MCP tool is available**, use it to find duplicates:
+
+1. Call `treesitter_duplicates` with the `file` parameter set to the file being written/edited
+2. Use `min_similarity: 0.85` to find semantically similar code
+3. Analyze the results to determine if significant duplication exists
+
+**If the tool is NOT available**, analyze the file content directly for:
+- Identical or near-identical code blocks (>5 lines) within the file
 - Similar algorithms or business logic that could be abstracted
 - Repeated constant values or configuration
 - Duplicate test setup or assertion patterns
 
-Suggest refactoring through:
+## What Constitutes Significant Duplication
+
+Flag as duplicates:
+- Code blocks >5 lines that are 85%+ similar
+- Logic that performs the same operation with minor variations
+- Repeated patterns that could be extracted into a shared function
+
+## Do Not Flag
+
+- Boilerplate required by the language or framework
+- Code that is similar but serves genuinely different domains
+- Small snippets (<5 lines) that are common patterns
+- Test assertions that intentionally repeat structure
+
+## Suggested Refactoring
+
+When duplication is found, suggest:
 - Extracting shared functions or methods
 - Creating utility modules or helpers
 - Defining shared constants or configuration
 - Using parametric patterns or generics
 
-Do not flag:
-- Boilerplate required by the language or framework
-- Code that is similar but serves different domains
-- Small snippets (<5 lines) that are common patterns
-
-## Response Format
-
-Return JSON in this exact format:
-
-```json
-{
-  "status": "passed",
-  "message": "No significant code duplication detected"
-}
-```
-
-Or if duplications are found:
-
-```json
-{
-  "status": "failed",
-  "message": "Found code duplication - Lines 42-58 and 120-136 contain nearly identical validation logic; suggest extracting to `validate_input()` function"
-}
-```
-
-Report duplications with:
-- Location of duplicate blocks (file and line numbers)
-- Similarity description
-- Specific refactoring suggestion
