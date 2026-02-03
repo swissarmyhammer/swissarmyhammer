@@ -38,10 +38,9 @@ impl ListActors {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for ListActors {
     async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let board = ctx.read_board().await?;
+        let all_actors = ctx.read_all_actors().await?;
 
-        let actors: Vec<&Actor> = board
-            .actors
+        let actors: Vec<&Actor> = all_actors
             .iter()
             .filter(|a| match &self.actor_type {
                 None => true,
@@ -55,5 +54,71 @@ impl Execute<KanbanContext, KanbanError> for ListActors {
             "actors": actors,
             "count": actors.len()
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actor::AddActor;
+    use crate::board::InitBoard;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        InitBoard::new("Test").execute(&ctx).await.unwrap();
+
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn test_list_actors_empty() {
+        let (_temp, ctx) = setup().await;
+
+        let result = ListActors::new().execute(&ctx).await.unwrap();
+
+        assert_eq!(result["count"], 0);
+        assert!(result["actors"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_actors() {
+        let (_temp, ctx) = setup().await;
+
+        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
+        AddActor::agent("assistant", "Assistant").execute(&ctx).await.unwrap();
+
+        let result = ListActors::new().execute(&ctx).await.unwrap();
+
+        assert_eq!(result["count"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_actors_filter_humans() {
+        let (_temp, ctx) = setup().await;
+
+        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
+        AddActor::agent("assistant", "Assistant").execute(&ctx).await.unwrap();
+
+        let result = ListActors::humans().execute(&ctx).await.unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["actors"][0]["type"], "human");
+    }
+
+    #[tokio::test]
+    async fn test_list_actors_filter_agents() {
+        let (_temp, ctx) = setup().await;
+
+        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
+        AddActor::agent("assistant", "Assistant").execute(&ctx).await.unwrap();
+
+        let result = ListActors::agents().execute(&ctx).await.unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["actors"][0]["type"], "agent");
     }
 }

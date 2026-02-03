@@ -25,16 +25,50 @@ impl GetActor {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for GetActor {
     async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let board = ctx.read_board().await?;
-
-        let actor = board
-            .actors
-            .iter()
-            .find(|a| a.id() == &self.id)
-            .ok_or_else(|| KanbanError::ActorNotFound {
-                id: self.id.to_string(),
-            })?;
-
+        let actor = ctx.read_actor(&self.id).await?;
         Ok(serde_json::to_value(actor)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actor::AddActor;
+    use crate::board::InitBoard;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        InitBoard::new("Test").execute(&ctx).await.unwrap();
+
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn test_get_actor() {
+        let (_temp, ctx) = setup().await;
+
+        AddActor::human("alice", "Alice Smith")
+            .execute(&ctx)
+            .await
+            .unwrap();
+
+        let result = GetActor::new("alice").execute(&ctx).await.unwrap();
+
+        assert_eq!(result["id"], "alice");
+        assert_eq!(result["name"], "Alice Smith");
+        assert_eq!(result["type"], "human");
+    }
+
+    #[tokio::test]
+    async fn test_get_nonexistent_actor() {
+        let (_temp, ctx) = setup().await;
+
+        let result = GetActor::new("nonexistent").execute(&ctx).await;
+
+        assert!(matches!(result, Err(KanbanError::ActorNotFound { .. })));
     }
 }

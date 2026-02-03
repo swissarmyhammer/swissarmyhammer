@@ -552,13 +552,14 @@ Which combinations are valid:
 | `complete` | | | | | | | | ✓ | | | | | | |
 | `tag` | | | | | | | | ✓ | | | | | | |
 | `untag` | | | | | | | | ✓ | | | | | | |
+| `assign` | | | | | | | | ✓ | | | | | | |
 
-**Valid operations (39 total):**
+**Valid operations (40 total):**
 - Board: `init board`, `get board`, `update board`
 - Column: `get column`, `add column`, `update column`, `delete column`, `list columns`
 - Swimlane: `get swimlane`, `add swimlane`, `update swimlane`, `delete swimlane`, `list swimlanes`
 - Actor: `get actor`, `add actor`, `update actor`, `delete actor`, `list actors`
-- Task: `get task`, `add task`, `update task`, `move task`, `delete task`, `next task`, `complete task`, `tag task`, `untag task`
+- Task: `get task`, `add task`, `update task`, `move task`, `delete task`, `next task`, `complete task`, `tag task`, `untag task`, `assign task`
 - Tasks: `list tasks`
 - Tag: `get tag`, `add tag`, `update tag`, `delete tag`, `list tags`
 - Comment: `get comment`, `add comment`, `update comment`, `delete comment`, `list comments`

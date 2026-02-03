@@ -1,6 +1,7 @@
 //! Task commands
 
 mod add;
+mod assign;
 mod complete;
 mod delete;
 mod get;
@@ -12,6 +13,7 @@ mod untag;
 mod update;
 
 pub use add::AddTask;
+pub use assign::AssignTask;
 pub use complete::CompleteTask;
 pub use delete::DeleteTask;
 pub use get::GetTask;

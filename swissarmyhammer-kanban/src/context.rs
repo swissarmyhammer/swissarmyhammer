@@ -4,7 +4,7 @@
 //! just data access primitives. Commands do all the work.
 
 use crate::error::{KanbanError, Result};
-use crate::types::{Board, LogEntry, Task, TaskId};
+use crate::types::{Actor, ActorId, Board, LogEntry, Task, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -69,6 +69,16 @@ impl KanbanContext {
         self.root.join("tasks").join(format!("{}.jsonl", id))
     }
 
+    /// Path to actors directory
+    pub fn actors_dir(&self) -> PathBuf {
+        self.root.join("actors")
+    }
+
+    /// Path to an actor's JSON file
+    pub fn actor_path(&self, id: &ActorId) -> PathBuf {
+        self.root.join("actors").join(format!("{}.json", id))
+    }
+
     /// Path to the activity directory
     pub fn activity_dir(&self) -> PathBuf {
         self.root.join("activity")
@@ -96,6 +106,7 @@ impl KanbanContext {
     /// Create the directory structure for a new board
     pub async fn create_directories(&self) -> Result<()> {
         fs::create_dir_all(self.tasks_dir()).await?;
+        fs::create_dir_all(self.actors_dir()).await?;
         fs::create_dir_all(self.activity_dir()).await?;
         Ok(())
     }
@@ -195,6 +206,79 @@ impl KanbanContext {
         }
 
         Ok(tasks)
+    }
+
+    // =========================================================================
+    // Actor I/O
+    // =========================================================================
+
+    /// Read an actor file
+    pub async fn read_actor(&self, id: &ActorId) -> Result<Actor> {
+        let path = self.actor_path(id);
+        if !path.exists() {
+            return Err(KanbanError::ActorNotFound { id: id.to_string() });
+        }
+
+        let content = fs::read_to_string(&path).await?;
+        let actor: Actor = serde_json::from_str(&content)?;
+        Ok(actor)
+    }
+
+    /// Write an actor file (atomic write via temp file)
+    pub async fn write_actor(&self, actor: &Actor) -> Result<()> {
+        let path = self.actor_path(actor.id());
+        let content = serde_json::to_string_pretty(actor)?;
+        atomic_write(&path, content.as_bytes()).await
+    }
+
+    /// Delete an actor file
+    pub async fn delete_actor_file(&self, id: &ActorId) -> Result<()> {
+        let actor_path = self.actor_path(id);
+
+        if actor_path.exists() {
+            fs::remove_file(&actor_path).await?;
+        }
+
+        Ok(())
+    }
+
+    /// List all actor IDs by reading the actors directory
+    pub async fn list_actor_ids(&self) -> Result<Vec<ActorId>> {
+        let actors_dir = self.actors_dir();
+        if !actors_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids = Vec::new();
+        let mut entries = fs::read_dir(&actors_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(ActorId::from_string(stem));
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+
+    /// Read all actors
+    pub async fn read_all_actors(&self) -> Result<Vec<Actor>> {
+        let ids = self.list_actor_ids().await?;
+        let mut actors = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            actors.push(self.read_actor(&id).await?);
+        }
+
+        Ok(actors)
+    }
+
+    /// Check if an actor exists
+    pub async fn actor_exists(&self, id: &ActorId) -> bool {
+        self.actor_path(id).exists()
     }
 
     // =========================================================================

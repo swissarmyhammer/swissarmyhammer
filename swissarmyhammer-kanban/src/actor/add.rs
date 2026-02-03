@@ -16,8 +16,11 @@ pub enum ActorType {
     Agent,
 }
 
-/// Add a new actor (person or agent) to the board
-#[operation(verb = "add", noun = "actor", description = "Add a new actor (person or agent) to the board")]
+/// Add a new actor (person or agent)
+///
+/// Actors are stored as separate files in `.kanban/actors/`.
+/// Use `ensure: true` for idempotent registration (returns existing actor if found).
+#[operation(verb = "add", noun = "actor", description = "Add a new actor (person or agent)")]
 #[derive(Debug, Deserialize)]
 pub struct AddActor {
     /// The actor ID (slug)
@@ -27,6 +30,9 @@ pub struct AddActor {
     /// The actor type (human or agent)
     #[serde(rename = "type")]
     pub actor_type: ActorType,
+    /// If true, return existing actor instead of error if ID exists (idempotent)
+    #[serde(default)]
+    pub ensure: bool,
 }
 
 impl AddActor {
@@ -36,6 +42,7 @@ impl AddActor {
             id: id.into(),
             name: name.into(),
             actor_type: ActorType::Human,
+            ensure: false,
         }
     }
 
@@ -45,17 +52,31 @@ impl AddActor {
             id: id.into(),
             name: name.into(),
             actor_type: ActorType::Agent,
+            ensure: false,
         }
+    }
+
+    /// Make this registration idempotent (return existing if found)
+    pub fn with_ensure(mut self) -> Self {
+        self.ensure = true;
+        self
     }
 }
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for AddActor {
     async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let mut board = ctx.read_board().await?;
-
-        // Check for duplicate ID
-        if board.actors.iter().any(|a| a.id() == &self.id) {
+        // Check if actor already exists
+        if ctx.actor_exists(&self.id).await {
+            if self.ensure {
+                // Idempotent mode: return existing actor
+                let actor = ctx.read_actor(&self.id).await?;
+                return Ok(serde_json::json!({
+                    "actor": actor,
+                    "created": false,
+                    "message": "Actor already exists"
+                }));
+            }
             return Err(KanbanError::duplicate_id("actor", self.id.to_string()));
         }
 
@@ -70,9 +91,94 @@ impl Execute<KanbanContext, KanbanError> for AddActor {
             },
         };
 
-        board.actors.push(actor.clone());
-        ctx.write_board(&board).await?;
+        ctx.write_actor(&actor).await?;
 
-        Ok(serde_json::to_value(&actor)?)
+        Ok(serde_json::json!({
+            "actor": actor,
+            "created": true
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        InitBoard::new("Test").execute(&ctx).await.unwrap();
+
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn test_add_human_actor() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddActor::human("alice", "Alice Smith")
+            .execute(&ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(result["created"], true);
+        assert_eq!(result["actor"]["type"], "human");
+        assert_eq!(result["actor"]["id"], "alice");
+        assert_eq!(result["actor"]["name"], "Alice Smith");
+    }
+
+    #[tokio::test]
+    async fn test_add_agent_actor() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddActor::agent("assistant", "AI Assistant")
+            .execute(&ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(result["created"], true);
+        assert_eq!(result["actor"]["type"], "agent");
+        assert_eq!(result["actor"]["id"], "assistant");
+    }
+
+    #[tokio::test]
+    async fn test_add_duplicate_actor_errors() {
+        let (_temp, ctx) = setup().await;
+
+        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
+
+        let result = AddActor::human("alice", "Alice Duplicate")
+            .execute(&ctx)
+            .await;
+
+        assert!(matches!(result, Err(KanbanError::DuplicateId { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_add_actor_with_ensure_idempotent() {
+        let (_temp, ctx) = setup().await;
+
+        // First add
+        let result1 = AddActor::agent("assistant", "AI Assistant")
+            .with_ensure()
+            .execute(&ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(result1["created"], true);
+
+        // Second add with ensure - should return existing
+        let result2 = AddActor::agent("assistant", "Different Name")
+            .with_ensure()
+            .execute(&ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(result2["created"], false);
+        assert_eq!(result2["actor"]["name"], "AI Assistant"); // Original name preserved
     }
 }

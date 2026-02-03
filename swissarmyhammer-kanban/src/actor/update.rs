@@ -35,35 +35,72 @@ impl UpdateActor {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateActor {
     async fn execute(&self, ctx: &KanbanContext) -> Result<Value> {
-        let mut board = ctx.read_board().await?;
+        let actor = ctx.read_actor(&self.id).await?;
 
-        let actor_idx = board
-            .actors
-            .iter()
-            .position(|a| a.id() == &self.id)
-            .ok_or_else(|| KanbanError::ActorNotFound {
-                id: self.id.to_string(),
-            })?;
-
-        if let Some(name) = &self.name {
+        let updated_actor = if let Some(name) = &self.name {
             // Update the name while preserving the type
-            let old_actor = &board.actors[actor_idx];
-            let new_actor = match old_actor {
+            match actor {
                 Actor::Human { id, .. } => Actor::Human {
-                    id: id.clone(),
+                    id,
                     name: name.clone(),
                 },
                 Actor::Agent { id, .. } => Actor::Agent {
-                    id: id.clone(),
+                    id,
                     name: name.clone(),
                 },
-            };
-            board.actors[actor_idx] = new_actor;
-        }
+            }
+        } else {
+            actor
+        };
 
-        let result = serde_json::to_value(&board.actors[actor_idx])?;
-        ctx.write_board(&board).await?;
+        ctx.write_actor(&updated_actor).await?;
 
-        Ok(result)
+        Ok(serde_json::to_value(&updated_actor)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actor::AddActor;
+    use crate::board::InitBoard;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        InitBoard::new("Test").execute(&ctx).await.unwrap();
+
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn test_update_actor_name() {
+        let (_temp, ctx) = setup().await;
+
+        AddActor::human("alice", "Alice").execute(&ctx).await.unwrap();
+
+        let result = UpdateActor::new("alice")
+            .with_name("Alice Smith")
+            .execute(&ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(result["name"], "Alice Smith");
+        assert_eq!(result["type"], "human"); // Type preserved
+    }
+
+    #[tokio::test]
+    async fn test_update_nonexistent_actor() {
+        let (_temp, ctx) = setup().await;
+
+        let result = UpdateActor::new("nonexistent")
+            .with_name("New Name")
+            .execute(&ctx)
+            .await;
+
+        assert!(matches!(result, Err(KanbanError::ActorNotFound { .. })));
     }
 }

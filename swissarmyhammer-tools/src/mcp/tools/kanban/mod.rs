@@ -30,7 +30,7 @@ use swissarmyhammer_kanban::{
     parse::parse_input,
     swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
     tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
-    task::{AddTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask, UntagTask, UpdateTask},
+    task::{AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask, UntagTask, UpdateTask},
     Execute, KanbanContext, KanbanOperation, Noun, Operation, Verb,
 };
 
@@ -65,6 +65,7 @@ static UPDATE_TASK: Lazy<UpdateTask> = Lazy::new(|| UpdateTask::new(""));
 static DELETE_TASK: Lazy<DeleteTask> = Lazy::new(|| DeleteTask::new(""));
 static MOVE_TASK: Lazy<MoveTask> = Lazy::new(|| MoveTask::to_column("", ""));
 static COMPLETE_TASK: Lazy<CompleteTask> = Lazy::new(|| CompleteTask::new(""));
+static ASSIGN_TASK: Lazy<AssignTask> = Lazy::new(|| AssignTask::new("", ""));
 static NEXT_TASK: Lazy<NextTask> = Lazy::new(NextTask::new);
 static TAG_TASK: Lazy<TagTask> = Lazy::new(|| TagTask::new("", ""));
 static UNTAG_TASK: Lazy<UntagTask> = Lazy::new(|| UntagTask::new("", ""));
@@ -116,6 +117,7 @@ static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*DELETE_TASK as &dyn Operation,
         &*MOVE_TASK as &dyn Operation,
         &*COMPLETE_TASK as &dyn Operation,
+        &*ASSIGN_TASK as &dyn Operation,
         &*NEXT_TASK as &dyn Operation,
         &*TAG_TASK as &dyn Operation,
         &*UNTAG_TASK as &dyn Operation,
@@ -257,6 +259,7 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
             | (Verb::Delete, Noun::Task)
             | (Verb::Move, Noun::Task)
             | (Verb::Complete, Noun::Task)
+            | (Verb::Assign, Noun::Task)
     )
 }
 
@@ -512,6 +515,15 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             CompleteTask::new(id).execute(ctx).await
         }
+        (Verb::Assign, Noun::Task) => {
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            let assignee = op
+                .get_string("assignee")
+                .ok_or_else(|| McpError::invalid_params("missing required field: assignee", None))?;
+            AssignTask::new(id, assignee).execute(ctx).await
+        }
         (Verb::Next, Noun::Task) => {
             let cmd = NextTask::new();
             // Could add swimlane/assignee filtering here
@@ -598,12 +610,18 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .get_string("name")
                 .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
             let actor_type = op.get_string("type").unwrap_or("human");
+            let ensure = op.get_param("ensure").and_then(|v| v.as_bool()).unwrap_or(false);
 
-            let cmd = if actor_type == "agent" {
+            let mut cmd = if actor_type == "agent" {
                 AddActor::agent(id, name)
             } else {
                 AddActor::human(id, name)
             };
+
+            if ensure {
+                cmd = cmd.with_ensure();
+            }
+
             cmd.execute(ctx).await
         }
         (Verb::Get, Noun::Actor) => {
@@ -1148,8 +1166,10 @@ mod tests {
         let result = tool.execute(args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "alice");
-        assert_eq!(data["name"], "Alice Smith");
+        // Response format: {"actor": {...}, "created": true}
+        assert_eq!(data["created"], true);
+        assert_eq!(data["actor"]["id"], "alice");
+        assert_eq!(data["actor"]["name"], "Alice Smith");
     }
 
     #[tokio::test]
@@ -1168,8 +1188,36 @@ mod tests {
         let result = tool.execute(args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "claude");
-        assert_eq!(data["name"], "Claude");
+        // Response format: {"actor": {...}, "created": true}
+        assert_eq!(data["created"], true);
+        assert_eq!(data["actor"]["id"], "claude");
+        assert_eq!(data["actor"]["name"], "Claude");
+    }
+
+    #[tokio::test]
+    async fn test_add_actor_with_ensure() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add actor first time
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("add actor"));
+        args.insert("id".to_string(), json!("assistant"));
+        args.insert("name".to_string(), json!("Assistant"));
+        args.insert("type".to_string(), json!("agent"));
+        args.insert("ensure".to_string(), json!(true));
+
+        let result = tool.execute(args.clone(), &context).await.unwrap();
+        let data = parse_json(&result);
+        assert_eq!(data["created"], true);
+
+        // Add again with ensure - should succeed and return existing
+        let result2 = tool.execute(args, &context).await.unwrap();
+        let data2 = parse_json(&result2);
+        assert_eq!(data2["created"], false);
+        assert_eq!(data2["actor"]["name"], "Assistant");
     }
 
     #[tokio::test]
@@ -1534,6 +1582,72 @@ mod tests {
 
         let result = tool.execute(complete_args, &context).await;
         assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Assign task operation
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_assign_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add an actor first
+        let mut actor_args = serde_json::Map::new();
+        actor_args.insert("op".to_string(), json!("add actor"));
+        actor_args.insert("id".to_string(), json!("assistant"));
+        actor_args.insert("name".to_string(), json!("Assistant"));
+        actor_args.insert("type".to_string(), json!("agent"));
+        tool.execute(actor_args, &context).await.unwrap();
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task to assign"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Assign the task
+        let mut assign_args = serde_json::Map::new();
+        assign_args.insert("op".to_string(), json!("assign task"));
+        assign_args.insert("id".to_string(), json!(task_id));
+        assign_args.insert("assignee".to_string(), json!("assistant"));
+
+        let result = tool.execute(assign_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Response format: {"assigned": true, "task_id": ..., "assignee": ..., "all_assignees": [...]}
+        assert_eq!(data["assigned"], true);
+        assert_eq!(data["task_id"], task_id);
+        assert_eq!(data["assignee"], "assistant");
+        assert!(data["all_assignees"].as_array().unwrap().contains(&json!("assistant")));
+    }
+
+    #[tokio::test]
+    async fn test_assign_task_nonexistent_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task
+        let mut task_args = serde_json::Map::new();
+        task_args.insert("op".to_string(), json!("add task"));
+        task_args.insert("title".to_string(), json!("Task to assign"));
+        let result = tool.execute(task_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        // Try to assign to nonexistent actor
+        let mut assign_args = serde_json::Map::new();
+        assign_args.insert("op".to_string(), json!("assign task"));
+        assign_args.insert("id".to_string(), json!(task_id));
+        assign_args.insert("assignee".to_string(), json!("nonexistent"));
+
+        let result = tool.execute(assign_args, &context).await;
+        assert!(result.is_err());
     }
 
     // =========================================================================
