@@ -415,7 +415,10 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             }
             processor.process(&cmd, ctx).await
         }
-        (Verb::Get, Noun::Board) => processor.process(&GetBoard, ctx).await,
+        (Verb::Get, Noun::Board) => {
+            let include_counts = op.get_bool("include_counts").unwrap_or(true);
+            processor.process(&GetBoard { include_counts }, ctx).await
+        }
         (Verb::Update, Noun::Board) => {
             let mut cmd = UpdateBoard::new();
             if let Some(name) = op.get_string("name") {

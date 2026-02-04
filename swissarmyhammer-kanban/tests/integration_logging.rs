@@ -24,7 +24,10 @@ async fn test_activity_logging_end_to_end() {
 
     // Add a task (logged)
     let result = processor
-        .process(&AddTask::new("First task").with_description("Test task"), &ctx)
+        .process(
+            &AddTask::new("First task").with_description("Test task"),
+            &ctx,
+        )
         .await
         .unwrap();
     let task_id = result["id"].as_str().unwrap().to_string();
@@ -87,7 +90,6 @@ async fn test_activity_logging_end_to_end() {
         "Task log file should exist at {:?}",
         task_log_path
     );
-
 }
 
 #[tokio::test]
@@ -125,12 +127,11 @@ async fn test_unlogged_operations_dont_create_logs() {
     processor.process(&ListTasks::new(), &ctx).await.unwrap();
 
     use swissarmyhammer_kanban::board::GetBoard;
-    processor.process(&GetBoard, &ctx).await.unwrap();
+    processor.process(&GetBoard::default(), &ctx).await.unwrap();
 
     // Verify still only 2 entries
     let entries_after = ctx.read_activity(None).await.unwrap();
     assert_eq!(entries_after.len(), 2);
-
 }
 
 #[tokio::test]
@@ -149,10 +150,7 @@ async fn test_error_logging() {
 
     // Try to update a non-existent task (should fail and log)
     let result = processor
-        .process(
-            &UpdateTask::new("nonexistent").with_title("Updated"),
-            &ctx,
-        )
+        .process(&UpdateTask::new("nonexistent").with_title("Updated"), &ctx)
         .await;
 
     assert!(result.is_err());
@@ -234,4 +232,3 @@ async fn test_actor_from_operation_context() {
     assert_eq!(entries[1].op, "init board");
     assert_eq!(entries[1].actor, None);
 }
-

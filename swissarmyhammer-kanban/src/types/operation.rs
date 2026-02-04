@@ -218,6 +218,11 @@ impl Operation {
         self.params.get(key).and_then(|v| v.as_str())
     }
 
+    /// Get a boolean parameter
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        self.params.get(key).and_then(|v| v.as_bool())
+    }
+
     /// Get a required string parameter
     pub fn require_string(&self, key: &str) -> Result<&str, String> {
         self.get_string(key)

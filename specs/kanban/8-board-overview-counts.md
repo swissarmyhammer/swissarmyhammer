@@ -1,6 +1,6 @@
 # Board Overview with Task Counts
 
-## Status: Not Implemented
+## Status: Implemented
 
 ## Problem
 
