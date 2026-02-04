@@ -133,7 +133,9 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
         println!("Usage:");
         println!("  avp                           Process hook from stdin (pipe JSON)");
         println!("  avp init [project|local|user]      Install hooks (default: project)");
-        println!("  avp deinit [project|local|user]    Remove hooks and .avp dir (default: project)");
+        println!(
+            "  avp deinit [project|local|user]    Remove hooks and .avp dir (default: project)"
+        );
         println!("  avp list [-v]                 List all available validators");
         println!("  avp doctor [-v]               Diagnose AVP setup");
         println!();
