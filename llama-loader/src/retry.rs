@@ -1,16 +1,42 @@
+use crate::download_lock::DownloadCoordinator;
 use crate::error::ModelError;
 use llama_common::retry::RetryManager;
 use std::path::PathBuf;
+use tracing::debug;
 
-/// Downloads a model file with retry logic and exponential backoff
+/// Downloads a model file with retry logic, exponential backoff, and cross-process coordination
 ///
-/// This function now uses the unified retry manager for consistent behavior
+/// This function:
+/// 1. Uses cross-process locking to prevent duplicate downloads
+/// 2. Uses the unified retry manager for consistent behavior
+/// 3. Waits for other processes if they're already downloading the same file
 pub async fn download_with_retry(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     filename: &str,
     repo: &str,
     retry_config: &crate::types::RetryConfig,
 ) -> Result<PathBuf, ModelError> {
+    // Create coordinator for cross-process download synchronization
+    let coordinator = DownloadCoordinator::new()?;
+
+    // Coordinate the download - if another process is downloading, we'll wait
+    coordinator
+        .coordinate_download(repo, filename, || {
+            download_with_retry_internal(repo_api, filename, repo, retry_config)
+        })
+        .await
+}
+
+/// Internal download function that handles retries (called by coordinator)
+/// Not public - only used internally by download_with_retry
+async fn download_with_retry_internal(
+    repo_api: &hf_hub::api::tokio::ApiRepo,
+    filename: &str,
+    repo: &str,
+    retry_config: &crate::types::RetryConfig,
+) -> Result<PathBuf, ModelError> {
+    debug!("Starting download for {}/{}", repo, filename);
+
     let retry_manager = RetryManager::with_config(retry_config.clone().into());
     let operation_name = format!("download {}", filename);
 
@@ -257,4 +283,19 @@ mod tests {
         }
         assert_eq!(delay, retry_config.max_delay_ms); // Should cap at 30s
     }
+
+    #[test]
+    fn test_download_coordinator_creation() {
+        // Verify that the DownloadCoordinator can be created successfully
+        // This tests the setup path of download_with_retry without requiring network access
+        let coordinator = DownloadCoordinator::new();
+        assert!(
+            coordinator.is_ok(),
+            "DownloadCoordinator should be creatable"
+        );
+    }
+
+    // Note: download_with_retry and download_with_retry_internal require network access
+    // to HuggingFace and are tested via integration tests. The coordinator logic
+    // is tested in download_lock.rs unit tests.
 }

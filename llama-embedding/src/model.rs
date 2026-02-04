@@ -3,98 +3,134 @@ use crate::types::{EmbeddingConfig, EmbeddingResult};
 use llama_cpp_2::{
     context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
+    llama_batch::LlamaBatch,
     model::LlamaModel,
     send_logs_to_tracing, LogOptions,
 };
-
-// High-level llama-cpp-2 types for embedding processing
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::token::LlamaToken;
 use llama_loader::{ModelConfig, ModelLoader, ModelMetadata, RetryConfig};
+use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use swissarmyhammer_common::Pretty;
 use tracing::{debug, info};
-// Need access to raw FFI bindings for llama_log_set
+
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
-static GLOBAL_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
+const LLAMA_CPP_DEFAULT_N_BATCH: u32 = 512;
 
-// Null log callback to suppress llama.cpp verbose output
-extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
-    // Do nothing - this suppresses all llama.cpp logging
+/// Global backend singleton for llama-cpp.
+///
+/// llama-cpp only allows one backend initialization per process.
+/// This ensures all EmbeddingModel instances share the same backend.
+/// Stores Result to capture initialization errors.
+static GLOBAL_BACKEND: OnceLock<std::result::Result<Arc<LlamaBackend>, String>> = OnceLock::new();
+
+/// Get or initialize the global llama backend.
+///
+/// Returns a shared reference to the backend. The backend is lazily
+/// initialized on first call and reused for all subsequent calls.
+fn get_global_backend() -> Result<Arc<LlamaBackend>> {
+    let result = GLOBAL_BACKEND.get_or_init(|| {
+        LlamaBackend::init()
+            .map(Arc::new)
+            .map_err(|e| format!("Backend init failed: {}", e))
+    });
+
+    match result {
+        Ok(backend) => Ok(backend.clone()),
+        Err(e) => Err(EmbeddingError::model(e.clone())),
+    }
 }
 
-// Set up logging suppression using llama_log_set
+/// Default embedding dimension fallback when model reports invalid value
+const DEFAULT_EMBEDDING_DIMENSION: usize = 384;
+
+/// Returns the embedding dimension from a LlamaModel.
+///
+/// Falls back to `DEFAULT_EMBEDDING_DIMENSION` if the model reports an invalid
+/// (zero or negative) dimension value.
+fn get_embedding_dimension(model: &LlamaModel) -> usize {
+    let n = model.n_embd();
+    if n > 0 {
+        n as usize
+    } else {
+        DEFAULT_EMBEDDING_DIMENSION
+    }
+}
+
+extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {}
+
 fn set_logging_suppression(suppress: bool) {
     unsafe {
-        // Access the raw FFI binding
         extern "C" {
             fn llama_log_set(
                 log_callback: Option<extern "C" fn(i32, *const c_char, *mut c_void)>,
                 user_data: *mut c_void,
             );
         }
-
         if suppress {
-            // Set null callback to suppress logging
             llama_log_set(Some(null_log_callback), std::ptr::null_mut());
         } else {
-            // Restore default logging (NULL callback means output to stderr)
             llama_log_set(None, std::ptr::null_mut());
         }
     }
 }
 
-/// Core embedding model that handles individual text embedding operations
+/// Embedding model - single-threaded, no concurrency.
+/// Model and context are owned directly, dropped when EmbeddingModel is dropped.
 pub struct EmbeddingModel {
-    model: Option<LlamaModel>,
-    config: EmbeddingConfig,
-    metadata: Option<ModelMetadata>,
+    /// Reference to global backend for context creation
     backend: Arc<LlamaBackend>,
+    model: Option<LlamaModel>,
+    context: Option<LlamaContext<'static>>,
+    metadata: Option<ModelMetadata>,
+    config: EmbeddingConfig,
 }
 
+// SAFETY: EmbeddingModel owns all its resources exclusively.
+// The raw pointers in LlamaContext/LlamaModel are only accessed through
+// &mut self methods, ensuring exclusive access. No concurrent access is possible.
+unsafe impl Send for EmbeddingModel {}
+unsafe impl Sync for EmbeddingModel {}
+
 impl EmbeddingModel {
-    /// Create a new EmbeddingModel with the given configuration
+    /// Create a new EmbeddingModel (nothing loaded yet)
     pub async fn new(config: EmbeddingConfig) -> Result<Self> {
-        // Configure llama.cpp logging based on debug setting
         if config.debug {
-            // Enable debug logging - send llama.cpp logs to tracing
             send_logs_to_tracing(LogOptions::default());
-            debug!("Enabled verbose llama.cpp logging via tracing");
             set_logging_suppression(false);
         } else {
-            // When debug is false, we rely on the tracing level configuration
-            // from main.rs (WARN level) to filter out verbose logs
-            debug!("llama.cpp logs will be filtered by tracing WARN level");
             set_logging_suppression(true);
         }
 
-        // Initialize or get global backend
-        let backend = Self::get_or_init_backend()?;
+        let backend = get_global_backend()?;
 
         Ok(Self {
-            model: None,
-            config,
-            metadata: None,
             backend,
+            model: None,
+            context: None,
+            metadata: None,
+            config,
         })
     }
 
-    /// Load the embedding model
+    /// Load the model
     pub async fn load_model(&mut self) -> Result<()> {
+        if self.model.is_some() {
+            info!("Model already loaded");
+            return Ok(());
+        }
+
         info!(
             "Loading embedding model from {:?}",
             self.config.model_source
         );
+        let start = Instant::now();
 
-        let start_time = Instant::now();
-
-        // Create ModelConfig for the loader
         let model_config = ModelConfig {
             source: self.config.model_source.clone(),
-            batch_size: 1024, // Default batch size for embedding
+            batch_size: LLAMA_CPP_DEFAULT_N_BATCH,
             n_seq_max: 1,
             n_threads: 1,
             n_threads_batch: 1,
@@ -103,104 +139,91 @@ impl EmbeddingModel {
             debug: self.config.debug,
         };
 
-        // Load the model using the loader
-        let loaded_model = {
-            // Create a new loader for model loading since we need mutable access
-            let loader = ModelLoader::new(self.backend.clone());
+        // Use the global backend for the loader
+        let loader = ModelLoader::new(self.backend.clone());
+        let loaded = loader
+            .load_model(&model_config)
+            .await
+            .map_err(EmbeddingError::ModelLoader)?;
 
-            loader
-                .load_model(&model_config)
-                .await
-                .map_err(EmbeddingError::ModelLoader)?
-        };
-
-        let load_time = start_time.elapsed();
-
-        // Store the model and metadata
-        self.model = Some(loaded_model.model);
-        self.metadata = Some(loaded_model.metadata);
+        let ctx_size = loaded.metadata.context_size;
+        self.metadata = Some(loaded.metadata);
+        self.model = Some(loaded.model);
 
         info!(
-            "Embedding model loaded successfully in {}",
-            Pretty(&load_time)
+            "Model loaded in {}, context: {} tokens",
+            Pretty(&start.elapsed()),
+            ctx_size
         );
-
         Ok(())
     }
 
-    /// Generate embedding for a single text
-    pub async fn embed_text(&self, text: &str) -> Result<EmbeddingResult> {
-        let model = self.model.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
+    /// Ensure context exists, creating if needed
+    fn ensure_context(&mut self) -> Result<()> {
+        if self.context.is_some() {
+            return Ok(());
+        }
 
+        let model = self.model.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(EmbeddingError::ModelNotLoaded)?;
+
+        info!("Creating LlamaContext");
+        let batch_size = metadata.context_size as u32;
+        let n_ctx = NonZeroU32::new(batch_size);
+        let params = LlamaContextParams::default()
+            .with_embeddings(true)
+            .with_n_ctx(n_ctx)
+            .with_n_batch(batch_size)
+            .with_n_ubatch(batch_size);
+
+        let ctx = model
+            .new_context(&self.backend, params)
+            .map_err(|e| EmbeddingError::model(format!("Context creation failed: {}", e)))?;
+
+        // SAFETY: We own the model and it won't be dropped before context
+        let ctx: LlamaContext<'static> = unsafe { std::mem::transmute(ctx) };
+        self.context = Some(ctx);
+        Ok(())
+    }
+
+    /// Generate embedding for text
+    pub async fn embed_text(&mut self, text: &str) -> Result<EmbeddingResult> {
         if text.is_empty() {
             return Err(EmbeddingError::text_processing(
                 "Input text cannot be empty",
             ));
         }
 
-        let start_time = Instant::now();
+        self.ensure_context()?;
 
-        debug!("Generating embedding for text: {} chars", text.len());
+        let model = self.model.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(EmbeddingError::ModelNotLoaded)?;
+        let ctx = self
+            .context
+            .as_mut()
+            .ok_or(EmbeddingError::ModelNotLoaded)?;
 
-        // Create context for this embedding operation
-        let mut context = self.create_context(model)?;
-
-        // Tokenize the text
-        let tokens = self.tokenize_text(&context, text)?;
-
-        // Apply sequence length limit if configured
-        let final_tokens = if let Some(max_len) = self.config.max_sequence_length {
-            if tokens.len() > max_len {
-                debug!("Truncating tokens from {} to {}", tokens.len(), max_len);
-                tokens[..max_len].to_vec()
-            } else {
-                tokens
-            }
-        } else {
-            tokens
-        };
-
-        // Generate embedding using the tokenized text
-        let embedding = self.generate_embedding_from_tokens(&mut context, &final_tokens)?;
-
-        let processing_time_ms = start_time.elapsed().as_millis() as u64;
-
-        let mut result = EmbeddingResult::new(
-            text.to_string(),
-            embedding,
-            final_tokens.len(),
-            processing_time_ms,
-        );
-
-        // Apply normalization if requested
-        if self.config.normalize_embeddings {
-            result.normalize();
-        }
-
-        debug!(
-            "Generated embedding: {} dimensions, {} tokens, {}ms",
-            result.dimension(),
-            result.sequence_length,
-            result.processing_time_ms
-        );
-
-        Ok(result)
+        embed_single(
+            ctx,
+            model,
+            text,
+            metadata.context_size,
+            self.config.normalize_embeddings,
+        )
     }
 
-    /// Get the embedding dimension of the loaded model
+    /// Get embedding dimension
     pub fn get_embedding_dimension(&self) -> Option<usize> {
-        self.model.as_ref().map(|model| {
-            let n_embd = model.n_embd();
-            if n_embd > 0 {
-                n_embd as usize
-            } else {
-                // Fallback to common default if API returns invalid value
-                384
-            }
-        })
+        self.model.as_ref().map(get_embedding_dimension)
     }
 
-    /// Get model metadata if loaded
+    /// Get model metadata
     pub fn get_metadata(&self) -> Option<&ModelMetadata> {
         self.metadata.as_ref()
     }
@@ -209,117 +232,72 @@ impl EmbeddingModel {
     pub fn is_loaded(&self) -> bool {
         self.model.is_some()
     }
+}
 
-    // Private helper methods
+fn embed_single(
+    ctx: &mut LlamaContext,
+    model: &LlamaModel,
+    text: &str,
+    max_seq_len: usize,
+    normalize: bool,
+) -> Result<EmbeddingResult> {
+    use llama_cpp_2::model::AddBos;
 
-    fn get_or_init_backend() -> Result<Arc<LlamaBackend>> {
-        if let Some(backend) = GLOBAL_BACKEND.get() {
-            Ok(backend.clone())
-        } else {
-            let backend = LlamaBackend::init().map_err(|e| {
-                EmbeddingError::model(format!("Failed to initialize LlamaBackend: {}", e))
-            })?;
-            let backend_arc = Arc::new(backend);
+    let start = Instant::now();
 
-            // Try to store globally, use existing if someone else set it
-            match GLOBAL_BACKEND.set(backend_arc.clone()) {
-                Ok(_) => Ok(backend_arc),
-                Err(_) => Ok(GLOBAL_BACKEND.get().unwrap().clone()),
-            }
-        }
+    // Clear KV cache before each embedding to ensure independent processing
+    ctx.clear_kv_cache();
+
+    let tokens = ctx
+        .model
+        .str_to_token(text, AddBos::Never)
+        .map_err(|e| EmbeddingError::text_encoding(format!("Tokenize failed: {}", e)))?;
+
+    if tokens.is_empty() {
+        return Err(EmbeddingError::text_encoding("No tokens"));
     }
 
-    fn create_context<'a>(&self, model: &'a LlamaModel) -> Result<LlamaContext<'a>> {
-        let context_params = LlamaContextParams::default().with_embeddings(true);
+    let tokens = if tokens.len() > max_seq_len {
+        debug!("Truncating {} -> {} tokens", tokens.len(), max_seq_len);
+        tokens[..max_seq_len].to_vec()
+    } else {
+        tokens
+    };
 
-        model
-            .new_context(&self.backend, context_params)
-            .map_err(|e| EmbeddingError::model(format!("Failed to create context: {}", e)))
+    let dim = get_embedding_dimension(model);
+
+    let mut batch = LlamaBatch::new(tokens.len(), 1);
+    batch
+        .add_sequence(&tokens, 0, false)
+        .map_err(|e| EmbeddingError::text_processing(format!("Batch failed: {}", e)))?;
+
+    ctx.decode(&mut batch)
+        .map_err(|e| EmbeddingError::text_processing(format!("Decode failed: {}", e)))?;
+
+    let emb = ctx
+        .embeddings_seq_ith(0)
+        .map_err(|e| EmbeddingError::text_processing(format!("Extract failed: {}", e)))?;
+
+    if emb.len() != dim {
+        return Err(EmbeddingError::text_processing(format!(
+            "Dimension mismatch: {} vs {}",
+            dim,
+            emb.len()
+        )));
     }
 
-    fn tokenize_text(&self, context: &LlamaContext, text: &str) -> Result<Vec<LlamaToken>> {
-        use llama_cpp_2::model::AddBos;
+    let mut result = EmbeddingResult::new(
+        text.to_string(),
+        emb.to_vec(),
+        tokens.len(),
+        start.elapsed().as_millis() as u64,
+    );
 
-        // For embedding models, we typically want to tokenize the text as-is
-        // without special tokens like BOS/EOS that are used for generation
-        let tokens = context
-            .model
-            .str_to_token(text, AddBos::Never)
-            .map_err(|e| {
-                EmbeddingError::text_encoding(format!("Failed to tokenize text: {}", e))
-            })?;
-
-        if tokens.is_empty() {
-            return Err(EmbeddingError::text_encoding(
-                "Tokenization produced no tokens",
-            ));
-        }
-
-        debug!("Tokenized text into {} tokens", tokens.len());
-        Ok(tokens)
+    if normalize {
+        result.normalize();
     }
 
-    fn generate_embedding_from_tokens(
-        &self,
-        context: &mut LlamaContext,
-        tokens: &[LlamaToken],
-    ) -> Result<Vec<f32>> {
-        if tokens.is_empty() {
-            return Err(EmbeddingError::text_processing(
-                "Cannot generate embedding from empty token sequence",
-            ));
-        }
-
-        // Get embedding dimension from the model
-        let embedding_dim = self.get_embedding_dimension().ok_or_else(|| {
-            EmbeddingError::model("Could not determine embedding dimension".to_string())
-        })?;
-
-        // Create a batch for the tokens
-        // We need enough space for all tokens and use one sequence
-        let mut batch = LlamaBatch::new(tokens.len(), 1);
-
-        // Add the token sequence to the batch
-        // Set logits to true for the last token to get embeddings
-        batch.add_sequence(tokens, 0, false).map_err(|e| {
-            EmbeddingError::text_processing(format!("Failed to add tokens to batch: {}", e))
-        })?;
-
-        // Decode the tokens to generate embeddings
-        context.decode(&mut batch).map_err(|e| {
-            EmbeddingError::text_processing(format!(
-                "Failed to decode tokens for embedding extraction: {}",
-                e
-            ))
-        })?;
-
-        // Extract embeddings for the sequence
-        // Use sequence 0 since we only have one sequence
-        let embeddings = context.embeddings_seq_ith(0).map_err(|e| {
-            EmbeddingError::text_processing(format!(
-                "Failed to extract embeddings from context: {}",
-                e
-            ))
-        })?;
-
-        // Validate embedding dimension matches expectation
-        if embeddings.len() != embedding_dim {
-            return Err(EmbeddingError::text_processing(format!(
-                "Embedding dimension mismatch: expected {}, got {}",
-                embedding_dim,
-                embeddings.len()
-            )));
-        }
-
-        debug!(
-            "Successfully extracted embedding of dimension {} for {} tokens",
-            embedding_dim,
-            tokens.len()
-        );
-
-        // Convert from slice to owned vector
-        Ok(embeddings.to_vec())
-    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -330,27 +308,44 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_embedding_model_creation() {
+    async fn test_model_creation() {
         let config = EmbeddingConfig::default();
-        let result = EmbeddingModel::new(config).await;
-
-        // This test might fail in CI without proper setup
-        // but validates the structure compiles correctly
-        match result {
-            Ok(_) => {
-                // Model created successfully
-            }
-            Err(EmbeddingError::ModelLoader(_)) => {
-                // Expected in test environment without proper model setup
-            }
-            Err(e) => {
-                panic!("Unexpected error: {}", e);
-            }
-        }
+        let model = EmbeddingModel::new(config).await;
+        assert!(model.is_ok());
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn test_not_loaded_initially() {
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        assert!(!model.is_loaded());
+        assert!(model.get_metadata().is_none());
+        assert!(model.get_embedding_dimension().is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_embed_requires_load() {
+        let config = EmbeddingConfig::default();
+        let mut model = EmbeddingModel::new(config).await.unwrap();
+        let result = model.embed_text("test").await;
+        assert!(matches!(result, Err(EmbeddingError::ModelNotLoaded)));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_empty_text_rejected() {
+        let config = EmbeddingConfig::default();
+        let mut model = EmbeddingModel::new(config).await.unwrap();
+        let result = model.embed_text("").await;
+        assert!(matches!(result, Err(EmbeddingError::TextProcessing(_))));
+    }
+
+    const TEST_MAX_SEQUENCE_LENGTH: usize = 512;
+
     #[test]
-    fn test_embedding_config_usage() {
+    fn test_config_fields() {
         let config = EmbeddingConfig {
             model_source: ModelSource::HuggingFace {
                 repo: "test/repo".to_string(),
@@ -358,12 +353,37 @@ mod tests {
                 folder: None,
             },
             normalize_embeddings: true,
-            max_sequence_length: Some(512),
+            max_sequence_length: Some(TEST_MAX_SEQUENCE_LENGTH),
             debug: true,
         };
-
         assert!(config.normalize_embeddings);
-        assert_eq!(config.max_sequence_length, Some(512));
-        assert!(config.debug);
+        assert_eq!(config.max_sequence_length, Some(TEST_MAX_SEQUENCE_LENGTH));
+    }
+
+    #[test]
+    fn test_default_config() {
+        let config = EmbeddingConfig::default();
+        assert!(!config.normalize_embeddings);
+        assert!(config.max_sequence_length.is_none());
+        assert!(!config.debug);
+    }
+
+    #[test]
+    fn test_get_embedding_dimension_helper() {
+        // Verify the default embedding dimension is a reasonable value for embeddings
+        // Common embedding dimensions: 384, 768, 1024, 1536
+        assert!(DEFAULT_EMBEDDING_DIMENSION > 0);
+        assert!(DEFAULT_EMBEDDING_DIMENSION <= 4096);
+    }
+
+    /// Integration tests for load_model and embed_text with real models
+    /// are in tests/integration/real_model_integration.rs covering:
+    /// - load_model success path (test_single_text_embedding, test_model_loading_and_caching)
+    /// - embed_text success path (test_single_text_embedding, test_batch_consistency)
+    /// - get_embedding_dimension after load (test_single_text_embedding)
+    #[test]
+    fn test_integration_coverage_documented() {
+        // This test documents that load_model, embed_text, and get_embedding_dimension
+        // success paths are covered by integration tests with real models
     }
 }

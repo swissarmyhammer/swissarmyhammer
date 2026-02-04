@@ -1,0 +1,18 @@
+[package]
+name = "swissarmyhammer-leader-election"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "File-lock based leader election primitives for multi-process coordination"
+
+[dependencies]
+fs2 = { workspace = true }
+md5 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

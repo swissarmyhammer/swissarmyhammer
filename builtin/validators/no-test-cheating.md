@@ -60,24 +60,5 @@ Examine the file content for these problematic patterns:
 - Legitimate mocking of external dependencies (databases, APIs, file systems)
 - Tests can be deleted entirely if they are no longer relevant or valid
 
-## Response Format
-
-Return JSON in this exact format:
-
-```json
-{
-  "status": "passed",
-  "message": "No test cheating detected"
-}
-```
-
-Or if issues are found:
-
-```json
-{
-  "status": "failed",
-  "message": "Found test integrity issues - Line 42: test.skip without issue reference; Line 87: empty test body"
-}
-```
 
 {% include 'test-remediation' %}

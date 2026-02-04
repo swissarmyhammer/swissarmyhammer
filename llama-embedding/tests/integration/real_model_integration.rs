@@ -18,9 +18,11 @@ use rstest::rstest;
 use serial_test::serial;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 use tempfile::NamedTempFile;
+
+/// Default batch size for file processing tests
+const TEST_FILE_BATCH_SIZE: usize = 32;
 
 /// Test texts covering various scenarios as specified in the issue
 const TEST_TEXTS: &[&str] = &[
@@ -169,7 +171,6 @@ async fn test_batch_processing_various_sizes() {
 
     model.load_model().await.expect("Failed to load model");
 
-    let model_arc = Arc::new(model);
     let batch_sizes = vec![1, 8, 32, 64];
     let test_texts: Vec<String> = TEST_TEXTS
         .iter()
@@ -180,7 +181,7 @@ async fn test_batch_processing_various_sizes() {
     for batch_size in batch_sizes {
         println!("Testing batch size: {}", batch_size);
 
-        let mut processor = BatchProcessor::new(model_arc.clone(), batch_size);
+        let mut processor = BatchProcessor::new(&mut model, batch_size);
         assert_eq!(processor.batch_size(), batch_size);
 
         let start_time = Instant::now();
@@ -230,9 +231,8 @@ async fn test_batch_consistency() {
         .await
         .expect("Failed to generate individual embedding");
 
-    // Generate batch embedding
-    let model_arc = Arc::new(model);
-    let mut processor = BatchProcessor::new(model_arc, 1);
+    // Generate batch embedding using the same model
+    let mut processor = BatchProcessor::new(&mut model, 1);
     let batch_results = processor
         .process_batch(&[test_text.to_string()])
         .await
@@ -261,7 +261,7 @@ async fn test_batch_consistency() {
     println!("  - Cosine similarity: {:.6}", similarity);
 }
 
-/// Test 5: File Processing Tests with different sizes using parallel execution
+/// Test 5: File Processing Tests with different sizes
 #[rstest]
 #[case(16)]
 #[case(32)]
@@ -276,8 +276,6 @@ async fn test_file_processing_different_sizes(#[case] file_size: usize) {
 
     model.load_model().await.expect("Failed to load model");
 
-    let model_arc = Arc::new(model);
-
     println!("Testing file processing with {} texts", file_size);
 
     // Create test file
@@ -285,7 +283,7 @@ async fn test_file_processing_different_sizes(#[case] file_size: usize) {
         .await
         .expect("Failed to create test file");
 
-    let mut processor = BatchProcessor::new(model_arc.clone(), 32);
+    let mut processor = BatchProcessor::new(&mut model, TEST_FILE_BATCH_SIZE);
 
     let start_time = Instant::now();
     let results = processor
@@ -385,7 +383,7 @@ async fn test_md5_hash_consistency() {
 async fn test_error_handling() {
     // Test model not loaded error
     let config = create_qwen_config();
-    let model = EmbeddingModel::new(config.clone())
+    let mut model = EmbeddingModel::new(config.clone())
         .await
         .expect("Failed to create embedding model");
 
@@ -406,8 +404,7 @@ async fn test_error_handling() {
     assert!(empty_result.is_err());
 
     // Test invalid file processing
-    let model_arc = Arc::new(model);
-    let mut processor = BatchProcessor::new(model_arc, 32);
+    let mut processor = BatchProcessor::new(&mut model, TEST_FILE_BATCH_SIZE);
 
     let non_existent_file = Path::new("/tmp/non_existent_file.txt");
     let file_result = processor.process_file(non_existent_file).await;

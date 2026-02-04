@@ -50,10 +50,17 @@ When evaluating code quality validators, focus your analysis on these changed fi
 
 Analyze this hook event against the validator instructions above.
 
-## Response Format
+## Analysis Process
 
-If validation passes, respond with exactly this JSON:
+**Use tools as needed during your analysis.** Many validators specify MCP tools to use (like treesitter_duplicates for code quality checks). Call these tools before making your decision.
 
+After completing your analysis with any required tool calls, provide your final decision.
+
+## Final Response Format
+
+Once you have completed your analysis (including any tool calls), respond with valid JSON ONLY:
+
+**If validation passes:**
 ```json
 {
   "status": "passed",
@@ -61,8 +68,7 @@ If validation passes, respond with exactly this JSON:
 }
 ```
 
-If validation fails, respond with exactly this JSON:
-
+**If validation fails:**
 ```json
 {
   "status": "failed",
@@ -70,4 +76,4 @@ If validation fails, respond with exactly this JSON:
 }
 ```
 
-Respond with valid JSON only - no additional text or markdown outside the JSON.
+Your FINAL message must contain only this JSON - no additional text or markdown.

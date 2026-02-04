@@ -48,14 +48,12 @@ fn test_batch_config_creation() {
     let default_config = BatchConfig::default();
     assert_eq!(default_config.batch_size, 32);
     assert!(default_config.continue_on_error);
-    assert_eq!(default_config.max_parallel_tasks, 4);
     assert!(!default_config.enable_progress_reporting);
 
     // Test custom config
     let custom_config = BatchConfig {
         batch_size: 64,
         continue_on_error: false,
-        max_parallel_tasks: 8,
         enable_progress_reporting: true,
         progress_report_interval_batches: 5,
         memory_limit_mb: Some(100),
@@ -63,7 +61,6 @@ fn test_batch_config_creation() {
     };
     assert_eq!(custom_config.batch_size, 64);
     assert!(!custom_config.continue_on_error);
-    assert_eq!(custom_config.max_parallel_tasks, 8);
     assert!(custom_config.enable_progress_reporting);
 }
 

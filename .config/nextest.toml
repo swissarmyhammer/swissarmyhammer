@@ -10,9 +10,20 @@ status-level = "slow"
 # loads models, so we can't go nuts on concurrency
 max-threads = 4
 
+# llama-embedding uses a global backend that only allows one initialization per process
+# Tests must run serially to avoid "BackendAlreadyInitialized" errors
+[test-groups.llama-embedding-serial]
+max-threads = 1
+
 # Apply the group to acp-conformance package tests
 [[profile.default.overrides]]
 filter = "package(acp-conformance)"
 test-group = "acp-conformance"
 # Also increase timeout for these slower tests
 slow-timeout = "60s"
+
+# Apply serial execution to llama-embedding tests
+[[profile.default.overrides]]
+filter = "package(llama-embedding)"
+test-group = "llama-embedding-serial"
+slow-timeout = "30s"

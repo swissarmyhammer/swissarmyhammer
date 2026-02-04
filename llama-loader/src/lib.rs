@@ -5,6 +5,7 @@
 //! from HuggingFace and local sources.
 
 pub mod detection;
+pub mod download_lock;
 pub mod error;
 pub mod huggingface;
 pub mod loader;
@@ -16,6 +17,7 @@ pub mod types;
 pub use detection::{
     auto_detect_hf_model_file, auto_detect_hf_model_file_with_folder, get_folder_files,
 };
+pub use download_lock::DownloadCoordinator;
 pub use error::ModelError;
 pub use huggingface::{
     load_huggingface_model, load_huggingface_model_with_folder, load_huggingface_model_with_path,

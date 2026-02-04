@@ -46,17 +46,16 @@ fn test_stop_validators_load() {
         "Should have at least one Stop validator"
     );
 
-    // code-duplication is the only code-quality validator that remains a Stop validator
-    // (others were converted to PostToolUse for per-file checking)
-    let validator = loader.get("code-duplication");
+    // session-summary is the Stop validator for session-level review
+    let validator = loader.get("session-summary");
     assert!(
         validator.is_some(),
-        "Stop validator 'code-duplication' should be loaded"
+        "Stop validator 'session-summary' should be loaded"
     );
     assert_eq!(
         validator.unwrap().trigger(),
         HookType::Stop,
-        "Validator 'code-duplication' should have Stop trigger"
+        "Validator 'session-summary' should have Stop trigger"
     );
 }
 
@@ -103,10 +102,10 @@ fn test_stop_validators_match_stop_hook() {
     // Should have Stop validators matching
     let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
 
-    // code-duplication is the only Stop validator now
+    // session-summary is the Stop validator
     assert!(
-        names.contains(&"code-duplication"),
-        "code-duplication should match Stop hook, got: {:?}",
+        names.contains(&"session-summary"),
+        "session-summary should match Stop hook, got: {:?}",
         names
     );
 
@@ -342,10 +341,10 @@ async fn test_stop_validator_passes_with_changed_files_playback() {
     let (agent, notifications) = context.agent().await.expect("Should get agent");
     let runner = ValidatorRunner::new(agent, notifications).expect("Should create runner");
 
-    // Load the code-duplication validator (only remaining Stop validator)
+    // Load the session-summary validator (Stop validator for session review)
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
-    let validator = loader.get("code-duplication").unwrap();
+    let validator = loader.get("session-summary").unwrap();
 
     // Build Stop input
     let input = HookInputBuilder::stop("test-session");
@@ -375,10 +374,10 @@ async fn test_stop_validator_fails_with_duplicated_code_playback() {
     let (agent, notifications) = context.agent().await.expect("Should get agent");
     let runner = ValidatorRunner::new(agent, notifications).expect("Should create runner");
 
-    // Load the code-duplication validator (only remaining Stop validator)
+    // Load the session-summary validator (Stop validator for session review)
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
-    let validator = loader.get("code-duplication").unwrap();
+    let validator = loader.get("session-summary").unwrap();
 
     // Build Stop input
     let input = HookInputBuilder::stop("test-session");
@@ -407,8 +406,8 @@ async fn run_validator_with_changed_files(
 
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
-    // Use code-duplication validator (the only remaining Stop validator)
-    let validator = loader.get("code-duplication").unwrap();
+    // Use session-summary validator (the Stop validator for session review)
+    let validator = loader.get("session-summary").unwrap();
 
     let input = HookInputBuilder::stop("test-session");
     let (result, _) = runner
@@ -624,7 +623,7 @@ fn test_stop_validators_count_matches_validators_not_files() {
     // NOT multiplied by number of changed files
     let validator_count = matching.len();
 
-    // We should have at least 1 Stop validator (code-duplication)
+    // We should have at least 1 Stop validator (session-summary)
     // Most code-quality validators are now PostToolUse
     assert!(
         validator_count >= 1,

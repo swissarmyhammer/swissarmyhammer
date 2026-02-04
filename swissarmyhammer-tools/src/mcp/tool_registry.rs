@@ -1729,6 +1729,11 @@ register_tool_category!(
     web_search,
     "Register all web search-related tools with the registry"
 );
+register_tool_category!(
+    register_treesitter_tools,
+    treesitter,
+    "Register all tree-sitter code analysis tools with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -1750,6 +1755,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_questions_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
+    register_treesitter_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
     register_web_search_tools(&mut registry);
 

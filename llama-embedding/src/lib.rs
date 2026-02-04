@@ -50,7 +50,6 @@
 //!
 //! ```rust,no_run
 //! use llama_embedding::{EmbeddingModel, BatchProcessor, EmbeddingConfig};
-//! use std::sync::Arc;
 //! use std::path::Path;
 //!
 //! #[tokio::main]
@@ -60,7 +59,7 @@
 //!     model.load_model().await?;
 //!
 //!     // Create batch processor
-//!     let mut processor = BatchProcessor::new(Arc::new(model), 32);
+//!     let mut processor = BatchProcessor::new(&mut model, 32);
 //!
 //!     // Process a file containing texts (one per line)
 //!     let results = processor.process_file(Path::new("texts.txt")).await?;
