@@ -99,10 +99,7 @@ fn plan_entry_to_acp_entry(entry: &Value) -> AcpPlanEntry {
     };
 
     // Preserve metadata from the entry
-    let meta = entry
-        .get("_meta")
-        .and_then(|m| m.as_object())
-        .cloned();
+    let meta = entry.get("_meta").and_then(|m| m.as_object()).cloned();
 
     let mut acp_entry = AcpPlanEntry::new(content, priority, status);
     if let Some(m) = meta {
@@ -290,7 +287,10 @@ mod tests {
         let entry_meta = plan.entries[0].meta.as_ref().unwrap();
         assert_eq!(entry_meta.get("id").unwrap(), "task-123");
         assert_eq!(entry_meta.get("column").unwrap(), "todo");
-        assert_eq!(entry_meta.get("notes").unwrap(), "Implementation notes here");
+        assert_eq!(
+            entry_meta.get("notes").unwrap(),
+            "Implementation notes here"
+        );
     }
 
     // Tests for tasks_to_acp_plan (legacy format)

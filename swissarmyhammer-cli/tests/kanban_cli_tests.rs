@@ -131,14 +131,7 @@ async fn test_kanban_column_add() {
     // Add a new column (use unique ID to avoid conflict with defaults)
     let result = executor
         .execute(&[
-            "tool",
-            "kanban",
-            "column",
-            "add",
-            "--id",
-            "testing",
-            "--name",
-            "Testing",
+            "tool", "kanban", "column", "add", "--id", "testing", "--name", "Testing",
         ])
         .await;
 
@@ -164,14 +157,7 @@ async fn test_kanban_column_get() {
         .await;
     executor
         .execute(&[
-            "tool",
-            "kanban",
-            "column",
-            "add",
-            "--id",
-            "testing",
-            "--name",
-            "Testing",
+            "tool", "kanban", "column", "add", "--id", "testing", "--name", "Testing",
         ])
         .await;
 
@@ -202,14 +188,7 @@ async fn test_kanban_column_update() {
         .await;
     executor
         .execute(&[
-            "tool",
-            "kanban",
-            "column",
-            "add",
-            "--id",
-            "testing",
-            "--name",
-            "Testing",
+            "tool", "kanban", "column", "add", "--id", "testing", "--name", "Testing",
         ])
         .await;
 
@@ -249,14 +228,7 @@ async fn test_kanban_column_delete() {
         .await;
     executor
         .execute(&[
-            "tool",
-            "kanban",
-            "column",
-            "add",
-            "--id",
-            "testing",
-            "--name",
-            "Testing",
+            "tool", "kanban", "column", "add", "--id", "testing", "--name", "Testing",
         ])
         .await;
 
@@ -272,7 +244,9 @@ async fn test_kanban_column_delete() {
     );
 
     // Verify column is gone
-    let list_result = executor.execute(&["tool", "kanban", "columns", "list"]).await;
+    let list_result = executor
+        .execute(&["tool", "kanban", "columns", "list"])
+        .await;
     assert!(
         !list_result.stdout.contains("testing"),
         "Deleted column should not appear in list"
@@ -290,7 +264,9 @@ async fn test_kanban_columns_list() {
         .await;
 
     // List columns
-    let result = executor.execute(&["tool", "kanban", "columns", "list"]).await;
+    let result = executor
+        .execute(&["tool", "kanban", "columns", "list"])
+        .await;
 
     assert_eq!(
         result.exit_code, 0,
@@ -447,10 +423,7 @@ async fn test_kanban_task_delete() {
     let get_result = executor
         .execute(&["tool", "kanban", "task", "get", "--id", &task_id])
         .await;
-    assert_ne!(
-        get_result.exit_code, 0,
-        "Should fail - task doesn't exist"
-    );
+    assert_ne!(get_result.exit_code, 0, "Should fail - task doesn't exist");
 }
 
 #[tokio::test]
@@ -470,14 +443,7 @@ async fn test_kanban_task_move() {
     // Move task to done
     let result = executor
         .execute(&[
-            "tool",
-            "kanban",
-            "task",
-            "move",
-            "--id",
-            &task_id,
-            "--column",
-            "done",
+            "tool", "kanban", "task", "move", "--id", &task_id, "--column", "done",
         ])
         .await;
 
@@ -577,14 +543,7 @@ async fn test_kanban_tasks_list_with_column_filter() {
     let task_id = extract_id(&add_result.stdout);
     executor
         .execute(&[
-            "tool",
-            "kanban",
-            "task",
-            "move",
-            "--id",
-            &task_id,
-            "--column",
-            "done",
+            "tool", "kanban", "task", "move", "--id", &task_id, "--column", "done",
         ])
         .await;
     executor

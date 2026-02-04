@@ -250,17 +250,11 @@ fn group_operations_by_noun(operations: &[&dyn Operation]) -> Map<String, Value>
         let noun = op.noun().to_string();
         let op_string = op.op_string();
 
-        groups
-            .entry(noun)
-            .or_default()
-            .push(op_string);
+        groups.entry(noun).or_default().push(op_string);
     }
 
     // Convert to Map<String, Value>
-    groups
-        .into_iter()
-        .map(|(k, v)| (k, json!(v)))
-        .collect()
+    groups.into_iter().map(|(k, v)| (k, json!(v))).collect()
 }
 
 #[cfg(test)]
@@ -298,12 +292,10 @@ mod tests {
 
     struct MockGetTask;
 
-    static MOCK_GET_TASK_PARAMS: &[ParamMeta] = &[
-        ParamMeta::new("id")
-            .description("Task ID")
-            .param_type(ParamType::String)
-            .required(),
-    ];
+    static MOCK_GET_TASK_PARAMS: &[ParamMeta] = &[ParamMeta::new("id")
+        .description("Task ID")
+        .param_type(ParamType::String)
+        .required()];
 
     impl Operation for MockGetTask {
         fn verb(&self) -> &'static str {
@@ -349,9 +341,15 @@ mod tests {
     #[test]
     fn test_param_type_mapping() {
         assert_eq!(param_type_to_json_schema_type(ParamType::String), "string");
-        assert_eq!(param_type_to_json_schema_type(ParamType::Integer), "integer");
+        assert_eq!(
+            param_type_to_json_schema_type(ParamType::Integer),
+            "integer"
+        );
         assert_eq!(param_type_to_json_schema_type(ParamType::Number), "number");
-        assert_eq!(param_type_to_json_schema_type(ParamType::Boolean), "boolean");
+        assert_eq!(
+            param_type_to_json_schema_type(ParamType::Boolean),
+            "boolean"
+        );
         assert_eq!(param_type_to_json_schema_type(ParamType::Array), "array");
     }
 

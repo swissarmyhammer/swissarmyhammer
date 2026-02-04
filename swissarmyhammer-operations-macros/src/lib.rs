@@ -40,11 +40,7 @@ pub fn operation(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Extract field metadata (handle unit structs and named fields)
     let param_metas: Vec<_> = match &input.data {
         syn::Data::Struct(data) => match &data.fields {
-            syn::Fields::Named(fields) => fields
-                .named
-                .iter()
-                .map(generate_param_meta)
-                .collect(),
+            syn::Fields::Named(fields) => fields.named.iter().map(generate_param_meta).collect(),
             syn::Fields::Unit => Vec::new(), // Unit struct has no fields
             syn::Fields::Unnamed(_) => panic!("operation macro does not support tuple structs"),
         },
@@ -124,7 +120,8 @@ impl Parse for OperationArgs {
         Ok(OperationArgs {
             verb: verb.ok_or_else(|| input.error("missing 'verb' attribute"))?,
             noun: noun.ok_or_else(|| input.error("missing 'noun' attribute"))?,
-            description: description.ok_or_else(|| input.error("missing 'description' attribute"))?,
+            description: description
+                .ok_or_else(|| input.error("missing 'description' attribute"))?,
         })
     }
 }

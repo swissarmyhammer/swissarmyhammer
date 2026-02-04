@@ -870,9 +870,18 @@ async fn handle_dynamic_tool_command(
                     Some((verb, verb_matches)) => {
                         // Construct "verb noun" for the op parameter (e.g., "init board")
                         let op_string = format!("{} {}", verb, noun);
-                        match convert_operation_matches_to_arguments(verb_matches, &op_string, &schema) {
+                        match convert_operation_matches_to_arguments(
+                            verb_matches,
+                            &op_string,
+                            &schema,
+                        ) {
                             Ok(args) => args,
-                            Err(e) => return report_error_and_exit(format!("Error processing arguments: {}", e)),
+                            Err(e) => {
+                                return report_error_and_exit(format!(
+                                    "Error processing arguments: {}",
+                                    e
+                                ))
+                            }
                         }
                     }
                     None => {
@@ -965,7 +974,10 @@ fn convert_operation_matches_to_arguments(
     let mut arguments = serde_json::Map::new();
 
     // Set the op parameter
-    arguments.insert("op".to_string(), serde_json::Value::String(op_string.to_string()));
+    arguments.insert(
+        "op".to_string(),
+        serde_json::Value::String(op_string.to_string()),
+    );
 
     // Extract arguments from schema properties (same as schema-based tools)
     if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {

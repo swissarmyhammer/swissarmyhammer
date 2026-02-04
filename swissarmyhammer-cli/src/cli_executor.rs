@@ -109,9 +109,7 @@ impl CliExecutor {
     async fn dispatch_command(&self, matches: &clap::ArgMatches) -> ExecutionResult {
         // Route based on subcommand
         match matches.subcommand() {
-            Some(("tool", tool_matches)) => {
-                self.handle_tool_command(tool_matches).await
-            }
+            Some(("tool", tool_matches)) => self.handle_tool_command(tool_matches).await,
             Some((cmd, _)) => {
                 ExecutionResult::error(format!("Command '{}' not supported in test executor", cmd))
             }
@@ -122,9 +120,7 @@ impl CliExecutor {
     /// Handle tool subcommand
     async fn handle_tool_command(&self, matches: &clap::ArgMatches) -> ExecutionResult {
         match matches.subcommand() {
-            Some((tool_name, tool_matches)) => {
-                self.execute_tool(tool_name, tool_matches).await
-            }
+            Some((tool_name, tool_matches)) => self.execute_tool(tool_name, tool_matches).await,
             None => ExecutionResult::error("No tool specified".to_string()),
         }
     }
@@ -222,7 +218,9 @@ impl CliExecutor {
                     continue; // Already handled
                 }
 
-                if let Some(value) = self.extract_value_from_matches(matches, prop_name, prop_schema) {
+                if let Some(value) =
+                    self.extract_value_from_matches(matches, prop_name, prop_schema)
+                {
                     arguments.insert(prop_name.clone(), value);
                 }
             }
@@ -241,9 +239,7 @@ impl CliExecutor {
         let type_str = schema.get("type").and_then(|t| t.as_str());
 
         match type_str {
-            Some("boolean") => matches
-                .get_flag(name)
-                .then_some(Value::Bool(true)),
+            Some("boolean") => matches.get_flag(name).then_some(Value::Bool(true)),
             Some("integer") => matches
                 .get_one::<i64>(name)
                 .map(|v| Value::Number((*v).into())),
@@ -259,7 +255,9 @@ impl CliExecutor {
                 if values.is_empty() {
                     None
                 } else {
-                    Some(Value::Array(values.into_iter().map(Value::String).collect()))
+                    Some(Value::Array(
+                        values.into_iter().map(Value::String).collect(),
+                    ))
                 }
             }
             _ => matches

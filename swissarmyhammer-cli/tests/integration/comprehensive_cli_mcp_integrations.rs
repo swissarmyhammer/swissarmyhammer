@@ -153,7 +153,8 @@ async fn test_response_formatting() -> Result<()> {
     let (_env, context) = create_test_context_with_git().await?;
 
     // Test successful response formatting with kanban add task
-    let args = create_kanban_add_task_args(&context, "Format Test Task", "Testing response formatting");
+    let args =
+        create_kanban_add_task_args(&context, "Format Test Task", "Testing response formatting");
     let result = context.execute_tool("kanban", args).await?;
 
     let success_response =
@@ -296,7 +297,10 @@ async fn test_mcp_error_boundaries() -> Result<()> {
     let is_error_or_not_found = match result {
         Err(_) => true,
         Ok(response) => {
-            let text = response.content[0].as_text().map(|t| t.text.as_str()).unwrap_or("");
+            let text = response.content[0]
+                .as_text()
+                .map(|t| t.text.as_str())
+                .unwrap_or("");
             text.contains("not found") || text.contains("No task")
         }
     };

@@ -306,7 +306,9 @@ mod tests {
         use crate::dynamic_cli::CliBuilder;
 
         // Use the same code path as the actual CLI
-        let context = CliToolContext::new().await.expect("Failed to create CliToolContext");
+        let context = CliToolContext::new()
+            .await
+            .expect("Failed to create CliToolContext");
         let tool_registry_arc = context.get_tool_registry_arc();
 
         // Create CLI builder and validate all tools
@@ -315,10 +317,8 @@ mod tests {
 
         // If there are validation errors, fail with detailed messages
         if !validation_errors.is_empty() {
-            let error_messages: Vec<String> = validation_errors
-                .iter()
-                .map(|e| e.to_string())
-                .collect();
+            let error_messages: Vec<String> =
+                validation_errors.iter().map(|e| e.to_string()).collect();
             panic!(
                 "Tool validation failed! All registered tools must have valid schemas for CLI generation.\n\
                  Validation errors:\n  - {}",

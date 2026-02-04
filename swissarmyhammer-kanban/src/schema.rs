@@ -80,7 +80,10 @@ fn get_kanban_verb_aliases() -> Map<String, Value> {
 
     aliases.insert("add".to_string(), json!(["create", "insert", "new"]));
     aliases.insert("get".to_string(), json!(["show", "read", "fetch"]));
-    aliases.insert("update".to_string(), json!(["edit", "modify", "set", "patch"]));
+    aliases.insert(
+        "update".to_string(),
+        json!(["edit", "modify", "set", "patch"]),
+    );
     aliases.insert("delete".to_string(), json!(["remove", "rm", "del"]));
     aliases.insert("list".to_string(), json!(["ls", "find", "search", "query"]));
     aliases.insert("move".to_string(), json!(["mv"]));
@@ -155,12 +158,9 @@ mod tests {
         });
         assert!(has_init);
 
-        let has_assign = examples.iter().any(|ex| {
-            ex["description"]
-                .as_str()
-                .unwrap_or("")
-                .contains("Assign")
-        });
+        let has_assign = examples
+            .iter()
+            .any(|ex| ex["description"].as_str().unwrap_or("").contains("Assign"));
         assert!(has_assign);
     }
 
@@ -171,7 +171,9 @@ mod tests {
 
         assert!(schema["x-forgiving-input"]["verb_aliases"].is_object());
 
-        let aliases = schema["x-forgiving-input"]["verb_aliases"].as_object().unwrap();
+        let aliases = schema["x-forgiving-input"]["verb_aliases"]
+            .as_object()
+            .unwrap();
         assert!(aliases.contains_key("add"));
         assert!(aliases.contains_key("complete"));
         assert!(aliases.contains_key("move"));

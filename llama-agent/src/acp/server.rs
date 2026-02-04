@@ -1580,10 +1580,9 @@ impl agent_client_protocol::Agent for AcpServer {
                                 "Kanban tool call '{}', checking for Plan data",
                                 tool_name
                             );
-                            if let Err(e) = self.send_plan_notification_from_result(
-                                &request.session_id,
-                                &result,
-                            ) {
+                            if let Err(e) = self
+                                .send_plan_notification_from_result(&request.session_id, &result)
+                            {
                                 tracing::warn!(
                                     "Failed to send Plan notification after '{}': {}",
                                     tool_name,

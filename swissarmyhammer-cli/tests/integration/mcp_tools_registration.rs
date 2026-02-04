@@ -232,10 +232,7 @@ async fn test_kanban_schema_has_all_operations() {
 
     // Check op enum count
     let op_enum = &kanban_tool.input_schema["properties"]["op"]["enum"];
-    let op_count = op_enum
-        .as_array()
-        .expect("op enum should be array")
-        .len();
+    let op_count = op_enum.as_array().expect("op enum should be array").len();
 
     assert_eq!(
         op_count, 50,
@@ -270,16 +267,12 @@ async fn test_kanban_schema_has_all_operations() {
 
     for expected_op in &expected_ops {
         assert!(
-            op_list
-                .iter()
-                .any(|v| v.as_str() == Some(expected_op)),
+            op_list.iter().any(|v| v.as_str() == Some(expected_op)),
             "Expected operation '{}' not found in schema",
             expected_op
         );
     }
 
     println!("✅ Kanban schema has all 50 operations");
-    println!(
-        "   Including: add subtask, add attachment (newly added operations)"
-    );
+    println!("   Including: add subtask, add attachment (newly added operations)");
 }

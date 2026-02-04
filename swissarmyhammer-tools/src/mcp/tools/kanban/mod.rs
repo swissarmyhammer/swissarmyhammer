@@ -24,7 +24,9 @@ use std::path::PathBuf;
 use swissarmyhammer_kanban::{
     activity::ListActivity,
     actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor},
-    attachment::{AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment},
+    attachment::{
+        AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
+    },
     board::{GetBoard, InitBoard, UpdateBoard},
     column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn},
     comment::{AddComment, DeleteComment, GetComment, ListComments, UpdateComment},
@@ -32,7 +34,10 @@ use swissarmyhammer_kanban::{
     subtask::{AddSubtask, CompleteSubtask, DeleteSubtask, UpdateSubtask},
     swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
     tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
-    task::{AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask, UnassignTask, UntagTask, UpdateTask},
+    task::{
+        AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask,
+        TagTask, UnassignTask, UntagTask, UpdateTask,
+    },
     Execute, KanbanContext, KanbanOperation, KanbanOperationProcessor, Noun, Operation,
     OperationProcessor, Verb,
 };
@@ -223,7 +228,11 @@ fn task_to_plan_entry(task: &Value) -> PlanEntry {
 /// under the `_plan` key.
 ///
 /// Per ACP spec: "Complete plan lists must be resent with each update"
-async fn build_plan_data(ctx: &KanbanContext, trigger: &str, affected_task_id: Option<&str>) -> Option<Value> {
+async fn build_plan_data(
+    ctx: &KanbanContext,
+    trigger: &str,
+    affected_task_id: Option<&str>,
+) -> Option<Value> {
     // Fetch all tasks
     let tasks_result = ListTasks::new().execute(ctx).await.into_result();
     let tasks = match tasks_result {
@@ -315,7 +324,10 @@ impl McpTool for KanbanTool {
         // We need to convert to a slice with 'static lifetime
         // SAFETY: The Lazy is initialized once and lives for 'static
         unsafe {
-            std::mem::transmute::<&[&dyn Operation], &'static [&'static dyn swissarmyhammer_operations::Operation]>(ops)
+            std::mem::transmute::<
+                &[&dyn Operation],
+                &'static [&'static dyn swissarmyhammer_operations::Operation],
+            >(ops)
         }
     }
 
@@ -365,7 +377,9 @@ impl McpTool for KanbanTool {
         // Include plan data in response for task-modifying operations
         // This enables ACP agents to emit Plan notifications
         if should_include_plan {
-            if let Some(plan) = build_plan_data(&ctx, &last_trigger, last_affected_task_id.as_deref()).await {
+            if let Some(plan) =
+                build_plan_data(&ctx, &last_trigger, last_affected_task_id.as_deref()).await
+            {
                 // Wrap in object if needed and add _plan key
                 if let Value::Object(ref mut map) = response {
                     map.insert("_plan".to_string(), plan);
@@ -375,7 +389,10 @@ impl McpTool for KanbanTool {
                         "_plan": plan
                     });
                 }
-                tracing::debug!("Included plan data in kanban response: trigger={}", last_trigger);
+                tracing::debug!(
+                    "Included plan data in kanban response: trigger={}",
+                    last_trigger
+                );
             }
         }
 
@@ -508,7 +525,9 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .get_string("column")
                 .ok_or_else(|| McpError::invalid_params("missing required field: column", None))?;
 
-            processor.process(&MoveTask::to_column(id, column), ctx).await
+            processor
+                .process(&MoveTask::to_column(id, column), ctx)
+                .await
         }
         (Verb::Delete, Noun::Task) => {
             let id = op
@@ -526,19 +545,21 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let assignee = op
-                .get_string("assignee")
-                .ok_or_else(|| McpError::invalid_params("missing required field: assignee", None))?;
+            let assignee = op.get_string("assignee").ok_or_else(|| {
+                McpError::invalid_params("missing required field: assignee", None)
+            })?;
             processor.process(&AssignTask::new(id, assignee), ctx).await
         }
         (Verb::Unassign, Noun::Task) => {
             let id = op
                 .get_string("id")
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let assignee = op
-                .get_string("assignee")
-                .ok_or_else(|| McpError::invalid_params("missing required field: assignee", None))?;
-            processor.process(&UnassignTask::new(id, assignee), ctx).await
+            let assignee = op.get_string("assignee").ok_or_else(|| {
+                McpError::invalid_params("missing required field: assignee", None)
+            })?;
+            processor
+                .process(&UnassignTask::new(id, assignee), ctx)
+                .await
         }
         (Verb::Next, Noun::Task) => {
             let cmd = NextTask::new();
@@ -626,7 +647,10 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .get_string("name")
                 .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
             let actor_type = op.get_string("type").unwrap_or("human");
-            let ensure = op.get_param("ensure").and_then(|v| v.as_bool()).unwrap_or(false);
+            let ensure = op
+                .get_param("ensure")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let mut cmd = if actor_type == "agent" {
                 AddActor::agent(id, name)
@@ -730,29 +754,36 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let author = op
                 .get_string("author")
                 .ok_or_else(|| McpError::invalid_params("missing required field: author", None))?;
-            processor.process(&AddComment::new(task_id, body, author), ctx).await
+            processor
+                .process(&AddComment::new(task_id, body, author), ctx)
+                .await
         }
         (Verb::Get, Noun::Comment) => {
             let task_id = op
                 .get_string("task_id")
                 .or_else(|| op.get_string("id"))
                 .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let comment_id = op
-                .get_string("comment_id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: comment_id", None))?;
-            processor.process(&GetComment::new(task_id, comment_id), ctx).await
+            let comment_id = op.get_string("comment_id").ok_or_else(|| {
+                McpError::invalid_params("missing required field: comment_id", None)
+            })?;
+            processor
+                .process(&GetComment::new(task_id, comment_id), ctx)
+                .await
         }
         (Verb::Update, Noun::Comment) => {
             let task_id = op
                 .get_string("task_id")
                 .or_else(|| op.get_string("id"))
                 .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let comment_id = op
-                .get_string("comment_id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: comment_id", None))?;
+            let comment_id = op.get_string("comment_id").ok_or_else(|| {
+                McpError::invalid_params("missing required field: comment_id", None)
+            })?;
 
             let mut cmd = UpdateComment::new(task_id, comment_id);
-            if let Some(body) = op.get_string("body").or_else(|| op.get_string("description")) {
+            if let Some(body) = op
+                .get_string("body")
+                .or_else(|| op.get_string("description"))
+            {
                 cmd = cmd.with_body(body);
             }
             processor.process(&cmd, ctx).await
@@ -762,10 +793,12 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .get_string("task_id")
                 .or_else(|| op.get_string("id"))
                 .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let comment_id = op
-                .get_string("comment_id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: comment_id", None))?;
-            processor.process(&DeleteComment::new(task_id, comment_id), ctx).await
+            let comment_id = op.get_string("comment_id").ok_or_else(|| {
+                McpError::invalid_params("missing required field: comment_id", None)
+            })?;
+            processor
+                .process(&DeleteComment::new(task_id, comment_id), ctx)
+                .await
         }
         (Verb::List, Noun::Comments) => {
             let task_id = op
@@ -837,7 +870,9 @@ mod tests {
     #[tokio::test]
     async fn test_init_board() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
 
         let mut args = serde_json::Map::new();
@@ -858,7 +893,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
 
         // First init the board
@@ -886,7 +923,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -912,7 +951,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -938,7 +979,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -969,7 +1012,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_tasks() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -997,7 +1042,9 @@ mod tests {
     #[tokio::test]
     async fn test_move_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1007,7 +1054,10 @@ mod tests {
         add_args.insert("title".to_string(), json!("Task to move"));
         let add_result = tool.execute(add_args, &context).await.unwrap();
         let task_id = extract_task_id(&add_result);
-        let original_column = parse_json(&add_result)["position"]["column"].as_str().unwrap().to_string();
+        let original_column = parse_json(&add_result)["position"]["column"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Move to "doing" column
         let mut move_args = serde_json::Map::new();
@@ -1019,14 +1069,19 @@ mod tests {
         let data = parse_json(&result);
 
         // Verify column changed (position.column)
-        assert_ne!(data["position"]["column"].as_str().unwrap(), original_column);
+        assert_ne!(
+            data["position"]["column"].as_str().unwrap(),
+            original_column
+        );
         assert_eq!(data["position"]["column"], "doing");
     }
 
     #[tokio::test]
     async fn test_inferred_operation() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
 
         // Init board first
@@ -1060,7 +1115,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_swimlane() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1079,7 +1136,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_swimlane() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1105,7 +1164,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_swimlanes() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1134,7 +1195,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_swimlane() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1169,7 +1232,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_actor() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1191,7 +1256,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_agent_actor() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1213,7 +1280,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_actor_with_ensure() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1239,7 +1308,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_actor() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1265,7 +1336,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_actors() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1294,7 +1367,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_actor() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1329,7 +1404,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_tag() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1350,7 +1427,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_tag() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1377,7 +1456,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_tags() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1407,7 +1488,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_tag() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1443,7 +1526,9 @@ mod tests {
     #[tokio::test]
     async fn test_tag_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1492,7 +1577,9 @@ mod tests {
     #[tokio::test]
     async fn test_untag_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1552,7 +1639,9 @@ mod tests {
     #[tokio::test]
     async fn test_complete_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1562,7 +1651,10 @@ mod tests {
         task_args.insert("title".to_string(), json!("Task to complete"));
         let result = tool.execute(task_args, &context).await.unwrap();
         let task_id = extract_task_id(&result);
-        let original_column = parse_json(&result)["position"]["column"].as_str().unwrap().to_string();
+        let original_column = parse_json(&result)["position"]["column"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Complete the task
         let mut complete_args = serde_json::Map::new();
@@ -1573,14 +1665,19 @@ mod tests {
         let data = parse_json(&result);
 
         // Verify task moved to the done column (position.column)
-        assert_ne!(data["position"]["column"].as_str().unwrap(), original_column);
+        assert_ne!(
+            data["position"]["column"].as_str().unwrap(),
+            original_column
+        );
         assert_eq!(data["position"]["column"], "done");
     }
 
     #[tokio::test]
     async fn test_complete_task_with_done_alias() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1607,7 +1704,9 @@ mod tests {
     #[tokio::test]
     async fn test_assign_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1639,13 +1738,18 @@ mod tests {
         assert_eq!(data["assigned"], true);
         assert_eq!(data["task_id"], task_id);
         assert_eq!(data["assignee"], "assistant");
-        assert!(data["all_assignees"].as_array().unwrap().contains(&json!("assistant")));
+        assert!(data["all_assignees"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("assistant")));
     }
 
     #[tokio::test]
     async fn test_assign_task_nonexistent_actor() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1673,7 +1777,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_comment() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1702,7 +1808,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_comment() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1738,7 +1846,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_comments() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1776,7 +1886,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_comment() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1822,7 +1934,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_activity() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1852,7 +1966,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_column() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1871,7 +1987,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_column() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1889,7 +2007,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_columns() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1913,7 +2033,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_nonexistent_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1928,7 +2050,9 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_operation() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1942,7 +2066,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_task_missing_title() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -1957,7 +2083,9 @@ mod tests {
     #[tokio::test]
     async fn test_operation_without_board() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         // Don't init board
 
@@ -1976,7 +2104,9 @@ mod tests {
     #[tokio::test]
     async fn test_next_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2007,7 +2137,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_board() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2024,7 +2156,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_board() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2045,7 +2179,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_column() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2065,7 +2201,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_column() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2096,7 +2234,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_swimlane() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2123,7 +2263,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_actor() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2150,7 +2292,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_tag() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2180,7 +2324,9 @@ mod tests {
     #[tokio::test]
     async fn test_update_comment() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2221,7 +2367,9 @@ mod tests {
     #[tokio::test]
     async fn test_move_task_with_position() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2252,7 +2400,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_tasks_with_filter() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2291,14 +2441,19 @@ mod tests {
     #[tokio::test]
     async fn test_task_with_description() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), json!("add task"));
         args.insert("title".to_string(), json!("Task with description"));
-        args.insert("description".to_string(), json!("This is a detailed description"));
+        args.insert(
+            "description".to_string(),
+            json!("This is a detailed description"),
+        );
 
         let result = tool.execute(args, &context).await.unwrap();
         let data = parse_json(&result);
@@ -2310,7 +2465,9 @@ mod tests {
     #[tokio::test]
     async fn test_next_task_empty_board() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2327,7 +2484,9 @@ mod tests {
     #[tokio::test]
     async fn test_tag_nonexistent_tag() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2351,7 +2510,9 @@ mod tests {
     #[tokio::test]
     async fn test_complete_already_done_task() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
@@ -2375,7 +2536,9 @@ mod tests {
     #[tokio::test]
     async fn test_activity_logging_via_mcp() {
         let temp = TempDir::new().unwrap();
-        let context = create_test_context().await.with_working_dir(temp.path().to_path_buf());
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 

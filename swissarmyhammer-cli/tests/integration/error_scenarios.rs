@@ -59,7 +59,14 @@ async fn test_invalid_kanban_operations() -> Result<()> {
 
     // Test completing non-existent task
     let complete_result = run_sah_command_in_process_with_dir(
-        &["tool", "kanban", "task", "complete", "--id", "nonexistent_id"],
+        &[
+            "tool",
+            "kanban",
+            "task",
+            "complete",
+            "--id",
+            "nonexistent_id",
+        ],
         &temp_path,
     )
     .await?;
@@ -102,9 +109,11 @@ async fn test_invalid_command_arguments() -> Result<()> {
     );
 
     // Test invalid flags for kanban tasks list
-    let invalid_flag_result =
-        run_sah_command_in_process_with_dir(&["tool", "kanban", "tasks", "list", "--invalid-flag"], &temp_path)
-            .await?;
+    let invalid_flag_result = run_sah_command_in_process_with_dir(
+        &["tool", "kanban", "tasks", "list", "--invalid-flag"],
+        &temp_path,
+    )
+    .await?;
     assert_eq!(
         invalid_flag_result.exit_code, 2,
         "Invalid flag should return clap usage error code"

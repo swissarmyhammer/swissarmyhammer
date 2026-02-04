@@ -2132,11 +2132,7 @@ mod tests {
         "shell_execute",
         "Execute shell commands with timeout controls"
     );
-    test_tool!(
-        GitStatusTool,
-        "git_status",
-        "Show the working tree status"
-    );
+    test_tool!(GitStatusTool, "git_status", "Show the working tree status");
     test_tool!(
         OutlineGenerateTool,
         "outline_generate",

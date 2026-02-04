@@ -220,7 +220,12 @@ mod tests {
 
     #[test]
     fn test_plan_entry_creation() {
-        let entry = PlanEntry::new("task-1", "Do something", PlanEntryStatus::Pending, PlanEntryPriority::Medium);
+        let entry = PlanEntry::new(
+            "task-1",
+            "Do something",
+            PlanEntryStatus::Pending,
+            PlanEntryPriority::Medium,
+        );
         assert_eq!(entry.id, "task-1");
         assert_eq!(entry.content, "Do something");
         assert_eq!(entry.status, PlanEntryStatus::Pending);
@@ -229,9 +234,14 @@ mod tests {
 
     #[test]
     fn test_plan_entry_with_notes() {
-        let entry = PlanEntry::new("task-1", "Do something", PlanEntryStatus::InProgress, PlanEntryPriority::High)
-            .with_notes("Important task")
-            .with_column("doing");
+        let entry = PlanEntry::new(
+            "task-1",
+            "Do something",
+            PlanEntryStatus::InProgress,
+            PlanEntryPriority::High,
+        )
+        .with_notes("Important task")
+        .with_column("doing");
 
         assert_eq!(entry.notes, Some("Important task".to_string()));
         assert_eq!(entry.column, Some("doing".to_string()));
@@ -240,12 +250,21 @@ mod tests {
     #[test]
     fn test_plan_notification_creation() {
         let entries = vec![
-            PlanEntry::new("task-1", "First task", PlanEntryStatus::Completed, PlanEntryPriority::Low),
-            PlanEntry::new("task-2", "Second task", PlanEntryStatus::Pending, PlanEntryPriority::Medium),
+            PlanEntry::new(
+                "task-1",
+                "First task",
+                PlanEntryStatus::Completed,
+                PlanEntryPriority::Low,
+            ),
+            PlanEntry::new(
+                "task-2",
+                "Second task",
+                PlanEntryStatus::Pending,
+                PlanEntryPriority::Medium,
+            ),
         ];
 
-        let notification = PlanNotification::new(entries, "add task")
-            .with_affected_task("task-2");
+        let notification = PlanNotification::new(entries, "add task").with_affected_task("task-2");
 
         assert_eq!(notification.entries.len(), 2);
         assert_eq!(notification.trigger, "add task");
@@ -258,11 +277,16 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let sender = PlanSender::new(tx);
 
-        let entries = vec![
-            PlanEntry::new("task-1", "Test task", PlanEntryStatus::Pending, PlanEntryPriority::High),
-        ];
+        let entries = vec![PlanEntry::new(
+            "task-1",
+            "Test task",
+            PlanEntryStatus::Pending,
+            PlanEntryPriority::High,
+        )];
 
-        sender.send_plan(entries, "add task", Some("task-1")).unwrap();
+        sender
+            .send_plan(entries, "add task", Some("task-1"))
+            .unwrap();
 
         let notification = rx.recv().await.unwrap();
         assert_eq!(notification.entries.len(), 1);
@@ -283,7 +307,12 @@ mod tests {
 
     #[test]
     fn test_plan_entry_serialization() {
-        let entry = PlanEntry::new("task-1", "Test", PlanEntryStatus::InProgress, PlanEntryPriority::High);
+        let entry = PlanEntry::new(
+            "task-1",
+            "Test",
+            PlanEntryStatus::InProgress,
+            PlanEntryPriority::High,
+        );
         let json = serde_json::to_value(&entry).unwrap();
 
         assert_eq!(json["id"], "task-1");

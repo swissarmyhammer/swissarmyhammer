@@ -10,14 +10,9 @@ use crate::LogEntry;
 /// - Failed: Errors (optionally logged)
 pub enum ExecutionResult<T, E> {
     /// Operation succeeded and should be logged
-    Logged {
-        value: T,
-        log_entry: LogEntry,
-    },
+    Logged { value: T, log_entry: LogEntry },
     /// Operation succeeded but no logging needed (read-only)
-    Unlogged {
-        value: T,
-    },
+    Unlogged { value: T },
     /// Operation failed
     Failed {
         error: E,
@@ -48,10 +43,11 @@ impl<T, E> ExecutionResult<T, E> {
     pub fn should_log(&self) -> bool {
         matches!(
             self,
-            Self::Logged { .. } | Self::Failed {
-                log_entry: Some(_),
-                ..
-            }
+            Self::Logged { .. }
+                | Self::Failed {
+                    log_entry: Some(_),
+                    ..
+                }
         )
     }
 }

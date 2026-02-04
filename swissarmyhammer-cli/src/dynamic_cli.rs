@@ -170,7 +170,6 @@ enum ArgType {
     Array,
 }
 
-
 /// Configuration for building a command with documentation
 struct CommandConfig {
     name: &'static str,
@@ -1484,8 +1483,7 @@ impl CliBuilder {
                     continue;
                 }
                 // Use full tool name as-is (e.g., web_search, treesitter_search)
-                let cli_tool_name =
-                    <dyn McpTool as McpTool>::name(tool).to_string();
+                let cli_tool_name = <dyn McpTool as McpTool>::name(tool).to_string();
                 if let Some(tool_data) = Self::precompute_tool_command(tool) {
                     all_tools.push((cli_tool_name, tool_data));
                 }

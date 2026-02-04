@@ -119,7 +119,8 @@ async fn test_web_search_works_without_git() {
     // Use explicit working directory instead of global directory change
 
     let result =
-        run_sah_command_in_process_with_dir(&["tool", "web_search", "--query", "test"], &temp_dir).await;
+        run_sah_command_in_process_with_dir(&["tool", "web_search", "--query", "test"], &temp_dir)
+            .await;
 
     // Restore original directory
 
