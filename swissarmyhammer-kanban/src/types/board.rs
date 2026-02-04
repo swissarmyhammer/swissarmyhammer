@@ -237,7 +237,11 @@ mod tests {
         }"#;
 
         let result: Result<Board, _> = serde_json::from_str(json_with_old_fields);
-        assert!(result.is_ok(), "Should deserialize old format, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Should deserialize old format, got: {:?}",
+            result
+        );
 
         let board = result.unwrap();
         assert_eq!(board.name, "Test Board");

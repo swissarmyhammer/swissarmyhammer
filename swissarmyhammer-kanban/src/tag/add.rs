@@ -1,12 +1,13 @@
 //! AddTag command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{Tag, TagId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Add a new tag to the board
 #[operation(verb = "add", noun = "tag", description = "Add a new tag to the board")]

@@ -1,15 +1,20 @@
 //! DeleteTag command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::TagId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Delete a tag (removes from all tasks)
-#[operation(verb = "delete", noun = "tag", description = "Delete a tag and remove from all tasks")]
+#[operation(
+    verb = "delete",
+    noun = "tag",
+    description = "Delete a tag and remove from all tasks"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteTag {
     /// The tag ID to delete

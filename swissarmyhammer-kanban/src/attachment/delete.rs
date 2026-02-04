@@ -5,10 +5,16 @@ use crate::error::{KanbanError, Result};
 use crate::types::{AttachmentId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Delete an attachment from a task
-#[operation(verb = "delete", noun = "attachment", description = "Delete an attachment from a task")]
+#[operation(
+    verb = "delete",
+    noun = "attachment",
+    description = "Delete an attachment from a task"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteAttachment {
     /// The task ID
@@ -96,7 +102,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -131,7 +141,11 @@ mod tests {
 
         // Verify the attachment is gone
         use crate::task::GetTask;
-        let task = GetTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         assert_eq!(task["attachments"].as_array().unwrap().len(), 0);
     }
 
@@ -200,7 +214,11 @@ mod tests {
 
         // Verify only one attachment remains
         use crate::task::GetTask;
-        let task = GetTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         assert_eq!(task["attachments"].as_array().unwrap().len(), 1);
         assert_eq!(task["attachments"][0]["name"], "file2.txt");
     }

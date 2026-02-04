@@ -24,7 +24,10 @@ async fn test_tag_file_based_storage() {
         .unwrap();
 
     // Verify tags directory was created
-    assert!(kanban_dir.join("tags").exists(), "Tags directory should be created");
+    assert!(
+        kanban_dir.join("tags").exists(),
+        "Tags directory should be created"
+    );
 
     // Add a tag
     let result = processor
@@ -81,7 +84,10 @@ async fn test_tag_file_based_storage() {
         .unwrap();
 
     // Delete tag - should cascade to tasks and delete file
-    processor.process(&DeleteTag::new("bug"), &ctx).await.unwrap();
+    processor
+        .process(&DeleteTag::new("bug"), &ctx)
+        .await
+        .unwrap();
 
     // Verify tag file was deleted
     assert!(!tag_file.exists(), "Tag file should be deleted");
@@ -120,5 +126,8 @@ async fn test_tag_validation() {
     let result = processor
         .process(&TagTask::new(task_id, "nonexistent"), &ctx)
         .await;
-    assert!(result.is_err(), "Should error when tagging with non-existent tag");
+    assert!(
+        result.is_err(),
+        "Should error when tagging with non-existent tag"
+    );
 }

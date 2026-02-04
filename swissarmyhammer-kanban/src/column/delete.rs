@@ -1,15 +1,20 @@
 //! DeleteColumn command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::ColumnId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Delete a column (fails if it has tasks)
-#[operation(verb = "delete", noun = "column", description = "Delete an empty column")]
+#[operation(
+    verb = "delete",
+    noun = "column",
+    description = "Delete an empty column"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteColumn {
     /// The column ID to delete

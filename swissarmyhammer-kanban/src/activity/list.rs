@@ -1,6 +1,5 @@
 //! ListActivity command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use serde::Deserialize;
@@ -8,7 +7,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List activity log entries
-#[operation(verb = "list", noun = "activity", description = "List activity log entries (most recent first)")]
+#[operation(
+    verb = "list",
+    noun = "activity",
+    description = "List activity log entries (most recent first)"
+)]
 #[derive(Debug, Default, Deserialize)]
 pub struct ListActivity {
     /// Maximum number of entries to return

@@ -1,6 +1,5 @@
 //! GetActor command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::ActorId;
@@ -52,7 +51,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }

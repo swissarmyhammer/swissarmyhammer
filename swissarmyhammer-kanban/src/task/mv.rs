@@ -1,15 +1,20 @@
 //! MoveTask command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{ColumnId, Ordinal, Position, SwimlaneId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Move a task to a new position
-#[operation(verb = "move", noun = "task", description = "Move a task to a different column or position")]
+#[operation(
+    verb = "move",
+    noun = "task",
+    description = "Move a task to a different column or position"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct MoveTask {
     /// The task ID to move
@@ -160,7 +165,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -169,7 +178,11 @@ mod tests {
     async fn test_move_task_to_column() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         let result = MoveTask::to_column(task_id, "done")
@@ -185,10 +198,17 @@ mod tests {
     async fn test_move_task_invalid_column() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        let result = MoveTask::to_column(task_id, "nonexistent").execute(&ctx).await.into_result();
+        let result = MoveTask::to_column(task_id, "nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
 
         assert!(matches!(result, Err(KanbanError::ColumnNotFound { .. })));
     }

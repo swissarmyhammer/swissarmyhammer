@@ -1,15 +1,20 @@
 //! UpdateComment command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::{CommentId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Update a comment
-#[operation(verb = "update", noun = "comment", description = "Update a comment's body")]
+#[operation(
+    verb = "update",
+    noun = "comment",
+    description = "Update a comment's body"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateComment {
     /// The task ID containing the comment

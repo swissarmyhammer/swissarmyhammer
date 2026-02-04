@@ -5,10 +5,16 @@ use crate::error::{KanbanError, Result};
 use crate::types::{AttachmentId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Update attachment metadata (name, mime type, size)
-#[operation(verb = "update", noun = "attachment", description = "Update an attachment's metadata")]
+#[operation(
+    verb = "update",
+    noun = "attachment",
+    description = "Update an attachment's metadata"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateAttachment {
     /// The task ID
@@ -66,12 +72,12 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
         let result: Result<Value> = async {
             let mut task = ctx.read_task(&self.task_id).await?;
 
-            let attachment = task
-                .find_attachment_mut(&self.id)
-                .ok_or_else(|| KanbanError::NotFound {
-                    resource: "attachment".to_string(),
-                    id: self.id.to_string(),
-                })?;
+            let attachment =
+                task.find_attachment_mut(&self.id)
+                    .ok_or_else(|| KanbanError::NotFound {
+                        resource: "attachment".to_string(),
+                        id: self.id.to_string(),
+                    })?;
 
             // Update only provided fields
             if let Some(name) = &self.name {
@@ -136,7 +142,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -196,7 +206,10 @@ mod tests {
             .into_result()
             .unwrap();
 
-        assert_eq!(result["attachment"]["mime_type"], "application/octet-stream");
+        assert_eq!(
+            result["attachment"]["mime_type"],
+            "application/octet-stream"
+        );
         assert_eq!(result["attachment"]["size"], 999);
     }
 

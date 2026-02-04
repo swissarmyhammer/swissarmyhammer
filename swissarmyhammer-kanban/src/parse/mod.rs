@@ -51,7 +51,11 @@ fn parse_single(input: Value) -> Result<Operation> {
 /// Extract verb and noun from the input object
 fn extract_operation(obj: &Map<String, Value>) -> Result<(Verb, Noun, Map<String, Value>)> {
     // Strategy 1: Explicit "op" field with "verb noun" string
-    if let Some(op_value) = obj.get("op").or_else(|| obj.get("operation")).or_else(|| obj.get("action")) {
+    if let Some(op_value) = obj
+        .get("op")
+        .or_else(|| obj.get("operation"))
+        .or_else(|| obj.get("action"))
+    {
         if let Some(op_str) = op_value.as_str() {
             if let Some((verb, noun)) = parse_op_string(op_str) {
                 let params = filter_op_keys(obj);
@@ -108,7 +112,8 @@ fn parse_op_string(s: &str) -> Option<(Verb, Noun)> {
 
 /// Infer operation from the data present
 fn infer_operation(obj: &Map<String, Value>) -> Option<(Verb, Noun)> {
-    let has_id = obj.contains_key("id") || obj.contains_key("task_id") || obj.contains_key("taskId");
+    let has_id =
+        obj.contains_key("id") || obj.contains_key("task_id") || obj.contains_key("taskId");
     let has_title = obj.contains_key("title");
     let has_column = obj.contains_key("column") || obj.contains_key("position");
 
@@ -119,7 +124,14 @@ fn infer_operation(obj: &Map<String, Value>) -> Option<(Verb, Noun)> {
 
     // Has id + column but no other updates → move task
     if has_id && has_column {
-        let update_keys = ["title", "description", "tags", "assignees", "depends_on", "subtasks"];
+        let update_keys = [
+            "title",
+            "description",
+            "tags",
+            "assignees",
+            "depends_on",
+            "subtasks",
+        ];
         if !update_keys.iter().any(|k| obj.contains_key(*k)) {
             return Some((Verb::Move, Noun::Task));
         }
@@ -127,9 +139,9 @@ fn infer_operation(obj: &Map<String, Value>) -> Option<(Verb, Noun)> {
 
     // Has id + other fields → update task
     if has_id {
-        let has_updates = obj.keys().any(|k| {
-            !matches!(k.as_str(), "id" | "task_id" | "taskId")
-        });
+        let has_updates = obj
+            .keys()
+            .any(|k| !matches!(k.as_str(), "id" | "task_id" | "taskId"));
         if has_updates {
             return Some((Verb::Update, Noun::Task));
         }
@@ -156,7 +168,12 @@ fn filter_op_keys(obj: &Map<String, Value>) -> Map<String, Value> {
 /// Filter out verb/noun/action/target/actor/note keys
 fn filter_verb_noun_keys(obj: &Map<String, Value>) -> Map<String, Value> {
     obj.iter()
-        .filter(|(k, _)| !matches!(k.as_str(), "verb" | "noun" | "action" | "target" | "actor" | "note"))
+        .filter(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "verb" | "noun" | "action" | "target" | "actor" | "note"
+            )
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
@@ -164,7 +181,9 @@ fn filter_verb_noun_keys(obj: &Map<String, Value>) -> Map<String, Value> {
 /// Filter out the shorthand key and metadata keys (actor, note)
 fn filter_shorthand_keys(obj: &Map<String, Value>, shorthand_key: &str) -> Map<String, Value> {
     obj.iter()
-        .filter(|(k, _)| !matches!(k.as_str(), k if k == shorthand_key || k == "actor" || k == "note"))
+        .filter(
+            |(k, _)| !matches!(k.as_str(), k if k == shorthand_key || k == "actor" || k == "note"),
+        )
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
@@ -309,7 +328,10 @@ mod tests {
     fn test_parse_with_actor() {
         let input = json!({ "op": "add task", "title": "Test", "actor": "user123" });
         let ops = parse_input(input).unwrap();
-        assert_eq!(ops[0].actor, Some(crate::types::ActorId::from_string("user123")));
+        assert_eq!(
+            ops[0].actor,
+            Some(crate::types::ActorId::from_string("user123"))
+        );
         assert_eq!(ops[0].params.get("title").unwrap(), "Test");
     }
 

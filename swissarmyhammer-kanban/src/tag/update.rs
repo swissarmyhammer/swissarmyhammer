@@ -1,15 +1,20 @@
 //! UpdateTag command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::TagId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Update a tag
-#[operation(verb = "update", noun = "tag", description = "Update a tag's name, color, or description")]
+#[operation(
+    verb = "update",
+    noun = "tag",
+    description = "Update a tag's name, color, or description"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateTag {
     /// The tag ID to update

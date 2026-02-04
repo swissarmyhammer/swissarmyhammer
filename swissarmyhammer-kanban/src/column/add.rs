@@ -1,15 +1,20 @@
 //! AddColumn command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{Column, ColumnId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Add a new column to the board
-#[operation(verb = "add", noun = "column", description = "Add a new column to the board")]
+#[operation(
+    verb = "add",
+    noun = "column",
+    description = "Add a new column to the board"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddColumn {
     /// The column ID (slug)
@@ -109,7 +114,11 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         (temp, ctx)
     }
 
@@ -131,7 +140,10 @@ mod tests {
     async fn test_add_column_duplicate() {
         let (_temp, ctx) = setup().await;
 
-        let result = AddColumn::new("todo", "Duplicate").execute(&ctx).await.into_result();
+        let result = AddColumn::new("todo", "Duplicate")
+            .execute(&ctx)
+            .await
+            .into_result();
         assert!(matches!(result, Err(KanbanError::DuplicateId { .. })));
     }
 }

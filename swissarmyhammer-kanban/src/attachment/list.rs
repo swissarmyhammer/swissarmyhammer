@@ -8,7 +8,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all attachments on a task
-#[operation(verb = "list", noun = "attachments", description = "List all attachments on a task")]
+#[operation(
+    verb = "list",
+    noun = "attachments",
+    description = "List all attachments on a task"
+)]
 #[derive(Debug, Deserialize)]
 pub struct ListAttachments {
     /// The task ID to list attachments for
@@ -62,7 +66,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }

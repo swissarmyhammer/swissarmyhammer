@@ -1,15 +1,20 @@
 //! DeleteComment command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{CommentId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Delete a comment
-#[operation(verb = "delete", noun = "comment", description = "Delete a comment from a task")]
+#[operation(
+    verb = "delete",
+    noun = "comment",
+    description = "Delete a comment from a task"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteComment {
     /// The task ID containing the comment

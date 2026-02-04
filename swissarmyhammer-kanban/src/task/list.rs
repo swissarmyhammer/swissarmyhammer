@@ -1,6 +1,5 @@
 //! ListTasks command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{ActorId, ColumnId, SwimlaneId, TagId};
@@ -9,7 +8,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List tasks with optional filters
-#[operation(verb = "list", noun = "tasks", description = "List tasks with optional filters")]
+#[operation(
+    verb = "list",
+    noun = "tasks",
+    description = "List tasks with optional filters"
+)]
 #[derive(Debug, Default, Deserialize)]
 pub struct ListTasks {
     /// Filter by column
@@ -163,7 +166,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -181,8 +188,16 @@ mod tests {
     async fn test_list_tasks_all() {
         let (_temp, ctx) = setup().await;
 
-        AddTask::new("Task 1").execute(&ctx).await.into_result().unwrap();
-        AddTask::new("Task 2").execute(&ctx).await.into_result().unwrap();
+        AddTask::new("Task 1")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddTask::new("Task 2")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         let result = ListTasks::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["count"], 2);
@@ -192,22 +207,32 @@ mod tests {
     async fn test_list_tasks_by_column() {
         let (_temp, ctx) = setup().await;
 
-        let result1 = AddTask::new("Todo task").execute(&ctx).await.into_result().unwrap();
+        let result1 = AddTask::new("Todo task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let id1 = result1["id"].as_str().unwrap();
-        AddTask::new("Another todo").execute(&ctx).await.into_result().unwrap();
+        AddTask::new("Another todo")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         // Move one to done
         MoveTask::to_column(id1, "done")
             .execute(&ctx)
             .await
-            .into_result().unwrap();
+            .into_result()
+            .unwrap();
 
         // List only todo column
         let result = ListTasks::new()
             .with_column("todo")
             .execute(&ctx)
             .await
-            .into_result().unwrap();
+            .into_result()
+            .unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["title"], "Another todo");
     }
@@ -216,21 +241,27 @@ mod tests {
     async fn test_list_tasks_by_ready() {
         let (_temp, ctx) = setup().await;
 
-        let result1 = AddTask::new("Blocker").execute(&ctx).await.into_result().unwrap();
+        let result1 = AddTask::new("Blocker")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let id1 = result1["id"].as_str().unwrap();
 
         AddTask::new("Blocked")
             .with_depends_on(vec![TaskId::from_string(id1)])
             .execute(&ctx)
             .await
-            .into_result().unwrap();
+            .into_result()
+            .unwrap();
 
         // List only ready tasks
         let result = ListTasks::new()
             .with_ready(true)
             .execute(&ctx)
             .await
-            .into_result().unwrap();
+            .into_result()
+            .unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["title"], "Blocker");
 
@@ -239,7 +270,8 @@ mod tests {
             .with_ready(false)
             .execute(&ctx)
             .await
-            .into_result().unwrap();
+            .into_result()
+            .unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["title"], "Blocked");
     }

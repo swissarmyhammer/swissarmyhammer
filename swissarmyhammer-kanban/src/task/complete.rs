@@ -5,7 +5,9 @@ use crate::error::{KanbanError, Result};
 use crate::types::{Ordinal, Position, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Mark a task as complete by moving it to the done column
 #[operation(
@@ -37,9 +39,11 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
             let board = ctx.read_board().await?;
 
             // Get terminal column (highest order = done)
-            let terminal = board.terminal_column().ok_or_else(|| KanbanError::ColumnNotFound {
-                id: "done".to_string(),
-            })?;
+            let terminal = board
+                .terminal_column()
+                .ok_or_else(|| KanbanError::ColumnNotFound {
+                    id: "done".to_string(),
+                })?;
 
             // Calculate ordinal at end of done column
             let task_ids = ctx.list_task_ids().await?;
@@ -118,7 +122,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -127,14 +135,22 @@ mod tests {
     async fn test_complete_task() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTask::new("Task to complete").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Task to complete")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Task should start in todo column
         assert_eq!(add_result["position"]["column"], "todo");
 
         // Complete the task
-        let result = CompleteTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let result = CompleteTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         // Task should now be in done column
         assert_eq!(result["position"]["column"], "done");
@@ -146,10 +162,18 @@ mod tests {
 
         // Add a swimlane
         use crate::swimlane::AddSwimlane;
-        AddSwimlane::new("feature", "Feature").execute(&ctx).await.into_result().unwrap();
+        AddSwimlane::new("feature", "Feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         // Add a task and move it to the swimlane
-        let add_result = AddTask::new("Task with swimlane").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Task with swimlane")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Move to doing column with swimlane
@@ -157,11 +181,7 @@ mod tests {
         use crate::types::Position;
         MoveTask::new(
             task_id,
-            Position::new(
-                "doing".into(),
-                Some("feature".into()),
-                Ordinal::first(),
-            ),
+            Position::new("doing".into(), Some("feature".into()), Ordinal::first()),
         )
         .execute(&ctx)
         .await
@@ -169,7 +189,11 @@ mod tests {
         .unwrap();
 
         // Complete the task
-        let result = CompleteTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let result = CompleteTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         // Should be in done column but preserve swimlane
         assert_eq!(result["position"]["column"], "done");
@@ -180,7 +204,10 @@ mod tests {
     async fn test_complete_nonexistent_task() {
         let (_temp, ctx) = setup().await;
 
-        let result = CompleteTask::new("nonexistent").execute(&ctx).await.into_result();
+        let result = CompleteTask::new("nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
 
         assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
     }

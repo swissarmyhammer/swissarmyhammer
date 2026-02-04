@@ -5,10 +5,16 @@ use crate::error::{KanbanError, Result};
 use crate::types::{SubtaskId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Remove a subtask from a task
-#[operation(verb = "delete", noun = "subtask", description = "Delete a subtask from a task")]
+#[operation(
+    verb = "delete",
+    noun = "subtask",
+    description = "Delete a subtask from a task"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteSubtask {
     /// The task ID containing the subtask
@@ -35,19 +41,19 @@ impl Execute<KanbanContext, KanbanError> for DeleteSubtask {
 
         let result: Result<Value> = async {
             let mut task = ctx.read_task(&self.task_id).await?;
-            
+
             let original_len = task.subtasks.len();
             task.subtasks.retain(|s| s.id != self.id);
-            
+
             if task.subtasks.len() == original_len {
                 return Err(KanbanError::NotFound {
                     resource: "subtask".to_string(),
                     id: self.id.to_string(),
                 });
             }
-            
+
             ctx.write_task(&task).await?;
-            
+
             Ok(serde_json::json!({
                 "deleted": true,
                 "subtask_id": self.id,
@@ -98,7 +104,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -107,7 +117,11 @@ mod tests {
     async fn test_delete_subtask() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         let add_result = AddSubtask::new(task_id, "Subtask")
@@ -127,7 +141,11 @@ mod tests {
         assert_eq!(result["subtask_id"], subtask_id);
 
         // Verify the subtask is gone
-        let task = GetTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         assert_eq!(task["subtasks"].as_array().unwrap().len(), 0);
     }
 
@@ -135,7 +153,11 @@ mod tests {
     async fn test_delete_subtask_updates_progress() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         // Add 2 subtasks, complete one
@@ -178,7 +200,11 @@ mod tests {
     async fn test_delete_all_subtasks_progress_zero() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         let add_result = AddSubtask::new(task_id, "Subtask")
@@ -202,7 +228,11 @@ mod tests {
     async fn test_delete_nonexistent_subtask() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         let result = DeleteSubtask::new(task_id, "nonexistent")
@@ -217,7 +247,11 @@ mod tests {
     async fn test_delete_from_multiple_subtasks() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         // Add 3 subtasks
@@ -248,9 +282,13 @@ mod tests {
             .unwrap();
 
         // Verify only 2 remain
-        let task = GetTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         assert_eq!(task["subtasks"].as_array().unwrap().len(), 2);
-        
+
         // Verify the right ones remain
         let titles: Vec<&str> = task["subtasks"]
             .as_array()

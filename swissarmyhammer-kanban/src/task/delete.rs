@@ -1,15 +1,20 @@
 //! DeleteTask command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Delete a task
-#[operation(verb = "delete", noun = "task", description = "Delete a task and clean up dependencies")]
+#[operation(
+    verb = "delete",
+    noun = "task",
+    description = "Delete a task and clean up dependencies"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteTask {
     /// The task ID to delete
@@ -102,7 +107,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -118,7 +127,11 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        let result = DeleteTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let result = DeleteTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         assert_eq!(result["deleted"], true);
         assert_eq!(result["title"], "Task to delete");
@@ -133,7 +146,11 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Create first task
-        let result1 = AddTask::new("Task 1").execute(&ctx).await.into_result().unwrap();
+        let result1 = AddTask::new("Task 1")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let id1 = result1["id"].as_str().unwrap();
 
         // Create second task depending on first
@@ -146,7 +163,11 @@ mod tests {
         let id2 = result2["id"].as_str().unwrap();
 
         // Delete first task
-        DeleteTask::new(id1).execute(&ctx).await.into_result().unwrap();
+        DeleteTask::new(id1)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         // Verify second task no longer has the dependency
         let task2 = ctx.read_task(&TaskId::from_string(id2)).await.unwrap();

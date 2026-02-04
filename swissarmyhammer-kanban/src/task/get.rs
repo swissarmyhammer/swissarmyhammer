@@ -1,6 +1,5 @@
 //! GetTask command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::TaskId;
@@ -9,7 +8,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Get a task by ID with computed fields
-#[operation(verb = "get", noun = "task", description = "Retrieve a task by ID with computed fields")]
+#[operation(
+    verb = "get",
+    noun = "task",
+    description = "Retrieve a task by ID with computed fields"
+)]
 #[derive(Debug, Deserialize)]
 pub struct GetTask {
     /// The task ID to retrieve
@@ -74,7 +77,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }

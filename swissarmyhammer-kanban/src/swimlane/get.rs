@@ -1,6 +1,5 @@
 //! GetSwimlane command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::SwimlaneId;
@@ -28,9 +27,12 @@ impl Execute<KanbanContext, KanbanError> for GetSwimlane {
         match async {
             let board = ctx.read_board().await?;
 
-            let swimlane = board.find_swimlane(&self.id).ok_or_else(|| KanbanError::SwimlaneNotFound {
-                id: self.id.to_string(),
-            })?;
+            let swimlane =
+                board
+                    .find_swimlane(&self.id)
+                    .ok_or_else(|| KanbanError::SwimlaneNotFound {
+                        id: self.id.to_string(),
+                    })?;
 
             Ok(serde_json::to_value(swimlane)?)
         }

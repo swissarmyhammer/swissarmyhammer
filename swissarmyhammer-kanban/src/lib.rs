@@ -59,6 +59,7 @@ pub mod attachment;
 pub mod board;
 pub mod column;
 pub mod comment;
+pub mod schema;
 pub mod subtask;
 pub mod swimlane;
 pub mod tag;

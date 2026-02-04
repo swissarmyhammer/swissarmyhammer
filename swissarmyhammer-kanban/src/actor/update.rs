@@ -1,15 +1,20 @@
 //! UpdateActor command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::{Actor, ActorId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Update an actor
-#[operation(verb = "update", noun = "actor", description = "Update an actor's name")]
+#[operation(
+    verb = "update",
+    noun = "actor",
+    description = "Update an actor's name"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateActor {
     /// The actor ID to update
@@ -99,7 +104,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }

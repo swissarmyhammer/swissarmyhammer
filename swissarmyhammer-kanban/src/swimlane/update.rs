@@ -1,15 +1,20 @@
 //! UpdateSwimlane command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::SwimlaneId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Update a swimlane
-#[operation(verb = "update", noun = "swimlane", description = "Update a swimlane's name or order")]
+#[operation(
+    verb = "update",
+    noun = "swimlane",
+    description = "Update a swimlane's name or order"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateSwimlane {
     /// The swimlane ID to update

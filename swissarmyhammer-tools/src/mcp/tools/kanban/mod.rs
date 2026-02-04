@@ -24,10 +24,12 @@ use std::path::PathBuf;
 use swissarmyhammer_kanban::{
     activity::ListActivity,
     actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor},
+    attachment::{AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment},
     board::{GetBoard, InitBoard, UpdateBoard},
     column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn},
     comment::{AddComment, DeleteComment, GetComment, ListComments, UpdateComment},
     parse::parse_input,
+    subtask::{AddSubtask, CompleteSubtask, DeleteSubtask, UpdateSubtask},
     swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
     tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
     task::{AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask, UnassignTask, UntagTask, UpdateTask},
@@ -87,6 +89,17 @@ static LIST_COMMENTS: Lazy<ListComments> = Lazy::new(|| ListComments::new(""));
 
 static LIST_ACTIVITY: Lazy<ListActivity> = Lazy::new(ListActivity::default);
 
+static ADD_SUBTASK: Lazy<AddSubtask> = Lazy::new(|| AddSubtask::new("", ""));
+static COMPLETE_SUBTASK: Lazy<CompleteSubtask> = Lazy::new(|| CompleteSubtask::new("", ""));
+static DELETE_SUBTASK: Lazy<DeleteSubtask> = Lazy::new(|| DeleteSubtask::new("", ""));
+static UPDATE_SUBTASK: Lazy<UpdateSubtask> = Lazy::new(|| UpdateSubtask::new("", ""));
+
+static ADD_ATTACHMENT: Lazy<AddAttachment> = Lazy::new(|| AddAttachment::new("", "", ""));
+static GET_ATTACHMENT: Lazy<GetAttachment> = Lazy::new(|| GetAttachment::new("", ""));
+static UPDATE_ATTACHMENT: Lazy<UpdateAttachment> = Lazy::new(|| UpdateAttachment::new("", ""));
+static DELETE_ATTACHMENT: Lazy<DeleteAttachment> = Lazy::new(|| DeleteAttachment::new("", ""));
+static LIST_ATTACHMENTS: Lazy<ListAttachments> = Lazy::new(|| ListAttachments::new(""));
+
 /// All kanban operations for CLI generation
 static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
@@ -137,6 +150,17 @@ static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*UPDATE_COMMENT as &dyn Operation,
         &*DELETE_COMMENT as &dyn Operation,
         &*LIST_COMMENTS as &dyn Operation,
+        // Subtask operations
+        &*ADD_SUBTASK as &dyn Operation,
+        &*COMPLETE_SUBTASK as &dyn Operation,
+        &*DELETE_SUBTASK as &dyn Operation,
+        &*UPDATE_SUBTASK as &dyn Operation,
+        // Attachment operations
+        &*ADD_ATTACHMENT as &dyn Operation,
+        &*GET_ATTACHMENT as &dyn Operation,
+        &*UPDATE_ATTACHMENT as &dyn Operation,
+        &*DELETE_ATTACHMENT as &dyn Operation,
+        &*LIST_ATTACHMENTS as &dyn Operation,
         // Activity operations
         &*LIST_ACTIVITY as &dyn Operation,
     ]
@@ -281,37 +305,7 @@ impl McpTool for KanbanTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "additionalProperties": true,
-            "description": "Kanban board operations. Accepts verb+noun operations like 'add task', 'move task', 'list tasks', etc.",
-            "properties": {
-                "op": {
-                    "type": "string",
-                    "description": "Operation to perform (e.g., 'add task', 'move task', 'list tasks', 'init board')"
-                },
-                "id": {
-                    "type": "string",
-                    "description": "ID of the task or column to operate on"
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Title for new tasks"
-                },
-                "name": {
-                    "type": "string",
-                    "description": "Name for boards or columns"
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Description for tasks or boards"
-                },
-                "column": {
-                    "type": "string",
-                    "description": "Target column ID for move operations or filtering"
-                }
-            }
-        })
+        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema(&KANBAN_OPERATIONS)
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {

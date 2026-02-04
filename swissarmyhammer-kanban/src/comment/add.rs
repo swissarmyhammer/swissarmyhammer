@@ -1,15 +1,20 @@
 //! AddComment command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, Comment, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Add a comment to a task
-#[operation(verb = "add", noun = "comment", description = "Add a comment to a task")]
+#[operation(
+    verb = "add",
+    noun = "comment",
+    description = "Add a comment to a task"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddComment {
     /// The task ID to comment on

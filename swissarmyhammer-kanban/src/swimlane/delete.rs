@@ -1,15 +1,20 @@
 //! DeleteSwimlane command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::SwimlaneId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Delete a swimlane (fails if it has tasks)
-#[operation(verb = "delete", noun = "swimlane", description = "Delete an empty swimlane")]
+#[operation(
+    verb = "delete",
+    noun = "swimlane",
+    description = "Delete an empty swimlane"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteSwimlane {
     /// The swimlane ID to delete

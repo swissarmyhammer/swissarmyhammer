@@ -5,10 +5,16 @@ use crate::error::{KanbanError, Result};
 use crate::types::{SubtaskId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Mark a subtask as complete (convenience operation)
-#[operation(verb = "complete", noun = "subtask", description = "Mark a subtask as complete")]
+#[operation(
+    verb = "complete",
+    noun = "subtask",
+    description = "Mark a subtask as complete"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CompleteSubtask {
     /// The task ID containing the subtask
@@ -35,7 +41,7 @@ impl Execute<KanbanContext, KanbanError> for CompleteSubtask {
 
         let result: Result<Value> = async {
             let mut task = ctx.read_task(&self.task_id).await?;
-            
+
             let subtask = task
                 .find_subtask_mut(&self.id)
                 .ok_or_else(|| KanbanError::NotFound {
@@ -45,9 +51,9 @@ impl Execute<KanbanContext, KanbanError> for CompleteSubtask {
 
             // Idempotent - if already complete, that's fine
             subtask.completed = true;
-            
+
             ctx.write_task(&task).await?;
-            
+
             Ok(serde_json::json!({
                 "completed": true,
                 "subtask_id": self.id,
@@ -98,7 +104,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -107,7 +117,11 @@ mod tests {
     async fn test_complete_subtask() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         let add_result = AddSubtask::new(task_id, "Subtask")
@@ -133,7 +147,11 @@ mod tests {
     async fn test_complete_subtask_idempotent() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         let add_result = AddSubtask::new(task_id, "Subtask")
@@ -164,7 +182,11 @@ mod tests {
     async fn test_complete_subtask_updates_progress() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         // Add 3 subtasks
@@ -203,7 +225,11 @@ mod tests {
     async fn test_complete_nonexistent_subtask() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         let result = CompleteSubtask::new(task_id, "nonexistent")

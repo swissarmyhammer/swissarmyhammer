@@ -1,14 +1,19 @@
 //! UpdateBoard command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Update board metadata
-#[operation(verb = "update", noun = "board", description = "Update board name or description")]
+#[operation(
+    verb = "update",
+    noun = "board",
+    description = "Update board name or description"
+)]
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct UpdateBoard {
     /// New board name
@@ -95,7 +100,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Original").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Original")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }

@@ -1,6 +1,5 @@
 //! ListActors command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::Actor;
@@ -9,7 +8,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all actors
-#[operation(verb = "list", noun = "actors", description = "List all actors with optional type filter")]
+#[operation(
+    verb = "list",
+    noun = "actors",
+    description = "List all actors with optional type filter"
+)]
 #[derive(Debug, Default, Deserialize)]
 pub struct ListActors {
     /// Filter by actor type (human or agent)
@@ -79,7 +82,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -88,11 +95,7 @@ mod tests {
     async fn test_list_actors_empty() {
         let (_temp, ctx) = setup().await;
 
-        let result = ListActors::new()
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
+        let result = ListActors::new().execute(&ctx).await.into_result().unwrap();
 
         assert_eq!(result["count"], 0);
         assert!(result["actors"].as_array().unwrap().is_empty());
@@ -113,11 +116,7 @@ mod tests {
             .into_result()
             .unwrap();
 
-        let result = ListActors::new()
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
+        let result = ListActors::new().execute(&ctx).await.into_result().unwrap();
 
         assert_eq!(result["count"], 2);
     }

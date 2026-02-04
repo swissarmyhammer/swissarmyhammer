@@ -1,6 +1,5 @@
 //! ListComments command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{Comment, TaskId};
@@ -9,7 +8,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all comments on a task
-#[operation(verb = "list", noun = "comments", description = "List all comments on a task")]
+#[operation(
+    verb = "list",
+    noun = "comments",
+    description = "List all comments on a task"
+)]
 #[derive(Debug, Deserialize)]
 pub struct ListComments {
     /// The task ID to list comments for

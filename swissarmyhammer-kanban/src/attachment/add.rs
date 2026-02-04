@@ -5,10 +5,16 @@ use crate::error::{KanbanError, Result};
 use crate::types::{Attachment, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Add an attachment to an existing task
-#[operation(verb = "add", noun = "attachment", description = "Add an attachment to a task")]
+#[operation(
+    verb = "add",
+    noun = "attachment",
+    description = "Add an attachment to a task"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddAttachment {
     /// The task ID to add the attachment to
@@ -136,7 +142,9 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
             let mut task = ctx.read_task(&self.task_id).await?;
 
             // Auto-detect MIME type if not provided
-            let mime_type = self.mime_type.clone()
+            let mime_type = self
+                .mime_type
+                .clone()
                 .or_else(|| detect_mime_type(&self.path));
 
             // Auto-detect file size if not provided
@@ -201,7 +209,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -231,7 +243,11 @@ mod tests {
 
         // Verify the task has the attachment
         use crate::task::GetTask;
-        let task = GetTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         assert_eq!(task["attachments"].as_array().unwrap().len(), 1);
         assert_eq!(task["attachments"][0]["name"], "screenshot.png");
     }
@@ -295,10 +311,19 @@ mod tests {
     #[test]
     fn test_detect_mime_type() {
         assert_eq!(detect_mime_type("file.png"), Some("image/png".to_string()));
-        assert_eq!(detect_mime_type("doc.pdf"), Some("application/pdf".to_string()));
-        assert_eq!(detect_mime_type("script.js"), Some("application/javascript".to_string()));
+        assert_eq!(
+            detect_mime_type("doc.pdf"),
+            Some("application/pdf".to_string())
+        );
+        assert_eq!(
+            detect_mime_type("script.js"),
+            Some("application/javascript".to_string())
+        );
         assert_eq!(detect_mime_type("code.rs"), Some("text/x-rust".to_string()));
-        assert_eq!(detect_mime_type("README.md"), Some("text/markdown".to_string()));
+        assert_eq!(
+            detect_mime_type("README.md"),
+            Some("text/markdown".to_string())
+        );
         assert_eq!(detect_mime_type("unknown.xyz"), None);
     }
 }

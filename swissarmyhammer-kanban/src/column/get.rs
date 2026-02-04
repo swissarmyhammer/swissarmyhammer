@@ -1,6 +1,5 @@
 //! GetColumn command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::ColumnId;
@@ -28,9 +27,12 @@ impl Execute<KanbanContext, KanbanError> for GetColumn {
         match async {
             let board = ctx.read_board().await?;
 
-            let column = board.find_column(&self.id).ok_or_else(|| KanbanError::ColumnNotFound {
-                id: self.id.to_string(),
-            })?;
+            let column =
+                board
+                    .find_column(&self.id)
+                    .ok_or_else(|| KanbanError::ColumnNotFound {
+                        id: self.id.to_string(),
+                    })?;
 
             Ok(serde_json::to_value(column)?)
         }

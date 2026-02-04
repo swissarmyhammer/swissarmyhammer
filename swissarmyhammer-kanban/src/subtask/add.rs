@@ -5,10 +5,16 @@ use crate::error::{KanbanError, Result};
 use crate::types::{Subtask, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Add a checklist item to an existing task
-#[operation(verb = "add", noun = "subtask", description = "Add a subtask to a task")]
+#[operation(
+    verb = "add",
+    noun = "subtask",
+    description = "Add a subtask to a task"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddSubtask {
     /// The task ID to add the subtask to
@@ -35,12 +41,12 @@ impl Execute<KanbanContext, KanbanError> for AddSubtask {
 
         let result: Result<Value> = async {
             let mut task = ctx.read_task(&self.task_id).await?;
-            
+
             let subtask = Subtask::new(&self.title);
             task.subtasks.push(subtask.clone());
-            
+
             ctx.write_task(&task).await?;
-            
+
             Ok(serde_json::json!({
                 "subtask": subtask,
                 "task_id": task.id
@@ -88,7 +94,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -118,7 +128,11 @@ mod tests {
 
         // Verify the task has the subtask
         use crate::task::GetTask;
-        let task = GetTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         assert_eq!(task["subtasks"].as_array().unwrap().len(), 1);
         assert_eq!(task["subtasks"][0]["title"], "Write tests");
     }
@@ -127,7 +141,11 @@ mod tests {
     async fn test_add_multiple_subtasks() {
         let (_temp, ctx) = setup().await;
 
-        let task_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let task_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
         AddSubtask::new(task_id, "Subtask 1")
@@ -142,7 +160,11 @@ mod tests {
             .unwrap();
 
         use crate::task::GetTask;
-        let task = GetTask::new(task_id).execute(&ctx).await.into_result().unwrap();
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         assert_eq!(task["subtasks"].as_array().unwrap().len(), 2);
     }
 

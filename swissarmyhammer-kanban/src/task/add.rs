@@ -1,15 +1,20 @@
 //! AddTask command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, Ordinal, Position, TagId, Task, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Add a new task to the board
-#[operation(verb = "add", noun = "task", description = "Create a new task on the board")]
+#[operation(
+    verb = "add",
+    noun = "task",
+    description = "Create a new task on the board"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddTask {
     /// The task title (required)
@@ -100,7 +105,9 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
                         if t.position.column == column.id && t.position.swimlane.is_none() {
                             last_ordinal = Some(match last_ordinal {
                                 None => t.position.ordinal.clone(),
-                                Some(ref o) if t.position.ordinal > *o => t.position.ordinal.clone(),
+                                Some(ref o) if t.position.ordinal > *o => {
+                                    t.position.ordinal.clone()
+                                }
                                 Some(o) => o,
                             });
                         }
@@ -178,7 +185,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -200,11 +211,19 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Add first task
-        let result1 = AddTask::new("Task 1").execute(&ctx).await.into_result().unwrap();
+        let result1 = AddTask::new("Task 1")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let ordinal1 = result1["position"]["ordinal"].as_str().unwrap();
 
         // Add second task
-        let result2 = AddTask::new("Task 2").execute(&ctx).await.into_result().unwrap();
+        let result2 = AddTask::new("Task 2")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let ordinal2 = result2["position"]["ordinal"].as_str().unwrap();
 
         // Second should be after first

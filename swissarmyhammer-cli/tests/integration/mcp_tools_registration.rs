@@ -217,3 +217,69 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     );
     println!("   No oneOf/allOf/anyOf constructs found at top level");
 }
+
+/// Test that verifies kanban tool schema has all 50 operations
+#[tokio::test]
+async fn test_kanban_schema_has_all_operations() {
+    let mut registry = ToolRegistry::new();
+    register_kanban_tools(&mut registry);
+
+    let tools = registry.list_tools();
+    let kanban_tool = tools
+        .iter()
+        .find(|t| t.name == "kanban")
+        .expect("kanban tool should be registered");
+
+    // Check op enum count
+    let op_enum = &kanban_tool.input_schema["properties"]["op"]["enum"];
+    let op_count = op_enum
+        .as_array()
+        .expect("op enum should be array")
+        .len();
+
+    assert_eq!(
+        op_count, 50,
+        "Expected 50 operations in op enum, got {}",
+        op_count
+    );
+
+    // Check x-operation-schemas count
+    let op_schemas = &kanban_tool.input_schema["x-operation-schemas"];
+    let op_schemas_count = op_schemas
+        .as_array()
+        .expect("x-operation-schemas should be array")
+        .len();
+
+    assert_eq!(
+        op_schemas_count, 50,
+        "Expected 50 operation schemas, got {}",
+        op_schemas_count
+    );
+
+    // Verify some expected operations are present
+    let op_list = op_enum.as_array().unwrap();
+    let expected_ops = [
+        "init board",
+        "add task",
+        "assign task",
+        "complete task",
+        "add subtask",
+        "add attachment",
+        "list activity",
+    ];
+
+    for expected_op in &expected_ops {
+        assert!(
+            op_list
+                .iter()
+                .any(|v| v.as_str() == Some(expected_op)),
+            "Expected operation '{}' not found in schema",
+            expected_op
+        );
+    }
+
+    println!("✅ Kanban schema has all 50 operations");
+    println!(
+        "   Including: add subtask, add attachment (newly added operations)"
+    );
+}

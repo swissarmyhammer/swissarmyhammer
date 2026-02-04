@@ -1,15 +1,20 @@
 //! UntagTask command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::{TagId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Remove a tag from a task
-#[operation(verb = "untag", noun = "task", description = "Remove a tag from a task")]
+#[operation(
+    verb = "untag",
+    noun = "task",
+    description = "Remove a tag from a task"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UntagTask {
     /// The task ID to untag

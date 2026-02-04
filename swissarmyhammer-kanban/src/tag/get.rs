@@ -1,6 +1,5 @@
 //! GetTag command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::TagId;

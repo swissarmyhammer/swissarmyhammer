@@ -1,6 +1,5 @@
 //! GetComment command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{CommentId, TaskId};
@@ -9,7 +8,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Get a comment by ID
-#[operation(verb = "get", noun = "comment", description = "Get a comment by ID from a task")]
+#[operation(
+    verb = "get",
+    noun = "comment",
+    description = "Get a comment by ID from a task"
+)]
 #[derive(Debug, Deserialize)]
 pub struct GetComment {
     /// The task ID containing the comment

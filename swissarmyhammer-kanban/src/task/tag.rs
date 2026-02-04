@@ -1,12 +1,13 @@
 //! TagTask command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{TagId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Add a tag to a task
 #[operation(verb = "tag", noun = "task", description = "Add a tag to a task")]

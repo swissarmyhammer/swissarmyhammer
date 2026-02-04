@@ -1,12 +1,13 @@
 //! AddActor command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{Actor, ActorId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Actor type for creation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -20,7 +21,11 @@ pub enum ActorType {
 ///
 /// Actors are stored as separate files in `.kanban/actors/`.
 /// Use `ensure: true` for idempotent registration (returns existing actor if found).
-#[operation(verb = "add", noun = "actor", description = "Add a new actor (person or agent)")]
+#[operation(
+    verb = "add",
+    noun = "actor",
+    description = "Add a new actor (person or agent)"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddActor {
     /// The actor ID (slug)
@@ -139,7 +144,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }

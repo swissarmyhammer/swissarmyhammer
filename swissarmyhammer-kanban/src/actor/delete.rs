@@ -1,15 +1,20 @@
 //! DeleteActor command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::ActorId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Delete an actor (removes from all task assignee lists)
-#[operation(verb = "delete", noun = "actor", description = "Delete an actor and remove from all task assignments")]
+#[operation(
+    verb = "delete",
+    noun = "actor",
+    description = "Delete an actor and remove from all task assignments"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteActor {
     /// The actor ID to delete
@@ -93,7 +98,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }

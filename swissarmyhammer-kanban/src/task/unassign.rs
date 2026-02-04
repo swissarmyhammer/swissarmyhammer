@@ -5,7 +5,9 @@ use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Remove an actor from a task's assignee list
 #[operation(
@@ -101,7 +103,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -118,7 +124,11 @@ mod tests {
             .unwrap();
 
         // Create a task
-        let add_result = AddTask::new("Test task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Assign the task
@@ -153,7 +163,11 @@ mod tests {
             .unwrap();
 
         // Create a task
-        let add_result = AddTask::new("Test task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Unassign without ever assigning (idempotent)
@@ -177,10 +191,18 @@ mod tests {
             .await
             .into_result()
             .unwrap();
-        AddActor::human("user", "User").execute(&ctx).await.into_result().unwrap();
+        AddActor::human("user", "User")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         // Create a task
-        let add_result = AddTask::new("Test task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Assign both
@@ -227,7 +249,11 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Create a task
-        let add_result = AddTask::new("Test task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Unassign nonexistent actor - should succeed (idempotent)

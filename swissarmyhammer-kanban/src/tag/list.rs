@@ -1,6 +1,5 @@
 //! ListTags command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use serde::Deserialize;
@@ -8,7 +7,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all tags
-#[operation(verb = "list", noun = "tags", description = "List all tags on the board")]
+#[operation(
+    verb = "list",
+    noun = "tags",
+    description = "List all tags on the board"
+)]
 #[derive(Debug, Default, Deserialize)]
 pub struct ListTags {}
 

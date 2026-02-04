@@ -5,7 +5,9 @@ use crate::error::KanbanError;
 use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Assign an actor to a task
 #[operation(
@@ -109,7 +111,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -126,7 +132,11 @@ mod tests {
             .unwrap();
 
         // Create a task
-        let add_result = AddTask::new("Test task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Assign the task
@@ -157,7 +167,11 @@ mod tests {
             .unwrap();
 
         // Create a task
-        let add_result = AddTask::new("Test task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Assign twice
@@ -186,10 +200,18 @@ mod tests {
             .await
             .into_result()
             .unwrap();
-        AddActor::human("user", "User").execute(&ctx).await.into_result().unwrap();
+        AddActor::human("user", "User")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         // Create a task
-        let add_result = AddTask::new("Test task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Assign both
@@ -231,11 +253,18 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Create a task
-        let add_result = AddTask::new("Test task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         // Try to assign to nonexistent actor
-        let result = AssignTask::new(task_id, "nonexistent").execute(&ctx).await.into_result();
+        let result = AssignTask::new(task_id, "nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
 
         assert!(matches!(result, Err(KanbanError::ActorNotFound { .. })));
     }

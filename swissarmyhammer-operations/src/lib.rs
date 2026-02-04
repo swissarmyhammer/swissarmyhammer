@@ -30,12 +30,14 @@ mod log;
 mod operation;
 mod parameter;
 mod processor;
+pub mod schema;
 
 pub use execution_result::ExecutionResult;
 pub use log::LogEntry;
 pub use operation::{Execute, Operation};
 pub use parameter::{ParamMeta, ParamType};
 pub use processor::OperationProcessor;
+pub use schema::{generate_mcp_schema, SchemaConfig};
 
 // Re-export proc macros
 pub use swissarmyhammer_operations_macros::{operation, param};

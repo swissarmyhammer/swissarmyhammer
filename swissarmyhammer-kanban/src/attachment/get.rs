@@ -8,7 +8,11 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Get a specific attachment from a task
-#[operation(verb = "get", noun = "attachment", description = "Get an attachment from a task")]
+#[operation(
+    verb = "get",
+    noun = "attachment",
+    description = "Get an attachment from a task"
+)]
 #[derive(Debug, Deserialize)]
 pub struct GetAttachment {
     /// The task ID
@@ -33,12 +37,12 @@ impl Execute<KanbanContext, KanbanError> for GetAttachment {
         match async {
             let task = ctx.read_task(&self.task_id).await?;
 
-            let attachment = task
-                .find_attachment(&self.id)
-                .ok_or_else(|| KanbanError::NotFound {
-                    resource: "attachment".to_string(),
-                    id: self.id.to_string(),
-                })?;
+            let attachment =
+                task.find_attachment(&self.id)
+                    .ok_or_else(|| KanbanError::NotFound {
+                        resource: "attachment".to_string(),
+                        id: self.id.to_string(),
+                    })?;
 
             Ok(serde_json::to_value(attachment)?)
         }
@@ -66,7 +70,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }

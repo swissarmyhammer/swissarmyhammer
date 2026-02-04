@@ -1,15 +1,20 @@
 //! AddSwimlane command
 
-
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::{Swimlane, SwimlaneId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Add a new swimlane to the board
-#[operation(verb = "add", noun = "swimlane", description = "Add a new swimlane to the board")]
+#[operation(
+    verb = "add",
+    noun = "swimlane",
+    description = "Add a new swimlane to the board"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddSwimlane {
     /// The swimlane ID (slug)

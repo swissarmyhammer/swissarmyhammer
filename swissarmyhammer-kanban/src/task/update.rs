@@ -1,12 +1,13 @@
 //! UpdateTask command
 
-
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, Attachment, SwimlaneId, Subtask, TagId, TaskId};
+use crate::types::{ActorId, Attachment, Subtask, SwimlaneId, TagId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult, LogEntry, Operation};
+use swissarmyhammer_operations::{
+    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
+};
 
 /// Update an existing task
 #[operation(verb = "update", noun = "task", description = "Update task properties")]
@@ -181,7 +182,11 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
 
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         (temp, ctx)
     }
@@ -190,7 +195,11 @@ mod tests {
     async fn test_update_task_title() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTask::new("Original").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Original")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         let result = UpdateTask::new(task_id)
@@ -207,7 +216,11 @@ mod tests {
     async fn test_update_task_description() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTask::new("Task").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
         let result = UpdateTask::new(task_id)
