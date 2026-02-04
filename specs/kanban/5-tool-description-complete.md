@@ -1,6 +1,6 @@
 # Complete Tool Description
 
-## Status: Incomplete
+## Status: Complete
 
 ## Problem
 
@@ -31,7 +31,6 @@ Expand `description.md` to document all 40+ operations with:
 - Required parameters
 - Optional parameters
 - Example usage
-- Return format
 
 ## Proposed Structure
 
