@@ -45,10 +45,8 @@ impl Execute<KanbanContext, KanbanError> for AddTag {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let mut board = ctx.read_board().await?;
-
-            // Check for duplicate ID
-            if board.tags.iter().any(|t| t.id == self.id) {
+            // Check if tag already exists using file-based storage
+            if ctx.tag_exists(&self.id).await {
                 return Err(KanbanError::duplicate_id("tag", self.id.to_string()));
             }
 
@@ -57,8 +55,8 @@ impl Execute<KanbanContext, KanbanError> for AddTag {
                 tag = tag.with_description(desc);
             }
 
-            board.tags.push(tag.clone());
-            ctx.write_board(&board).await?;
+            // Write tag to file
+            ctx.write_tag(&tag).await?;
 
             Ok(serde_json::to_value(&tag)?)
         }

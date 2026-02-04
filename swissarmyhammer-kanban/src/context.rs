@@ -4,7 +4,7 @@
 //! just data access primitives. Commands do all the work.
 
 use crate::error::{KanbanError, Result};
-use crate::types::{Actor, ActorId, Board, LogEntry, Task, TaskId};
+use crate::types::{Actor, ActorId, Board, LogEntry, Tag, TagId, Task, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -79,6 +79,16 @@ impl KanbanContext {
         self.root.join("actors").join(format!("{}.json", id))
     }
 
+    /// Path to tags directory
+    pub fn tags_dir(&self) -> PathBuf {
+        self.root.join("tags")
+    }
+
+    /// Path to a tag's JSON file
+    pub fn tag_path(&self, id: &TagId) -> PathBuf {
+        self.root.join("tags").join(format!("{}.json", id))
+    }
+
     /// Path to the activity directory
     pub fn activity_dir(&self) -> PathBuf {
         self.root.join("activity")
@@ -107,6 +117,7 @@ impl KanbanContext {
     pub async fn create_directories(&self) -> Result<()> {
         fs::create_dir_all(self.tasks_dir()).await?;
         fs::create_dir_all(self.actors_dir()).await?;
+        fs::create_dir_all(self.tags_dir()).await?;
         fs::create_dir_all(self.activity_dir()).await?;
         Ok(())
     }
@@ -279,6 +290,79 @@ impl KanbanContext {
     /// Check if an actor exists
     pub async fn actor_exists(&self, id: &ActorId) -> bool {
         self.actor_path(id).exists()
+    }
+
+    // =========================================================================
+    // Tag I/O
+    // =========================================================================
+
+    /// Read a tag file
+    pub async fn read_tag(&self, id: &TagId) -> Result<Tag> {
+        let path = self.tag_path(id);
+        if !path.exists() {
+            return Err(KanbanError::TagNotFound { id: id.to_string() });
+        }
+
+        let content = fs::read_to_string(&path).await?;
+        let tag: Tag = serde_json::from_str(&content)?;
+        Ok(tag)
+    }
+
+    /// Write a tag file (atomic write via temp file)
+    pub async fn write_tag(&self, tag: &Tag) -> Result<()> {
+        let path = self.tag_path(&tag.id);
+        let content = serde_json::to_string_pretty(tag)?;
+        atomic_write(&path, content.as_bytes()).await
+    }
+
+    /// Delete a tag file
+    pub async fn delete_tag_file(&self, id: &TagId) -> Result<()> {
+        let tag_path = self.tag_path(id);
+
+        if tag_path.exists() {
+            fs::remove_file(&tag_path).await?;
+        }
+
+        Ok(())
+    }
+
+    /// List all tag IDs by reading the tags directory
+    pub async fn list_tag_ids(&self) -> Result<Vec<TagId>> {
+        let tags_dir = self.tags_dir();
+        if !tags_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids = Vec::new();
+        let mut entries = fs::read_dir(&tags_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(TagId::from_string(stem));
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+
+    /// Read all tags
+    pub async fn read_all_tags(&self) -> Result<Vec<Tag>> {
+        let ids = self.list_tag_ids().await?;
+        let mut tags = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            tags.push(self.read_tag(&id).await?);
+        }
+
+        Ok(tags)
+    }
+
+    /// Check if a tag exists
+    pub async fn tag_exists(&self, id: &TagId) -> bool {
+        self.tag_path(id).exists()
     }
 
     // =========================================================================

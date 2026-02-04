@@ -3,7 +3,6 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::Tag;
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -23,9 +22,7 @@ impl ListTags {
 impl Execute<KanbanContext, KanbanError> for ListTags {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let board = ctx.read_board().await?;
-
-            let tags: Vec<&Tag> = board.tags.iter().collect();
+            let tags = ctx.read_all_tags().await?;
 
             Ok(serde_json::json!({
                 "tags": tags,

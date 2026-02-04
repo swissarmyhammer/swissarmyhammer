@@ -12,10 +12,6 @@ pub struct Board {
     pub columns: Vec<Column>,
     #[serde(default)]
     pub swimlanes: Vec<Swimlane>,
-    #[serde(default)]
-    pub actors: Vec<Actor>,
-    #[serde(default)]
-    pub tags: Vec<Tag>,
 }
 
 impl Board {
@@ -26,8 +22,6 @@ impl Board {
             description: None,
             columns: Self::default_columns(),
             swimlanes: Vec::new(),
-            actors: Vec::new(),
-            tags: Vec::new(),
         }
     }
 
@@ -76,16 +70,6 @@ impl Board {
     /// Find a swimlane by ID
     pub fn find_swimlane(&self, id: &SwimlaneId) -> Option<&Swimlane> {
         self.swimlanes.iter().find(|s| &s.id == id)
-    }
-
-    /// Find an actor by ID
-    pub fn find_actor(&self, id: &ActorId) -> Option<&Actor> {
-        self.actors.iter().find(|a| a.id() == id)
-    }
-
-    /// Find a tag by ID
-    pub fn find_tag(&self, id: &TagId) -> Option<&Tag> {
-        self.tags.iter().find(|t| &t.id == id)
     }
 }
 
@@ -233,5 +217,30 @@ mod tests {
         let parsed: Board = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, board.name);
         assert_eq!(parsed.columns.len(), board.columns.len());
+    }
+
+    #[test]
+    fn test_board_ignores_unknown_fields() {
+        // Test that old board.json with actors/tags fields can still be read
+        let json_with_old_fields = r#"{
+            "name": "Test Board",
+            "columns": [
+                {"id": "todo", "name": "To Do", "order": 0}
+            ],
+            "swimlanes": [],
+            "actors": [
+                {"type": "human", "id": "alice", "name": "Alice"}
+            ],
+            "tags": [
+                {"id": "bug", "name": "Bug", "color": "FF0000"}
+            ]
+        }"#;
+
+        let result: Result<Board, _> = serde_json::from_str(json_with_old_fields);
+        assert!(result.is_ok(), "Should deserialize old format, got: {:?}", result);
+
+        let board = result.unwrap();
+        assert_eq!(board.name, "Test Board");
+        assert_eq!(board.columns.len(), 1);
     }
 }

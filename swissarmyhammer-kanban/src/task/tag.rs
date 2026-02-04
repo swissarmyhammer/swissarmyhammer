@@ -34,9 +34,8 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            // Verify tag exists
-            let board = ctx.read_board().await?;
-            if !board.tags.iter().any(|t| t.id == self.tag) {
+            // Verify tag exists using file-based storage
+            if !ctx.tag_exists(&self.tag).await {
                 return Err(KanbanError::TagNotFound {
                     id: self.tag.to_string(),
                 });

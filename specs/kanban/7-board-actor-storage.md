@@ -1,13 +1,13 @@
-# Board Actor Storage Cleanup
+# Board Actor and Tag Storage Cleanup
 
 ## Status: Partially Fixed
 
 ## Problem
 
-Actors are now stored as separate files in `.kanban/actors/*.json`, but the `Board` struct still has an `actors: Vec<Actor>` field that's no longer used.
+Actors and tags should be stored as separate files in `.kanban/actors/*.json` and `.kanban/tags/*.json`, but the `Board` struct still has `actors: Vec<Actor>` and `tags: Vec<Tag>` fields that should not be used.
 
 This creates confusion and maintenance issues:
-- Board file still serializes empty actors array
+- Board file still serializes empty actors and tags arrays
 - Methods like `board.find_actor()` work on stale data
 - Unclear which is the source of truth
 
@@ -20,26 +20,34 @@ pub struct Board {
     pub description: Option<String>,
     pub columns: Vec<Column>,
     pub swimlanes: Vec<Swimlane>,
-    pub actors: Vec<Actor>,  // <-- STALE, not used
-    pub tags: Vec<Tag>,
+    pub actors: Vec<Actor>,  // <-- STALE, should not be used
+    pub tags: Vec<Tag>,      // <-- STALE, should not be used
 }
 ```
 
-**Actual storage:**
+**Desired storage:**
 ```
 .kanban/
-├── board.json         # Has empty actors array
+├── board.json         # Should have empty actors and tags arrays
 ├── actors/
 │   ├── alice.json     # Actual actor storage
 │   └── assistant.json
+├── tags/
+│   ├── bug.json       # Actual tag storage
+│   └── feature.json
 ```
 
 **Context methods:**
 ```rust
-// These are the new source of truth
+// These are the new source of truth for actors
 ctx.read_actor(&id)
 ctx.list_actor_ids()
 ctx.read_all_actors()
+
+// These should be the source of truth for tags
+ctx.read_tag(&id)
+ctx.list_tag_ids()
+ctx.read_all_tags()
 ```
 
 **Board methods that are now broken:**
@@ -48,12 +56,16 @@ impl Board {
     pub fn find_actor(&self, id: &ActorId) -> Option<&Actor> {
         self.actors.iter().find(|a| a.id() == id)  // Always returns None!
     }
+
+    pub fn find_tag(&self, id: &TagId) -> Option<&Tag> {
+        self.tags.iter().find(|t| t.id() == id)  // Will be stale!
+    }
 }
 ```
 
 ## Required Changes
 
-### 1. Remove actors field from Board
+### 1. Remove actors and tags fields from Board
 
 ```rust
 pub struct Board {
@@ -62,26 +74,27 @@ pub struct Board {
     pub columns: Vec<Column>,
     pub swimlanes: Vec<Swimlane>,
     // pub actors: Vec<Actor>,  // REMOVED
-    pub tags: Vec<Tag>,
+    // pub tags: Vec<Tag>,      // REMOVED
 }
 ```
 
-### 2. Remove Board::find_actor method
+### 2. Remove Board::find_actor and Board::find_tag methods
 
-Since actors aren't in the board anymore, this method is misleading:
+Since actors and tags aren't in the board anymore, these methods are misleading:
 
 ```rust
 impl Board {
     // DELETE THIS:
     // pub fn find_actor(&self, id: &ActorId) -> Option<&Actor>
+    // pub fn find_tag(&self, id: &TagId) -> Option<&Tag>
 }
 ```
 
-Instead, code should use `ctx.read_actor(&id)`.
+Instead, code should use `ctx.read_actor(&id)` and `ctx.read_tag(&id)`.
 
 ### 3. Update Board::new()
 
-Remove actors initialization:
+Remove actors and tags initialization:
 
 ```rust
 impl Board {
@@ -92,71 +105,86 @@ impl Board {
             columns: Self::default_columns(),
             swimlanes: Vec::new(),
             // actors: Vec::new(),  // REMOVED
-            tags: Vec::new(),
+            // tags: Vec::new(),    // REMOVED
         }
     }
 }
 ```
 
-### 4. Check for usages
+### 4. Implement tag storage operations
 
-Search for code that accesses `board.actors` and update to use context methods instead:
+Add context methods for tag storage similar to actor storage:
+
+```rust
+impl BoardContext {
+    pub async fn create_tag(&self, tag: Tag) -> Result<()>
+    pub async fn read_tag(&self, id: &TagId) -> Result<Tag>
+    pub async fn update_tag(&self, tag: &Tag) -> Result<()>
+    pub async fn delete_tag(&self, id: &TagId) -> Result<()>
+    pub async fn list_tag_ids(&self) -> Result<Vec<TagId>>
+    pub async fn read_all_tags(&self) -> Result<Vec<Tag>>
+}
+```
+
+### 5. Check for usages
+
+Search for code that accesses `board.actors` or `board.tags` and update to use context methods instead:
 
 ```bash
-# Find all uses of board.actors
+# Find all uses of board.actors and board.tags
 rg "board\.actors"
+rg "board\.tags"
 
 # Should be replaced with:
 ctx.read_all_actors().await?
+ctx.read_all_tags().await?
 ```
 
 ## Migration Consideration
 
-**Breaking change**: Existing `.kanban/board.json` files have an `actors` array that will be ignored after this change.
+**No migration needed** - The system has not shipped yet, so we can make this breaking change without worrying about backwards compatibility. All boards will start fresh with the new file-based storage for actors and tags.
 
-**Migration path:**
-1. Add a migration command `sah kanban migrate-actors`
-2. Reads `board.json` actors array
-3. Writes each actor to `.kanban/actors/{id}.json`
-4. Removes actors from board.json
+## Why File-Based Storage for Tags?
 
-**OR** simpler: Since actors are still in board.json, just document that they're deprecated and will be ignored. New actor operations use file-based storage, old boards continue to work.
+Moving tags to individual files provides several benefits:
 
-## Same Issue with Tags?
+**Consistency:**
+- ✅ Same pattern as actors - easier to understand
+- ✅ Uniform context API (read_actor, read_tag, etc.)
+- ✅ Consistent storage structure
 
-**Question**: Should tags also be file-based like actors?
-
-Currently tags are stored in `board.json`. Arguments for each approach:
-
-**Tags in board.json (current):**
-- ✅ Fewer files
-- ✅ Tags are board-level metadata
-- ✅ Tags change less frequently than actors
-
-**Tags as separate files:**
-- ✅ Consistent with actors pattern
-- ✅ Better git diffs
+**Version Control:**
+- ✅ Better git diffs - see exact tag changes
 - ✅ Can track tag history separately
+- ✅ Easier to resolve merge conflicts
 
-**Recommendation**: Keep tags in board for now unless there's a strong reason to move them.
+**Flexibility:**
+- ✅ Can add tag-specific metadata without bloating board.json
+- ✅ Tags can be created/updated independently
+- ✅ Better separation of concerns
 
 ## Testing Requirements
 
-- Test board serialization without actors field
-- Test that old boards with actors field can still be read (backwards compat)
-- Test that actor operations work correctly with file-based storage
-- Update any tests that rely on `board.actors`
+- Test board serialization without actors and tags fields
+- Test that old boards with actors and tags fields can still be read (backwards compat)
+- Test that actor and tag operations work correctly with file-based storage
+- Update any tests that rely on `board.actors` or `board.tags`
+- Test CRUD operations for tags using context methods
 
 ## File Changes
 
 1. `swissarmyhammer-kanban/src/types/board.rs`
-   - Remove `actors` field
-   - Remove `find_actor()` method
+   - Remove `actors` and `tags` fields
+   - Remove `find_actor()` and `find_tag()` methods
    - Update tests
 
-2. Search and update any code using `board.actors`
+2. `swissarmyhammer-kanban/src/context.rs`
+   - Implement tag storage methods (create, read, update, delete, list)
+   - Add `.kanban/tags/` directory support
 
-3. Update spec documentation to reflect file-based actor storage
+3. Search and update any code using `board.actors` or `board.tags`
+
+4. Update spec documentation to reflect file-based actor and tag storage
 
 ## Priority
 

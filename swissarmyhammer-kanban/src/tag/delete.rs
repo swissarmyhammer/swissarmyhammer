@@ -29,10 +29,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let mut board = ctx.read_board().await?;
-
-            // Check tag exists
-            if !board.tags.iter().any(|t| t.id == self.id) {
+            // Check tag exists using file-based storage
+            if !ctx.tag_exists(&self.id).await {
                 return Err(KanbanError::TagNotFound {
                     id: self.id.to_string(),
                 });
@@ -48,9 +46,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
                 }
             }
 
-            // Remove from board
-            board.tags.retain(|t| t.id != self.id);
-            ctx.write_board(&board).await?;
+            // Delete tag file
+            ctx.delete_tag_file(&self.id).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,

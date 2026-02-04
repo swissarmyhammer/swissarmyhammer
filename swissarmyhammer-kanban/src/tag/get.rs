@@ -26,17 +26,8 @@ impl GetTag {
 impl Execute<KanbanContext, KanbanError> for GetTag {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let board = ctx.read_board().await?;
-
-            let tag = board
-                .tags
-                .iter()
-                .find(|t| t.id == self.id)
-                .ok_or_else(|| KanbanError::TagNotFound {
-                    id: self.id.to_string(),
-                })?;
-
-            Ok(serde_json::to_value(tag)?)
+            let tag = ctx.read_tag(&self.id).await?;
+            Ok(serde_json::to_value(&tag)?)
         }
         .await
         {

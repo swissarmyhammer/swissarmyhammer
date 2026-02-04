@@ -55,15 +55,8 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
         let input = serde_json::to_value(self).unwrap();
 
         let result: std::result::Result<Value, KanbanError> = async {
-            let mut board = ctx.read_board().await?;
-
-            let tag = board
-                .tags
-                .iter_mut()
-                .find(|t| t.id == self.id)
-                .ok_or_else(|| KanbanError::TagNotFound {
-                    id: self.id.to_string(),
-                })?;
+            // Read tag from file
+            let mut tag = ctx.read_tag(&self.id).await?;
 
             if let Some(name) = &self.name {
                 tag.name = name.clone();
@@ -75,10 +68,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
                 tag.description = Some(description.clone());
             }
 
-            let updated_tag = serde_json::to_value(&*tag)?;
-            ctx.write_board(&board).await?;
+            // Write updated tag back to file
+            ctx.write_tag(&tag).await?;
 
-            Ok(updated_tag)
+            Ok(serde_json::to_value(&tag)?)
         }
         .await;
 
