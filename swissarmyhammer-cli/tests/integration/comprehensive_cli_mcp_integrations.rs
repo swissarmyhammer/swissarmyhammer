@@ -92,7 +92,9 @@ async fn test_mcp_error_propagation() -> Result<()> {
         let error = result.unwrap_err();
         let error_msg = format!("{:?}", error);
         assert!(
-            error_msg.contains("parse") || error_msg.contains("invalid") || error_msg.contains("required"),
+            error_msg.contains("parse")
+                || error_msg.contains("invalid")
+                || error_msg.contains("required"),
             "Error should be about parsing/validation, got: {}",
             error_msg
         );
@@ -249,10 +251,7 @@ async fn test_error_message_formatting() -> Result<()> {
     if result.is_err() {
         let error = result.unwrap_err();
         // Accept parsing errors
-        assert_error_contains_any(
-            &error,
-            &["required", "missing", "op", "parse", "invalid"],
-        );
+        assert_error_contains_any(&error, &["required", "missing", "op", "parse", "invalid"]);
     }
 
     // Test invalid tool name error

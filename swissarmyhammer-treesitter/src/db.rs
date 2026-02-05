@@ -817,7 +817,10 @@ mod tests {
         assert!(content.contains(".treesitter-index.db-wal"));
 
         // Count occurrences - should only have one .treesitter-index.db
-        let db_count = content.lines().filter(|l| l.trim() == ".treesitter-index.db").count();
+        let db_count = content
+            .lines()
+            .filter(|l| l.trim() == ".treesitter-index.db")
+            .count();
         assert_eq!(db_count, 1, "Should not duplicate existing entries");
     }
 }

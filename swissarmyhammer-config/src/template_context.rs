@@ -837,8 +837,8 @@ mod tests {
     use std::env;
     use std::fs;
     use std::sync::Mutex;
-    use swissarmyhammer_common::SwissarmyhammerDirectory;
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
+    use swissarmyhammer_common::SwissarmyhammerDirectory;
     use tempfile::TempDir;
 
     /// Global mutex to serialize environment variable tests

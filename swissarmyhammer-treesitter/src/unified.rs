@@ -317,7 +317,10 @@ impl Workspace {
 
                 // Compute skip set for background task
                 let skip_paths = Self::compute_unchanged_files_static(&workspace_root, &leader_db)?;
-                tracing::debug!("Incremental indexing: skipping {} unchanged files", skip_paths.len());
+                tracing::debug!(
+                    "Incremental indexing: skipping {} unchanged files",
+                    skip_paths.len()
+                );
 
                 // Spawn background indexer (takes ownership of guard)
                 Self::spawn_background_indexer(

@@ -1941,8 +1941,7 @@ mod tests {
     ) -> (tempfile::TempDir, std::path::PathBuf, CurrentDirGuard) {
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
         // Create a .git directory to prevent config discovery from walking up to the real repo
-        std::fs::create_dir(temp_dir.path().join(".git"))
-            .expect("Failed to create .git marker");
+        std::fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
         let guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
@@ -3269,7 +3268,6 @@ quiet: false"#;
             config_content.contains("root:"),
             "Should contain root use case"
         );
-
     }
 
     #[test]
@@ -3307,7 +3305,6 @@ other_section:
             updated_config.contains("root:"),
             "Should contain root use case"
         );
-
     }
 
     #[test]
@@ -3347,7 +3344,6 @@ agents:
             !updated_config.contains("qwen-coder"),
             "Should replace old agent config"
         );
-
     }
 
     #[test]

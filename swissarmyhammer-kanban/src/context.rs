@@ -634,10 +634,7 @@ mod tests {
 
         // Remove one subdirectory
         std::fs::remove_dir_all(ctx.actors_dir()).unwrap();
-        assert!(
-            !ctx.directories_exist(),
-            "Should detect missing actors dir"
-        );
+        assert!(!ctx.directories_exist(), "Should detect missing actors dir");
     }
 
     #[tokio::test]

@@ -158,7 +158,8 @@ impl ConfigFileHelper {
         let _ = fs::create_dir(project_root.join(".git"));
         // Directory might already exist, that's fine
 
-        let dir_guard = CurrentDirGuard::new(&project_root).expect("Failed to change to project dir");
+        let dir_guard =
+            CurrentDirGuard::new(&project_root).expect("Failed to change to project dir");
         Self {
             project_root,
             _dir_guard: dir_guard,
