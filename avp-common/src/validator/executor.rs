@@ -688,12 +688,18 @@ impl<'a> RuleSetSessionContext<'a> {
 
         let mut template_context = TemplateContext::new();
 
-        // RuleSet information
-        template_context.set("ruleset_name".to_string(), self.ruleset.name().to_string().into());
+        // Required by the .system/validator template
         template_context.set(
-            "ruleset_description".to_string(),
+            "validator_content".to_string(),
             self.ruleset.description().to_string().into(),
         );
+        template_context.set(
+            "validator_name".to_string(),
+            self.ruleset.name().to_string().into(),
+        );
+
+        // RuleSet-specific fields
+        template_context.set("ruleset_name".to_string(), self.ruleset.name().to_string().into());
         template_context.set(
             "rule_count".to_string(),
             self.ruleset.rules.len().to_string().into(),

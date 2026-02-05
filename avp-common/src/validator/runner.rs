@@ -609,11 +609,18 @@ impl ValidatorRunner {
                         if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
                             if let Ok(content) = std::fs::read_to_string(&path) {
                                 if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                                    // Strip .liquid suffix if present (e.g. "test-remediation.liquid" -> "test-remediation")
+                                    let base_name = name.strip_suffix(".liquid").unwrap_or(name);
+
                                     // Register with RuleSet-scoped name
-                                    let scoped_name = format!("{}/_partials/{}", ruleset.name(), name);
+                                    let scoped_name = format!("{}/_partials/{}", ruleset.name(), base_name);
                                     partials.add(&scoped_name, &content);
-                                    // Also register with just the name for easy reference
-                                    partials.add(name, &content);
+                                    // Also register with just the base name for easy reference
+                                    partials.add(base_name, &content);
+                                    // And the full name with .liquid for explicit references
+                                    if base_name != name {
+                                        partials.add(name, &content);
+                                    }
                                     tracing::debug!(
                                         "Loaded partial '{}' from RuleSet '{}' _partials/",
                                         name,
