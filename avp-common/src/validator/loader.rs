@@ -95,17 +95,17 @@ impl ValidatorLoader {
     /// Later sources override earlier ones with the same name.
     /// Call `load_builtins()` before this if you want builtin validators.
     pub fn load_from_context(&mut self, context: &AvpContext) -> Result<(), AvpError> {
-        // Load from user directory first (lower precedence)
+        // Load RuleSets from user directory first (lower precedence)
         if let Some(home_dir) = context.home_validators_dir() {
             if home_dir.exists() {
-                self.load_directory(&home_dir, ValidatorSource::User)?;
+                self.load_rulesets_directory(&home_dir, ValidatorSource::User)?;
             }
         }
 
-        // Load from project directory (higher precedence, overrides user)
+        // Load RuleSets from project directory (higher precedence, overrides user)
         let project_dir = context.project_validators_dir();
         if project_dir.exists() {
-            self.load_directory(&project_dir, ValidatorSource::Project)?;
+            self.load_rulesets_directory(&project_dir, ValidatorSource::Project)?;
         }
 
         Ok(())
@@ -123,15 +123,20 @@ impl ValidatorLoader {
     /// Note: Prefer `load_from_context()` when an AvpContext is available.
     /// Note: Call `load_includes()` before this to enable `@` reference expansion.
     pub fn load_all(&mut self) -> Result<(), AvpError> {
-        let mut vfs = VirtualFileSystem::<AvpConfig>::new("validators");
-
-        if let Err(e) = vfs.load_all() {
-            tracing::warn!("Failed to load validators from some directories: {}", e);
+        // Load RuleSets from user directory (~/<AVP_DIR>/validators)
+        if let Ok(dir) = ManagedDirectory::<AvpConfig>::from_user_home() {
+            let validators_dir = dir.subdir("validators");
+            if validators_dir.exists() {
+                self.load_rulesets_directory(&validators_dir, ValidatorSource::User)?;
+            }
         }
 
-        for file_entry in vfs.list() {
-            let source = Self::map_file_source(&file_entry.source);
-            self.parse_and_insert_validator(&file_entry.content, &file_entry.path, source);
+        // Load RuleSets from project directory (./<AVP_DIR>/validators)
+        if let Ok(dir) = ManagedDirectory::<AvpConfig>::from_git_root() {
+            let validators_dir = dir.subdir("validators");
+            if validators_dir.exists() {
+                self.load_rulesets_directory(&validators_dir, ValidatorSource::Project)?;
+            }
         }
 
         Ok(())
