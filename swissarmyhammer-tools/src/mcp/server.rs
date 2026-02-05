@@ -21,8 +21,9 @@ use tokio::sync::{Mutex, RwLock};
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_cel_tools, register_file_tools, register_flow_tools, register_git_tools,
-    register_questions_tools, register_shell_tools, register_todo_tools, register_treesitter_tools,
-    register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
+    register_kanban_tools, register_questions_tools, register_shell_tools,
+    register_treesitter_tools, register_web_fetch_tools, register_web_search_tools, ToolContext,
+    ToolRegistry,
 };
 
 /// Server instructions displayed to MCP clients
@@ -402,9 +403,9 @@ impl McpServer {
         register_file_tools(tool_registry).await;
         register_flow_tools(tool_registry);
         register_git_tools(tool_registry);
+        register_kanban_tools(tool_registry);
         register_questions_tools(tool_registry);
         register_shell_tools(tool_registry);
-        register_todo_tools(tool_registry);
         register_treesitter_tools(tool_registry);
         register_web_fetch_tools(tool_registry);
         register_web_search_tools(tool_registry);
@@ -499,6 +500,17 @@ impl McpServer {
     /// * `Vec<rmcp::model::Tool>` - List of all registered tools
     pub async fn list_tools(&self) -> Vec<rmcp::model::Tool> {
         self.tool_registry.read().await.list_tools()
+    }
+
+    /// Get the tool registry for direct access.
+    ///
+    /// This provides shared access to the tool registry for CLI and other consumers.
+    ///
+    /// # Returns
+    ///
+    /// * `Arc<RwLock<ToolRegistry>>` - Shared reference to the tool registry
+    pub fn get_tool_registry(&self) -> Arc<RwLock<ToolRegistry>> {
+        self.tool_registry.clone()
     }
 
     /// Get a tool by name for execution.

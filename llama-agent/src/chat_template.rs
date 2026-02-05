@@ -1496,8 +1496,6 @@ mod qwen3coder_model_integration {
             transcript_path: None,
             context_state: None,
 
-            todos: Vec::new(),
-
             available_commands: Vec::new(),
             current_mode: None,
 
@@ -2103,8 +2101,6 @@ mod qwen3coder_integration_tests {
             compaction_history: Vec::new(),
             transcript_path: None,
             context_state: None,
-
-            todos: Vec::new(),
 
             available_commands: Vec::new(),
             current_mode: None,
@@ -4561,8 +4557,6 @@ mod tests {
             compaction_history: Vec::new(),
             transcript_path: None,
             context_state: None,
-
-            todos: Vec::new(),
 
             available_commands: Vec::new(),
             current_mode: None,
@@ -7331,8 +7325,6 @@ mod template_only_tests {
             compaction_history: Vec::new(),
             transcript_path: None,
             context_state: None,
-
-            todos: Vec::new(),
 
             available_commands: Vec::new(),
             current_mode: None,

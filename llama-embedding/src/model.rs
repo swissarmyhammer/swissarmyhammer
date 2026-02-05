@@ -372,8 +372,8 @@ mod tests {
     fn test_get_embedding_dimension_helper() {
         // Verify the default embedding dimension is a reasonable value for embeddings
         // Common embedding dimensions: 384, 768, 1024, 1536
-        assert!(DEFAULT_EMBEDDING_DIMENSION > 0);
-        assert!(DEFAULT_EMBEDDING_DIMENSION <= 4096);
+        const { assert!(DEFAULT_EMBEDDING_DIMENSION > 0) };
+        const { assert!(DEFAULT_EMBEDDING_DIMENSION <= 4096) };
     }
 
     /// Integration tests for load_model and embed_text with real models

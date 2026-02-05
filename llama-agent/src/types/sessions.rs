@@ -242,23 +242,16 @@ pub struct Session {
     /// None indicates no context state is being tracked (full processing mode).
     pub context_state: Option<ContextState>,
 
-    /// Todo items associated with this session
+    /// Kanban tasks associated with this session
     ///
     /// Tracks tasks and plan entries for this session. Used by the ACP server to send
     /// Plan notifications to clients showing the agent's execution plan.
     ///
     /// # ACP Integration
     ///
-    /// When ACP feature is enabled, these todos are automatically converted to ACP Plan
+    /// When ACP feature is enabled, these tasks are automatically converted to ACP Plan
     /// format and sent to clients via SessionNotification::Plan updates. The conversion
-    /// is handled by the `llama_agent::acp::plan::todos_to_acp_plan` function.
-    ///
-    /// # Todo Management
-    ///
-    /// - Todos are created when the agent calls `mcp__swissarmyhammer__todo_create`
-    /// - Todos are marked complete when `mcp__swissarmyhammer__todo_mark_complete` is called
-    /// - The list is maintained per-session to isolate task tracking between different conversations
-    pub todos: Vec<swissarmyhammer_todo::TodoItem>,
+    /// is handled by the `llama_agent::acp::plan::tasks_to_acp_plan` function.
     /// Available commands that can be invoked during this session
     ///
     /// Tracks slash commands that are available to the user in this session.

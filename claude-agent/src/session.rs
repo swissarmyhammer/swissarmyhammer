@@ -188,8 +188,6 @@ pub struct Session {
     pub turn_token_count: u64,
     /// Current session mode identifier for ACP current mode updates
     pub current_mode: Option<String>,
-    /// Todo items associated with this session
-    pub todos: Vec<String>,
 }
 
 impl Session {
@@ -224,7 +222,6 @@ impl Session {
             turn_request_count: 0,
             turn_token_count: 0,
             current_mode: None,
-            todos: Vec::new(),
         }
     }
 
@@ -300,23 +297,6 @@ impl Session {
     /// Get the current turn token count
     pub fn get_turn_token_count(&self) -> u64 {
         self.turn_token_count
-    }
-
-    /// Add a todo item ID to the session
-    pub fn add_todo(&mut self, todo_id: String) {
-        self.todos.push(todo_id);
-        self.last_accessed = SystemTime::now();
-    }
-
-    /// Remove a todo item ID from the session (when completed)
-    pub fn remove_todo(&mut self, todo_id: &str) {
-        self.todos.retain(|id| id != todo_id);
-        self.last_accessed = SystemTime::now();
-    }
-
-    /// Get all todo item IDs for this session
-    pub fn get_todos(&self) -> &[String] {
-        &self.todos
     }
 }
 
@@ -753,28 +733,6 @@ impl SessionManager {
             );
             Ok(false)
         }
-    }
-
-    /// Add a todo item ID to a session
-    pub fn add_todo_to_session(
-        &self,
-        session_id: &SessionId,
-        todo_id: String,
-    ) -> crate::Result<()> {
-        self.update_session(session_id, |session| {
-            session.add_todo(todo_id);
-        })
-    }
-
-    /// Remove a todo item ID from a session
-    pub fn remove_todo_from_session(
-        &self,
-        session_id: &SessionId,
-        todo_id: &str,
-    ) -> crate::Result<()> {
-        self.update_session(session_id, |session| {
-            session.remove_todo(todo_id);
-        })
     }
 
     /// Start the cleanup task that removes expired sessions
@@ -1613,103 +1571,5 @@ mod tests {
         .meta(meta_map)];
 
         assert!(session.has_available_commands_changed(&updated_commands));
-    }
-
-    #[test]
-    fn test_session_add_todo() {
-        let session_id = SessionId::new();
-        let cwd = std::env::current_dir().unwrap();
-        let mut session = Session::new(session_id, cwd);
-
-        assert_eq!(session.get_todos().len(), 0);
-
-        session.add_todo("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string());
-        assert_eq!(session.get_todos().len(), 1);
-        assert_eq!(session.get_todos()[0], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
-
-        session.add_todo("01BRZ3NDEKTSV4RRFFQ69G5FAV".to_string());
-        assert_eq!(session.get_todos().len(), 2);
-    }
-
-    #[test]
-    fn test_session_remove_todo() {
-        let session_id = SessionId::new();
-        let cwd = std::env::current_dir().unwrap();
-        let mut session = Session::new(session_id, cwd);
-
-        session.add_todo("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string());
-        session.add_todo("01BRZ3NDEKTSV4RRFFQ69G5FAV".to_string());
-        assert_eq!(session.get_todos().len(), 2);
-
-        session.remove_todo("01ARZ3NDEKTSV4RRFFQ69G5FAV");
-        assert_eq!(session.get_todos().len(), 1);
-        assert_eq!(session.get_todos()[0], "01BRZ3NDEKTSV4RRFFQ69G5FAV");
-
-        session.remove_todo("01BRZ3NDEKTSV4RRFFQ69G5FAV");
-        assert_eq!(session.get_todos().len(), 0);
-    }
-
-    #[test]
-    fn test_session_manager_add_todo() {
-        let manager = SessionManager::new();
-        let cwd = std::env::current_dir().unwrap();
-        let session_id = manager.create_session(cwd, None).unwrap();
-
-        manager
-            .add_todo_to_session(&session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string())
-            .unwrap();
-
-        let session = manager.get_session(&session_id).unwrap().unwrap();
-        assert_eq!(session.get_todos().len(), 1);
-        assert_eq!(session.get_todos()[0], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
-    }
-
-    #[test]
-    fn test_session_manager_remove_todo() {
-        let manager = SessionManager::new();
-        let cwd = std::env::current_dir().unwrap();
-        let session_id = manager.create_session(cwd, None).unwrap();
-
-        manager
-            .add_todo_to_session(&session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string())
-            .unwrap();
-        manager
-            .add_todo_to_session(&session_id, "01BRZ3NDEKTSV4RRFFQ69G5FAV".to_string())
-            .unwrap();
-
-        let session = manager.get_session(&session_id).unwrap().unwrap();
-        assert_eq!(session.get_todos().len(), 2);
-
-        manager
-            .remove_todo_from_session(&session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
-            .unwrap();
-
-        let session = manager.get_session(&session_id).unwrap().unwrap();
-        assert_eq!(session.get_todos().len(), 1);
-        assert_eq!(session.get_todos()[0], "01BRZ3NDEKTSV4RRFFQ69G5FAV");
-    }
-
-    #[test]
-    fn test_session_todos_persist_to_disk() {
-        use tempfile::tempdir;
-
-        let temp_dir = tempdir().unwrap();
-        let storage_path = temp_dir.path().join("sessions");
-
-        let manager = SessionManager::new().with_storage_path(Some(storage_path.clone()));
-        let cwd = std::env::current_dir().unwrap();
-        let session_id = manager.create_session(cwd, None).unwrap();
-
-        manager
-            .add_todo_to_session(&session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string())
-            .unwrap();
-
-        // Create a new manager with the same storage path
-        let manager2 = SessionManager::new().with_storage_path(Some(storage_path));
-
-        // Load the session from disk
-        let session = manager2.get_session(&session_id).unwrap().unwrap();
-        assert_eq!(session.get_todos().len(), 1);
-        assert_eq!(session.get_todos()[0], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
     }
 }

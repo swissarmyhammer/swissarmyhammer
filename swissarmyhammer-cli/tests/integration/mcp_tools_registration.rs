@@ -4,7 +4,7 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_cel_tools, register_file_tools, register_shell_tools, register_todo_tools,
+    register_cel_tools, register_file_tools, register_kanban_tools, register_shell_tools,
     register_web_fetch_tools, register_web_search_tools,
 };
 
@@ -17,19 +17,19 @@ async fn test_mcp_tools_are_registered() {
     register_cel_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
-    register_todo_tools(&mut registry);
+    register_kanban_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
     register_web_search_tools(&mut registry);
 
     let tool_count = registry.len();
     println!("📊 Registered {} MCP tools", tool_count);
 
-    // We should have a significant number of tools. The threshold of 13 is based on the
-    // minimum set of core tools across all categories (files, shell, todos, web, etc.).
+    // We should have a significant number of tools. The threshold of 10 is based on the
+    // minimum set of core tools across all categories (files, shell, kanban, web, etc.).
     // This acts as a smoke test to catch missing tool registrations.
     assert!(
-        tool_count >= 13,
-        "Expected at least 13 tools, got {}. This suggests tools are not being registered properly.",
+        tool_count >= 10,
+        "Expected at least 10 tools, got {}. This suggests tools are not being registered properly.",
         tool_count
     );
 
@@ -43,8 +43,7 @@ async fn test_mcp_tools_are_registered() {
         "files_glob",
         "files_grep",
         "shell_execute",
-        "todo_create",
-        "todo_show",
+        "kanban",
         "web_fetch",
         "web_search",
     ];
@@ -126,7 +125,7 @@ async fn test_cli_categories_are_available() {
     register_cel_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
-    register_todo_tools(&mut registry);
+    register_kanban_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
     register_web_search_tools(&mut registry);
 
@@ -134,7 +133,7 @@ async fn test_cli_categories_are_available() {
     println!("📋 CLI Categories: {:?}", categories);
 
     // These categories should be available (excluding hidden tools like CEL and notify)
-    let expected_categories = ["file", "shell", "todo", "web-search"];
+    let expected_categories = ["file", "kanban", "shell", "web-search"];
 
     for &expected_cat in &expected_categories {
         assert!(
@@ -180,7 +179,7 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     register_cel_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
-    register_todo_tools(&mut registry);
+    register_kanban_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
     register_web_search_tools(&mut registry);
 
@@ -217,4 +216,63 @@ async fn test_tool_schemas_are_claude_api_compatible() {
         registry.len()
     );
     println!("   No oneOf/allOf/anyOf constructs found at top level");
+}
+
+/// Test that verifies kanban tool schema has all 50 operations
+#[tokio::test]
+async fn test_kanban_schema_has_all_operations() {
+    let mut registry = ToolRegistry::new();
+    register_kanban_tools(&mut registry);
+
+    let tools = registry.list_tools();
+    let kanban_tool = tools
+        .iter()
+        .find(|t| t.name == "kanban")
+        .expect("kanban tool should be registered");
+
+    // Check op enum count
+    let op_enum = &kanban_tool.input_schema["properties"]["op"]["enum"];
+    let op_count = op_enum.as_array().expect("op enum should be array").len();
+
+    assert_eq!(
+        op_count, 50,
+        "Expected 50 operations in op enum, got {}",
+        op_count
+    );
+
+    // Check x-operation-schemas count
+    let op_schemas = &kanban_tool.input_schema["x-operation-schemas"];
+    let op_schemas_count = op_schemas
+        .as_array()
+        .expect("x-operation-schemas should be array")
+        .len();
+
+    assert_eq!(
+        op_schemas_count, 50,
+        "Expected 50 operation schemas, got {}",
+        op_schemas_count
+    );
+
+    // Verify some expected operations are present
+    let op_list = op_enum.as_array().unwrap();
+    let expected_ops = [
+        "init board",
+        "add task",
+        "assign task",
+        "complete task",
+        "add subtask",
+        "add attachment",
+        "list activity",
+    ];
+
+    for expected_op in &expected_ops {
+        assert!(
+            op_list.iter().any(|v| v.as_str() == Some(expected_op)),
+            "Expected operation '{}' not found in schema",
+            expected_op
+        );
+    }
+
+    println!("✅ Kanban schema has all 50 operations");
+    println!("   Including: add subtask, add attachment (newly added operations)");
 }

@@ -7,7 +7,7 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::sync::Mutex;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::{ConfigurationDiscovery, TemplateContext};
 
@@ -18,7 +18,7 @@ static GLOBAL_STATE_LOCK: Mutex<()> = Mutex::new(());
 /// Test helper for isolated file discovery testing
 struct IsolatedDiscoveryTest {
     _env: IsolatedTestEnvironment,
-    original_cwd: std::path::PathBuf,
+    _dir_guard: CurrentDirGuard,
     original_home: Option<String>,
     _lock_guard: std::sync::MutexGuard<'static, ()>,
 }
@@ -33,18 +33,19 @@ impl IsolatedDiscoveryTest {
         });
 
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-        let original_cwd = std::env::current_dir().expect("Failed to get current dir");
         let original_home = std::env::var("HOME").ok();
 
         // Set up isolated environment
         let home_dir = env.temp_dir().join("home");
         fs::create_dir(&home_dir).expect("Failed to create home dir");
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
         std::env::set_var("HOME", &home_dir);
-        std::env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
+        let dir_guard = CurrentDirGuard::new(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
             _env: env,
-            original_cwd,
+            _dir_guard: dir_guard,
             original_home,
             _lock_guard: lock_guard,
         }
@@ -74,8 +75,7 @@ impl IsolatedDiscoveryTest {
 
 impl Drop for IsolatedDiscoveryTest {
     fn drop(&mut self) {
-        // Restore original environment
-        let _ = env::set_current_dir(&self.original_cwd);
+        // CurrentDirGuard automatically restores the original directory
         if let Some(home) = &self.original_home {
             env::set_var("HOME", home);
         } else {
@@ -85,6 +85,7 @@ impl Drop for IsolatedDiscoveryTest {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_short_form_names_discovery() {
     let test = IsolatedDiscoveryTest::new();
     let project_config_dir = test.project_config_dir();
@@ -119,6 +120,7 @@ fn test_short_form_names_discovery() {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_long_form_names_discovery() {
     let test = IsolatedDiscoveryTest::new();
     let project_config_dir = test.project_config_dir();
@@ -153,6 +155,7 @@ fn test_long_form_names_discovery() {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_project_directory_discovery() {
     let test = IsolatedDiscoveryTest::new();
     let project_config_dir = test.project_config_dir();
@@ -179,6 +182,7 @@ database_url = "postgresql://localhost/project_db"
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_home_directory_discovery() {
     let test = IsolatedDiscoveryTest::new();
     let home_config_dir = test.home_config_dir();
@@ -205,6 +209,7 @@ default_database = "postgresql://localhost/global_db"
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_project_overrides_home_config() {
     let test = IsolatedDiscoveryTest::new();
     let project_config_dir = test.project_config_dir();
@@ -246,6 +251,7 @@ database_url = "postgresql://localhost/project_db"
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_missing_directories_graceful_handling() {
     let _test = IsolatedDiscoveryTest::new();
 
@@ -259,6 +265,7 @@ fn test_missing_directories_graceful_handling() {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_discovery_with_nested_project_structure() {
     let test = IsolatedDiscoveryTest::new();
 
@@ -320,6 +327,7 @@ project_setting = true
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_file_name_precedence() {
     let test = IsolatedDiscoveryTest::new();
     let project_config_dir = test.project_config_dir();
@@ -358,6 +366,7 @@ value = "from_swissarmyhammer"
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_multiple_formats_same_location() {
     let test = IsolatedDiscoveryTest::new();
     let project_config_dir = test.project_config_dir();
@@ -389,6 +398,7 @@ fn test_multiple_formats_same_location() {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_discovery_api_directly() {
     let test = IsolatedDiscoveryTest::new();
     let project_config_dir = test.project_config_dir();
@@ -436,6 +446,7 @@ fn test_discovery_api_directly() {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_nonexistent_config_directories() {
     let test = IsolatedDiscoveryTest::new();
 
@@ -471,6 +482,7 @@ fn test_nonexistent_config_directories() {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_permission_denied_directories() {
     use std::os::unix::fs::PermissionsExt;
 

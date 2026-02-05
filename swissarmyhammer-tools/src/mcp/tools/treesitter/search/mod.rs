@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_tool_default_creates_valid_instance() {
-        let tool = TreesitterSearchTool::default();
+        let tool = TreesitterSearchTool;
         assert_tool_basics(&tool, "treesitter_search", "semantic");
     }
 

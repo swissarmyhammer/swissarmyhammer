@@ -1,0 +1,28 @@
+[package]
+name = "swissarmyhammer-kanban"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Kanban board engine with file-backed storage for task management"
+
+[dependencies]
+# Workspace dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+chrono = { workspace = true }
+fs2 = { workspace = true }
+async-trait = { workspace = true }
+
+# Local workspace dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-operations = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }

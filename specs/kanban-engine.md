@@ -178,8 +178,7 @@ pub struct Board {
 
 **Default columns** when creating a new board:
 - To Do
-- In Progress
-- Review
+- Doing
 - Done
 
 ### Column
@@ -532,6 +531,7 @@ Regardless of input format, every operation is normalized to canonical form befo
 | `move` | `mv` | Change task's column/position |
 | `delete` | `remove`, `rm`, `del` | Delete an item |
 | `next` | | Get next actionable item |
+| `complete` | `done`, `finish`, `close` | Move task to terminal column |
 | `tag` | `label` | Apply a tag to a task |
 | `untag` | `unlabel` | Remove a tag from a task |
 
@@ -549,15 +549,17 @@ Which combinations are valid:
 | `move` | | | | | | | | ✓ | | | | | | |
 | `delete` | | ✓ | | ✓ | | ✓ | | ✓ | | ✓ | | ✓ | | |
 | `next` | | | | | | | | ✓ | | | | | | |
+| `complete` | | | | | | | | ✓ | | | | | | |
 | `tag` | | | | | | | | ✓ | | | | | | |
 | `untag` | | | | | | | | ✓ | | | | | | |
+| `assign` | | | | | | | | ✓ | | | | | | |
 
-**Valid operations (36 total):**
+**Valid operations (40 total):**
 - Board: `init board`, `get board`, `update board`
 - Column: `get column`, `add column`, `update column`, `delete column`, `list columns`
 - Swimlane: `get swimlane`, `add swimlane`, `update swimlane`, `delete swimlane`, `list swimlanes`
 - Actor: `get actor`, `add actor`, `update actor`, `delete actor`, `list actors`
-- Task: `get task`, `add task`, `update task`, `move task`, `delete task`, `next task`, `tag task`, `untag task`
+- Task: `get task`, `add task`, `update task`, `move task`, `delete task`, `next task`, `complete task`, `tag task`, `untag task`, `assign task`
 - Tasks: `list tasks`
 - Tag: `get tag`, `add tag`, `update tag`, `delete tag`, `list tags`
 - Comment: `get comment`, `add comment`, `update comment`, `delete comment`, `list comments`
@@ -870,6 +872,15 @@ Shorthand forms also accepted:
 ```json
 {
   "op": "delete task",
+  "id": "string (required)"
+}
+```
+
+#### complete task
+Move a task to the terminal (done) column.
+```json
+{
+  "op": "complete task",
   "id": "string (required)"
 }
 ```

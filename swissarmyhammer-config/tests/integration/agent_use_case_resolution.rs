@@ -5,11 +5,15 @@ use swissarmyhammer_config::model::ModelManager;
 use swissarmyhammer_config::AgentUseCase;
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_resolve_workflows_model_from_config() {
     // Create temp directory
     let _env = IsolatedTestEnvironment::new().unwrap();
     let temp_dir = _env.temp_dir();
     let temp_path = temp_dir;
+
+    // Create .git marker to prevent config discovery from walking up to real repo
+    fs::create_dir(temp_path.join(".git")).expect("Failed to create .git marker");
 
     // Create .swissarmyhammer directory
     let sah_dir = temp_path.join(SwissarmyhammerDirectory::dir_name());

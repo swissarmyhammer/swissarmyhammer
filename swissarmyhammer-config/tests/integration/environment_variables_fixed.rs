@@ -7,13 +7,13 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper for isolated environment variable testing
 struct IsolatedEnvTest {
     _env: IsolatedTestEnvironment,
-    original_cwd: std::path::PathBuf,
+    _dir_guard: CurrentDirGuard,
     original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
     timestamp: String,
@@ -22,7 +22,6 @@ struct IsolatedEnvTest {
 impl IsolatedEnvTest {
     fn new() -> Self {
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-        let original_cwd = env::current_dir().expect("Failed to get current dir");
         let original_home = env::var("HOME").ok();
 
         // Create unique timestamp for variable names
@@ -32,15 +31,18 @@ impl IsolatedEnvTest {
             .as_nanos()
             .to_string();
 
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
+
         // Set up isolated environment
         let home_dir = env.temp_dir().join("home");
         fs::create_dir(&home_dir).expect("Failed to create home dir");
         env::set_var("HOME", &home_dir);
-        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
+        let dir_guard = CurrentDirGuard::new(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
             _env: env,
-            original_cwd,
+            _dir_guard: dir_guard,
             original_home,
             env_vars_to_restore: Vec::new(),
             timestamp,
@@ -66,8 +68,7 @@ impl Drop for IsolatedEnvTest {
             }
         }
 
-        // Restore original environment
-        let _ = env::set_current_dir(&self.original_cwd);
+        // CurrentDirGuard automatically restores the original working directory
         if let Some(home) = &self.original_home {
             env::set_var("HOME", home);
         } else {

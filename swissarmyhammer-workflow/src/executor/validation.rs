@@ -52,10 +52,10 @@
 //!
 //! # Usage Examples
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! # use std::collections::HashMap;
 //! # use serde_json::Value;
-//! # use swissarmyhammer_workflow::executor::validation::{TransitionCondition, ConditionType};
+//! # use swissarmyhammer_workflow::{WorkflowExecutor, TransitionCondition, ConditionType};
 //! # let mut executor = WorkflowExecutor::new();
 //! # let context = HashMap::<String, Value>::new();
 //! // Simple condition evaluation

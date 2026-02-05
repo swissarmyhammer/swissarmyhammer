@@ -33,21 +33,26 @@
 //!
 //! # Usage Example
 //!
-//! ```no_run
-//! use claude_agent::claude_process::ClaudeProcessManager;
+//! ```ignore
+//! use claude_agent::claude_process::{ClaudeProcessManager, SpawnConfig};
 //! use claude_agent::session::SessionId;
-//! use std::path::Path;
+//! use std::path::PathBuf;
 //!
 //! # async fn example() -> claude_agent::Result<()> {
 //! let manager = ClaudeProcessManager::new();
 //! let session_id = SessionId::new();
-//! let cwd = Path::new("/tmp");
+//! let acp_session_id = agent_client_protocol::SessionId::new("test".to_string());
 //!
-//! // Spawn a new process
-//! manager.spawn_for_session(session_id.clone(), cwd, None, vec![]).await?;
+//! // Spawn a new process using SpawnConfig builder
+//! let config = SpawnConfig::builder()
+//!     .session_id(session_id.clone())
+//!     .acp_session_id(acp_session_id)
+//!     .cwd(PathBuf::from("/tmp"))
+//!     .build();
+//! manager.spawn_for_session(config).await?;
 //!
 //! // Get the process and interact with it
-//! let process = manager.get_process(&session_id).await?;
+//! let process = manager.get_process(&session_id)?;
 //! let mut proc = process.lock().await;
 //!
 //! // Write a JSON-RPC message

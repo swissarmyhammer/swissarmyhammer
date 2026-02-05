@@ -18,6 +18,9 @@ fn create_project_config_dir() -> std::path::PathBuf {
     let config_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
 
+    // Create .git marker to prevent config discovery from walking up to real repo
+    fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+
     // Change to the temp directory so config discovery works
     env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
 
@@ -28,6 +31,7 @@ fn create_project_config_dir() -> std::path::PathBuf {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_malformed_toml_config_error() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let config_dir = create_project_config_dir();
@@ -82,6 +86,7 @@ fn test_malformed_toml_config_error() {
 }
 
 #[test]
+#[serial_test::serial(cwd)]
 fn test_malformed_yaml_config_error() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let config_dir = create_project_config_dir();

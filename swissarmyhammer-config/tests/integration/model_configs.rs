@@ -1,5 +1,5 @@
 use std::{env, fs};
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::{
     parse_model_config, parse_model_description, ModelConfigSource, ModelError, ModelManager,
@@ -72,7 +72,7 @@ quiet: false"#,
 struct TestEnvironment {
     _env: IsolatedTestEnvironment,
     project_root: std::path::PathBuf,
-    original_dir: std::path::PathBuf,
+    _dir_guard: CurrentDirGuard,
 }
 
 impl TestEnvironment {
@@ -82,6 +82,9 @@ impl TestEnvironment {
 
         fs::create_dir_all(&project_root).expect("Failed to create project root");
 
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
+
         // Initialize as git repository for gitroot model discovery
         std::process::Command::new("git")
             .args(["init"])
@@ -89,12 +92,12 @@ impl TestEnvironment {
             .output()
             .expect("Failed to init git repo");
 
-        let original_dir = env::current_dir().expect("Failed to get current dir");
+        let dir_guard = CurrentDirGuard::new(&project_root).expect("Failed to set current dir");
 
         Self {
             _env: env,
             project_root,
-            original_dir,
+            _dir_guard: dir_guard,
         }
     }
 
@@ -137,7 +140,7 @@ impl TestEnvironment {
 
 impl Drop for TestEnvironment {
     fn drop(&mut self) {
-        let _ = env::set_current_dir(&self.original_dir);
+        // CurrentDirGuard automatically restores the original directory
         // IsolatedTestEnvironment handles HOME restoration
     }
 }
@@ -145,16 +148,20 @@ impl Drop for TestEnvironment {
 /// Helper for config file operations
 struct ConfigFileHelper {
     project_root: std::path::PathBuf,
-    original_dir: std::path::PathBuf,
+    _dir_guard: CurrentDirGuard,
 }
 
 impl ConfigFileHelper {
     fn new(project_root: std::path::PathBuf) -> Self {
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&project_root).expect("Failed to change to project dir");
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir_all(project_root.parent().unwrap()).expect("Failed to create parent dir");
+        let _ = fs::create_dir(project_root.join(".git"));
+        // Directory might already exist, that's fine
+
+        let dir_guard = CurrentDirGuard::new(&project_root).expect("Failed to change to project dir");
         Self {
             project_root,
-            original_dir,
+            _dir_guard: dir_guard,
         }
     }
 
@@ -185,7 +192,7 @@ impl ConfigFileHelper {
 
 impl Drop for ConfigFileHelper {
     fn drop(&mut self) {
-        let _ = env::set_current_dir(&self.original_dir);
+        // CurrentDirGuard automatically restores the original directory
     }
 }
 
@@ -250,6 +257,7 @@ fn assert_not_found_error(result: Result<(), ModelError>, expected_name: &str) {
 // BASIC CONFIGURATION TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_config_system_default_is_claude() {
     let config = ModelConfig::default();
@@ -257,6 +265,7 @@ fn test_agent_config_system_default_is_claude() {
     assert!(!config.quiet);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_config_factories() {
     let claude_config = ModelConfig::claude_code();
@@ -266,6 +275,7 @@ fn test_agent_config_factories() {
     assert_eq!(llama_config.executor_type(), ModelExecutorType::LlamaAgent);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_config_serialization() {
     let config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
@@ -286,6 +296,7 @@ fn test_agent_config_serialization() {
 // BUILTIN AGENTS TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_manager_load_builtin_models_comprehensive() {
     let agents = ModelManager::load_builtin_models().expect("Should load builtin agents");
@@ -325,6 +336,7 @@ fn test_agent_manager_load_builtin_models_comprehensive() {
 // AGENT PRECEDENCE TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_user_agent_overrides_builtin() {
     let env = TestEnvironment::new();
@@ -348,6 +360,7 @@ fn test_user_agent_overrides_builtin() {
     assert_agent_description_contains(&agents, "claude-code", "User override");
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_project_agent_overrides_user() {
     let env = TestEnvironment::new();
@@ -376,6 +389,7 @@ fn test_project_agent_overrides_user() {
     assert_agent_description_contains(&agents, "qwen-coder", "Project override");
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_custom_agents_from_each_source() {
     let env = TestEnvironment::new();
@@ -410,6 +424,7 @@ fn test_custom_agents_from_each_source() {
     assert_agent_has_source(&agents, "project-specific", ModelConfigSource::Project);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_precedence_verification() {
     let env = TestEnvironment::new();
@@ -420,6 +435,7 @@ fn test_agent_precedence_verification() {
     assert_agent_has_source(&agents, "qwen-next", ModelConfigSource::Builtin);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_gitroot_agent_loading() {
     let env = TestEnvironment::new();
@@ -440,6 +456,7 @@ fn test_gitroot_agent_loading() {
     assert_agent_description_contains(&agents, "gitroot-test", "Test gitroot agent");
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_gitroot_agent_overrides_project() {
     let env = TestEnvironment::new();
@@ -460,6 +477,7 @@ fn test_gitroot_agent_overrides_project() {
     assert_agent_description_contains(&agents, "override-test", "GitRoot version");
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_user_agent_overrides_gitroot() {
     let env = TestEnvironment::new();
@@ -480,6 +498,7 @@ fn test_user_agent_overrides_gitroot() {
     assert_agent_description_contains(&agents, "override-test", "User version");
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_full_precedence_hierarchy_with_gitroot() {
     let env = TestEnvironment::new();
@@ -506,6 +525,7 @@ fn test_full_precedence_hierarchy_with_gitroot() {
 // AGENTS MAP AND USE CASE TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agents_map_structure_creation() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -532,6 +552,7 @@ fn test_agents_map_structure_creation() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_use_case_to_agent_name_mapping() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -559,6 +580,7 @@ fn test_use_case_to_agent_name_mapping() {
     assert_eq!(workflows_agent, Some("qwen-coder".to_string()));
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_use_case_fallback_to_root() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -590,6 +612,7 @@ fn test_use_case_fallback_to_root() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_model_use_case_enum_variants() {
     use swissarmyhammer_config::AgentUseCase;
@@ -620,6 +643,7 @@ fn test_model_use_case_enum_variants() {
         .contains("Invalid use case: 'invalid'"));
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_resolve_agent_config_for_use_case() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -655,6 +679,7 @@ fn test_resolve_agent_config_for_use_case() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_resolve_agent_config_default_fallback() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -671,6 +696,7 @@ fn test_resolve_agent_config_default_fallback() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_get_agent_for_use_case_no_config() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -683,6 +709,7 @@ fn test_get_agent_for_use_case_no_config() {
     assert_eq!(result, None);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agents_map_in_config_file_operations() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -719,6 +746,7 @@ fn test_agents_map_in_config_file_operations() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agents_map_preserved_with_other_config_sections() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -772,6 +800,7 @@ agents:
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_use_agent_updates_root_use_case() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -792,6 +821,7 @@ fn test_use_agent_updates_root_use_case() {
     assert_eq!(root_agent, Some("claude-code".to_string()));
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_overwrite_existing_use_case_agent() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -821,6 +851,7 @@ fn test_overwrite_existing_use_case_agent() {
 // CONFIG FILE OPERATIONS TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_manager_config_file_operations() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -864,6 +895,7 @@ fn test_agent_manager_config_file_operations() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_config_file_sections_preserved() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -907,6 +939,7 @@ other_section:
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_config_models_section_updated() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -930,6 +963,7 @@ fn test_config_models_section_updated() {
 // ERROR HANDLING TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_manager_error_handling_comprehensive() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -965,6 +999,7 @@ fn test_agent_manager_error_handling_comprehensive() {
 // INVALID FILE HANDLING TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_valid_agent_loads_successfully() {
     let env = TestEnvironment::new();
@@ -986,6 +1021,7 @@ fn test_valid_agent_loads_successfully() {
         .contains("Valid test agent"));
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_invalid_yaml_syntax_ignored() {
     let env = TestEnvironment::new();
@@ -1006,6 +1042,7 @@ fn test_invalid_yaml_syntax_ignored() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_invalid_config_structure_ignored() {
     let env = TestEnvironment::new();
@@ -1034,6 +1071,7 @@ invalid_field: true"#;
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_non_yaml_files_ignored() {
     let env = TestEnvironment::new();
@@ -1058,6 +1096,7 @@ fn test_non_yaml_files_ignored() {
 // DESCRIPTION PARSING TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_description_yaml_frontmatter() {
     let content = r#"---
@@ -1077,6 +1116,7 @@ quiet: false"#;
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_description_comment_based() {
     let content = r#"# Description: Comment-based description
@@ -1090,6 +1130,7 @@ quiet: false"#;
     assert_eq!(description, Some("Comment-based description".to_string()));
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_description_yaml_precedence() {
     let content = r#"---
@@ -1105,6 +1146,7 @@ quiet: false"#;
     assert_eq!(description, Some("YAML takes precedence".to_string()));
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_description_no_description() {
     let content = r#"executor:
@@ -1116,6 +1158,7 @@ quiet: false"#;
     assert_eq!(description, None);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_description_empty_description() {
     let content = r#"---
@@ -1130,6 +1173,7 @@ quiet: false"#;
     assert_eq!(description, Some("".to_string()));
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_description_whitespace_trimmed() {
     let content = r#"---
@@ -1148,6 +1192,7 @@ quiet: false"#;
 // CONFIG PARSING TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_config_parsing_with_frontmatter() {
     let content = r#"---
@@ -1166,6 +1211,7 @@ quiet: true"#;
     assert!(config.quiet);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_config_parsing_pure_config() {
     let content = format!(
@@ -1188,6 +1234,7 @@ quiet: false"#,
     assert!(!config.quiet);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_config_parsing_with_comments() {
     let content = r#"# Description: Test agent with comments
@@ -1202,6 +1249,7 @@ quiet: false"#;
     assert!(!config.quiet);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_parse_invalid_config() {
     let invalid_content = "invalid yaml content [unclosed";
@@ -1213,6 +1261,7 @@ fn test_parse_invalid_config() {
 // DIRECTORY LOADING EDGE CASES
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_agent_manager_directory_loading_edge_cases() {
     struct DirTestCase {
@@ -1272,6 +1321,7 @@ fn test_agent_manager_directory_loading_edge_cases() {
 // GLOBAL --AGENT FLAG OVERRIDE TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_global_agent_flag_override_concept() {
     // This test verifies the concept that a runtime --agent flag can override
@@ -1333,6 +1383,7 @@ fn test_global_agent_flag_override_concept() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_global_agent_override_with_nonexistent_agent() {
     // Test that attempting to override with a nonexistent agent fails gracefully
@@ -1347,6 +1398,7 @@ fn test_global_agent_override_with_nonexistent_agent() {
     }
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_global_agent_override_preserves_config_file() {
     // Verify that using an agent for override doesn't modify the config file
@@ -1408,6 +1460,7 @@ fn test_global_agent_override_preserves_config_file() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_global_agent_override_all_builtin_agents() {
     // Test that all builtin agents can be used as runtime overrides
@@ -1433,6 +1486,7 @@ fn test_global_agent_override_all_builtin_agents() {
     }
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_global_agent_override_with_custom_user_agent() {
     // Test that custom user agents can be used as runtime overrides
@@ -1469,6 +1523,7 @@ fn test_global_agent_override_with_custom_user_agent() {
 // LOAD_GITROOT_MODELS TESTS
 // =============================================================================
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_load_gitroot_models_in_git_repo_with_agents() {
     let env = TestEnvironment::new();
@@ -1495,6 +1550,7 @@ fn test_load_gitroot_models_in_git_repo_with_agents() {
     }
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_load_gitroot_models_in_git_repo_without_models_dir() {
     let env = TestEnvironment::new();
@@ -1511,6 +1567,7 @@ fn test_load_gitroot_models_in_git_repo_without_models_dir() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_load_gitroot_models_in_git_repo_with_empty_models_dir() {
     let env = TestEnvironment::new();
@@ -1530,6 +1587,7 @@ fn test_load_gitroot_models_in_git_repo_with_empty_models_dir() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_load_gitroot_models_not_in_git_repo() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1550,6 +1608,7 @@ fn test_load_gitroot_models_not_in_git_repo() {
     );
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_load_gitroot_models_with_invalid_agents() {
     let env = TestEnvironment::new();
@@ -1578,6 +1637,7 @@ fn test_load_gitroot_models_with_invalid_agents() {
     assert_eq!(gitroot_models[0].source, ModelConfigSource::GitRoot);
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_load_gitroot_models_with_non_yaml_files() {
     let env = TestEnvironment::new();
@@ -1603,6 +1663,7 @@ fn test_load_gitroot_models_with_non_yaml_files() {
     assert_eq!(gitroot_models[0].name, "agent");
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_load_gitroot_models_git_root_detection() {
     let env = TestEnvironment::new();

@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::PromptLibrary;
 use tempfile::TempDir;
@@ -11,11 +12,10 @@ fn get_builtin_prompts_path() -> PathBuf {
     workspace_root.join("builtin/prompts")
 }
 
+#[serial_test::serial(cwd)]
 #[test]
+#[serial_test::serial(cwd)]
 fn test_rust_project_detection_renders_guidelines() {
-    // Store original directory first
-    let original_dir = std::env::current_dir().unwrap();
-
     // Create a temporary directory OUTSIDE of any git repo
     let temp_dir = TempDir::new().unwrap();
     let root = temp_dir.path();
@@ -39,7 +39,7 @@ fn test_rust_project_detection_renders_guidelines() {
     fs::write(project_path.join("src/main.rs"), "fn main() {}").unwrap();
 
     // Change to the project directory
-    std::env::set_current_dir(&project_path).unwrap();
+    let _guard = CurrentDirGuard::new(&project_path).unwrap();
 
     // Create template context with project detection
     let mut context = TemplateContext::new();
@@ -103,17 +103,13 @@ fn test_rust_project_detection_renders_guidelines() {
         "Should contain Project Guidelines section"
     );
 
-    // Restore original directory BEFORE TempDir is dropped
-    // Use let _ to ignore the result since the temp dir might already be cleaning up
-    let _ = std::env::set_current_dir(&original_dir);
-    // Now temp_dir will be dropped and cleaned up safely
+    // CurrentDirGuard automatically restores the original directory
 }
 
+#[serial_test::serial(cwd)]
 #[test]
+#[serial_test::serial(cwd)]
 fn test_nodejs_project_detection_renders_guidelines() {
-    // Store original directory first
-    let original_dir = std::env::current_dir().unwrap();
-
     // Create a temporary directory OUTSIDE of any git repo
     let temp_dir = TempDir::new().unwrap();
     let root = temp_dir.path();
@@ -138,7 +134,7 @@ fn test_nodejs_project_detection_renders_guidelines() {
     fs::write(project_path.join("src/index.js"), "console.log('test');").unwrap();
 
     // Change to the project directory
-    std::env::set_current_dir(&project_path).unwrap();
+    let _guard = CurrentDirGuard::new(&project_path).unwrap();
 
     // Create template context with project detection
     let mut context = TemplateContext::new();
@@ -189,16 +185,13 @@ fn test_nodejs_project_detection_renders_guidelines() {
         "Should contain project-specific guidelines"
     );
 
-    // Restore original directory BEFORE TempDir is dropped
-    // Use let _ to ignore the result since the temp dir might already be cleaning up
-    let _ = std::env::set_current_dir(&original_dir);
-    // Now temp_dir will be dropped and cleaned up safely
+    // CurrentDirGuard automatically restores the original directory
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_multiple_rust_projects_renders_guidelines_once() {
     // Store original directory first
-    let original_dir = std::env::current_dir().unwrap();
 
     // Create a temporary directory with multiple Rust projects
     let temp_dir = TempDir::new().unwrap();
@@ -232,7 +225,7 @@ fn test_multiple_rust_projects_renders_guidelines_once() {
     fs::write(project2.join("src/lib.rs"), "").unwrap();
 
     // Change to the monorepo directory to detect the projects
-    std::env::set_current_dir(&root_path).unwrap();
+    let _guard = CurrentDirGuard::new(&root_path).unwrap();
 
     // Create template context with project detection
     let mut context = TemplateContext::new();
@@ -284,16 +277,13 @@ fn test_multiple_rust_projects_renders_guidelines_once() {
         rust_guideline_count
     );
 
-    // Restore original directory BEFORE TempDir is dropped
-    // Use let _ to ignore the result since the temp dir might already be cleaning up
-    let _ = std::env::set_current_dir(&original_dir);
-    // Now temp_dir will be dropped and cleaned up safely
+    // CurrentDirGuard automatically restores the original directory
 }
 
+#[serial_test::serial(cwd)]
 #[test]
 fn test_mixed_projects_renders_multiple_guidelines() {
     // Store original directory first
-    let original_dir = std::env::current_dir().unwrap();
 
     // Create a temporary directory with mixed project types
     let temp_dir = TempDir::new().unwrap();
@@ -323,7 +313,7 @@ fn test_mixed_projects_renders_multiple_guidelines() {
     fs::write(node_project.join("src/index.js"), "console.log('test');").unwrap();
 
     // Change to the root directory
-    std::env::set_current_dir(&root_path).unwrap();
+    let _guard = CurrentDirGuard::new(&root_path).unwrap();
 
     // Create template context with project detection
     let mut context = TemplateContext::new();
@@ -379,8 +369,5 @@ fn test_mixed_projects_renders_multiple_guidelines() {
         "Node.js guidelines should appear exactly once"
     );
 
-    // Restore original directory BEFORE TempDir is dropped
-    // Use let _ to ignore the result since the temp dir might already be cleaning up
-    let _ = std::env::set_current_dir(&original_dir);
-    // Now temp_dir will be dropped and cleaned up safely
+    // CurrentDirGuard automatically restores the original directory
 }

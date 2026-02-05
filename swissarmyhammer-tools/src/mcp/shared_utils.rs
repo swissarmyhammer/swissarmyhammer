@@ -6,7 +6,6 @@
 use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
-use swissarmyhammer_todo::TodoError;
 
 /// Type alias for common error type used across MCP tools
 ///
@@ -127,41 +126,6 @@ impl McpErrorHandler {
         operation: &str,
     ) -> std::result::Result<T, McpError> {
         result.map_err(|e| Self::handle_error(e, operation))
-    }
-
-    /// Convert TodoError to appropriate MCP error response
-    pub fn handle_todo_error(error: TodoError, operation: &str) -> McpError {
-        tracing::error!("MCP todo operation '{}' failed: {}", operation, error);
-
-        match error {
-            // User input validation errors
-            TodoError::InvalidTodoListName(name) => {
-                McpError::invalid_params(format!("Invalid todo list name: {name}"), None)
-            }
-            TodoError::InvalidTodoId(id) => {
-                McpError::invalid_params(format!("Invalid todo item ID: {id}"), None)
-            }
-            TodoError::TodoListNotFound(name) => {
-                McpError::invalid_params(format!("Todo list '{name}' not found"), None)
-            }
-            TodoError::TodoItemNotFound(id, list) => McpError::invalid_params(
-                format!("Todo item '{id}' not found in list '{list}'"),
-                None,
-            ),
-            TodoError::EmptyTask => {
-                McpError::invalid_params("Task description cannot be empty".to_string(), None)
-            }
-            // System errors
-            TodoError::Io(err) => McpError::internal_error(format!("IO error: {err}"), None),
-            TodoError::Yaml(err) => McpError::internal_error(format!("YAML error: {err}"), None),
-            TodoError::Common(common_err) => {
-                // Since we're now using the common error type directly, just delegate
-                Self::handle_error(common_err, operation)
-            }
-            TodoError::Other(msg) => {
-                McpError::internal_error(format!("Todo operation failed: {msg}"), None)
-            }
-        }
     }
 }
 

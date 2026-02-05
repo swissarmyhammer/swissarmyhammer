@@ -329,9 +329,9 @@ fn try_parse_plain_text_status(response: &str) -> Option<ValidatorResult> {
     let trimmed = response.trim();
 
     // Check if response starts with PASS
-    if trimmed.starts_with("PASS") {
-        let message = if trimmed.len() > 4 {
-            trimmed[4..].trim().to_string()
+    if let Some(stripped) = trimmed.strip_prefix("PASS") {
+        let message = if !stripped.is_empty() {
+            stripped.trim().to_string()
         } else {
             "Validation passed".to_string()
         };
@@ -339,9 +339,9 @@ fn try_parse_plain_text_status(response: &str) -> Option<ValidatorResult> {
     }
 
     // Check if response starts with FAIL
-    if trimmed.starts_with("FAIL") {
-        let message = if trimmed.len() > 4 {
-            trimmed[4..].trim().to_string()
+    if let Some(stripped) = trimmed.strip_prefix("FAIL") {
+        let message = if !stripped.is_empty() {
+            stripped.trim().to_string()
         } else {
             "Validation failed".to_string()
         };
@@ -421,8 +421,7 @@ fn extract_reason_from_response(response: &str) -> Option<String> {
         let after_key = &response[idx + pattern.len()..];
         if let Some(colon_idx) = after_key.find(':') {
             let after_colon = after_key[colon_idx + 1..].trim_start();
-            if after_colon.starts_with('"') {
-                let content = &after_colon[1..];
+            if let Some(content) = after_colon.strip_prefix('"') {
                 if let Some(end_quote) = content.find('"') {
                     return Some(content[..end_quote].to_string());
                 }

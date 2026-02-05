@@ -5,31 +5,32 @@
 
 use liquid::ParserBuilder;
 use serde_json::json;
-use serial_test::serial;
 use std::env;
 use std::fs;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper for comprehensive integration testing
 struct IntegrationTestEnvironment {
     _env: IsolatedTestEnvironment,
-    original_cwd: std::path::PathBuf,
+    _dir_guard: CurrentDirGuard,
     env_vars_to_restore: Vec<(String, Option<String>)>,
 }
 
 impl IntegrationTestEnvironment {
     fn new() -> Self {
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-        let original_cwd = env::current_dir().expect("Failed to get current dir");
+
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
 
         // Set current directory to temp dir for these tests
-        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
+        let dir_guard = CurrentDirGuard::new(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
             _env: env,
-            original_cwd,
+            _dir_guard: dir_guard,
             env_vars_to_restore: Vec::new(),
         }
     }
@@ -84,13 +85,13 @@ impl Drop for IntegrationTestEnvironment {
             }
         }
 
-        // Restore original directory - IsolatedTestEnvironment handles HOME restoration
-        let _ = env::set_current_dir(&self.original_cwd);
+        // CurrentDirGuard automatically restores the original directory
+        // IsolatedTestEnvironment handles HOME restoration
     }
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_complete_development_workflow_scenario() {
     let mut test = IntegrationTestEnvironment::new();
     let project_config_dir = test.project_config_dir();
@@ -272,7 +273,7 @@ log_level = "debug"  # More verbose logging for development
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_production_deployment_scenario() {
     let mut test = IntegrationTestEnvironment::new();
     let project_config_dir = test.project_config_dir();
@@ -471,7 +472,7 @@ audit = true
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_multi_environment_project_with_dynamic_switching() {
     let mut test = IntegrationTestEnvironment::new();
     let project_config_dir = test.project_config_dir();
@@ -668,7 +669,7 @@ rate_limiting = true
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_complex_nested_project_structure_with_inheritance() {
     let mut test = IntegrationTestEnvironment::new();
     let nested_subdir = test.create_nested_project_structure();
@@ -822,7 +823,7 @@ serialization = ["serde"]
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_real_time_configuration_updates_workflow() {
     let test = IntegrationTestEnvironment::new();
     let config_dir = test.project_config_dir();

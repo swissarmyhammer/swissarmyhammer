@@ -1152,9 +1152,9 @@ dependencies = [
  "serial_test",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
+ "swissarmyhammer-kanban",
  "swissarmyhammer-modes",
  "swissarmyhammer-prompts",
- "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -3565,8 +3565,8 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer-common",
+ "swissarmyhammer-kanban",
  "swissarmyhammer-modes",
- "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -6300,6 +6300,7 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-doctor",
  "swissarmyhammer-git",
+ "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
@@ -6402,6 +6403,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-kanban"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "fs2",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-operations",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "swissarmyhammer-leader-election"
 version = "0.5.0"
 dependencies = [
@@ -6455,6 +6475,28 @@ dependencies = [
  "tokio",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "swissarmyhammer-operations"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-operations-macros",
+ "tokio",
+ "ulid",
+]
+
+[[package]]
+name = "swissarmyhammer-operations-macros"
+version = "0.5.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
@@ -6534,23 +6576,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swissarmyhammer-todo"
-version = "0.5.0"
-dependencies = [
- "chrono",
- "fs2",
- "serde",
- "serde_json",
- "serde_yaml",
- "swissarmyhammer-common",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "ulid",
-]
-
-[[package]]
 name = "swissarmyhammer-tools"
 version = "0.5.0"
 dependencies = [
@@ -6599,10 +6624,11 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
+ "swissarmyhammer-kanban",
  "swissarmyhammer-mcp-proxy",
+ "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
  "swissarmyhammer-shell",
- "swissarmyhammer-todo",
  "swissarmyhammer-treesitter",
  "swissarmyhammer-workflow",
  "tempfile",

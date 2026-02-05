@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn test_tool_default_creates_valid_instance() {
-        let tool = TreesitterQueryTool::default();
+        let tool = TreesitterQueryTool;
         assert_tool_basics(&tool, "treesitter_query", "tree-sitter");
     }
 

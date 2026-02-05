@@ -890,10 +890,6 @@ impl ToolCallHandler {
 
         match self.execute_tool_request(session_id, &request).await {
             Ok(response) => {
-                // Update session todos for todo-related MCP tool calls
-                self.update_session_todos_if_needed(session_id, &request, &response)
-                    .await;
-
                 // Complete the tool call with success
                 let completed_report = self
                     .complete_tool_call_report(
@@ -1032,115 +1028,6 @@ impl ToolCallHandler {
         } else {
             None
         }
-    }
-
-    /// Update session todos when MCP todo tools are called
-    ///
-    /// This method intercepts successful todo_create and todo_mark_complete tool calls
-    /// to keep the session's todos field synchronized with the todo storage by syncing
-    /// the entire todo list from storage.
-    async fn update_session_todos_if_needed(
-        &self,
-        session_id: &agent_client_protocol::SessionId,
-        request: &InternalToolRequest,
-        _response: &str,
-    ) {
-        // Check if this is a todo-related MCP tool
-        let tool_base_name = if let Some(server_name) = self.extract_mcp_server_name(&request.name)
-        {
-            // Extract tool name after server prefix (e.g., "swissarmyhammer:todo_create" -> "todo_create")
-            request
-                .name
-                .strip_prefix(&format!("{}:", server_name))
-                .unwrap_or(&request.name)
-        } else {
-            &request.name
-        };
-
-        match tool_base_name {
-            "todo_create" | "todo_mark_complete" => {
-                // Sync the entire todo list from storage for todo-related operations
-                if let Err(e) = self.sync_session_todos(&session_id.0).await {
-                    tracing::warn!(
-                        "Failed to sync todos for session {} after {}: {}",
-                        session_id.0,
-                        tool_base_name,
-                        e
-                    );
-                } else {
-                    tracing::debug!(
-                        "Synced todos for session {} after {}",
-                        session_id.0,
-                        tool_base_name
-                    );
-                }
-            }
-            _ => {
-                // Not a todo tool, no action needed
-            }
-        }
-    }
-
-    /// Sync session todos from storage
-    ///
-    /// This method reads the complete todo list from storage and updates the session's
-    /// todos field to match. This ensures the session state stays in sync with the
-    /// underlying todo storage.
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - The session identifier (as a string)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The session does not exist
-    /// - The todo storage cannot be accessed
-    /// - The session cannot be updated
-    async fn sync_session_todos(&self, session_id: &str) -> crate::Result<()> {
-        // Get the session to access its working directory
-        let session_id_parsed = crate::session::SessionId::parse(session_id)
-            .map_err(|e| crate::error::AgentError::Session(format!("Invalid session ID: {}", e)))?;
-
-        let session = self
-            .session_manager
-            .get_session(&session_id_parsed)
-            .map_err(|e| {
-                crate::error::AgentError::Session(format!("Failed to get session: {}", e))
-            })?
-            .ok_or_else(|| {
-                crate::error::AgentError::Session(format!("Session not found: {}", session_id))
-            })?;
-
-        // Create TodoStorage using the session's working directory
-        let storage = swissarmyhammer_todo::TodoStorage::new_with_working_dir(session.cwd)
-            .map_err(|e| {
-                crate::error::AgentError::Internal(format!("Failed to create todo storage: {}", e))
-            })?;
-
-        // Get the todo list from storage
-        let todo_list = storage.get_todo_list().await.map_err(|e| {
-            crate::error::AgentError::Internal(format!("Failed to get todo list: {}", e))
-        })?;
-
-        // Extract incomplete todo IDs (done is a field, id is TodoId type)
-        let todo_ids: Vec<String> = if let Some(list) = todo_list {
-            list.todo
-                .iter()
-                .filter(|item| !item.done)
-                .map(|item| item.id.as_str().to_string())
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // Update the session's todos vector
-        self.session_manager
-            .update_session(&session_id_parsed, |session| {
-                session.todos = todo_ids;
-            })?;
-
-        Ok(())
     }
 
     /// List all available tools including MCP tools

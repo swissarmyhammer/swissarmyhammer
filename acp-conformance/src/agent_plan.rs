@@ -58,8 +58,8 @@ pub async fn test_agent_sends_plan_notifications<A: Agent + ?Sized>(
     let new_session_response = agent.new_session(new_session_request).await?;
     let session_id = new_session_response.session_id;
 
-    // Ask agent to use todo_create tool which should trigger plan notifications
-    // The TestMcpServer and SwissArmyHammer both have todo tools
+    // Ask agent to use create-plan tool which should trigger plan notifications
+    // The TestMcpServer has planning tools for this test
     let text_content = TextContent::new(
         "Create a todo item using the mcp__test-mcp-server__create-plan tool with goal 'Implement user authentication'. \
          This is a multi-step task that requires planning.",

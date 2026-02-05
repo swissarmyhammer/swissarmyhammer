@@ -39,6 +39,13 @@ pub const NOTIFICATION_CHANNEL_CAPACITY: usize = 4096;
 /// Log file name within the AVP directory.
 const LOG_FILE_NAME: &str = "avp.log";
 
+/// Result type for directory initialization
+type InitDirectoriesResult = (
+    ManagedDirectory<AvpConfig>,
+    Option<ManagedDirectory<AvpConfig>>,
+    Option<Arc<StdMutex<File>>>,
+);
+
 /// Spawn a task to forward notifications from a receiver to a sender.
 ///
 /// This is used when injecting an agent to bridge its notification receiver
@@ -243,14 +250,7 @@ impl AvpContext {
     }
 
     /// Initialize directories and log file (shared by init and with_agent).
-    fn init_directories() -> Result<
-        (
-            ManagedDirectory<AvpConfig>,
-            Option<ManagedDirectory<AvpConfig>>,
-            Option<Arc<StdMutex<File>>>,
-        ),
-        AvpError,
-    > {
+    fn init_directories() -> Result<InitDirectoriesResult, AvpError> {
         let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
             AvpError::Context(format!(
                 "failed to create {} directory: {}",

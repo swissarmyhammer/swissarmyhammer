@@ -99,12 +99,12 @@
 //! ## Configuration Loading
 //!
 //! ```no_run
-//! use swissarmyhammer_config::model::{parse_agent_config, parse_agent_description};
+//! use swissarmyhammer_config::model::{parse_model_config, parse_model_description};
 //!
 //! let agent_content = std::fs::read_to_string("./agents/my-agent.yaml")?;
 //!
 //! // Extract description
-//! let description = parse_agent_description(&agent_content);
+//! let description = parse_model_description(&agent_content);
 //! println!("Description: {:?}", description);
 //!
 //! // Parse configuration
@@ -675,6 +675,7 @@ impl ModelManager {
     ///              match agent.source {
     ///                  swissarmyhammer_config::model::ModelConfigSource::Builtin => "built-in",
     ///                  swissarmyhammer_config::model::ModelConfigSource::Project => "project",
+    ///                  swissarmyhammer_config::model::ModelConfigSource::GitRoot => "gitroot",
     ///                  swissarmyhammer_config::model::ModelConfigSource::User => "user",
     ///              });
     /// }
@@ -914,14 +915,14 @@ impl ModelManager {
     ///
     /// # Examples
     /// ```no_run
-    /// use swissarmyhammer_config::model::{ModelManager, ModelSource};
+    /// use swissarmyhammer_config::model::{ModelManager, ModelConfigSource};
     /// use std::path::Path;
     ///
     /// let models = ModelManager::load_models_from_dir(
     ///     Path::new("./models"),
     ///     ModelConfigSource::Project
     /// )?;
-    /// # Ok::<(), swissarmyhammer_config::ModelError>(())
+    /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
     pub fn load_models_from_dir(
         dir_path: &Path,
@@ -1930,52 +1931,29 @@ impl ModelManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-    /// Test helper: Setup a temporary directory and change to it, returning cleanup guard
-    ///
-    /// Returns (TempDir, original_dir) - when dropped, TempDir cleans up and you should restore original_dir
-    fn setup_temp_test_dir() -> (tempfile::TempDir, std::path::PathBuf) {
-        use std::env;
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
-        (temp_dir, original_dir)
-    }
-
-    /// Test helper: Restore original directory after test
-    fn restore_dir(original_dir: std::path::PathBuf) {
-        use std::env;
-        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
-    }
-
-    /// Test helper: Setup config test environment with optional initial config content
-    ///
-    /// Creates .swissarmyhammer directory and optionally writes a config file.
-    /// Returns (TempDir, config_path, original_dir)
+    /// Set up a temporary config test environment with directory change
+    /// Returns (temp_dir, config_path, guard)
     fn setup_config_test_env(
-        config_file: &str,
-        content: Option<&str>,
-    ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
-        let (temp_dir, original_dir) = setup_temp_test_dir();
-        let config_path = create_config_file(&temp_dir, config_file, content);
-        (temp_dir, config_path, original_dir)
-    }
+        config_filename: &str,
+        initial_content: Option<&str>,
+    ) -> (tempfile::TempDir, std::path::PathBuf, CurrentDirGuard) {
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        std::fs::create_dir(temp_dir.path().join(".git"))
+            .expect("Failed to create .git marker");
+        let guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
-    /// Create config file in temp directory with optional content
-    fn create_config_file(
-        temp_dir: &tempfile::TempDir,
-        config_file: &str,
-        content: Option<&str>,
-    ) -> std::path::PathBuf {
-        use std::fs;
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
-        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        std::fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
 
-        let config_path = sah_dir.join(config_file);
-        if let Some(content) = content {
-            fs::write(&config_path, content).expect("Failed to write config file");
+        let config_path = sah_dir.join(config_filename);
+        if let Some(content) = initial_content {
+            std::fs::write(&config_path, content).expect("Failed to write config file");
         }
-        config_path
+
+        (temp_dir, config_path, guard)
     }
 
     #[test]
@@ -2758,14 +2736,12 @@ quiet: false"#;
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_list_agents_overriding_with_temp_files() {
-        use std::env;
         use std::fs;
-        use tempfile::TempDir;
 
-        // Create temporary directories for testing
-        let temp_project_dir = TempDir::new().expect("Failed to create temp project dir");
-        let temp_user_dir = TempDir::new().expect("Failed to create temp user dir");
+        let temp_project_dir = tempfile::TempDir::new().expect("Failed to create temp project dir");
+        let temp_user_dir = tempfile::TempDir::new().expect("Failed to create temp user dir");
 
         // Create project agent that overrides a builtin agent
         let project_claude_content = r#"---
@@ -2819,16 +2795,9 @@ quiet: false"#;
         )
         .expect("Failed to write unique project agent");
 
-        // Temporarily change working directory to test project agents
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_project_dir).expect("Failed to change to temp project dir");
-
         // Mock home directory for user agents test
         // Note: This is tricky to test without mocking the dirs::home_dir() function
         // For now, we'll test the directory loading function directly
-
-        let result = env::set_current_dir(&original_dir);
-        assert!(result.is_ok(), "Failed to restore original directory");
 
         // Test direct directory loading instead since we can't easily mock home_dir
         let project_agents =
@@ -3066,27 +3035,37 @@ quiet: false"#;
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_detect_config_file_no_config() {
-        use std::env;
-        use tempfile::TempDir;
+        use std::fs;
 
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         let result = ModelManager::detect_config_file();
         assert!(
             result.is_none(),
             "Should return None when no config files exist"
         );
-
-        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_detect_config_file_yaml_exists() {
-        let (_temp_dir, _yaml_path, original_dir) =
-            setup_config_test_env("sah.yaml", Some("agent: {}\n"));
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
+        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        let yaml_path = sah_dir.join("sah.yaml");
+        fs::write(&yaml_path, "agent: {}\n").expect("Failed to write yaml config");
 
         let result = ModelManager::detect_config_file();
         assert!(result.is_some(), "Should find yaml config file");
@@ -3101,14 +3080,23 @@ quiet: false"#;
             found_path.ends_with(".swissarmyhammer/sah.yaml"),
             "Should end with .swissarmyhammer/sah.yaml"
         );
-
-        restore_dir(original_dir);
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_detect_config_file_toml_fallback() {
-        let (_temp_dir, _toml_path, original_dir) =
-            setup_config_test_env("sah.toml", Some("[agent]\n"));
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
+        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        let toml_path = sah_dir.join("sah.toml");
+        fs::write(&toml_path, "[agent]\n").expect("Failed to write toml config");
 
         let result = ModelManager::detect_config_file();
         assert!(result.is_some(), "Should find toml config file");
@@ -3123,19 +3111,18 @@ quiet: false"#;
             found_path.ends_with(".swissarmyhammer/sah.toml"),
             "Should end with .swissarmyhammer/sah.toml"
         );
-
-        restore_dir(original_dir);
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_detect_config_file_yaml_precedence() {
-        use std::env;
         use std::fs;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         // Create .swissarmyhammer directory with both yaml and toml configs
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
@@ -3158,18 +3145,18 @@ quiet: false"#;
             found_path.ends_with(".swissarmyhammer/sah.yaml"),
             "Should end with .swissarmyhammer/sah.yaml"
         );
-
-        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_ensure_config_structure_creates_directory() {
-        use std::env;
+        use std::fs;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         let result = ModelManager::ensure_config_structure();
         assert!(
@@ -3192,19 +3179,17 @@ quiet: false"#;
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         assert!(sah_dir.exists(), "Should create .swissarmyhammer directory");
         assert!(sah_dir.is_dir(), "Should create directory, not file");
-
-        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_ensure_config_structure_existing_directory() {
-        use std::env;
         use std::fs;
-        use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         // Pre-create the directory
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
@@ -3226,19 +3211,17 @@ quiet: false"#;
             config_path.ends_with(".swissarmyhammer/sah.yaml"),
             "Should end with .swissarmyhammer/sah.yaml"
         );
-
-        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_ensure_config_structure_with_existing_config() {
-        use std::env;
         use std::fs;
-        use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         // Pre-create directory and existing config file
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
@@ -3261,14 +3244,12 @@ quiet: false"#;
             config_path.ends_with(".swissarmyhammer/sah.toml"),
             "Should return existing toml config"
         );
-
-        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
     fn test_agent_manager_use_agent_creates_new_config() {
         use std::fs;
-        let (temp_dir, _config_path, original_dir) = setup_config_test_env("sah.yaml", None);
+        let (temp_dir, _config_path, _guard) = setup_config_test_env("sah.yaml", None);
 
         let result = ModelManager::use_agent("claude-code");
         assert!(result.is_ok(), "Should successfully use claude-code agent");
@@ -3289,7 +3270,6 @@ quiet: false"#;
             "Should contain root use case"
         );
 
-        restore_dir(original_dir);
     }
 
     #[test]
@@ -3300,7 +3280,7 @@ other_section:
   value: "preserved"
   number: 42
 "#;
-        let (_temp_dir, config_path, original_dir) =
+        let (_temp_dir, config_path, _guard) =
             setup_config_test_env("sah.yaml", Some(existing_config));
 
         let result = ModelManager::use_agent("claude-code");
@@ -3328,7 +3308,6 @@ other_section:
             "Should contain root use case"
         );
 
-        restore_dir(original_dir);
     }
 
     #[test]
@@ -3340,7 +3319,7 @@ other_section:
 agents:
   root: "qwen-coder"
 "#;
-        let (_temp_dir, config_path, original_dir) =
+        let (_temp_dir, config_path, _guard) =
             setup_config_test_env("sah.yaml", Some(existing_config));
 
         let result = ModelManager::use_agent("claude-code");
@@ -3369,17 +3348,17 @@ agents:
             "Should replace old agent config"
         );
 
-        restore_dir(original_dir);
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_use_agent_not_found() {
-        use std::env;
-        use tempfile::TempDir;
+        use std::fs;
 
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         let result = ModelManager::use_agent("non-existent-agent");
         assert!(result.is_err(), "Should fail for non-existent agent");
@@ -3390,8 +3369,6 @@ agents:
             }
             _ => panic!("Should return NotFound error"),
         }
-
-        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
@@ -3430,14 +3407,14 @@ agents:
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_resolve_agent_fallback_chain() {
-        use std::env;
         use std::fs;
-        use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_dir = env::current_dir().expect("Failed to get current dir");
-        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         // Test 1: No config - should return default claude-code
         let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows);
@@ -3483,28 +3460,25 @@ agents:
         assert!(result.is_ok(), "Should resolve root use case");
         let config = result.unwrap();
         assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-
-        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
 
     // Use Case Resolution Tests
     mod use_case_resolution_tests {
         use super::*;
-        use tempfile::TempDir;
 
-        fn setup_test_env() -> TempDir {
-            let temp_dir = TempDir::new().unwrap();
-            std::env::set_current_dir(temp_dir.path()).unwrap();
+        fn setup_test_env() -> tempfile::TempDir {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            // Create a .git directory to prevent config discovery from walking up to the real repo
+            std::fs::create_dir(temp_dir.path().join(".git"))
+                .expect("Failed to create .git marker");
             temp_dir
         }
 
-        // Note: This is a simplified test setup that doesn't need the full
-        // setup_temp_test_dir pattern since tests in this module don't need
-        // to restore the original directory
-
         #[test]
+        #[serial_test::serial(cwd)]
         fn test_resolve_use_case_with_specific_agent() {
-            let _temp = setup_test_env();
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
             // Set Workflows to specific agent
             ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Workflows).unwrap();
@@ -3519,8 +3493,10 @@ agents:
         }
 
         #[test]
+        #[serial_test::serial(cwd)]
         fn test_fallback_to_root_when_use_case_not_configured() {
-            let _temp = setup_test_env();
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
             // Set only Root
             ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Root).unwrap();
@@ -3535,8 +3511,10 @@ agents:
         }
 
         #[test]
+        #[serial_test::serial(cwd)]
         fn test_fallback_to_default_when_nothing_configured() {
-            let _temp = setup_test_env();
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
             // Don't configure anything
             // Should fall back to default (claude-code)
@@ -3566,8 +3544,10 @@ agents:
         }
 
         #[test]
+        #[serial_test::serial(cwd)]
         fn test_backward_compatibility_with_old_config() {
-            let _temp = setup_test_env();
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
             // Create old-style config
             let config_path = ModelManager::ensure_config_structure().unwrap();
@@ -3579,8 +3559,10 @@ agents:
         }
 
         #[test]
+        #[serial_test::serial(cwd)]
         fn test_new_config_format() {
-            let _temp = setup_test_env();
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
             // Create new-style config
             let config_path = ModelManager::ensure_config_structure().unwrap();
