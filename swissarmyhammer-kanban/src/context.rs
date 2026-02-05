@@ -113,12 +113,39 @@ impl KanbanContext {
         self.board_path().exists()
     }
 
+    /// Check if all required directories exist
+    pub fn directories_exist(&self) -> bool {
+        self.root.exists()
+            && self.tasks_dir().exists()
+            && self.actors_dir().exists()
+            && self.tags_dir().exists()
+            && self.activity_dir().exists()
+    }
+
     /// Create the directory structure for a new board
+    ///
+    /// This is idempotent - safe to call multiple times.
+    /// Creates the root .kanban directory and all subdirectories.
     pub async fn create_directories(&self) -> Result<()> {
+        // Ensure root .kanban directory exists first
+        fs::create_dir_all(&self.root).await?;
+
+        // Create all subdirectories
         fs::create_dir_all(self.tasks_dir()).await?;
         fs::create_dir_all(self.actors_dir()).await?;
         fs::create_dir_all(self.tags_dir()).await?;
         fs::create_dir_all(self.activity_dir()).await?;
+        Ok(())
+    }
+
+    /// Ensure directories exist, creating them if needed
+    ///
+    /// This should be called at the start of operations that need directories.
+    /// It's idempotent and fast when directories already exist.
+    pub async fn ensure_directories(&self) -> Result<()> {
+        if !self.directories_exist() {
+            self.create_directories().await?;
+        }
         Ok(())
     }
 
@@ -561,5 +588,90 @@ mod tests {
         // After dropping, should be able to lock again
         drop(lock1);
         let _lock2 = ctx.lock().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_create_directories_creates_root() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+
+        // DO NOT manually create .kanban directory - that's what we're testing
+        let ctx = KanbanContext::new(&kanban_dir);
+
+        // Root should not exist yet
+        assert!(!ctx.root().exists());
+
+        // create_directories should create root AND subdirectories
+        ctx.create_directories().await.unwrap();
+
+        // Verify root exists
+        assert!(ctx.root().exists());
+        assert!(ctx.root().is_dir());
+
+        // Verify all subdirectories exist
+        assert!(ctx.tasks_dir().exists());
+        assert!(ctx.actors_dir().exists());
+        assert!(ctx.tags_dir().exists());
+        assert!(ctx.activity_dir().exists());
+    }
+
+    #[tokio::test]
+    async fn test_directories_exist_checks_all_dirs() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(&kanban_dir);
+
+        // Initially nothing exists
+        assert!(!ctx.directories_exist());
+
+        // Create only root
+        std::fs::create_dir_all(ctx.root()).unwrap();
+        assert!(!ctx.directories_exist(), "Should require all subdirs");
+
+        // Create all directories
+        ctx.create_directories().await.unwrap();
+        assert!(ctx.directories_exist());
+
+        // Remove one subdirectory
+        std::fs::remove_dir_all(ctx.actors_dir()).unwrap();
+        assert!(
+            !ctx.directories_exist(),
+            "Should detect missing actors dir"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ensure_directories_is_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(&kanban_dir);
+
+        // Call multiple times
+        ctx.ensure_directories().await.unwrap();
+        ctx.ensure_directories().await.unwrap();
+        ctx.ensure_directories().await.unwrap();
+
+        // Should work without errors
+        assert!(ctx.directories_exist());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_directories_recreates_missing() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(&kanban_dir);
+
+        // Create directories
+        ctx.ensure_directories().await.unwrap();
+        assert!(ctx.directories_exist());
+
+        // Delete actors directory
+        std::fs::remove_dir_all(ctx.actors_dir()).unwrap();
+        assert!(!ctx.directories_exist());
+
+        // ensure_directories should recreate it
+        ctx.ensure_directories().await.unwrap();
+        assert!(ctx.directories_exist());
+        assert!(ctx.actors_dir().exists());
     }
 }

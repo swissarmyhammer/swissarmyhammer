@@ -338,6 +338,11 @@ impl McpTool for KanbanTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let ctx = Self::get_kanban_context(_context)?;
 
+        // Ensure directory structure exists (idempotent)
+        ctx.ensure_directories().await.map_err(|e| {
+            McpError::internal_error(format!("Failed to create kanban directories: {}", e), None)
+        })?;
+
         // Parse the input to get operations
         let input = Value::Object(arguments);
         let operations = parse_input(input).map_err(|e| {
@@ -2594,5 +2599,111 @@ mod tests {
         let task_log = std::fs::read_to_string(task_log_path).unwrap();
         let log_lines: Vec<&str> = task_log.lines().collect();
         assert_eq!(log_lines.len(), 2); // add + update (not get)
+    }
+
+    // =========================================================================
+    // Directory initialization tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_operations_fail_gracefully_without_init() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+
+        // DO NOT call init_test_board - this is the bug we're testing for
+
+        // Try to add a task without initializing
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Task without init"));
+
+        let result = tool.execute(add_args, &context).await;
+
+        // Should fail with NotInitialized error, not IO error
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.message.to_lowercase();
+        assert!(
+            err_msg.contains("not initialized") || err_msg.contains("board"),
+            "Error should mention board not initialized, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ensure_directories_is_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        // Call ensure_directories multiple times
+        ctx.ensure_directories().await.unwrap();
+        ctx.ensure_directories().await.unwrap();
+        ctx.ensure_directories().await.unwrap();
+
+        // Verify all directories exist
+        assert!(ctx.directories_exist());
+        assert!(ctx.root().exists());
+        assert!(ctx.tasks_dir().exists());
+        assert!(ctx.actors_dir().exists());
+        assert!(ctx.tags_dir().exists());
+        assert!(ctx.activity_dir().exists());
+    }
+
+    #[tokio::test]
+    async fn test_add_actor_without_init_succeeds_after_ensure() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+
+        // Initialize board (creates board.json and dirs)
+        init_test_board(&tool, &context).await;
+
+        // Manually delete the actors directory to simulate missing subdirs
+        let kanban_ctx = KanbanContext::find(temp.path()).unwrap();
+        tokio::fs::remove_dir_all(kanban_ctx.actors_dir())
+            .await
+            .unwrap();
+
+        // Try to add actor - should succeed because ensure_directories() was added
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add actor"));
+        add_args.insert("id".to_string(), json!("alice"));
+        add_args.insert("name".to_string(), json!("Alice"));
+        add_args.insert("actor_type".to_string(), json!("human"));
+        add_args.insert("ensure".to_string(), json!(false));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(data["actor"]["id"], "alice");
+        assert_eq!(data["actor"]["name"], "Alice");
+    }
+
+    #[tokio::test]
+    async fn test_directories_exist_check() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(&kanban_dir);
+
+        // Initially no directories exist
+        assert!(!ctx.directories_exist());
+
+        // Create directories
+        ctx.create_directories().await.unwrap();
+
+        // Now they should exist
+        assert!(ctx.directories_exist());
+
+        // Delete one subdirectory
+        tokio::fs::remove_dir_all(ctx.actors_dir()).await.unwrap();
+
+        // directories_exist should now return false
+        assert!(!ctx.directories_exist());
     }
 }
