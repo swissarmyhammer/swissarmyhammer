@@ -377,6 +377,71 @@ pub fn database_path(workspace_root: &Path) -> PathBuf {
     workspace_root.join(DEFAULT_DB_FILENAME)
 }
 
+/// Ensure the root .gitignore contains tree-sitter database entries
+///
+/// This function checks if the .gitignore file at the workspace root contains
+/// the necessary entries for tree-sitter database files. If not, it appends them.
+///
+/// Entries added:
+/// - `.treesitter-index.db`
+/// - `.treesitter-index.db-shm`
+/// - `.treesitter-index.db-wal`
+///
+/// # Errors
+///
+/// Returns an error if the .gitignore file cannot be read or written.
+pub fn ensure_root_gitignore(workspace_root: &Path) -> std::io::Result<()> {
+    let gitignore_path = workspace_root.join(".gitignore");
+
+    // Required entries for tree-sitter database files
+    let required_entries = [
+        ".treesitter-index.db",
+        ".treesitter-index.db-shm",
+        ".treesitter-index.db-wal",
+    ];
+
+    // Read existing content or start with empty string
+    let existing_content = if gitignore_path.exists() {
+        std::fs::read_to_string(&gitignore_path)?
+    } else {
+        String::new()
+    };
+
+    // Check which entries are missing
+    let mut missing_entries = Vec::new();
+    for entry in &required_entries {
+        // Check if entry exists as a line (avoiding partial matches)
+        if !existing_content.lines().any(|line| line.trim() == *entry) {
+            missing_entries.push(*entry);
+        }
+    }
+
+    // If all entries exist, nothing to do
+    if missing_entries.is_empty() {
+        return Ok(());
+    }
+
+    // Append missing entries
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&gitignore_path)?;
+
+    // Add a section header if we're adding entries
+    if !existing_content.is_empty() && !existing_content.ends_with('\n') {
+        writeln!(file)?;
+    }
+
+    writeln!(file)?;
+    writeln!(file, "# Tree-sitter index database files")?;
+    for entry in missing_entries {
+        writeln!(file, "{}", entry)?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,5 +732,92 @@ mod tests {
         db.rollback_transaction().unwrap();
 
         assert_eq!(db.file_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_ensure_root_gitignore_creates_new() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+
+        // Ensure .gitignore doesn't exist yet
+        assert!(!gitignore_path.exists());
+
+        // Run ensure_root_gitignore
+        ensure_root_gitignore(temp.path()).unwrap();
+
+        // Verify .gitignore was created with all entries
+        assert!(gitignore_path.exists());
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        assert!(content.contains("# Tree-sitter index database files"));
+        assert!(content.contains(".treesitter-index.db"));
+        assert!(content.contains(".treesitter-index.db-shm"));
+        assert!(content.contains(".treesitter-index.db-wal"));
+    }
+
+    #[test]
+    fn test_ensure_root_gitignore_appends_missing() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+
+        // Create .gitignore with some existing content
+        std::fs::write(&gitignore_path, "# Existing content\n*.log\n").unwrap();
+
+        // Run ensure_root_gitignore
+        ensure_root_gitignore(temp.path()).unwrap();
+
+        // Verify existing content is preserved and new entries added
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        assert!(content.contains("# Existing content"));
+        assert!(content.contains("*.log"));
+        assert!(content.contains("# Tree-sitter index database files"));
+        assert!(content.contains(".treesitter-index.db"));
+        assert!(content.contains(".treesitter-index.db-shm"));
+        assert!(content.contains(".treesitter-index.db-wal"));
+    }
+
+    #[test]
+    fn test_ensure_root_gitignore_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+
+        // Create .gitignore with tree-sitter entries already present
+        let initial_content = r#"# Existing
+*.log
+
+# Tree-sitter index database files
+.treesitter-index.db
+.treesitter-index.db-shm
+.treesitter-index.db-wal
+"#;
+        std::fs::write(&gitignore_path, initial_content).unwrap();
+
+        // Run ensure_root_gitignore
+        ensure_root_gitignore(temp.path()).unwrap();
+
+        // Verify content hasn't changed (idempotent)
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        assert_eq!(content, initial_content);
+    }
+
+    #[test]
+    fn test_ensure_root_gitignore_partial_entries() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+
+        // Create .gitignore with only one of the entries
+        std::fs::write(&gitignore_path, "# Existing\n.treesitter-index.db\n").unwrap();
+
+        // Run ensure_root_gitignore
+        ensure_root_gitignore(temp.path()).unwrap();
+
+        // Verify missing entries were added
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        assert!(content.contains(".treesitter-index.db"));
+        assert!(content.contains(".treesitter-index.db-shm"));
+        assert!(content.contains(".treesitter-index.db-wal"));
+
+        // Count occurrences - should only have one .treesitter-index.db
+        let db_count = content.lines().filter(|l| l.trim() == ".treesitter-index.db").count();
+        assert_eq!(db_count, 1, "Should not duplicate existing entries");
     }
 }

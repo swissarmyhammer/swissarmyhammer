@@ -108,7 +108,7 @@ pub use query::{
 };
 
 // Database types
-pub use db::{ChunkRecord, EmbeddedChunkRecord, IndexDatabase};
+pub use db::{database_path, ensure_root_gitignore, ChunkRecord, EmbeddedChunkRecord, IndexDatabase};
 
 // Workspace with automatic leader/client mode using SQLite storage
 pub use unified::{Workspace, WorkspaceBuilder};

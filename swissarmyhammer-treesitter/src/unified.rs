@@ -286,6 +286,11 @@ impl Workspace {
         index_config: IndexConfig,
         progress_callback: Option<ProgressCallback>,
     ) -> Result<Self> {
+        // Ensure root .gitignore contains tree-sitter database entries
+        crate::db::ensure_root_gitignore(&workspace_root).map_err(|e| {
+            TreeSitterError::database_error(format!("Failed to update root .gitignore: {}", e))
+        })?;
+
         let election = LeaderElection::with_config(&workspace_root, election_config);
         let db_path = database_path(&workspace_root);
 
