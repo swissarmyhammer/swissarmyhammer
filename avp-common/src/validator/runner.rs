@@ -477,8 +477,8 @@ pub struct ValidatorRunner {
     partials: HashMapPartialLoader,
     /// Agent for executing prompts
     agent: Arc<dyn Agent + Send + Sync>,
-    /// Notification sender for resubscription
-    notifications: broadcast::Sender<SessionNotification>,
+    /// Notification sender with per-session channels
+    notifier: Arc<claude_agent::NotificationSender>,
     /// Concurrency limiter for parallel execution
     concurrency: Arc<ConcurrencyLimiter>,
 }
@@ -486,13 +486,12 @@ pub struct ValidatorRunner {
 impl ValidatorRunner {
     /// Create a new ValidatorRunner with the given agent and notification sender.
     ///
-    /// Takes the notification Sender directly so we can subscribe() for each
-    /// rule turn without any forwarding hops. The agent publishes notifications
-    /// synchronously before prompt() returns, so subscribers see all content
-    /// immediately.
+    /// Takes the NotificationSender which provides per-session channels.
+    /// Each RuleSet session subscribes to its own channel - no cross-session
+    /// notification bleed.
     pub fn new(
         agent: Arc<dyn Agent + Send + Sync>,
-        notifications: broadcast::Sender<SessionNotification>,
+        notifier: Arc<claude_agent::NotificationSender>,
     ) -> Result<Self, AvpError> {
         let prompt_library = Self::load_prompt_library()?;
         let partials = Self::load_validator_partials();
@@ -502,7 +501,7 @@ impl ValidatorRunner {
             prompt_library: Arc::new(prompt_library),
             partials,
             agent,
-            notifications,
+            notifier,
             concurrency,
         })
     }
@@ -644,7 +643,7 @@ impl ValidatorRunner {
             Err(e) => return (create_render_error(validator, &e), false),
         };
 
-        let notifications = self.notifications.subscribe();
+        let notifications = self.notifier.sender().subscribe();
         let response =
             claude_agent::execute_prompt_with_agent(&*self.agent, notifications, prompt_text).await;
 
@@ -729,7 +728,7 @@ impl ValidatorRunner {
             prompt_library: Arc::clone(&self.prompt_library),
             partials: self.partials.clone(),
             agent: Arc::clone(&self.agent),
-            notifications_tx: self.notifications.clone(),
+            notifications_tx: self.notifier.sender(),
         }
     }
 
@@ -869,6 +868,11 @@ impl ValidatorRunner {
         };
 
         let session_id = session_response.session_id;
+        tracing::debug!(
+            "RuleSet '{}' got session_id={}",
+            ruleset.name(),
+            session_id
+        );
 
         let mut rule_results = Vec::new();
         let mut is_rate_limited = false;
@@ -879,8 +883,8 @@ impl ValidatorRunner {
             vec![ContentBlock::Text(TextContent::new(init_prompt))],
         );
 
-        // Collector for init prompt - runs concurrently while prompt() blocks
-        let init_notifications = self.notifications.subscribe();
+        // Subscribe to this session's dedicated notification channel
+        let init_notifications = self.notifier.subscribe_session(&session_id.0);
         let (init_collector, _init_text, _, _) =
             claude_agent::spawn_notification_collector(init_notifications, session_id.clone());
 
@@ -918,7 +922,7 @@ impl ValidatorRunner {
 
             // Spawn collector BEFORE prompt - it runs concurrently, collecting
             // notifications as they stream in during prompt execution
-            let rule_notifications = self.notifications.subscribe();
+            let rule_notifications = self.notifier.subscribe_session(&session_id.0);
             let (rule_collector, rule_text, _, _) =
                 claude_agent::spawn_notification_collector(rule_notifications, session_id.clone());
 
@@ -1063,7 +1067,7 @@ impl ValidatorRunner {
             prompt_library: Arc::clone(&self.prompt_library),
             partials: self.partials.clone(),
             agent: Arc::clone(&self.agent),
-            notifications: self.notifications.clone(),
+            notifier: Arc::clone(&self.notifier),
             concurrency: Arc::clone(&self.concurrency),
         }
     }
@@ -1368,11 +1372,12 @@ mod tests {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
         let rx = agent.subscribe_notifications();
-        let (tx, _) = broadcast::channel(64);
-        let tx2 = tx.clone();
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), tx);
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier);
         assert!(runner.is_ok(), "ValidatorRunner::new should succeed");
 
         let runner = runner.unwrap();
@@ -1391,11 +1396,12 @@ mod tests {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
         let rx = agent.subscribe_notifications();
-        let (tx, _) = broadcast::channel(64);
-        let tx2 = tx.clone();
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
 
         // current_concurrency should return a valid value
         let concurrency = runner.current_concurrency();
@@ -1408,11 +1414,12 @@ mod tests {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
         let rx = agent.subscribe_notifications();
-        let (tx, _) = broadcast::channel(64);
-        let tx2 = tx.clone();
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
 
@@ -1429,11 +1436,12 @@ mod tests {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
         let rx = agent.subscribe_notifications();
-        let (tx, _) = broadcast::channel(64);
-        let tx2 = tx.clone();
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let context = serde_json::json!({"tool_name": "Write"});
 
         // Empty validators list should return empty results
@@ -1453,11 +1461,12 @@ mod tests {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
         let rx = agent.subscribe_notifications();
-        let (tx, _) = broadcast::channel(64);
-        let tx2 = tx.clone();
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"session_id": "test"});
         let changed_files = vec!["src/lib.rs".to_string(), "src/main.rs".to_string()];
@@ -1475,11 +1484,12 @@ mod tests {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_FAIL);
         let agent = PlaybackAgent::new(fixture_path, "test");
         let rx = agent.subscribe_notifications();
-        let (tx, _) = broadcast::channel(64);
-        let tx2 = tx.clone();
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
 

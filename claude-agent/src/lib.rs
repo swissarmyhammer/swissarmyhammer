@@ -63,6 +63,7 @@ pub mod url_validation;
 
 // Re-exports for convenient access to main types
 pub use agent::{ClaudeAgent, RawMessageManager};
+pub use agent_notifications::NotificationSender;
 pub use claude_process::SpawnConfig;
 pub use config::{AgentConfig, McpServerConfig};
 pub use error::{AgentError, Result};
@@ -133,13 +134,13 @@ pub struct CreateAgentConfig {
 /// ```
 pub async fn create_agent(
     config: CreateAgentConfig,
-) -> Result<(ClaudeAgent, broadcast::Sender<SessionNotification>)> {
+) -> Result<(ClaudeAgent, Arc<crate::agent_notifications::NotificationSender>)> {
     let mut agent_config = AgentConfig::default();
     agent_config.claude.ephemeral = config.ephemeral;
     agent_config.mcp_servers = config.mcp_servers;
     let (agent, _receiver) = ClaudeAgent::new(agent_config).await?;
-    let sender = agent.notification_sender.sender();
-    Ok((agent, sender))
+    let notifier = Arc::clone(&agent.notification_sender);
+    Ok((agent, notifier))
 }
 
 /// Execute a prompt and collect the response content.

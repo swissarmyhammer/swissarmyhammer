@@ -1183,6 +1183,10 @@ impl ClaudeAgent {
             self.store_mcp_servers_in_session(&session_id, &request.mcp_servers)?;
         }
 
+        // Register per-session notification channel
+        self.notification_sender
+            .register_session(&session_id.to_string());
+
         tracing::info!("Created session: {}", session_id);
         Ok(session_id)
     }

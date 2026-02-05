@@ -39,38 +39,6 @@ pub const NOTIFICATION_CHANNEL_CAPACITY: usize = 4096;
 /// Log file name within the AVP directory.
 const LOG_FILE_NAME: &str = "avp.log";
 
-/// Spawn a task to forward notifications from a receiver to a sender.
-///
-/// This is used when injecting an agent to bridge its notification receiver
-/// to our internal broadcast channel.
-fn spawn_notification_forwarder(
-    mut rx: broadcast::Receiver<SessionNotification>,
-    tx: broadcast::Sender<SessionNotification>,
-) {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(notification) => {
-                    let _ = tx.send(notification);
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    // Channel buffer overflowed - some messages were dropped
-                    // Continue forwarding remaining messages
-                    tracing::warn!(
-                        skipped_messages = n,
-                        "Notification forwarder lagged - some messages may be lost"
-                    );
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    // Channel closed - no more messages
-                    tracing::trace!("Notification forwarder channel closed");
-                    break;
-                }
-            }
-        }
-    });
-}
 
 /// Decision outcome for a hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,10 +85,10 @@ pub struct ValidatorEvent<'a> {
     pub hook_type: &'a str,
 }
 
-/// Holds the agent and notification channel.
+/// Holds the agent and notification sender.
 struct AgentHandle {
     agent: Arc<dyn Agent + Send + Sync>,
-    notifications: broadcast::Sender<SessionNotification>,
+    notifier: Arc<claude_agent::NotificationSender>,
 }
 
 /// AVP Context - manages the AVP directory, logging, agent access, turn state, and validator execution.
@@ -221,9 +189,26 @@ impl AvpContext {
     ) -> Result<Self, AvpError> {
         let (project_dir, home_dir, log_file) = Self::init_directories()?;
 
-        // Create broadcast channel and forward notifications from injected receiver
-        let (tx, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
-        spawn_notification_forwarder(notifications, tx.clone());
+        // Create a NotificationSender and forward from the injected receiver
+        // This is for test/playback agents that provide a Receiver
+        let (notifier, _) =
+            claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
+        let notifier = Arc::new(notifier);
+        let notifier_clone = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = notifications;
+            loop {
+                match rx.recv().await {
+                    Ok(notification) => {
+                        let _ = notifier_clone.send_update(notification).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "with_agent notification forwarder lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
 
         // Create turn state manager
         let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
@@ -235,7 +220,7 @@ impl AvpContext {
             log_file,
             agent_handle: Arc::new(Mutex::new(Some(AgentHandle {
                 agent,
-                notifications: tx,
+                notifier,
             }))),
             turn_state,
             runner_cache: Mutex::new(None),
@@ -266,13 +251,13 @@ impl AvpContext {
     /// Get the agent for validator execution.
     ///
     /// Creates an ephemeral ClaudeAgent on first access if not already created.
-    /// Returns a reference to the agent and the notification sender (for subscribing).
+    /// Returns a reference to the agent and the notification sender (for per-session subscribing).
     pub async fn agent(
         &self,
     ) -> Result<
         (
             Arc<dyn Agent + Send + Sync>,
-            broadcast::Sender<SessionNotification>,
+            Arc<claude_agent::NotificationSender>,
         ),
         AvpError,
     > {
@@ -283,7 +268,7 @@ impl AvpContext {
             let start = std::time::Instant::now();
 
             let config = CreateAgentConfig::builder().ephemeral(true).build();
-            let (agent, sender) = claude_agent::create_agent(config)
+            let (agent, notifier) = claude_agent::create_agent(config)
                 .await
                 .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
 
@@ -294,12 +279,12 @@ impl AvpContext {
 
             *guard = Some(AgentHandle {
                 agent: Arc::new(agent),
-                notifications: sender,
+                notifier,
             });
         }
 
         let handle = guard.as_ref().unwrap();
-        Ok((Arc::clone(&handle.agent), handle.notifications.clone()))
+        Ok((Arc::clone(&handle.agent), Arc::clone(&handle.notifier)))
     }
 
     /// Get the project AVP directory path.
