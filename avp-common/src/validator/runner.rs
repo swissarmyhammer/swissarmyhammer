@@ -291,6 +291,50 @@ impl Default for ConcurrencyLimiter {
     }
 }
 
+/// Collect all notification content for a completed prompt turn.
+///
+/// After `agent.prompt()` returns, the notification forwarder may still be
+/// flushing messages through the broadcast channel. This function uses
+/// `recv().await` to wait for messages, with a timeout to detect when the
+/// stream is done. This is event-driven (not a sleep) - it only waits
+/// when there are messages still in flight.
+async fn drain_notifications(
+    rx: &mut broadcast::Receiver<SessionNotification>,
+    session_id: &agent_client_protocol::SessionId,
+) -> String {
+    use agent_client_protocol::{ContentBlock, SessionUpdate};
+
+    let mut collected = String::new();
+
+    loop {
+        // Wait for next notification, but give up if nothing arrives
+        // within 100ms - that means the forwarder has flushed everything
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx.recv(),
+        )
+        .await
+        {
+            Ok(Ok(notification)) => {
+                if notification.session_id == *session_id {
+                    if let SessionUpdate::AgentMessageChunk(chunk) = &notification.update {
+                        if let ContentBlock::Text(text) = &chunk.content {
+                            collected.push_str(&text.text);
+                        }
+                    }
+                }
+            }
+            Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
+                tracing::warn!("Notification receiver lagged, skipped {} messages", n);
+            }
+            Ok(Err(broadcast::error::RecvError::Closed)) => break,
+            Err(_) => break, // Timeout - no more messages arriving
+        }
+    }
+
+    collected
+}
+
 /// Handle a validator execution response, creating the appropriate result.
 ///
 /// This is a shared helper used by both parallel (`ValidatorTask`) and
@@ -902,19 +946,15 @@ impl ValidatorRunner {
             vec![ContentBlock::Text(TextContent::new(init_prompt))],
         );
 
-        // Collect response for init prompt
-        let init_notifications = self.notifications.subscribe();
-        let (init_collector, _init_collected, _init_count, _init_matched) =
-            claude_agent::spawn_notification_collector(init_notifications, session_id.clone());
+        // Subscribe before init prompt so we don't miss notifications
+        let mut init_rx = self.notifications.subscribe();
 
         match self.agent.prompt(init_request).await {
             Ok(_init_response) => {
-                // Init turn complete - abort collector and discard content
-                init_collector.abort();
-                // We don't need the init response content
+                // Drain and discard init notifications
+                drain_notifications(&mut init_rx, &session_id).await;
             }
             Err(e) => {
-                init_collector.abort();
                 tracing::error!("Failed to send init prompt for RuleSet '{}': {}", ruleset.name(), e);
                 return (
                     create_executed_ruleset(
@@ -941,18 +981,15 @@ impl ValidatorRunner {
                 vec![ContentBlock::Text(TextContent::new(rule_prompt))],
             );
 
-            // Start collector for this rule's response
-            let rule_notifications = self.notifications.subscribe();
-            let (rule_collector, rule_collected, _rule_count, _rule_matched) =
-                claude_agent::spawn_notification_collector(rule_notifications, session_id.clone());
+            // Subscribe before prompt so we capture all notifications for this turn
+            let mut rule_rx = self.notifications.subscribe();
 
             let response = self.agent.prompt(rule_request).await;
 
             match response {
                 Ok(prompt_response) => {
-                    // Prompt completed - collect text immediately
-                    rule_collector.abort();
-                    let content = rule_collected.lock().await.clone();
+                    // Prompt completed - drain all queued notifications
+                    let content = drain_notifications(&mut rule_rx, &session_id).await;
 
                     if content.is_empty() {
                         tracing::warn!(
@@ -973,7 +1010,6 @@ impl ValidatorRunner {
                     self.concurrency.report_success();
                 }
                 Err(e) => {
-                    rule_collector.abort();
                     let error_str = e.to_string();
                     is_rate_limited = is_rate_limit_error(&error_str);
 
