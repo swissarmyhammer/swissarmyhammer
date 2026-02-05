@@ -1,18 +1,6 @@
 ---
 name: no-log-truncation
 description: Detect truncation of log messages which loses diagnostic information
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - logging
-timeout: 30
 ---
 
 # No Log Truncation Validator
@@ -43,4 +31,5 @@ Examine the file content for patterns that truncate log messages:
 - User-facing output that genuinely needs truncation for display
 - Preview text generation (e.g., showing first 100 chars of a document)
 - Intentional summarization for dashboards or alerts
+
 

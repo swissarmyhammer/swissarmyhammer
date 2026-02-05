@@ -1,19 +1,6 @@
 ---
 name: naming-consistency
 description: Check that naming conventions match existing codebase patterns
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - consistency
-  - style
-timeout: 30
 ---
 
 # Naming Consistency Validator
@@ -43,4 +30,5 @@ Examine the file content for naming inconsistencies:
 - Domain-specific terminology that's standard
 - Well-known acronyms or abbreviations
 - FFI bindings that must match external names
+
 

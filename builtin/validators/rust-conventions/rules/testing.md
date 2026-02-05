@@ -1,19 +1,6 @@
 ---
 name: rust-testing
 description: Validates Rust test organization and quality assurance practices
-severity: warn
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "**/*.rs"
-tags:
-  - rust
-  - testing
-  - quality
-timeout: 30
 ---
 
 # Testing Patterns and Quality Assurance
@@ -97,4 +84,5 @@ timeout: 30
 - Explain complex test scenarios
 - Maintain test data documentation
 - Keep test documentation up to date with code changes
+
 

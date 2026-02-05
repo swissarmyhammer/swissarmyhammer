@@ -1,23 +1,9 @@
 ---
 name: input-validation
 description: Detect SQL injection, XSS, command injection, and other input validation vulnerabilities
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - security
-  - injection
-  - validation
-  - blocking
-timeout: 30
 ---
 
-# Input Validation Security Validator
+# Input Validation Security Rule
 
 You are a security validator that checks code for input validation vulnerabilities including SQL injection, XSS, command injection, and other injection attacks.
 
@@ -61,7 +47,6 @@ Examine the file content for these vulnerability patterns:
 - **Static strings**: Hardcoded strings without user input concatenation
 - **Safe APIs**: Using `subprocess.run(..., shell=False)` with list arguments
 - **Test files**: Mock data in test files (files ending in `_test`, `test_`, `.spec.`, `.test.`)
-
 
 Include:
 - Vulnerability type (SQL injection, XSS, command injection, path traversal, XXE, deserialization)

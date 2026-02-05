@@ -1,12 +1,6 @@
 ---
 name: session-summary
 description: Review session changes for consistency and completeness
-severity: error
-trigger: Stop
-tags:
-  - session
-  - review
-timeout: 30
 ---
 
 # Session Summary Validator
@@ -25,4 +19,5 @@ Review the changed files for overall consistency:
 - Partial work that is clearly work-in-progress
 - Changes that are complete and self-contained
 - Normal development patterns
+
 

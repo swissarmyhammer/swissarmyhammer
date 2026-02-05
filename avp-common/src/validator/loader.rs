@@ -27,17 +27,21 @@ use swissarmyhammer_templating::partials::TemplateContentProvider;
 use crate::context::AvpContext;
 use crate::error::AvpError;
 
-use super::parser::parse_validator_with_expansion;
-use super::types::{MatchContext, Validator, ValidatorSource};
+use super::parser::{parse_ruleset_directory, parse_validator_with_expansion};
+use super::types::{MatchContext, RuleSet, Validator, ValidatorSource};
 
 /// Loader for validators with directory stacking precedence.
 ///
 /// The loader manages validators from multiple sources and provides
 /// methods to find validators matching specific criteria.
+///
+/// Supports both legacy standalone validators and new RuleSet packages.
 #[derive(Debug)]
 pub struct ValidatorLoader {
-    /// Map of validator names to validators.
+    /// Map of validator names to validators (legacy format).
     validators: HashMap<String, Validator>,
+    /// Map of RuleSet names to RuleSets (new format).
+    rulesets: HashMap<String, RuleSet>,
     /// YAML expander for `@` include references.
     expander: YamlExpander<AvpConfig>,
 }
@@ -53,6 +57,7 @@ impl ValidatorLoader {
     pub fn new() -> Self {
         Self {
             validators: HashMap::new(),
+            rulesets: HashMap::new(),
             expander: YamlExpander::new(),
         }
     }
@@ -61,6 +66,7 @@ impl ValidatorLoader {
     pub fn with_expander(expander: YamlExpander<AvpConfig>) -> Self {
         Self {
             validators: HashMap::new(),
+            rulesets: HashMap::new(),
             expander,
         }
     }
@@ -294,6 +300,132 @@ impl ValidatorLoader {
         }
 
         dirs
+    }
+
+    // ========================================================================
+    // RuleSet Management (New Architecture)
+    // ========================================================================
+
+    /// Load RuleSets from a directory.
+    ///
+    /// Scans for subdirectories containing VALIDATOR.md and loads them as RuleSets.
+    /// Later-loaded RuleSets override earlier ones with the same name.
+    pub fn load_rulesets_directory(
+        &mut self,
+        path: &Path,
+        source: ValidatorSource,
+    ) -> Result<(), AvpError> {
+        if !path.exists() {
+            return Ok(());
+        }
+
+        if !path.is_dir() {
+            return Err(AvpError::Validator {
+                validator: path.display().to_string(),
+                message: "not a directory".to_string(),
+            });
+        }
+
+        // Scan for subdirectories with VALIDATOR.md
+        let entries = std::fs::read_dir(path).map_err(|e| AvpError::Validator {
+            validator: path.display().to_string(),
+            message: format!("failed to read directory: {}", e),
+        })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| AvpError::Validator {
+                validator: path.display().to_string(),
+                message: format!("failed to read directory entry: {}", e),
+            })?;
+
+            let dir_path = entry.path();
+
+            // Skip non-directories
+            if !dir_path.is_dir() {
+                continue;
+            }
+
+            // Skip _partials directories
+            if dir_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with('_'))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            // Check if this directory contains VALIDATOR.md
+            let manifest_path = dir_path.join("VALIDATOR.md");
+            if !manifest_path.exists() {
+                continue;
+            }
+
+            // Parse the RuleSet
+            match parse_ruleset_directory(&dir_path, source.clone(), Some(&self.expander)) {
+                Ok(ruleset) => {
+                    tracing::debug!(
+                        "Loaded RuleSet '{}' from {} with {} rules ({})",
+                        ruleset.name(),
+                        source,
+                        ruleset.rules.len(),
+                        dir_path.display()
+                    );
+                    self.rulesets.insert(ruleset.name().to_string(), ruleset);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse RuleSet at {}: {}",
+                        dir_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Add a builtin RuleSet from embedded directory structure.
+    ///
+    /// This is used by the build system to load RuleSets embedded in the binary.
+    pub fn add_builtin_ruleset(&mut self, ruleset: RuleSet) {
+        tracing::debug!(
+            "Adding builtin RuleSet '{}' with {} rules",
+            ruleset.name(),
+            ruleset.rules.len()
+        );
+        self.rulesets.insert(ruleset.name().to_string(), ruleset);
+    }
+
+    /// Get a RuleSet by name.
+    pub fn get_ruleset(&self, name: &str) -> Option<&RuleSet> {
+        self.rulesets.get(name)
+    }
+
+    /// List all loaded RuleSets.
+    pub fn list_rulesets(&self) -> Vec<&RuleSet> {
+        self.rulesets.values().collect()
+    }
+
+    /// Get the number of loaded RuleSets.
+    pub fn ruleset_count(&self) -> usize {
+        self.rulesets.len()
+    }
+
+    /// Find RuleSets matching a hook event context.
+    ///
+    /// Returns all RuleSets that match the given context criteria.
+    pub fn matching_rulesets(&self, ctx: &MatchContext) -> Vec<&RuleSet> {
+        self.rulesets
+            .values()
+            .filter(|rs| rs.matches(ctx))
+            .collect()
+    }
+
+    /// List all RuleSet names.
+    pub fn list_ruleset_names(&self) -> Vec<String> {
+        self.rulesets.keys().cloned().collect()
     }
 
     /// Get diagnostic information about validator loading.

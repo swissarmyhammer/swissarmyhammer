@@ -22,6 +22,7 @@
 //! - Concurrency is reduced when rate limits or timeouts are detected
 //! - Concurrency gradually recovers after successful executions
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -34,9 +35,10 @@ use tokio::sync::{broadcast, Semaphore};
 use crate::error::AvpError;
 use crate::types::HookType;
 use crate::validator::{
-    create_executed_validator, is_rate_limit_error, log_validator_result, parse_validator_response,
-    render_validator_prompt_with_partials_and_changed_files, ExecutedValidator, Validator,
-    ValidatorLoader, VALIDATOR_PROMPT_NAME,
+    create_executed_ruleset, create_executed_validator, is_rate_limit_error, log_ruleset_result,
+    log_validator_result, parse_validator_response, render_validator_prompt_with_partials_and_changed_files,
+    ExecutedRuleSet, ExecutedValidator, RulePromptContext, RuleResult, RuleSet, RuleSetSessionContext,
+    Validator, ValidatorLoader, ValidatorResult, VALIDATOR_PROMPT_NAME,
 };
 
 /// Minimum concurrency level for parallel validator execution.
@@ -581,17 +583,47 @@ impl ValidatorRunner {
     /// Extract partials from a ValidatorLoader.
     ///
     /// Uses shared partial detection logic from executor module.
+    /// Also loads partials from RuleSet _partials/ directories.
     fn extract_partials_from_loader(loader: &ValidatorLoader) -> HashMapPartialLoader {
         use crate::validator::{add_partial_with_aliases, is_partial};
 
         let mut partials = HashMapPartialLoader::empty();
 
+        // Load partials from legacy validators (for backward compatibility)
         for validator in loader.list() {
             let name = validator.name();
             let body = &validator.body;
 
             if is_partial(name, body) {
                 add_partial_with_aliases(&mut partials, name, body);
+            }
+        }
+
+        // Load partials from RuleSet _partials/ directories
+        for ruleset in loader.list_rulesets() {
+            let partials_dir = ruleset.base_path.join("_partials");
+            if partials_dir.exists() && partials_dir.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&partials_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                                    // Register with RuleSet-scoped name
+                                    let scoped_name = format!("{}/_partials/{}", ruleset.name(), name);
+                                    partials.add(&scoped_name, &content);
+                                    // Also register with just the name for easy reference
+                                    partials.add(name, &content);
+                                    tracing::debug!(
+                                        "Loaded partial '{}' from RuleSet '{}' _partials/",
+                                        name,
+                                        ruleset.name()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -748,6 +780,309 @@ impl ValidatorRunner {
     /// are detected, then recovers after consecutive successes.
     pub fn current_concurrency(&self) -> usize {
         self.concurrency.current_max()
+    }
+
+    // ========================================================================
+    // RuleSet Execution (New Architecture)
+    // ========================================================================
+
+    /// Execute a single RuleSet as one agent session with conversational rule evaluation.
+    ///
+    /// This starts one agent session for the RuleSet and evaluates each rule
+    /// sequentially as part of the conversation, maintaining context across rules.
+    ///
+    /// # Arguments
+    ///
+    /// * `ruleset` - The RuleSet to execute
+    /// * `hook_type` - The hook event type
+    /// * `context` - Hook event context as JSON
+    /// * `changed_files` - Optional list of changed files (for Stop hooks)
+    ///
+    /// # Returns
+    ///
+    /// Returns an `ExecutedRuleSet` with results for all rules, and a boolean
+    /// indicating if rate limiting was detected.
+    pub async fn execute_ruleset(
+        &self,
+        ruleset: &RuleSet,
+        hook_type: HookType,
+        context: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> (ExecutedRuleSet, bool) {
+        // Acquire concurrency permit for this RuleSet
+        let _permit = self.concurrency.acquire().await;
+
+        tracing::debug!(
+            "Executing RuleSet '{}' with {} rules in a single session",
+            ruleset.name(),
+            ruleset.rules.len()
+        );
+
+        // Initialize the session
+        let session_ctx = RuleSetSessionContext::new(&self.prompt_library, ruleset, hook_type, context)
+            .with_changed_files(changed_files);
+
+        let init_prompt = match session_ctx.render_session_init() {
+            Ok(prompt) => prompt,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to render RuleSet '{}' session init: {}",
+                    ruleset.name(),
+                    e
+                );
+                return (
+                    create_executed_ruleset(
+                        ruleset,
+                        vec![RuleResult {
+                            rule_name: "session-init".to_string(),
+                            severity: ruleset.manifest.severity,
+                            result: ValidatorResult::fail(format!("Failed to render session init: {}", e)),
+                        }],
+                    ),
+                    false,
+                );
+            }
+        };
+
+        // Initialize agent and create session for multi-turn conversation
+        use agent_client_protocol::{InitializeRequest, NewSessionRequest, PromptRequest, ContentBlock, TextContent};
+
+        let init_request = InitializeRequest::new(1.into());
+        if let Err(e) = self.agent.initialize(init_request).await {
+            tracing::error!("Failed to initialize agent for RuleSet '{}': {}", ruleset.name(), e);
+            return (
+                create_executed_ruleset(
+                    ruleset,
+                    vec![RuleResult {
+                        rule_name: "session-init".to_string(),
+                        severity: ruleset.manifest.severity,
+                        result: ValidatorResult::fail(format!("Failed to initialize agent: {}", e)),
+                    }],
+                ),
+                false,
+            );
+        }
+
+        // Create session
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
+        let session_request = NewSessionRequest::new(cwd);
+        let session_response = match self.agent.new_session(session_request).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!("Failed to create session for RuleSet '{}': {}", ruleset.name(), e);
+                return (
+                    create_executed_ruleset(
+                        ruleset,
+                        vec![RuleResult {
+                            rule_name: "session-create".to_string(),
+                            severity: ruleset.manifest.severity,
+                            result: ValidatorResult::fail(format!("Failed to create session: {}", e)),
+                        }],
+                    ),
+                    false,
+                );
+            }
+        };
+
+        let session_id = session_response.session_id;
+
+        let mut rule_results = Vec::new();
+        let mut is_rate_limited = false;
+
+        // Send initialization prompt as first message
+        let init_request = PromptRequest::new(
+            session_id.clone(),
+            vec![ContentBlock::Text(TextContent::new(init_prompt))],
+        );
+
+        // Collect response for init prompt
+        let init_notifications = self.notifications.subscribe();
+        let (init_collector, _init_collected, _init_count, _init_matched) =
+            claude_agent::spawn_notification_collector(init_notifications, session_id.clone());
+
+        match self.agent.prompt(init_request).await {
+            Ok(_init_response) => {
+                // Init turn complete - abort collector and discard content
+                init_collector.abort();
+                // We don't need the init response content
+            }
+            Err(e) => {
+                init_collector.abort();
+                tracing::error!("Failed to send init prompt for RuleSet '{}': {}", ruleset.name(), e);
+                return (
+                    create_executed_ruleset(
+                        ruleset,
+                        vec![RuleResult {
+                            rule_name: "session-init".to_string(),
+                            severity: ruleset.manifest.severity,
+                            result: ValidatorResult::fail(format!("Failed to send init prompt: {}", e)),
+                        }],
+                    ),
+                    false,
+                );
+            }
+        }
+
+        // Execute each rule sequentially in the same session
+        for rule in &ruleset.rules {
+            let rule_ctx = RulePromptContext::with_partials(rule, ruleset, Some(&self.partials));
+            let rule_prompt = rule_ctx.render();
+
+            // Send rule as next message in the conversation
+            let rule_request = PromptRequest::new(
+                session_id.clone(),
+                vec![ContentBlock::Text(TextContent::new(rule_prompt))],
+            );
+
+            // Start collector for this rule's response
+            let rule_notifications = self.notifications.subscribe();
+            let (rule_collector, rule_collected, _rule_count, _rule_matched) =
+                claude_agent::spawn_notification_collector(rule_notifications, session_id.clone());
+
+            let response = self.agent.prompt(rule_request).await;
+
+            match response {
+                Ok(prompt_response) => {
+                    // Prompt completed - collect text immediately
+                    rule_collector.abort();
+                    let content = rule_collected.lock().await.clone();
+
+                    if content.is_empty() {
+                        tracing::warn!(
+                            "RuleSet '{}' rule '{}' returned empty content (stop_reason: {:?})",
+                            ruleset.name(),
+                            rule.name,
+                            prompt_response.stop_reason
+                        );
+                    }
+
+                    let result = parse_validator_response(&content, &prompt_response.stop_reason);
+                    let rule_result = RuleResult {
+                        rule_name: rule.name.clone(),
+                        severity: rule.effective_severity(ruleset),
+                        result,
+                    };
+                    rule_results.push(rule_result);
+                    self.concurrency.report_success();
+                }
+                Err(e) => {
+                    rule_collector.abort();
+                    let error_str = e.to_string();
+                    is_rate_limited = is_rate_limit_error(&error_str);
+
+                    if is_rate_limited {
+                        self.concurrency.report_rate_limit();
+                        tracing::warn!(
+                            "Rate limit/timeout for RuleSet '{}' rule '{}': {}",
+                            ruleset.name(),
+                            rule.name,
+                            e
+                        );
+                    } else {
+                        tracing::error!(
+                            "Agent execution failed for RuleSet '{}' rule '{}': {}",
+                            ruleset.name(),
+                            rule.name,
+                            e
+                        );
+                    }
+
+                    let rule_result = RuleResult {
+                        rule_name: rule.name.clone(),
+                        severity: rule.effective_severity(ruleset),
+                        result: ValidatorResult::fail(format!("Agent execution failed: {}", e)),
+                    };
+                    rule_results.push(rule_result);
+
+                    // Stop executing remaining rules if rate limited
+                    if is_rate_limited {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let executed = create_executed_ruleset(ruleset, rule_results);
+        log_ruleset_result(ruleset.name(), &executed);
+
+        (executed, is_rate_limited)
+    }
+
+    /// Execute multiple RuleSets against a hook event context.
+    ///
+    /// Executes RuleSets in parallel with adaptive concurrency control.
+    /// Each RuleSet runs in its own agent session with rules evaluated sequentially.
+    ///
+    /// # Arguments
+    ///
+    /// * `rulesets` - Slice of RuleSets to execute
+    /// * `hook_type` - The hook event type
+    /// * `context` - Hook event context as JSON
+    /// * `changed_files` - Optional list of changed files (for Stop hooks)
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of `ExecutedRuleSet` results, one per RuleSet.
+    pub async fn execute_rulesets(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+        context: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Vec<ExecutedRuleSet> {
+        if rulesets.is_empty() {
+            return Vec::new();
+        }
+
+        tracing::debug!(
+            "Executing {} RuleSets in parallel (max_concurrency={})",
+            rulesets.len(),
+            self.concurrency.current_max()
+        );
+
+        // Create futures for parallel execution
+        let changed_files_owned: Option<Vec<String>> = changed_files.map(|f| f.to_vec());
+        let mut futures = FuturesUnordered::new();
+
+        for (idx, ruleset) in rulesets.iter().enumerate() {
+            let ruleset_clone = (*ruleset).clone();
+            let hook_type_clone = hook_type;
+            let context_clone = context.clone();
+            let changed_files_clone = changed_files_owned.clone();
+
+            // Create a task that executes this RuleSet
+            let runner = self.clone_for_task();
+
+            futures.push(async move {
+                let (result, is_rate_limit) = runner
+                    .execute_ruleset(&ruleset_clone, hook_type_clone, &context_clone, changed_files_clone.as_deref())
+                    .await;
+                (idx, result, is_rate_limit)
+            });
+        }
+
+        // Collect results preserving order
+        let mut results: Vec<Option<ExecutedRuleSet>> = vec![None; rulesets.len()];
+
+        while let Some((idx, result, _is_rate_limit)) = futures.next().await {
+            results[idx] = Some(result);
+        }
+
+        results.into_iter().flatten().collect()
+    }
+
+    /// Clone the runner for task execution.
+    ///
+    /// Creates a lightweight clone that shares the underlying resources
+    /// (agent, prompt library, partials, concurrency limiter).
+    fn clone_for_task(&self) -> Self {
+        Self {
+            prompt_library: Arc::clone(&self.prompt_library),
+            partials: self.partials.clone(),
+            agent: Arc::clone(&self.agent),
+            notifications: self.notifications.clone(),
+            concurrency: Arc::clone(&self.concurrency),
+        }
     }
 }
 

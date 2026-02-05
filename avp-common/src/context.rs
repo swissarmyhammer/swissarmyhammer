@@ -26,7 +26,7 @@ use tokio::sync::{broadcast, Mutex};
 use crate::error::AvpError;
 use crate::turn::TurnStateManager;
 use crate::types::HookType;
-use crate::validator::{ExecutedValidator, Validator, ValidatorRunner};
+use crate::validator::{ExecutedRuleSet, ExecutedValidator, RuleSet, Validator, ValidatorRunner};
 
 /// Capacity for the broadcast channel used for session notifications.
 /// Capacity for notification broadcast channels.
@@ -546,6 +546,144 @@ impl AvpContext {
                         "Validator '{}' matched (runner unavailable)",
                         validator.name()
                     )),
+                }
+            })
+            .collect()
+    }
+
+    // ========================================================================
+    // RuleSet Execution (New Architecture)
+    // ========================================================================
+
+    /// Execute RuleSets using the cached runner.
+    ///
+    /// Each RuleSet runs in a single agent session with rules evaluated sequentially.
+    /// RuleSets execute in parallel with adaptive concurrency control.
+    ///
+    /// The runner is created lazily on first access and reused for subsequent calls.
+    /// If the agent is unavailable, placeholder pass results are returned.
+    pub async fn execute_rulesets(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Vec<ExecutedRuleSet> {
+        if rulesets.is_empty() {
+            return Vec::new();
+        }
+
+        if self.is_agent_skipped() {
+            return self.placeholder_ruleset_results(rulesets, hook_type);
+        }
+
+        let results = self
+            .run_rulesets_with_fallback(rulesets, hook_type, input, changed_files)
+            .await;
+
+        self.log_ruleset_results(&results, hook_type);
+        results
+    }
+
+    /// Run RuleSets with cached runner, falling back to placeholders on error.
+    async fn run_rulesets_with_fallback(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Vec<ExecutedRuleSet> {
+        match self
+            .execute_rulesets_with_cached_runner(rulesets, hook_type, input, changed_files)
+            .await
+        {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::warn!("Failed to execute RuleSets: {} - using placeholders", e);
+                self.placeholder_ruleset_results(rulesets, hook_type)
+            }
+        }
+    }
+
+    /// Log results for each executed RuleSet.
+    fn log_ruleset_results(&self, results: &[ExecutedRuleSet], hook_type: HookType) {
+        let hook_type_str = hook_type.to_string();
+        for ruleset_result in results {
+            for rule_result in &ruleset_result.rule_results {
+                self.log_validator(&ValidatorEvent {
+                    name: &format!("{}:{}", ruleset_result.ruleset_name, rule_result.rule_name),
+                    passed: rule_result.passed(),
+                    message: rule_result.message(),
+                    hook_type: &hook_type_str,
+                });
+            }
+        }
+    }
+
+    /// Execute RuleSets with the cached runner.
+    async fn execute_rulesets_with_cached_runner(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Result<Vec<ExecutedRuleSet>, AvpError> {
+        let mut guard = self.runner_cache.lock().await;
+
+        // Create runner if not cached
+        if guard.is_none() {
+            tracing::debug!("Creating cached ValidatorRunner...");
+            let (agent, notifications) = self.agent().await?;
+            let runner = ValidatorRunner::new(agent, notifications)?;
+            *guard = Some(runner);
+            tracing::debug!("ValidatorRunner cached successfully");
+        }
+
+        // Execute with the cached runner
+        let runner = guard.as_ref().unwrap();
+        tracing::debug!(
+            "Executing {} RuleSets via cached ACP runner for hook {}",
+            rulesets.len(),
+            hook_type
+        );
+        Ok(runner
+            .execute_rulesets(rulesets, hook_type, input, changed_files)
+            .await)
+    }
+
+    /// Generate placeholder pass results when agent is unavailable.
+    fn placeholder_ruleset_results(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+    ) -> Vec<ExecutedRuleSet> {
+        rulesets
+            .iter()
+            .map(|ruleset| {
+                tracing::debug!(
+                    "Would execute RuleSet '{}' ({}) with {} rules for hook {}",
+                    ruleset.name(),
+                    ruleset.source,
+                    ruleset.rules.len(),
+                    hook_type
+                );
+
+                let rule_results = ruleset
+                    .rules
+                    .iter()
+                    .map(|rule| crate::validator::RuleResult {
+                        rule_name: rule.name.clone(),
+                        severity: rule.effective_severity(ruleset),
+                        result: crate::validator::ValidatorResult::pass(format!(
+                            "Rule '{}' matched (runner unavailable)",
+                            rule.name
+                        )),
+                    })
+                    .collect();
+
+                crate::validator::ExecutedRuleSet {
+                    ruleset_name: ruleset.name().to_string(),
+                    rule_results,
                 }
             })
             .collect()

@@ -1,18 +1,6 @@
 ---
 name: no-hard-code
 description: Detect the misuse of hard coding to make tests appear to pass
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - testing
-timeout: 30
 ---
 
 # No Hard-Coded Test Values Validator
@@ -41,4 +29,5 @@ Examine the file content for patterns that hard-code values instead of implement
 - Constants that are genuinely constant (configuration, limits)
 - Lookup tables that are correct for all inputs
 - Default values that are appropriate for the domain
+
 

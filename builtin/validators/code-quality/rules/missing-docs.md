@@ -1,18 +1,6 @@
 ---
 name: missing-docs
 description: Check that public functions and types have documentation comments
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - documentation
-timeout: 30
 ---
 
 # Missing Documentation Validator
@@ -36,4 +24,5 @@ Examine the file content for public items lacking documentation:
 - Generated code
 - Simple getters/setters with self-explanatory names
 - Items with #[doc(hidden)] or equivalent
+
 

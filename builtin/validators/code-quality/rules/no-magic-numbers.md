@@ -1,18 +1,6 @@
 ---
 name: no-magic-numbers
 description: Detect unexplained numeric literals in code
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - maintainability
-timeout: 30
 ---
 
 # No Magic Numbers Validator
@@ -38,4 +26,5 @@ Examine the file content for magic numbers that should be named constants:
 - Mathematical constants in context (e.g., 360 for degrees, 100 for percentage)
 - Array index access with small literal indices
 - Bit shifts and masks where the number is conventional (e.g., << 8)
+
 

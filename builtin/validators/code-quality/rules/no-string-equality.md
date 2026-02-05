@@ -1,18 +1,6 @@
 ---
 name: no-string-equality
 description: Detect the misuse of stringify for equality checks
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - correctness
-timeout: 30
 ---
 
 # No String Equality Validator
@@ -48,4 +36,5 @@ Examine the file content for patterns where data is converted to strings just fo
 - Test assertions that intentionally check string representation
 - Logging or debugging code
 - Serialization tests
+
 

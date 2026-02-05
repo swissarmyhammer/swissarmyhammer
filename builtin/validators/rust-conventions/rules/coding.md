@@ -1,19 +1,6 @@
 ---
 name: rust-coding
 description: Validates Rust code follows language patterns and conventions
-severity: warn
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "**/*.rs"
-tags:
-  - rust
-  - patterns
-  - conventions
-timeout: 30
 ---
 
 # Rust Language Patterns and Conventions
@@ -107,3 +94,4 @@ timeout: 30
 - Implement cleanup in `Drop` even if explicit cleanup exists
 - Use `scopeguard` crate for complex cleanup scenarios
 - Never assume destructors will run (they might not in panics)
+

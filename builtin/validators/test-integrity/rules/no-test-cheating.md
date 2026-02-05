@@ -1,20 +1,6 @@
 ---
 name: no-test-cheating
 description: Detect attempts to skip, disable, or mock tests inappropriately
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-    - "@file_groups/test_files"
-tags:
-  - testing
-  - blocking
-  - quality
-timeout: 30
 ---
 
 # No Test Cheating Validator
@@ -62,3 +48,4 @@ Examine the file content for these problematic patterns:
 
 
 {% include 'test-remediation' %}
+

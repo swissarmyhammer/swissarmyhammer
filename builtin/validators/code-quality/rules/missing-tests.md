@@ -1,18 +1,6 @@
 ---
 name: missing-tests
 description: Check that public functions and types have corresponding tests
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - testing
-timeout: 30
 ---
 
 # Missing Tests Validator
@@ -36,4 +24,5 @@ Examine the file content for public items that lack test coverage:
 - Test utility functions
 - Trait implementations with no custom logic (derives)
 - Items that are clearly tested via integration tests
+
 

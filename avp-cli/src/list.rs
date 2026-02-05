@@ -1,7 +1,7 @@
 //! AVP List - List all available validators.
 //!
-//! Lists validators from all sources (builtin, user, project) with their
-//! name, description, trigger, severity, and source.
+//! Lists RuleSets and their rules from all sources (builtin, user, project)
+//! with name, description, trigger, severity, and source.
 
 use avp_common::builtin::load_builtins;
 use avp_common::validator::{ValidatorLoader, ValidatorSource};
@@ -10,10 +10,10 @@ use comfy_table::{presets::UTF8_FULL, Table};
 /// Maximum length for description in table display before truncation.
 const MAX_DESCRIPTION_LENGTH: usize = 50;
 
-/// Run the list command and display validators.
+/// Run the list command and display RuleSets and their rules.
 ///
-/// Loads validators from all sources (builtin, user, project) and displays
-/// them in a formatted table. User and project validators override builtins
+/// Loads RuleSets from all sources (builtin, user, project) and displays
+/// them in a formatted table. User and project RuleSets override builtins
 /// with the same name.
 ///
 /// # Arguments
@@ -40,71 +40,89 @@ pub fn run_list(verbose: bool, debug: bool) -> i32 {
         print_diagnostics(&loader);
     }
 
-    let mut validators = loader.list();
+    let mut rulesets = loader.list_rulesets();
 
-    if validators.is_empty() {
-        println!("No validators found.");
+    if rulesets.is_empty() {
+        println!("No RuleSets found.");
         return 0;
     }
 
     // Sort by name for consistent output
-    validators.sort_by(|a, b| a.name().cmp(b.name()));
+    rulesets.sort_by(|a, b| a.name().cmp(b.name()));
 
-    // Build and print the table
+    // Build and print the table - one row per RuleSet, rules as multiline cell
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
 
-    // Set headers based on verbose mode
     if verbose {
-        table.set_header(vec!["Name", "Description", "Trigger", "Severity", "Source"]);
+        table.set_header(vec!["RuleSet", "Description", "Rules", "Trigger", "Severity", "Source"]);
     } else {
-        table.set_header(vec!["Name", "Trigger", "Severity", "Source"]);
+        table.set_header(vec!["RuleSet", "Rules", "Trigger", "Severity", "Source"]);
     }
 
-    // Add rows
-    for v in &validators {
-        let source = source_emoji(&v.source);
+    for ruleset in &rulesets {
+        let source = source_emoji(&ruleset.source);
+        let trigger = ruleset.manifest.trigger.to_string();
+        let severity = ruleset.manifest.severity.to_string();
+
+        // Build multiline rules cell
+        let rules_cell: String = ruleset
+            .rules
+            .iter()
+            .map(|rule| {
+                let eff_sev = rule.effective_severity(ruleset);
+                if eff_sev != ruleset.manifest.severity {
+                    format!("{} [{}]", rule.name, eff_sev)
+                } else {
+                    rule.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
         if verbose {
-            let description = truncate_description(v.description(), MAX_DESCRIPTION_LENGTH);
+            let description = truncate_description(ruleset.description(), MAX_DESCRIPTION_LENGTH);
             table.add_row(vec![
-                v.name(),
-                &description,
-                &v.trigger().to_string(),
-                &v.severity().to_string(),
-                &source,
+                ruleset.name().to_string(),
+                description,
+                rules_cell,
+                trigger,
+                severity,
+                source,
             ]);
         } else {
             table.add_row(vec![
-                v.name(),
-                &v.trigger().to_string(),
-                &v.severity().to_string(),
-                &source,
+                ruleset.name().to_string(),
+                rules_cell,
+                trigger,
+                severity,
+                source,
             ]);
         }
     }
 
     println!("{table}");
-    println!();
-    println!("{} validator(s) found", validators.len());
+
+    let total_rules: usize = rulesets.iter().map(|rs| rs.rules.len()).sum();
+    println!(
+        "\n{} RuleSet(s), {} rule(s)",
+        rulesets.len(),
+        total_rules
+    );
 
     0
 }
 
 /// Get emoji representation for validator source.
-///
-/// Maps each source type to a user-friendly string with emoji prefix.
 fn source_emoji(source: &ValidatorSource) -> String {
     match source {
-        ValidatorSource::Builtin => "📦 Built-in".to_string(),
-        ValidatorSource::User => "👤 User".to_string(),
-        ValidatorSource::Project => "📁 Project".to_string(),
+        ValidatorSource::Builtin => "builtin".to_string(),
+        ValidatorSource::User => "user".to_string(),
+        ValidatorSource::Project => "project".to_string(),
     }
 }
 
 /// Truncate description to max length with ellipsis.
-///
-/// If the description exceeds max_len, truncates and appends "...".
-/// This is for user-facing table display formatting only.
 fn truncate_description(desc: &str, max_len: usize) -> String {
     if desc.len() <= max_len {
         desc.to_string()
@@ -128,18 +146,18 @@ fn print_diagnostics(loader: &ValidatorLoader) {
         Some(path) => {
             println!("  Path: {}", path.display());
             if diag.user_directory.exists {
-                println!("  Status: ✓ exists");
+                println!("  Status: exists");
             } else {
                 println!(
-                    "  Status: ✗ does not exist (create this directory to add user validators)"
+                    "  Status: does not exist (create this directory to add user validators)"
                 );
             }
         }
         None => {
             if let Some(err) = &diag.user_directory.error {
-                println!("  Status: ✗ could not resolve ({})", err);
+                println!("  Status: could not resolve ({})", err);
             } else {
-                println!("  Status: ✗ could not resolve home directory");
+                println!("  Status: could not resolve home directory");
             }
         }
     }
@@ -151,16 +169,16 @@ fn print_diagnostics(loader: &ValidatorLoader) {
         Some(path) => {
             println!("  Path: {}", path.display());
             if diag.project_directory.exists {
-                println!("  Status: ✓ exists");
+                println!("  Status: exists");
             } else {
-                println!("  Status: ✗ does not exist");
+                println!("  Status: does not exist");
             }
         }
         None => {
             if let Some(err) = &diag.project_directory.error {
-                println!("  Status: ✗ could not resolve ({})", err);
+                println!("  Status: could not resolve ({})", err);
             } else {
-                println!("  Status: ✗ not in a git repository");
+                println!("  Status: not in a git repository");
             }
         }
     }
@@ -168,9 +186,9 @@ fn print_diagnostics(loader: &ValidatorLoader) {
 
     // Counts
     println!("Validators loaded:");
-    println!("  📦 Built-in: {}", diag.builtin_count);
-    println!("  👤 User: {}", diag.user_count);
-    println!("  📁 Project: {}", diag.project_count);
+    println!("  Built-in: {}", diag.builtin_count);
+    println!("  User: {}", diag.user_count);
+    println!("  Project: {}", diag.project_count);
     println!("  Total: {}", diag.total_count);
     println!();
     println!("=========================================");
@@ -183,54 +201,41 @@ mod tests {
 
     #[test]
     fn test_source_emoji() {
-        assert_eq!(source_emoji(&ValidatorSource::Builtin), "📦 Built-in");
-        assert_eq!(source_emoji(&ValidatorSource::User), "👤 User");
-        assert_eq!(source_emoji(&ValidatorSource::Project), "📁 Project");
+        assert_eq!(source_emoji(&ValidatorSource::Builtin), "builtin");
+        assert_eq!(source_emoji(&ValidatorSource::User), "user");
+        assert_eq!(source_emoji(&ValidatorSource::Project), "project");
     }
-
-    /// Test length for truncation tests.
-    const TEST_TRUNCATE_LEN: usize = 20;
 
     #[test]
     fn test_truncate_description_short() {
-        let desc = "Short description";
         assert_eq!(
-            truncate_description(desc, MAX_DESCRIPTION_LENGTH),
-            "Short description"
+            truncate_description("Short", MAX_DESCRIPTION_LENGTH),
+            "Short"
         );
     }
 
     #[test]
     fn test_truncate_description_long() {
-        let desc = "This is a very long description that should be truncated";
-        let result = truncate_description(desc, TEST_TRUNCATE_LEN);
-        assert_eq!(result.len(), TEST_TRUNCATE_LEN);
+        let long = "This is a very long description that definitely exceeds the maximum length";
+        let result = truncate_description(long, MAX_DESCRIPTION_LENGTH);
+        assert_eq!(result.len(), MAX_DESCRIPTION_LENGTH);
         assert!(result.ends_with("..."));
     }
 
     #[test]
-    fn test_truncate_description_exact() {
-        let desc = "Exactly twenty chars";
-        assert_eq!(truncate_description(desc, TEST_TRUNCATE_LEN), desc);
-    }
-
-    #[test]
     fn test_run_list() {
-        // Should not panic and return 0
         let exit_code = run_list(false, false);
         assert_eq!(exit_code, 0);
     }
 
     #[test]
     fn test_run_list_verbose() {
-        // Should not panic and return 0
         let exit_code = run_list(true, false);
         assert_eq!(exit_code, 0);
     }
 
     #[test]
     fn test_run_list_debug() {
-        // Should not panic and return 0, and print diagnostics
         let exit_code = run_list(false, true);
         assert_eq!(exit_code, 0);
     }

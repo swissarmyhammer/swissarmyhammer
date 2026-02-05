@@ -1,22 +1,9 @@
 ---
 name: no-secrets
 description: Detect hardcoded secrets, API keys, and credentials in code
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.* 
-  files:
-    - "@file_groups/source_code"
-tags:
-  - secrets
-  - blocking
-  - security
-timeout: 30
 ---
 
-# No Secrets Validator
+# No Secrets Rule
 
 You are a security validator that checks code for hardcoded secrets and credentials.
 
@@ -43,4 +30,3 @@ Examine the file content for any of these patterns:
 - Test files with obviously fake values: `test_api_key`, `dummy_password`, `xxx`, `yyy`
 - Documentation examples with placeholders
 - Tests that are testing secret detection functionality -- these are not real secrets
-

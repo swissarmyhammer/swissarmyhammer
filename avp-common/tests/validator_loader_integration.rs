@@ -13,7 +13,10 @@ use avp_common::builtin::load_builtins;
 use avp_common::validator::{ValidatorLoader, ValidatorSource};
 use std::fs;
 use tempfile::TempDir;
-use test_helpers::{create_validator_dir, minimal_validator, validator_with_settings};
+use test_helpers::{
+    create_test_ruleset, create_validator_dir, minimal_rule, minimal_ruleset_manifest,
+    minimal_validator, ruleset_manifest_with_settings, validator_with_settings,
+};
 
 #[test]
 fn test_load_validators_from_user_directory() {
@@ -140,19 +143,27 @@ fn test_project_validators_override_user_validators() {
 }
 
 #[test]
-fn test_user_validators_override_builtins() {
+fn test_user_rulesets_override_builtins() {
     let temp = TempDir::new().unwrap();
-    let validators_dir = create_validator_dir(temp.path());
+    let validators_base = temp.path();
 
-    // Create a user validator that overrides the builtin "no-secrets"
+    // Create a user RuleSet that overrides the builtin "security-rules"
+    let ruleset_dir = create_test_ruleset(validators_base, "security-rules");
+
     fs::write(
-        validators_dir.join("no-secrets.md"),
-        validator_with_settings(
-            "no-secrets",
-            "Custom no-secrets - user override",
+        ruleset_dir.join("VALIDATOR.md"),
+        ruleset_manifest_with_settings(
+            "security-rules",
+            "Custom security rules - user override",
             "PostToolUse",
             "info", // Changed from error to info
         ),
+    )
+    .unwrap();
+
+    fs::write(
+        ruleset_dir.join("rules").join("no-secrets.md"),
+        minimal_rule("no-secrets", "Custom no-secrets rule"),
     )
     .unwrap();
 
@@ -160,59 +171,83 @@ fn test_user_validators_override_builtins() {
     let mut loader = ValidatorLoader::new();
     load_builtins(&mut loader);
 
-    // Verify builtin is loaded
-    let builtin = loader.get("no-secrets");
-    assert!(builtin.is_some(), "Builtin no-secrets should exist");
+    // Verify builtin RuleSet is loaded
+    let builtin = loader.get_ruleset("security-rules");
+    assert!(builtin.is_some(), "Builtin security-rules should exist");
     assert_eq!(builtin.unwrap().source, ValidatorSource::Builtin);
 
-    // Load user validators (should override)
+    // Load user RuleSets (should override)
     loader
-        .load_directory(&validators_dir, ValidatorSource::User)
+        .load_rulesets_directory(&validators_base.join("validators"), ValidatorSource::User)
         .unwrap();
 
     // Verify user version now active
-    let v = loader.get("no-secrets").unwrap();
+    let rs = loader.get_ruleset("security-rules").unwrap();
     assert_eq!(
-        v.description(),
-        "Custom no-secrets - user override",
-        "User validator should override builtin"
+        rs.description(),
+        "Custom security rules - user override",
+        "User RuleSet should override builtin"
     );
-    assert_eq!(v.source, ValidatorSource::User);
+    assert_eq!(rs.source, ValidatorSource::User);
 }
 
 #[test]
 fn test_full_precedence_chain_builtin_user_project() {
     let user_temp = TempDir::new().unwrap();
-    let user_validators = create_validator_dir(user_temp.path());
+    let user_base = user_temp.path();
 
     let project_temp = TempDir::new().unwrap();
-    let project_validators = create_validator_dir(project_temp.path());
+    let project_base = project_temp.path();
 
-    // Create validators at each level
-    // User-only validator
+    // Create RuleSets at each level
+    // User-only RuleSet
+    let user_only_dir = create_test_ruleset(user_base, "user-custom");
     fs::write(
-        user_validators.join("user-only.md"),
-        minimal_validator("user-only", "Only in user dir"),
+        user_only_dir.join("VALIDATOR.md"),
+        minimal_ruleset_manifest("user-custom", "Only in user dir"),
+    )
+    .unwrap();
+    fs::write(
+        user_only_dir.join("rules").join("custom-rule.md"),
+        minimal_rule("custom-rule", "User custom rule"),
     )
     .unwrap();
 
-    // Project-only validator
+    // Project-only RuleSet
+    let project_only_dir = create_test_ruleset(project_base, "project-custom");
     fs::write(
-        project_validators.join("project-only.md"),
-        minimal_validator("project-only", "Only in project dir"),
+        project_only_dir.join("VALIDATOR.md"),
+        minimal_ruleset_manifest("project-custom", "Only in project dir"),
+    )
+    .unwrap();
+    fs::write(
+        project_only_dir.join("rules").join("custom-rule.md"),
+        minimal_rule("custom-rule", "Project custom rule"),
     )
     .unwrap();
 
-    // Override chain: builtin -> user -> project
+    // Override chain: builtin -> user -> project for security-rules
+    let user_security_dir = create_test_ruleset(user_base, "security-rules");
     fs::write(
-        user_validators.join("no-secrets.md"),
-        validator_with_settings("no-secrets", "User no-secrets", "PostToolUse", "warn"),
+        user_security_dir.join("VALIDATOR.md"),
+        ruleset_manifest_with_settings("security-rules", "User security", "PostToolUse", "warn"),
+    )
+    .unwrap();
+    fs::write(
+        user_security_dir.join("rules").join("no-secrets.md"),
+        minimal_rule("no-secrets", "User no-secrets"),
     )
     .unwrap();
 
+    let project_security_dir = create_test_ruleset(project_base, "security-rules");
     fs::write(
-        project_validators.join("no-secrets.md"),
-        validator_with_settings("no-secrets", "Project no-secrets", "PostToolUse", "info"),
+        project_security_dir.join("VALIDATOR.md"),
+        ruleset_manifest_with_settings("security-rules", "Project security", "PostToolUse", "info"),
+    )
+    .unwrap();
+    fs::write(
+        project_security_dir.join("rules").join("no-secrets.md"),
+        minimal_rule("no-secrets", "Project no-secrets"),
     )
     .unwrap();
 
@@ -220,52 +255,52 @@ fn test_full_precedence_chain_builtin_user_project() {
     let mut loader = ValidatorLoader::new();
     load_builtins(&mut loader);
 
-    let builtin_count = loader.len();
+    let builtin_count = loader.ruleset_count();
     assert!(builtin_count > 0, "Should have loaded builtins");
 
     loader
-        .load_directory(&user_validators, ValidatorSource::User)
+        .load_rulesets_directory(&user_base.join("validators"), ValidatorSource::User)
         .unwrap();
     loader
-        .load_directory(&project_validators, ValidatorSource::Project)
+        .load_rulesets_directory(&project_base.join("validators"), ValidatorSource::Project)
         .unwrap();
 
     // Verify final state
-    // Builtin-only validators should still exist
+    // Builtin-only RuleSets should still exist
     assert!(
-        loader.get("safe-commands").is_some(),
-        "Builtin safe-commands should exist"
+        loader.get_ruleset("command-safety").is_some(),
+        "Builtin command-safety should exist"
     );
     assert_eq!(
-        loader.get("safe-commands").unwrap().source,
+        loader.get_ruleset("command-safety").unwrap().source,
         ValidatorSource::Builtin
     );
 
-    // User-only validator should exist
-    assert!(loader.get("user-only").is_some(), "User-only should exist");
+    // User-only RuleSet should exist
+    assert!(loader.get_ruleset("user-custom").is_some(), "User-only should exist");
     assert_eq!(
-        loader.get("user-only").unwrap().source,
+        loader.get_ruleset("user-custom").unwrap().source,
         ValidatorSource::User
     );
 
-    // Project-only validator should exist
+    // Project-only RuleSet should exist
     assert!(
-        loader.get("project-only").is_some(),
+        loader.get_ruleset("project-custom").is_some(),
         "Project-only should exist"
     );
     assert_eq!(
-        loader.get("project-only").unwrap().source,
+        loader.get_ruleset("project-custom").unwrap().source,
         ValidatorSource::Project
     );
 
-    // Override chain: project should win
-    let no_secrets = loader.get("no-secrets").unwrap();
+    // Override chain: project should win for security-rules
+    let security_rules = loader.get_ruleset("security-rules").unwrap();
     assert_eq!(
-        no_secrets.description(),
-        "Project no-secrets",
+        security_rules.description(),
+        "Project security",
         "Project version should be active"
     );
-    assert_eq!(no_secrets.source, ValidatorSource::Project);
+    assert_eq!(security_rules.source, ValidatorSource::Project);
 }
 
 #[test]
@@ -533,36 +568,43 @@ fn test_validator_without_any_frontmatter() {
 }
 
 #[test]
-fn test_list_validators_shows_all_sources() {
+fn test_list_rulesets_shows_all_sources() {
     let user_temp = TempDir::new().unwrap();
-    let user_validators = create_validator_dir(user_temp.path());
+    let user_base = user_temp.path();
 
+    // Create a user RuleSet
+    let ruleset_dir = create_test_ruleset(user_base, "user-checks");
     fs::write(
-        user_validators.join("user-check.md"),
-        minimal_validator("user-check", "User check"),
+        ruleset_dir.join("VALIDATOR.md"),
+        minimal_ruleset_manifest("user-checks", "User checks"),
+    )
+    .unwrap();
+    fs::write(
+        ruleset_dir.join("rules").join("check1.md"),
+        minimal_rule("check1", "User check"),
     )
     .unwrap();
 
     let mut loader = ValidatorLoader::new();
     load_builtins(&mut loader);
     loader
-        .load_directory(&user_validators, ValidatorSource::User)
+        .load_rulesets_directory(&user_base.join("validators"), ValidatorSource::User)
         .unwrap();
 
-    let all_validators = loader.list();
+    let all_rulesets = loader.list_rulesets();
 
-    // Should have both builtin and user validators
-    let sources: Vec<_> = all_validators.iter().map(|v| &v.source).collect();
+    // Should have both builtin and user RuleSets
+    let sources: Vec<_> = all_rulesets.iter().map(|rs| &rs.source).collect();
     assert!(
         sources.contains(&&ValidatorSource::Builtin),
-        "Should have builtin validators"
+        "Should have builtin RuleSets"
     );
     assert!(
         sources.contains(&&ValidatorSource::User),
-        "Should have user validators"
+        "Should have user RuleSets"
     );
 
-    // Verify user-check is in the list
-    let user_check = all_validators.iter().find(|v| v.name() == "user-check");
-    assert!(user_check.is_some(), "user-check should be in list");
+    // Verify user-checks is in the list
+    let user_checks = all_rulesets.iter().find(|rs| rs.name() == "user-checks");
+    assert!(user_checks.is_some(), "user-checks should be in list");
 }

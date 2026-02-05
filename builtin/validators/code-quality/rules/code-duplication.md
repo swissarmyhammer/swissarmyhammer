@@ -1,18 +1,6 @@
 ---
 name: code-duplication
 description: Detect duplicate code blocks and similar logic patterns
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - maintainability
-  - refactoring
 timeout: 300
 ---
 
@@ -64,3 +52,4 @@ When duplication is found, suggest:
 - Creating utility modules or helpers
 - Defining shared constants or configuration
 - Using parametric patterns or generics
+

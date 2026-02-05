@@ -39,6 +39,68 @@ pub fn create_validator_dir(base: &Path) -> std::path::PathBuf {
     std::fs::create_dir_all(&validators_dir).unwrap();
     validators_dir
 }
+
+// ============================================================================
+// RuleSet Fixture Helpers (New Architecture)
+// ============================================================================
+
+/// Create a minimal RuleSet manifest (VALIDATOR.md).
+pub fn minimal_ruleset_manifest(name: &str, description: &str) -> String {
+    format!(
+        "---\nname: {}\ndescription: {}\nversion: 1.0.0\ntrigger: PostToolUse\nseverity: warn\n---\n\n# {} RuleSet\n\nRuleSet description.\n",
+        name, description, name
+    )
+}
+
+/// Create a RuleSet manifest with specific settings.
+pub fn ruleset_manifest_with_settings(
+    name: &str,
+    description: &str,
+    trigger: &str,
+    severity: &str,
+) -> String {
+    format!(
+        "---\nname: {}\ndescription: {}\nversion: 1.0.0\ntrigger: {}\nseverity: {}\n---\n\n# {} RuleSet\n\nRuleSet with custom settings.\n",
+        name, description, trigger, severity, name
+    )
+}
+
+/// Create a minimal rule file.
+pub fn minimal_rule(name: &str, description: &str) -> String {
+    format!(
+        "---\nname: {}\ndescription: {}\n---\n\n# {} Rule\n\nValidation instructions for {}.\n",
+        name, description, name, name
+    )
+}
+
+/// Create a rule with severity override.
+pub fn rule_with_severity(name: &str, description: &str, severity: &str) -> String {
+    format!(
+        "---\nname: {}\ndescription: {}\nseverity: {}\n---\n\n# {} Rule\n\nRule with custom severity.\n",
+        name, description, severity, name
+    )
+}
+
+/// Create a rule with timeout override.
+pub fn rule_with_timeout(name: &str, description: &str, timeout: u32) -> String {
+    format!(
+        "---\nname: {}\ndescription: {}\ntimeout: {}\n---\n\n# {} Rule\n\nRule with custom timeout.\n",
+        name, description, timeout, name
+    )
+}
+
+/// Create a RuleSet directory structure in a base path.
+///
+/// Creates:
+/// - base/validators/ruleset-name/VALIDATOR.md
+/// - base/validators/ruleset-name/rules/ directory
+///
+/// Returns the path to the RuleSet directory.
+pub fn create_test_ruleset(base: &Path, ruleset_name: &str) -> std::path::PathBuf {
+    let ruleset_dir = base.join("validators").join(ruleset_name);
+    std::fs::create_dir_all(ruleset_dir.join("rules")).unwrap();
+    ruleset_dir
+}
 use avp_common::context::AvpContext;
 use avp_common::types::{CommonInput, HookType, PostToolUseInput, PreToolUseInput};
 use avp_common::validator::ExecutedValidator;

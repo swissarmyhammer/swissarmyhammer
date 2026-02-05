@@ -16,7 +16,9 @@ use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_templating::{HashMapPartialLoader, PartialLoader, Template};
 
 use crate::types::HookType;
-use crate::validator::{ExecutedValidator, Validator, ValidatorResult};
+use crate::validator::{
+    ExecutedRuleSet, ExecutedValidator, Rule, RuleResult, RuleSet, Validator, ValidatorResult,
+};
 
 /// Length of the markdown JSON code fence marker "```json".
 const JSON_CODE_FENCE_LEN: usize = 7;
@@ -631,6 +633,191 @@ pub fn is_rate_limit_error(error: &str) -> bool {
         || error_lower.contains("timed out")
         || error_lower.contains("overloaded")
         || error_lower.contains("capacity")
+}
+
+// ============================================================================
+// RuleSet Execution (New Architecture)
+// ============================================================================
+
+/// Context for rendering a RuleSet session initialization prompt.
+///
+/// This context is used to create the initial system message that sets up
+/// the agent session for evaluating all rules in a RuleSet.
+pub struct RuleSetSessionContext<'a> {
+    /// The prompt library containing prompt templates.
+    pub prompt_library: &'a PromptLibrary,
+    /// The RuleSet being evaluated.
+    pub ruleset: &'a RuleSet,
+    /// The hook type that triggered validation.
+    pub hook_type: HookType,
+    /// The hook event context as JSON.
+    pub hook_context: &'a serde_json::Value,
+    /// Optional list of files changed during the turn (for Stop hooks).
+    pub changed_files: Option<&'a [String]>,
+}
+
+impl<'a> RuleSetSessionContext<'a> {
+    /// Create a new RuleSet session context.
+    pub fn new(
+        prompt_library: &'a PromptLibrary,
+        ruleset: &'a RuleSet,
+        hook_type: HookType,
+        hook_context: &'a serde_json::Value,
+    ) -> Self {
+        Self {
+            prompt_library,
+            ruleset,
+            hook_type,
+            hook_context,
+            changed_files: None,
+        }
+    }
+
+    /// Set the changed files for Stop hook validators.
+    pub fn with_changed_files(mut self, changed_files: Option<&'a [String]>) -> Self {
+        self.changed_files = changed_files;
+        self
+    }
+
+    /// Render the session initialization prompt.
+    ///
+    /// This creates the initial system message that explains the RuleSet
+    /// context and prepares the agent for sequential rule evaluation.
+    pub fn render_session_init(&self) -> Result<String, String> {
+        use swissarmyhammer_config::TemplateContext;
+
+        let mut template_context = TemplateContext::new();
+
+        // RuleSet information
+        template_context.set("ruleset_name".to_string(), self.ruleset.name().to_string().into());
+        template_context.set(
+            "ruleset_description".to_string(),
+            self.ruleset.description().to_string().into(),
+        );
+        template_context.set(
+            "rule_count".to_string(),
+            self.ruleset.rules.len().to_string().into(),
+        );
+
+        // Hook context
+        template_context.set(
+            "hook_context".to_string(),
+            serde_json::to_string_pretty(self.hook_context)
+                .unwrap_or_else(|_| self.hook_context.to_string())
+                .into(),
+        );
+        template_context.set("hook_type".to_string(), self.hook_type.to_string().into());
+
+        // Add changed files if provided (for Stop hooks)
+        if let Some(files) = self.changed_files {
+            if !files.is_empty() {
+                template_context.set(
+                    "changed_files".to_string(),
+                    serde_json::Value::Array(
+                        files
+                            .iter()
+                            .map(|f| serde_json::Value::String(f.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+        }
+
+        self.prompt_library
+            .render(VALIDATOR_PROMPT_NAME, &template_context)
+            .map_err(|e| format!("Failed to render RuleSet session init prompt: {}", e))
+    }
+}
+
+/// Context for rendering an individual rule prompt within a RuleSet session.
+pub struct RulePromptContext<'a, P: PartialLoader + Clone + 'static = HashMapPartialLoader> {
+    /// The rule being evaluated.
+    pub rule: &'a Rule,
+    /// The parent RuleSet (for inheritance).
+    pub ruleset: &'a RuleSet,
+    /// Optional partial loader for template includes.
+    pub partials: Option<&'a P>,
+}
+
+impl<'a> RulePromptContext<'a, HashMapPartialLoader> {
+    /// Create a new rule prompt context.
+    pub fn new(rule: &'a Rule, ruleset: &'a RuleSet) -> Self {
+        Self {
+            rule,
+            ruleset,
+            partials: None,
+        }
+    }
+}
+
+impl<'a, P: PartialLoader + Clone + 'static> RulePromptContext<'a, P> {
+    /// Create a rule prompt context with a specific partial loader.
+    pub fn with_partials(rule: &'a Rule, ruleset: &'a RuleSet, partials: Option<&'a P>) -> Self {
+        Self {
+            rule,
+            ruleset,
+            partials,
+        }
+    }
+
+    /// Render the rule as a user message for the conversational flow.
+    ///
+    /// This creates a message that presents the rule to the agent within
+    /// the ongoing RuleSet session.
+    pub fn render(&self) -> String {
+        // Render the rule body with partials if provided
+        let rendered_body = match self.partials {
+            Some(p) => render_validator_body(&self.rule.body, p),
+            None => self.rule.body.clone(),
+        };
+
+        // Build the rule message
+        let severity = self.rule.effective_severity(self.ruleset);
+
+        format!(
+            "# Rule: {}\n\n**Description**: {}\n**Severity**: {}\n\n{}",
+            self.rule.name,
+            self.rule.description,
+            severity,
+            rendered_body
+        )
+    }
+}
+
+/// Create an ExecutedRuleSet from a ruleset and rule results.
+pub fn create_executed_ruleset(
+    ruleset: &RuleSet,
+    rule_results: Vec<RuleResult>,
+) -> ExecutedRuleSet {
+    ExecutedRuleSet {
+        ruleset_name: ruleset.name().to_string(),
+        rule_results,
+    }
+}
+
+/// Log RuleSet result at debug level.
+pub fn log_ruleset_result(name: &str, executed: &ExecutedRuleSet) {
+    let passed_count = executed.rule_results.iter().filter(|r| r.passed()).count();
+    let total_count = executed.rule_results.len();
+
+    tracing::debug!(
+        "RuleSet '{}' result: {}/{} rules passed (overall: {})",
+        name,
+        passed_count,
+        total_count,
+        if executed.passed() { "PASSED" } else { "FAILED" }
+    );
+
+    // Log individual rule results
+    for rule_result in &executed.rule_results {
+        tracing::debug!(
+            "  Rule '{}' [{}]: {} - {}",
+            rule_result.rule_name,
+            rule_result.severity,
+            if rule_result.passed() { "PASSED" } else { "FAILED" },
+            rule_result.message()
+        );
+    }
 }
 
 #[cfg(test)]

@@ -1,18 +1,6 @@
 ---
 name: no-commented-code
 description: Detect large blocks of commented-out code
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - cleanup
-timeout: 30
 ---
 
 # No Commented Code Validator
@@ -42,4 +30,5 @@ Examine the file content for large blocks of commented-out code:
 - Example code in documentation comments
 - Single-line temporary debugging comments (though these should be removed too)
 - Code examples showing "don't do this" patterns
+
 

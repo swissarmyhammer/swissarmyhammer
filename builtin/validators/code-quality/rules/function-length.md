@@ -1,18 +1,6 @@
 ---
 name: function-length
 description: Functions should be less than 50 lines
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - maintainability
-timeout: 30
 ---
 
 # Function Length Validator
@@ -33,4 +21,5 @@ Examine the file content for functions longer than 50 lines of actual code:
 - Generated code
 - Functions that are mostly configuration/data (e.g., builder patterns with many options)
 - Initialization functions that set many fields
+
 

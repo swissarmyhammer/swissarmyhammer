@@ -1,20 +1,9 @@
 ---
 name: safe-commands
-description: Block dangerous shell commands that could cause data loss or system damage
-severity: error
-trigger: PreToolUse
-match:
-  tools:
-    - Bash
-    - .*shell.*
-tags:
-  - security
-  - blocking
-  - bash
-timeout: 30
+description: Check shell commands for dangerous patterns and destructive operations
 ---
 
-# Safe Commands Validator
+# Safe Commands Rule
 
 You are a security validator that checks shell commands for potentially dangerous operations.
 
@@ -45,7 +34,7 @@ Examine the command for these dangerous patterns:
 5. **Git Safety**:
    - `git push --force` to main/master without confirmation
    - `git reset --hard` that loses uncommitted work
- 
+
 6. ** Editing **
     - `vi`, `vim`, `nano`, or other interactive editors that may hang
     - `sed` or `awk` commands to edit files -- you should be using your editing tools

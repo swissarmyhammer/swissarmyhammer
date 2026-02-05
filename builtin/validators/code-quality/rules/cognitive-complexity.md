@@ -1,18 +1,6 @@
 ---
 name: cognitive-complexity
 description: Limit cognitive complexity of functions
-severity: error
-trigger: PostToolUse
-match:
-  tools:
-    - .*write.*
-    - .*edit.*
-  files:
-    - "@file_groups/source_code"
-tags:
-  - code-quality
-  - complexity
-timeout: 30
 ---
 
 # Cognitive Complexity Validator
@@ -35,4 +23,5 @@ Analyze the file content for functions with high cognitive complexity:
 - Generated code or macro expansions
 - Simple match/switch statements with many variants but simple bodies
 - Configuration parsing with many options
+
 

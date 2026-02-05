@@ -264,7 +264,7 @@ async fn process_notification(
 }
 
 /// Spawn a task to collect text from session notifications.
-fn spawn_notification_collector(
+pub fn spawn_notification_collector(
     mut notifications: broadcast::Receiver<SessionNotification>,
     session_id: agent_client_protocol::SessionId,
 ) -> (
@@ -307,7 +307,7 @@ fn spawn_notification_collector(
 }
 
 /// Collect the response content after prompt execution.
-async fn collect_response_content(
+pub async fn collect_response_content(
     collector: tokio::task::JoinHandle<()>,
     collected_text: Arc<tokio::sync::Mutex<String>>,
     notification_count: Arc<std::sync::atomic::AtomicUsize>,
