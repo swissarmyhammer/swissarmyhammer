@@ -338,11 +338,6 @@ impl McpTool for KanbanTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let ctx = Self::get_kanban_context(_context)?;
 
-        // Ensure directory structure exists (idempotent)
-        ctx.ensure_directories().await.map_err(|e| {
-            McpError::internal_error(format!("Failed to create kanban directories: {}", e), None)
-        })?;
-
         // Parse the input to get operations
         let input = Value::Object(arguments);
         let operations = parse_input(input).map_err(|e| {

@@ -37,6 +37,9 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
     where
         T: Execute<KanbanContext, KanbanError> + Send + Sync,
     {
+        // Ensure directory structure exists (idempotent, fast when dirs exist)
+        ctx.ensure_directories().await?;
+
         // Execute the operation
         let exec_result = operation.execute(ctx).await;
 
