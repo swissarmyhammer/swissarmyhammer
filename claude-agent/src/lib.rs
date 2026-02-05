@@ -133,11 +133,13 @@ pub struct CreateAgentConfig {
 /// ```
 pub async fn create_agent(
     config: CreateAgentConfig,
-) -> Result<(ClaudeAgent, broadcast::Receiver<SessionNotification>)> {
+) -> Result<(ClaudeAgent, broadcast::Sender<SessionNotification>)> {
     let mut agent_config = AgentConfig::default();
     agent_config.claude.ephemeral = config.ephemeral;
     agent_config.mcp_servers = config.mcp_servers;
-    ClaudeAgent::new(agent_config).await
+    let (agent, _receiver) = ClaudeAgent::new(agent_config).await?;
+    let sender = agent.notification_sender.sender();
+    Ok((agent, sender))
 }
 
 /// Execute a prompt and collect the response content.

@@ -291,50 +291,6 @@ impl Default for ConcurrencyLimiter {
     }
 }
 
-/// Collect all notification content for a completed prompt turn.
-///
-/// After `agent.prompt()` returns, the notification forwarder may still be
-/// flushing messages through the broadcast channel. This function uses
-/// `recv().await` to wait for messages, with a timeout to detect when the
-/// stream is done. This is event-driven (not a sleep) - it only waits
-/// when there are messages still in flight.
-async fn drain_notifications(
-    rx: &mut broadcast::Receiver<SessionNotification>,
-    session_id: &agent_client_protocol::SessionId,
-) -> String {
-    use agent_client_protocol::{ContentBlock, SessionUpdate};
-
-    let mut collected = String::new();
-
-    loop {
-        // Wait for next notification, but give up if nothing arrives
-        // within 100ms - that means the forwarder has flushed everything
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.recv(),
-        )
-        .await
-        {
-            Ok(Ok(notification)) => {
-                if notification.session_id == *session_id {
-                    if let SessionUpdate::AgentMessageChunk(chunk) = &notification.update {
-                        if let ContentBlock::Text(text) = &chunk.content {
-                            collected.push_str(&text.text);
-                        }
-                    }
-                }
-            }
-            Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
-                tracing::warn!("Notification receiver lagged, skipped {} messages", n);
-            }
-            Ok(Err(broadcast::error::RecvError::Closed)) => break,
-            Err(_) => break, // Timeout - no more messages arriving
-        }
-    }
-
-    collected
-}
-
 /// Handle a validator execution response, creating the appropriate result.
 ///
 /// This is a shared helper used by both parallel (`ValidatorTask`) and
@@ -528,48 +484,25 @@ pub struct ValidatorRunner {
 }
 
 impl ValidatorRunner {
-    /// Create a new ValidatorRunner with the given agent.
+    /// Create a new ValidatorRunner with the given agent and notification sender.
     ///
-    /// The agent and notifications should be obtained from `AvpContext::agent()`.
+    /// Takes the notification Sender directly so we can subscribe() for each
+    /// rule turn without any forwarding hops. The agent publishes notifications
+    /// synchronously before prompt() returns, so subscribers see all content
+    /// immediately.
     pub fn new(
         agent: Arc<dyn Agent + Send + Sync>,
-        notifications: broadcast::Receiver<SessionNotification>,
+        notifications: broadcast::Sender<SessionNotification>,
     ) -> Result<Self, AvpError> {
         let prompt_library = Self::load_prompt_library()?;
         let partials = Self::load_validator_partials();
         let concurrency = Arc::new(ConcurrencyLimiter::new());
 
-        // Create a sender so we can resubscribe for each validator execution
-        let (tx, _) = broadcast::channel(crate::context::NOTIFICATION_CHANNEL_CAPACITY);
-        let tx_clone = tx.clone();
-
-        // Forward notifications from the provided receiver to our sender
-        tokio::spawn(async move {
-            let mut rx = notifications;
-            loop {
-                match rx.recv().await {
-                    Ok(notification) => {
-                        let _ = tx_clone.send(notification);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(
-                            skipped_messages = n,
-                            "ValidatorRunner notification forwarder lagged"
-                        );
-                        continue;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
-                }
-            }
-        });
-
         Ok(Self {
             prompt_library: Arc::new(prompt_library),
             partials,
             agent,
-            notifications: tx,
+            notifications,
             concurrency,
         })
     }
@@ -946,15 +879,18 @@ impl ValidatorRunner {
             vec![ContentBlock::Text(TextContent::new(init_prompt))],
         );
 
-        // Subscribe before init prompt so we don't miss notifications
-        let mut init_rx = self.notifications.subscribe();
+        // Collector for init prompt - runs concurrently while prompt() blocks
+        let init_notifications = self.notifications.subscribe();
+        let (init_collector, _init_text, _, _) =
+            claude_agent::spawn_notification_collector(init_notifications, session_id.clone());
 
         match self.agent.prompt(init_request).await {
             Ok(_init_response) => {
-                // Drain and discard init notifications
-                drain_notifications(&mut init_rx, &session_id).await;
+                // prompt() returned - collector already has everything, discard it
+                init_collector.abort();
             }
             Err(e) => {
+                init_collector.abort();
                 tracing::error!("Failed to send init prompt for RuleSet '{}': {}", ruleset.name(), e);
                 return (
                     create_executed_ruleset(
@@ -975,21 +911,25 @@ impl ValidatorRunner {
             let rule_ctx = RulePromptContext::with_partials(rule, ruleset, Some(&self.partials));
             let rule_prompt = rule_ctx.render();
 
-            // Send rule as next message in the conversation
             let rule_request = PromptRequest::new(
                 session_id.clone(),
                 vec![ContentBlock::Text(TextContent::new(rule_prompt))],
             );
 
-            // Subscribe before prompt so we capture all notifications for this turn
-            let mut rule_rx = self.notifications.subscribe();
+            // Spawn collector BEFORE prompt - it runs concurrently, collecting
+            // notifications as they stream in during prompt execution
+            let rule_notifications = self.notifications.subscribe();
+            let (rule_collector, rule_text, _, _) =
+                claude_agent::spawn_notification_collector(rule_notifications, session_id.clone());
 
             let response = self.agent.prompt(rule_request).await;
 
+            // prompt() returned - collector has already received all content
+            rule_collector.abort();
+
             match response {
                 Ok(prompt_response) => {
-                    // Prompt completed - drain all queued notifications
-                    let content = drain_notifications(&mut rule_rx, &session_id).await;
+                    let content = rule_text.lock().await.clone();
 
                     if content.is_empty() {
                         tracing::warn!(
@@ -1427,9 +1367,12 @@ mod tests {
     async fn test_validator_runner_new() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (tx, _) = broadcast::channel(64);
+        let tx2 = tx.clone();
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications);
+        let runner = ValidatorRunner::new(Arc::new(agent), tx);
         assert!(runner.is_ok(), "ValidatorRunner::new should succeed");
 
         let runner = runner.unwrap();
@@ -1447,9 +1390,12 @@ mod tests {
     async fn test_validator_runner_current_concurrency() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (tx, _) = broadcast::channel(64);
+        let tx2 = tx.clone();
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
 
         // current_concurrency should return a valid value
         let concurrency = runner.current_concurrency();
@@ -1461,9 +1407,12 @@ mod tests {
     async fn test_validator_runner_execute_validator_pass() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (tx, _) = broadcast::channel(64);
+        let tx2 = tx.clone();
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
 
@@ -1479,9 +1428,12 @@ mod tests {
     async fn test_validator_runner_execute_validators_empty() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (tx, _) = broadcast::channel(64);
+        let tx2 = tx.clone();
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
         let context = serde_json::json!({"tool_name": "Write"});
 
         // Empty validators list should return empty results
@@ -1500,9 +1452,12 @@ mod tests {
     async fn test_validator_runner_execute_validator_with_changed_files() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (tx, _) = broadcast::channel(64);
+        let tx2 = tx.clone();
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"session_id": "test"});
         let changed_files = vec!["src/lib.rs".to_string(), "src/main.rs".to_string()];
@@ -1519,9 +1474,12 @@ mod tests {
     async fn test_validator_runner_execute_validator_fail() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_FAIL);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (tx, _) = broadcast::channel(64);
+        let tx2 = tx.clone();
+        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = tx2.send(n); } });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), tx).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
 

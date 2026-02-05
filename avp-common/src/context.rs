@@ -266,13 +266,13 @@ impl AvpContext {
     /// Get the agent for validator execution.
     ///
     /// Creates an ephemeral ClaudeAgent on first access if not already created.
-    /// Returns a reference to the agent and a notification receiver.
+    /// Returns a reference to the agent and the notification sender (for subscribing).
     pub async fn agent(
         &self,
     ) -> Result<
         (
             Arc<dyn Agent + Send + Sync>,
-            broadcast::Receiver<SessionNotification>,
+            broadcast::Sender<SessionNotification>,
         ),
         AvpError,
     > {
@@ -283,12 +283,9 @@ impl AvpContext {
             let start = std::time::Instant::now();
 
             let config = CreateAgentConfig::builder().ephemeral(true).build();
-            let (agent, notifications) = claude_agent::create_agent(config)
+            let (agent, sender) = claude_agent::create_agent(config)
                 .await
                 .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
-
-            let (tx, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
-            spawn_notification_forwarder(notifications, tx.clone());
 
             tracing::debug!(
                 "Ephemeral ClaudeAgent created in {:.2}s",
@@ -297,12 +294,12 @@ impl AvpContext {
 
             *guard = Some(AgentHandle {
                 agent: Arc::new(agent),
-                notifications: tx,
+                notifications: sender,
             });
         }
 
         let handle = guard.as_ref().unwrap();
-        Ok((Arc::clone(&handle.agent), handle.notifications.subscribe()))
+        Ok((Arc::clone(&handle.agent), handle.notifications.clone()))
     }
 
     /// Get the project AVP directory path.
