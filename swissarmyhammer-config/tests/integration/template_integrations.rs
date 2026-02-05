@@ -6,32 +6,33 @@
 
 use liquid::ParserBuilder;
 use serde_json::json;
-use serial_test::serial;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper for isolated template integration testing
 struct IsolatedTemplateTest {
     _env: IsolatedTestEnvironment,
-    original_cwd: std::path::PathBuf,
+    _dir_guard: CurrentDirGuard,
     env_vars_to_restore: Vec<(String, Option<String>)>,
 }
 
 impl IsolatedTemplateTest {
     fn new() -> Self {
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-        let original_cwd = env::current_dir().expect("Failed to get current dir");
+
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
 
         // Set up isolated environment - set current directory to temp dir
-        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
+        let dir_guard = CurrentDirGuard::new(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
             _env: env,
-            original_cwd,
+            _dir_guard: dir_guard,
             env_vars_to_restore: Vec::new(),
         }
     }
@@ -64,13 +65,13 @@ impl Drop for IsolatedTemplateTest {
             }
         }
 
-        // Restore original directory - IsolatedTestEnvironment handles HOME restoration
-        let _ = env::set_current_dir(&self.original_cwd);
+        // CurrentDirGuard automatically restores the original directory
+        // IsolatedTestEnvironment handles HOME restoration
     }
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_template_context_to_liquid_context_conversion() {
     let test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -186,7 +187,7 @@ Generated on {{now | date: "%Y-%m-%d"}}
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_template_context_with_env_var_overrides() {
     let mut test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -232,7 +233,7 @@ Database: {{database.host}}:{{database_port}}
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_template_context_merge_into_workflow_context() {
     let test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -309,7 +310,7 @@ optimization = true
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_template_context_with_template_vars() {
     let test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -363,7 +364,7 @@ Dynamic: {% if dynamic_setting %}enabled{% else %}disabled{% endif %}
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_complex_template_rendering_with_config() {
     let mut test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -487,7 +488,7 @@ key_path = "/etc/ssl/private/server.key"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_template_context_with_liquid_filters_and_functions() {
     let mut context = TemplateContext::new();
     context.set("raw_text".to_string(), json!("hello world"));
@@ -576,7 +577,7 @@ Array Iteration with Filters:
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_template_context_error_handling() {
     let mut context = TemplateContext::new();
     context.set("valid_var".to_string(), json!("valid_value"));
@@ -615,7 +616,7 @@ Valid var is present: {{valid_var}}
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_template_context_nested_object_access() {
     let mut context = TemplateContext::new();
     context.set(

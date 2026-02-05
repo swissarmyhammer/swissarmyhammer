@@ -4,7 +4,6 @@
 //! Verifies that TemplateContext always loads fresh config as specified in the requirements.
 
 use serde_json::json;
-use serial_test::serial;
 use std::env;
 use std::fs;
 use std::thread;
@@ -16,21 +15,24 @@ use swissarmyhammer_config::TemplateContext;
 /// Test helper for isolated fresh loading testing
 struct IsolatedFreshLoadTest {
     _env: IsolatedTestEnvironment,
-    original_cwd: std::path::PathBuf,
+    _dir_guard: swissarmyhammer_common::test_utils::CurrentDirGuard,
     env_vars_to_restore: Vec<(String, Option<String>)>,
 }
 
 impl IsolatedFreshLoadTest {
     fn new() -> Self {
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-        let original_cwd = env::current_dir().expect("Failed to get current dir");
+
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
 
         // Set current directory to temp dir for these tests
-        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
+        let dir_guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(env.temp_dir())
+            .expect("Failed to set current dir");
 
         Self {
             _env: env,
-            original_cwd,
+            _dir_guard: dir_guard,
             env_vars_to_restore: Vec::new(),
         }
     }
@@ -68,14 +70,13 @@ impl Drop for IsolatedFreshLoadTest {
                 None => env::remove_var(key),
             }
         }
-
-        // Restore original directory - IsolatedTestEnvironment handles HOME restoration
-        let _ = env::set_current_dir(&self.original_cwd);
+        // CurrentDirGuard automatically restores the original directory
+        // IsolatedTestEnvironment handles HOME restoration
     }
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_config_file_changes_picked_up_immediately() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -109,7 +110,7 @@ new_setting = "added"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_multiple_successive_loads_always_fresh() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -143,7 +144,7 @@ counter = {}
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_environment_variable_changes_picked_up() {
     let mut test = IsolatedFreshLoadTest::new();
 
@@ -168,7 +169,7 @@ fn test_environment_variable_changes_picked_up() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_config_file_deletion_and_recreation() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -211,7 +212,7 @@ new_after_recreation = "new_value"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_multiple_config_files_fresh_loading() {
     let test = IsolatedFreshLoadTest::new();
     let project_config_dir = test.project_config_dir();
@@ -285,7 +286,7 @@ new_project = "new_project_value"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_concurrent_fresh_loading() {
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -370,7 +371,7 @@ thread_id = {}
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_config_format_changes_fresh_loading() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -424,7 +425,7 @@ new_in_yaml: yaml_specific
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_no_caching_with_rapid_changes() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -467,7 +468,7 @@ iteration_mod_5 = {}
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_fresh_loading_with_file_permissions_changes() {
     use std::os::unix::fs::PermissionsExt;
 

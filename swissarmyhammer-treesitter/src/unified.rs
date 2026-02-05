@@ -177,6 +177,7 @@ impl Workspace {
     ///     .open()
     ///     .await?;
     /// ```
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(workspace_root: impl AsRef<Path>) -> WorkspaceBuilder {
         WorkspaceBuilder::new(workspace_root)
     }
@@ -311,6 +312,7 @@ impl Workspace {
 
                 // Compute skip set for background task
                 let skip_paths = Self::compute_unchanged_files_static(&workspace_root, &leader_db)?;
+                tracing::debug!("Incremental indexing: skipping {} unchanged files", skip_paths.len());
 
                 // Spawn background indexer (takes ownership of guard)
                 Self::spawn_background_indexer(
@@ -721,7 +723,7 @@ impl ToChunkResult for EmbeddedChunkRecord {
         // Try to read the file and extract the text range
         let (text, start_line, end_line) = std::fs::read_to_string(&self.path)
             .ok()
-            .and_then(|content| {
+            .map(|content| {
                 // Extract the byte range
                 let text = content
                     .get(self.start_byte..self.end_byte)
@@ -736,7 +738,7 @@ impl ToChunkResult for EmbeddedChunkRecord {
                 let newlines_in_chunk = text.matches('\n').count();
                 let end_line = start_line + newlines_in_chunk;
 
-                Some((text, start_line, end_line))
+                (text, start_line, end_line)
             })
             .unwrap_or_else(|| (String::new(), 0, 0));
 
@@ -1824,6 +1826,7 @@ mod tests {
     // =========================================================================
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_indexing_skips_unchanged_files() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
@@ -1861,6 +1864,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_indexing_reparses_changed_files() {
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("test.rs");
@@ -1870,6 +1874,9 @@ mod tests {
         let workspace = Workspace::new(dir.path()).open().await.unwrap();
         tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
         drop(workspace);
+
+        // Wait to ensure file modification timestamp will be different (filesystem granularity)
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         // Modify the file
         std::fs::write(&file_path, "fn main() { println!(\"changed\"); }").unwrap();
@@ -1893,6 +1900,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_indexing_mixed_changed_unchanged() {
         let dir = TempDir::new().unwrap();
         let file1 = dir.path().join("unchanged.rs");
@@ -1902,10 +1910,19 @@ mod tests {
 
         // First indexing
         let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
-        let status1 = workspace.status().await.unwrap();
+
+        // Poll for both files to be indexed (with timeout)
+        let mut status1 = workspace.status().await.unwrap();
+        let start = std::time::Instant::now();
+        while status1.files_indexed < 2 && start.elapsed() < std::time::Duration::from_secs(5) {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            status1 = workspace.status().await.unwrap();
+        }
         assert_eq!(status1.files_indexed, 2);
         drop(workspace);
+
+        // Wait to ensure file modification timestamp will be different (filesystem granularity)
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         // Modify only one file
         std::fs::write(&file2, "fn changed() { println!(\"modified\"); }").unwrap();
@@ -1933,6 +1950,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_incremental_indexing_new_file_added() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("existing.rs"), "fn existing() {}").unwrap();
@@ -1941,6 +1959,9 @@ mod tests {
         let workspace = Workspace::new(dir.path()).open().await.unwrap();
         tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
         drop(workspace);
+
+        // Wait to ensure background task has fully completed and released locks
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         // Add a new file
         std::fs::write(dir.path().join("new.rs"), "fn new_func() {}").unwrap();
@@ -2156,6 +2177,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_open_spawns_background_indexer() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
@@ -2195,6 +2217,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_background_indexer_releases_lock() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();

@@ -147,9 +147,10 @@ pub enum SkipReason {
 /// 5. `ChunkComplete` - finished embedding a chunk
 /// 6. `FileComplete` - finished processing file (all chunks embedded)
 /// 7. `BuildComplete` - all files processed
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum IndexAction {
     /// No specific action
+    #[default]
     None,
     /// Build started
     BuildStarted,
@@ -201,12 +202,6 @@ pub enum IndexAction {
     },
     /// Build complete
     BuildComplete,
-}
-
-impl Default for IndexAction {
-    fn default() -> Self {
-        IndexAction::None
-    }
 }
 
 /// Current status of the index during scan operations
@@ -1223,7 +1218,7 @@ mod tests {
 
         // Check chunk count after refresh
         let after_chunks = db.get_chunks_for_file(&path).unwrap();
-        assert!(after_chunks.len() > 0, "Should have chunks after refresh");
+        assert!(!after_chunks.is_empty(), "Should have chunks after refresh");
     }
 
     #[tokio::test]

@@ -4,11 +4,10 @@
 //! key transformation, type conversion, and precedence handling.
 
 use serde_json::json;
-use serial_test::serial;
 use std::env;
 use std::fs;
 use std::sync::Mutex;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
@@ -19,7 +18,7 @@ static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 /// Test helper for isolated environment variable testing
 struct IsolatedEnvTest {
     _env: IsolatedTestEnvironment,
-    original_cwd: std::path::PathBuf,
+    _dir_guard: CurrentDirGuard,
     original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
     original_sah_vars: std::collections::HashMap<String, String>,
@@ -35,7 +34,6 @@ impl IsolatedEnvTest {
         });
 
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-        let original_cwd = env::current_dir().expect("Failed to get current dir");
         let original_home = env::var("HOME").ok();
 
         // Capture all existing SAH_ and SWISSARMYHAMMER_ environment variables
@@ -46,15 +44,18 @@ impl IsolatedEnvTest {
             }
         }
 
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
+
         // Set up isolated environment
         let home_dir = env.temp_dir().join("home");
         fs::create_dir(&home_dir).expect("Failed to create home dir");
         env::set_var("HOME", &home_dir);
-        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
+        let dir_guard = CurrentDirGuard::new(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
             _env: env,
-            original_cwd,
+            _dir_guard: dir_guard,
             original_home,
             env_vars_to_restore: Vec::new(),
             original_sah_vars,
@@ -85,17 +86,17 @@ impl IsolatedEnvTest {
 
 impl Drop for IsolatedEnvTest {
     fn drop(&mut self) {
-        // FIRST: Restore original working directory before temp directory is cleaned up
-        let _ = env::set_current_dir(&self.original_cwd);
+        // CurrentDirGuard automatically restores the original working directory
+        // This happens BEFORE the temp directory is cleaned up
 
-        // SECOND: Restore original HOME environment
+        // Restore original HOME environment
         if let Some(home) = &self.original_home {
             env::set_var("HOME", home);
         } else {
             env::remove_var("HOME");
         }
 
-        // THIRD: Clean up environment variables completely
+        // Clean up environment variables completely
         // Remove ALL current SAH_ and SWISSARMYHAMMER_ environment variables
         let current_sah_vars: Vec<String> = env::vars()
             .filter_map(|(key, _)| {
@@ -126,12 +127,12 @@ impl Drop for IsolatedEnvTest {
             }
         }
 
-        // FINALLY: The temp_dir will be cleaned up automatically when this struct is dropped
+        // The temp_dir will be cleaned up automatically when this struct is dropped
     }
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_sah_prefix_basic_variables() {
     let mut test = IsolatedEnvTest::new();
 
@@ -165,7 +166,7 @@ fn test_sah_prefix_basic_variables() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_swissarmyhammer_prefix_basic_variables() {
     let mut test = IsolatedEnvTest::new();
 
@@ -187,7 +188,7 @@ fn test_swissarmyhammer_prefix_basic_variables() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_nested_environment_variables() {
     let mut test = IsolatedEnvTest::new();
 
@@ -217,7 +218,7 @@ fn test_nested_environment_variables() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_both_prefixes_simultaneously() {
     let mut test = IsolatedEnvTest::new();
 
@@ -237,7 +238,7 @@ fn test_both_prefixes_simultaneously() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_prefix_precedence_when_both_set() {
     let mut test = IsolatedEnvTest::new();
 
@@ -275,7 +276,7 @@ fn test_prefix_precedence_when_both_set() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_environment_variable_type_conversion() {
     let mut test = IsolatedEnvTest::new();
 
@@ -339,7 +340,7 @@ fn test_environment_variable_type_conversion() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_environment_variable_with_special_characters() {
     let mut test = IsolatedEnvTest::new();
 
@@ -379,7 +380,7 @@ fn test_environment_variable_with_special_characters() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_environment_variable_override_config_file() {
     let mut test = IsolatedEnvTest::new();
 
@@ -419,7 +420,7 @@ config_only = "config_value"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_case_sensitivity_in_env_vars() {
     let mut test = IsolatedEnvTest::new();
 
@@ -462,7 +463,7 @@ fn test_case_sensitivity_in_env_vars() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_env_var_with_numbers_in_keys() {
     let mut test = IsolatedEnvTest::new();
 
@@ -497,7 +498,7 @@ fn test_env_var_with_numbers_in_keys() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_env_vars_with_no_config_files() {
     let mut test = IsolatedEnvTest::new();
 
@@ -525,7 +526,7 @@ fn test_env_vars_with_no_config_files() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_invalid_env_var_names() {
     let mut test = IsolatedEnvTest::new();
 
@@ -550,7 +551,7 @@ fn test_invalid_env_var_names() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_env_var_substitution_in_values() {
     let mut test = IsolatedEnvTest::new();
 
@@ -600,7 +601,7 @@ fn test_env_var_substitution_in_values() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_unset_environment_variables() {
     let mut test = IsolatedEnvTest::new();
 
@@ -622,7 +623,7 @@ fn test_unset_environment_variables() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_env_var_precedence_order_consistency() {
     let mut test = IsolatedEnvTest::new();
 

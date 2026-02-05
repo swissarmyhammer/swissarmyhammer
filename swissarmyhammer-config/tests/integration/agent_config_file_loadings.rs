@@ -1,5 +1,4 @@
 // sah rule ignore test_rule_with_allow
-use serial_test::serial;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -20,6 +19,9 @@ impl TempTestDir {
         let env = IsolatedTestEnvironment::new().unwrap();
         let config_dir = env.temp_dir().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir(&config_dir).unwrap();
+
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
 
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(env.temp_dir()).unwrap();
@@ -78,7 +80,7 @@ fn assert_all_toml_configs(context: &TemplateContext) {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_load_model_config_from_toml_file() {
     let test_dir = TempTestDir::new();
 
@@ -138,7 +140,7 @@ fn assert_fallback_yaml_config(context: &TemplateContext) {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_load_model_config_from_yaml_file() {
     let test_dir = TempTestDir::new();
 
@@ -193,7 +195,7 @@ agent:
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_model_config_with_environment_variables() {
     use std::sync::Mutex;
 

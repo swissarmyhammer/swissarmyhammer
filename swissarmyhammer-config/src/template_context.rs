@@ -838,6 +838,7 @@ mod tests {
     use std::fs;
     use std::sync::Mutex;
     use swissarmyhammer_common::SwissarmyhammerDirectory;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
     /// Global mutex to serialize environment variable tests
@@ -965,6 +966,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_load_with_config_file() {
         // Acquire the global environment variable test lock to prevent race conditions
         let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
@@ -973,6 +975,8 @@ mod tests {
         });
 
         let temp_dir = TempDir::new().unwrap();
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).unwrap();
         let config_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir(&config_dir).unwrap();
 
@@ -992,8 +996,7 @@ version = "1.0.0"
         .unwrap();
 
         // Change to the temp directory so the config file is discovered
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(temp_dir.path()).unwrap();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         // Add a small delay to ensure directory change is fully processed
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1004,9 +1007,6 @@ version = "1.0.0"
         assert_eq!(context.get("database.port"), Some(&json!(5432)));
         assert_eq!(context.get("app.name"), Some(&json!("TestApp")));
         assert_eq!(context.get("app.version"), Some(&json!("1.0.0")));
-
-        // Restore original directory (may fail if original dir no longer exists)
-        let _ = env::set_current_dir(original_dir);
     }
 
     #[test]
@@ -1487,11 +1487,8 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_with_template_vars_error_cases() {
-        use std::env;
-        use std::fs;
-        use tempfile::TempDir;
-
         // Acquire the global environment variable test lock to prevent race conditions
         let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("Environment variable test lock was poisoned, recovering");
@@ -1514,6 +1511,8 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Test case: template vars should override any loaded config values
         let temp_dir = TempDir::new().unwrap();
+        // Create a .git directory to prevent config discovery from walking up to the real repo
+        fs::create_dir(temp_dir.path().join(".git")).unwrap();
         let config_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir(&config_dir).unwrap();
 
@@ -1528,8 +1527,7 @@ config_only = "config_only_value"
         .unwrap();
 
         // Change to temp directory to load the config
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(temp_dir.path()).unwrap();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         // Create context with template vars that override config
         let mut override_vars = HashMap::new();
@@ -1559,8 +1557,5 @@ config_only = "config_only_value"
             "with_template_vars should handle empty vars: {:?}",
             empty_context.err()
         );
-
-        // Restore original directory (may fail if original dir no longer exists)
-        let _ = env::set_current_dir(original_dir);
     }
 }

@@ -4,7 +4,6 @@
 //! with various content structures and edge cases.
 
 use serde_json::json;
-use serial_test::serial;
 use std::env;
 use std::fs;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
@@ -19,6 +18,9 @@ struct IsolatedConfigTest {
 impl IsolatedConfigTest {
     fn new() -> Self {
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
 
         // Set current directory to temp dir for these tests
         env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
@@ -37,7 +39,7 @@ impl IsolatedConfigTest {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_toml_config_file_loading() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -131,7 +133,7 @@ retention_days = 7
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_yaml_config_file_loading() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -239,7 +241,7 @@ metadata: { created_by: test, version: 1.0 }
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_yml_extension_handling() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -269,7 +271,7 @@ database:
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_json_config_file_loading() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -370,7 +372,7 @@ fn test_json_config_file_loading() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_malformed_config_files() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -431,7 +433,7 @@ database:
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_empty_config_files() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -473,7 +475,7 @@ fn test_empty_config_files() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_file_format_precedence() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -539,7 +541,7 @@ format: yaml
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_complex_nested_structures() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();

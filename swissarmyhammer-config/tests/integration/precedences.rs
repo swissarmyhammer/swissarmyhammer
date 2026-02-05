@@ -5,31 +5,32 @@
 //! (later sources override earlier ones)
 
 use serde_json::json;
-use serial_test::serial;
 use std::env;
 use std::fs;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper for isolated precedence testing
 struct IsolatedPrecedenceTest {
     _env: IsolatedTestEnvironment,
-    original_cwd: std::path::PathBuf,
+    _dir_guard: CurrentDirGuard,
     env_vars_to_restore: Vec<(String, Option<String>)>,
 }
 
 impl IsolatedPrecedenceTest {
     fn new() -> Self {
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-        let original_cwd = env::current_dir().expect("Failed to get current dir");
+
+        // Create .git marker to prevent config discovery from walking up to real repo
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
 
         // Set current directory to temp dir for these tests
-        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
+        let dir_guard = CurrentDirGuard::new(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
             _env: env,
-            original_cwd,
+            _dir_guard: dir_guard,
             env_vars_to_restore: Vec::new(),
         }
     }
@@ -68,13 +69,13 @@ impl Drop for IsolatedPrecedenceTest {
             }
         }
 
-        // Restore original directory - IsolatedTestEnvironment handles HOME restoration
-        let _ = env::set_current_dir(&self.original_cwd);
+        // CurrentDirGuard automatically restores the original directory
+        // IsolatedTestEnvironment handles HOME restoration
     }
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_global_overrides_defaults() {
     let test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -99,7 +100,7 @@ global_only = "global_value"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_project_overrides_global() {
     let test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -142,7 +143,7 @@ shared_setting = "from_project"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_env_vars_override_config_files() {
     let mut test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -191,7 +192,7 @@ project_setting = "project_value"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_swissarmyhammer_prefix_env_vars() {
     let mut test = IsolatedPrecedenceTest::new();
     let project_config_dir = test.project_config_dir();
@@ -230,7 +231,7 @@ shared_value = "from_project"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_both_env_prefixes_simultaneously() {
     let mut test = IsolatedPrecedenceTest::new();
     let project_config_dir = test.project_config_dir();
@@ -268,7 +269,7 @@ swissarmyhammer_specific = "from_project"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_cli_args_highest_precedence() {
     let mut test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -318,7 +319,7 @@ shared_value = "from_project"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_complete_precedence_chain() {
     let mut test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -404,7 +405,7 @@ database_timeout = 60
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_nested_value_precedence() {
     let mut test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -488,7 +489,7 @@ level = "debug"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_precedence_with_missing_layers() {
     let mut test = IsolatedPrecedenceTest::new();
 
@@ -513,7 +514,7 @@ fn test_precedence_with_missing_layers() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(cwd)]
 fn test_precedence_with_empty_sources() {
     let mut test = IsolatedPrecedenceTest::new();
     let project_config_dir = test.project_config_dir();
