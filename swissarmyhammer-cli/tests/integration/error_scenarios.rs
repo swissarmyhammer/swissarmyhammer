@@ -5,7 +5,6 @@
 
 use anyhow::Result;
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_common::SwissarmyhammerDirectory;
 use tempfile::TempDir;
 
 use crate::in_process_test_utils::{run_sah_command_in_process_with_dir, CapturedOutput};
@@ -122,7 +121,7 @@ async fn test_invalid_command_arguments() -> Result<()> {
     Ok(())
 }
 
-/// Test storage backend errors when .swissarmyhammer directory is read-only
+/// Test storage backend errors when working directory is read-only
 #[tokio::test]
 async fn test_storage_backend_permissions() -> Result<()> {
     use std::fs::Permissions;
@@ -130,23 +129,13 @@ async fn test_storage_backend_permissions() -> Result<()> {
 
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Create a read-only parent directory to cause storage errors
-    let swissarmyhammer_dir = temp_path.join(SwissarmyhammerDirectory::dir_name());
-    std::fs::remove_dir_all(&swissarmyhammer_dir).ok(); // Remove existing directory structure
-
-    // Create the directory first
-    if let Err(e) = std::fs::create_dir_all(&swissarmyhammer_dir) {
-        println!("Failed to create swissarmyhammer dir: {}", e);
-        return Ok(());
-    }
-
-    // Make the .swissarmyhammer directory read-only to prevent kanban directory creation
-    if let Err(e) = std::fs::set_permissions(&swissarmyhammer_dir, Permissions::from_mode(0o555)) {
+    // Make the working directory read-only to prevent .kanban creation
+    if let Err(e) = std::fs::set_permissions(&temp_path, Permissions::from_mode(0o555)) {
         println!("Failed to set permissions: {}", e);
         return Ok(());
     }
 
-    // Test operations that require write access to .swissarmyhammer
+    // Test operations that require write access to create .kanban directory
     let result = run_sah_command_in_process_with_dir(
         &["tool", "kanban", "task", "add", "--title", "test"],
         &temp_path,
@@ -159,44 +148,43 @@ async fn test_storage_backend_permissions() -> Result<()> {
     });
 
     // Restore permissions for cleanup before assertions (to avoid test cleanup issues)
-    std::fs::set_permissions(&swissarmyhammer_dir, Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&temp_path, Permissions::from_mode(0o755))?;
 
-    // Assert that the command failed with a permission or initialization error
-    // Kanban operations may fail with "board not initialized" when the directory is read-only
-    // because the board initialization cannot proceed
+    // Assert that the command failed with a permission error
+    // Kanban auto-init will fail when it can't create .kanban directory
     assert_ne!(
         result.exit_code, 0,
-        "Should fail when .swissarmyhammer directory is not writable. Exit code: {}, Stderr: {}",
+        "Should fail when working directory is not writable. Exit code: {}, Stderr: {}",
         result.exit_code, result.stderr
     );
     assert!(
         result.stderr.contains("Permission denied")
             || result.stderr.contains("permission denied")
             || result.stderr.contains("IO error")
-            || result.stderr.contains("board not initialized")
-            || result.stderr.contains("not initialized"),
-        "Should show permission-related or initialization error: {}",
+            || result.stderr.contains("Read-only file system"),
+        "Should show permission-related error: {}",
         result.stderr
     );
 
     Ok(())
 }
 
-/// Test git-related functionality - verify kanban commands require git
+/// Test git-related functionality - verify kanban commands work without git (auto-init)
 #[tokio::test]
-async fn test_commands_require_git() -> Result<()> {
+async fn test_commands_work_without_git() -> Result<()> {
     // Create a separate temporary directory without git for this test
     let temp_dir = tempfile::TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
 
-    // Test that kanban commands require git repository
+    // Test that kanban commands work without git repository (auto-initialize)
     // Use explicit working directory instead of global directory change to avoid race conditions
     let result =
         run_sah_command_in_process_with_dir(&["tool", "kanban", "tasks", "list"], &temp_path)
             .await?;
-    assert_ne!(
+    assert_eq!(
         result.exit_code, 0,
-        "Kanban commands should fail without git repository"
+        "Kanban commands should succeed with auto-init, stderr: {}",
+        result.stderr
     );
     assert!(
         result

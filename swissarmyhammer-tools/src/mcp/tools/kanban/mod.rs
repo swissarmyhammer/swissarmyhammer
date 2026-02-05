@@ -2081,20 +2081,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_operation_without_board() {
+    async fn test_operation_without_board_auto_inits() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context()
             .await
             .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
-        // Don't init board
+        // Don't init board - auto-init should create one
 
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), json!("add task"));
         args.insert("title".to_string(), json!("Test"));
 
+        // Should succeed now with auto-init
         let result = tool.execute(args, &context).await;
-        assert!(result.is_err());
+        assert!(result.is_ok(), "Operation should succeed with auto-init");
+
+        // Verify board was auto-created
+        let mut get_board = serde_json::Map::new();
+        get_board.insert("op".to_string(), json!("get board"));
+        let board_result = tool.execute(get_board, &context).await.unwrap();
+        let data = parse_json(&board_result);
+        assert_eq!(data["name"], "Untitled Board");
     }
 
     // =========================================================================
@@ -2601,31 +2609,33 @@ mod tests {
     // =========================================================================
 
     #[tokio::test]
-    async fn test_operations_fail_gracefully_without_init() {
+    async fn test_operations_auto_init_without_explicit_init() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context()
             .await
             .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
 
-        // DO NOT call init_test_board - this is the bug we're testing for
+        // DO NOT call init_test_board - verifying auto-init works
 
-        // Try to add a task without initializing
+        // Try to add a task without explicit initialization
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add task"));
         add_args.insert("title".to_string(), json!("Task without init"));
 
         let result = tool.execute(add_args, &context).await;
 
-        // Should fail with NotInitialized error, not IO error
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        let err_msg = err.message.to_lowercase();
-        assert!(
-            err_msg.contains("not initialized") || err_msg.contains("board"),
-            "Error should mention board not initialized, got: {}",
-            err_msg
-        );
+        // Should succeed with auto-init
+        assert!(result.is_ok(), "Operation should succeed with auto-init");
+        let data = parse_json(&result.unwrap());
+        assert_eq!(data["title"], "Task without init");
+
+        // Verify board was auto-created with default name
+        let mut get_board = serde_json::Map::new();
+        get_board.insert("op".to_string(), json!("get board"));
+        let board_result = tool.execute(get_board, &context).await.unwrap();
+        let board_data = parse_json(&board_result);
+        assert_eq!(board_data["name"], "Untitled Board");
     }
 
     #[tokio::test]

@@ -40,6 +40,13 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         // Ensure directory structure exists (idempotent, fast when dirs exist)
         ctx.ensure_directories().await?;
 
+        // Auto-initialize board if not present (idempotent)
+        // Skip auto-init if the operation is InitBoard itself
+        if !ctx.is_initialized() && operation.op_string() != "init board" {
+            let board = crate::types::Board::new("Untitled Board");
+            ctx.write_board(&board).await?;
+        }
+
         // Execute the operation
         let exec_result = operation.execute(ctx).await;
 

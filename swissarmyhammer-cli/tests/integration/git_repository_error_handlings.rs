@@ -11,9 +11,9 @@ use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 use crate::in_process_test_utils::run_sah_command_in_process_with_dir;
 
-/// Test that kanban commands require Git repository
+/// Test that kanban commands work without Git repository (auto-initialize)
 #[tokio::test]
-async fn test_kanban_commands_require_git_repository() {
+async fn test_kanban_commands_work_without_git_repository() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
 
@@ -25,19 +25,17 @@ async fn test_kanban_commands_require_git_repository() {
     // Restore original directory
 
     let output = result.unwrap();
-    // Kanban commands require git repositories
-    assert_ne!(
+    // Kanban commands should succeed with auto-initialization
+    assert_eq!(
         output.exit_code, 0,
-        "Command should fail without git repository"
-    );
-    assert!(
-        output
-            .stderr
-            .contains("Kanban operations require a Git repository")
-            || output.stderr.contains("Git repository")
-            || output.stderr.contains("git"),
-        "Should show git repository error: {}",
+        "Command should succeed with auto-init, stderr: {}",
         output.stderr
+    );
+    // Should return empty task list from auto-initialized board
+    assert!(
+        output.stdout.contains("tasks") || output.stdout.contains("count"),
+        "Should show tasks list: {}",
+        output.stdout
     );
 }
 
@@ -74,7 +72,7 @@ async fn test_commands_work_in_git_repository() {
 
 /// Test exit codes for Git repository errors
 #[tokio::test]
-async fn test_git_repository_error_exit_codes() {
+async fn test_kanban_auto_init_exit_codes() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
 
@@ -87,21 +85,21 @@ async fn test_git_repository_error_exit_codes() {
 
     let output = result.unwrap();
     eprintln!(
-        "DEBUG test_git_repository_error_exit_codes: stdout: {}",
+        "DEBUG test_kanban_auto_init_exit_codes: stdout: {}",
         output.stdout
     );
     eprintln!(
-        "DEBUG test_git_repository_error_exit_codes: stderr: {}",
+        "DEBUG test_kanban_auto_init_exit_codes: stderr: {}",
         output.stderr
     );
     eprintln!(
-        "DEBUG test_git_repository_error_exit_codes: exit_code: {}",
+        "DEBUG test_kanban_auto_init_exit_codes: exit_code: {}",
         output.exit_code
     );
-    // Kanban commands require git repositories
-    assert_ne!(
+    // Kanban commands should succeed with auto-initialization
+    assert_eq!(
         output.exit_code, 0,
-        "Kanban commands should fail without git repository"
+        "Kanban commands should succeed with auto-init"
     );
 }
 
