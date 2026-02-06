@@ -3,7 +3,7 @@
 pub mod core;
 pub mod fork_join;
 #[cfg(test)]
-mod result_cel_test;
+mod result_js_test;
 #[cfg(test)]
 mod tests;
 pub mod validation;

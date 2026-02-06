@@ -4,7 +4,7 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_cel_tools, register_file_tools, register_kanban_tools, register_shell_tools,
+    register_js_tools, register_file_tools, register_kanban_tools, register_shell_tools,
     register_web_fetch_tools, register_web_search_tools,
 };
 
@@ -14,7 +14,7 @@ async fn test_mcp_tools_are_registered() {
     let mut registry = ToolRegistry::new();
 
     // This mirrors exactly what McpServer does in its constructor
-    register_cel_tools(&mut registry);
+    register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
@@ -35,8 +35,7 @@ async fn test_mcp_tools_are_registered() {
 
     // Check for specific tools we know should be there (internal names, not MCP prefixed)
     let expected_tools = [
-        "cel_set",
-        "cel_get",
+        "js",
         "files_read",
         "files_write",
         "files_edit",
@@ -122,7 +121,7 @@ async fn test_cli_categories_are_available() {
     let mut registry = ToolRegistry::new();
 
     // Register all tools
-    register_cel_tools(&mut registry);
+    register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
@@ -132,7 +131,7 @@ async fn test_cli_categories_are_available() {
     let categories = registry.get_cli_categories();
     println!("📋 CLI Categories: {:?}", categories);
 
-    // These categories should be available (excluding hidden tools like CEL and notify)
+    // These categories should be available (excluding hidden tools like JS and notify)
     let expected_categories = ["file", "kanban", "shell", "web-search"];
 
     for &expected_cat in &expected_categories {
@@ -176,7 +175,7 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     let mut registry = ToolRegistry::new();
 
     // Register all tools
-    register_cel_tools(&mut registry);
+    register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);

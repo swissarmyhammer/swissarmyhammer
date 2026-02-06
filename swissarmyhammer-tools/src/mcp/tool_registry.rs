@@ -1736,9 +1736,9 @@ macro_rules! register_tool_category {
 }
 
 register_tool_category!(
-    register_cel_tools,
-    cel,
-    "Register all CEL-related tools with the registry"
+    register_js_tools,
+    js,
+    "Register all JavaScript expression tools with the registry"
 );
 
 /// Register all file-related tools with the registry
@@ -1801,7 +1801,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     // Register all tools exactly like McpServer does
-    register_cel_tools(&mut registry);
+    register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_flow_tools(&mut registry);
     register_git_tools(&mut registry);

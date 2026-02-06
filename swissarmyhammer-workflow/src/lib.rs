@@ -80,18 +80,5 @@ pub fn parse_workflow_from_string(input: &str) -> ParseResult<Workflow> {
     MermaidParser::parse(input, workflow_name)
 }
 
-// Initialize common workflow CEL variables when the module loads
-fn init_workflow_cel_variables() {
-    let cel_state = swissarmyhammer_cel::CelState::global();
-    // Initialize are_tests_passing to false by default
-    // This ensures the variable exists for workflows that depend on it
-    if cel_state.get("are_tests_passing").is_err() {
-        let _ = cel_state.set("are_tests_passing", "false");
-    }
-}
-
-// Call initialization when module loads
-#[ctor::ctor]
-fn init() {
-    init_workflow_cel_variables();
-}
+// JS initialization happens lazily on first use since it requires async.
+// The JS worker thread will be spawned on first JsState access.

@@ -5,7 +5,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn test_result_content_field_accessible_in_cel() {
+    fn test_result_content_field_accessible_in_js() {
         let mut executor = WorkflowExecutor::new();
         let mut context = HashMap::new();
 
@@ -19,7 +19,7 @@ mod tests {
         context.insert("result".to_string(), agent_response);
 
         // This should work - accessing result.content
-        let expression = "result.content.contains(\"YES\")";
+        let expression = "result.content.includes(\"YES\")";
         let result = executor.evaluate_condition(
             &crate::TransitionCondition {
                 condition_type: crate::ConditionType::Custom,
@@ -41,7 +41,7 @@ mod tests {
         context.insert("result".to_string(), json!("YES"));
 
         // This should fail - string doesn't have content field
-        let expression = "result.content.contains(\"YES\")";
+        let expression = "result.content.includes(\"YES\")";
         let result = executor.evaluate_condition(
             &crate::TransitionCondition {
                 condition_type: crate::ConditionType::Custom,

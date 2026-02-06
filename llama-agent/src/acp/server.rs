@@ -1654,7 +1654,7 @@ impl agent_client_protocol::Agent for AcpServer {
                 serde_json::json!(total_tool_calls),
             );
         }
-        // Include the response text in metadata for workflow CEL expression evaluation
+        // Include the response text in metadata for workflow JS expression evaluation
         // This mirrors claude-agent's behavior with "claude_response"
         meta.insert(
             "llama_response".to_string(),

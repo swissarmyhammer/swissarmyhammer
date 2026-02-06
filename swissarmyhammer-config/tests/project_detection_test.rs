@@ -47,7 +47,7 @@ fn test_template_context_has_project_types() {
 
     let project_types = ctx
         .get("project_types")
-        .expect("project_types variable should be set in CEL context");
+        .expect("project_types variable should be set in JS context");
 
     println!("✅ project_types variable is set");
     println!("Value: {:#?}", project_types);

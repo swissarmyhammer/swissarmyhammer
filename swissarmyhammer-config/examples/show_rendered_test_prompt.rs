@@ -14,7 +14,7 @@ fn main() {
             .as_array()
             .expect("project_types should be array");
         println!(
-            "✅ Found {} detected projects in CEL context\n",
+            "✅ Found {} detected projects in JS context\n",
             projects.len()
         );
 

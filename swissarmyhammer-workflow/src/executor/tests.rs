@@ -764,10 +764,10 @@ async fn test_choice_state_execution() {
 async fn test_choice_state_with_cel_conditions() {
     let mut executor = WorkflowExecutor::new();
 
-    // Create a workflow with a choice state using CEL expressions
+    // Create a workflow with a choice state using JS expressions
     let mut workflow = Workflow::new(
-        WorkflowName::new("Choice State CEL Test"),
-        "Test choice state with CEL conditions".to_string(),
+        WorkflowName::new("Choice State JS Test"),
+        "Test choice state with JS conditions".to_string(),
         StateId::new("start"),
     );
 
@@ -775,7 +775,7 @@ async fn test_choice_state_with_cel_conditions() {
     workflow.add_state(create_state("start", "Set result=\"ok\"", false));
     workflow.add_state(create_state_with_type(
         "choice1",
-        "Choice state with CEL",
+        "Choice state with JS",
         StateType::Choice,
         false,
     ));
@@ -794,7 +794,7 @@ async fn test_choice_state_with_cel_conditions() {
         metadata: HashMap::new(),
     });
 
-    // Choice state with CEL condition that checks result
+    // Choice state with JS condition that checks result
     workflow.add_transition(Transition {
         from_state: StateId::new("choice1"),
         to_state: StateId::new("success"),
@@ -1951,12 +1951,12 @@ stateDiagram-v2
     );
 }
 
-#[test]
-fn test_global_cel_variables_accessible_in_workflow() {
-    // Set a global CEL variable
-    let cel_state = swissarmyhammer_cel::CelState::global();
-    cel_state.set("global_flag", "true").unwrap();
-    cel_state.set("global_count", "42").unwrap();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_global_cel_variables_accessible_in_workflow() {
+    // Set a global JS variable
+    let js_state = swissarmyhammer_js::JsState::global();
+    js_state.set("global_flag", "true").await.unwrap();
+    js_state.set("global_count", "42").await.unwrap();
 
     let mut executor = WorkflowExecutor::new();
     let mut context = HashMap::new();
@@ -1964,7 +1964,7 @@ fn test_global_cel_variables_accessible_in_workflow() {
     // Add workflow-specific variable
     context.insert("local_value".to_string(), json!(10));
 
-    // Test 1: Can access global variable in CEL expression
+    // Test 1: Can access global variable in JS expression
     let result = executor.evaluate_condition(
         &TransitionCondition {
             condition_type: ConditionType::Custom,
@@ -1998,7 +1998,7 @@ fn test_global_cel_variables_accessible_in_workflow() {
     );
 
     // Test 3: Can use global abort flag
-    cel_state.set("abort", "false").unwrap();
+    js_state.set("abort", "false").await.unwrap();
     let result = executor.evaluate_condition(
         &TransitionCondition {
             condition_type: ConditionType::Custom,
@@ -2014,11 +2014,11 @@ fn test_global_cel_variables_accessible_in_workflow() {
     assert!(result.unwrap(), "abort should be false");
 }
 
-#[test]
-fn test_local_workflow_variables_override_global() {
-    // Set a global CEL variable
-    let cel_state = swissarmyhammer_cel::CelState::global();
-    cel_state.set("shared_var", "100").unwrap();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_workflow_variables_override_global() {
+    // Set a global JS variable
+    let js_state = swissarmyhammer_js::JsState::global();
+    js_state.set("shared_var", "100").await.unwrap();
 
     let mut executor = WorkflowExecutor::new();
     let mut context = HashMap::new();
@@ -2041,17 +2041,17 @@ fn test_local_workflow_variables_override_global() {
     );
 }
 
-#[test]
-fn test_global_boolean_true_and_false_in_workflows() {
-    // This test explicitly verifies that cel_set("name", true) and cel_set("name", false)
-    // work correctly in workflow CEL expressions
-    let cel_state = swissarmyhammer_cel::CelState::global();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_global_boolean_true_and_false_in_workflows() {
+    // This test explicitly verifies that js set("name", "true") and set("name", "false")
+    // work correctly in workflow JS expressions
+    let js_state = swissarmyhammer_js::JsState::global();
 
     // Set boolean true
-    cel_state.set("feature_enabled", "true").unwrap();
+    js_state.set("feature_enabled", "true").await.unwrap();
 
     // Set boolean false
-    cel_state.set("feature_disabled", "false").unwrap();
+    js_state.set("feature_disabled", "false").await.unwrap();
 
     let mut executor = WorkflowExecutor::new();
     let context = HashMap::new();
@@ -2135,7 +2135,7 @@ fn test_global_boolean_true_and_false_in_workflows() {
     );
 
     // Test 6: Set a flag to false and verify it blocks a condition
-    cel_state.set("workflow_should_continue", "false").unwrap();
+    js_state.set("workflow_should_continue", "false").await.unwrap();
     let result = executor.evaluate_condition(
         &TransitionCondition {
             condition_type: ConditionType::Custom,

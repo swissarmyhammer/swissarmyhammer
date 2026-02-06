@@ -88,7 +88,7 @@ impl WorkflowRun {
     }
 
     fn new_impl(workflow: Workflow, agent: Option<Arc<ModelConfig>>) -> Self {
-        // Note: Abort state is now managed via CEL (cel_set("abort", "true"))
+        // Note: Abort state is managed via JS (js_set("abort", "true"))
         // No file cleanup needed
 
         let now = chrono::Utc::now();

@@ -707,9 +707,9 @@ impl MermaidParser {
         match &transition.event {
             Some(event) => {
                 // Analyze the event text to determine condition type
-                // Check for CEL expressions first (contains operators or function calls)
+                // Check for JS expressions first (contains operators or function calls)
                 let event_lower = event.to_lowercase();
-                let is_cel_expression = event.contains("==")
+                let is_js_expression = event.contains("==")
                     || event.contains("!=")
                     || event.contains("&&")
                     || event.contains("||")
@@ -718,7 +718,7 @@ impl MermaidParser {
                     || event.contains("<")
                     || event.contains(">");
 
-                let condition_type = if is_cel_expression {
+                let condition_type = if is_js_expression {
                     ConditionType::Custom
                 } else if event_lower == "always" || event.is_empty() {
                     ConditionType::Always

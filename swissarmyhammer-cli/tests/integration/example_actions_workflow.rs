@@ -246,7 +246,7 @@ async fn test_branch_decision_condition2() -> Result<()> {
     run.context
         .insert("example_var".to_string(), json!("No match here")); // Branch1 condition should be false
 
-    // Navigate to BranchDecision state to test the CEL condition
+    // Navigate to BranchDecision state to test the JS condition
     run.current_state = StateId::new("BranchDecision");
 
     // Reset workflow status to Running so it can execute again
@@ -437,8 +437,8 @@ async fn test_all_branches_are_reachable() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_debug_cel_expressions() -> Result<()> {
-    // Focused test for CEL expression evaluation - optimized for speed
+async fn test_debug_js_expressions() -> Result<()> {
+    // Focused test for JS expression evaluation - optimized for speed
     let mut executor = WorkflowExecutor::new();
 
     // Create minimal context for testing
@@ -446,12 +446,12 @@ async fn test_debug_cel_expressions() -> Result<()> {
     context.insert("error_handled".to_string(), json!(true));
     context.insert("example_var".to_string(), json!("Hello from workflow"));
 
-    // Test key CEL expressions without full workflow execution
+    // Test key JS expressions without full workflow execution
     use swissarmyhammer_workflow::{ConditionType, TransitionCondition};
 
     let condition = TransitionCondition {
         condition_type: ConditionType::Custom,
-        expression: Some("example_var.contains('Hello')".to_string()),
+        expression: Some("example_var.includes('Hello')".to_string()),
     };
     let result = executor.evaluate_condition(&condition, &context);
     assert!(result.unwrap());

@@ -4,7 +4,7 @@
 //! and finding project marker files (Cargo.toml, package.json, etc.)
 //!
 //! This crate is used by the SwissArmyHammer prompt system to populate
-//! CEL context with detected project types, making them available to all
+//! JS context with detected project types, making them available to all
 //! prompts without requiring LLM tool calls.
 
 mod detect;

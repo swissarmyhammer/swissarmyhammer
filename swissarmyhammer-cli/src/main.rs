@@ -20,24 +20,22 @@ use mcp_integration::CliToolContext;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_cel::CelState;
+use swissarmyhammer_js::JsState;
 use swissarmyhammer_config::TemplateContext;
 
 /// Track if we've already performed shutdown to prevent double-shutdown
 static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
 
-/// Initialize global CEL variables used by workflows
+/// Initialize global JS variables used by workflows
 ///
 /// This ensures that common workflow variables exist before any workflows
 /// are loaded or executed, preventing "undeclared reference" errors.
-fn initialize_global_cel_variables() {
-    let cel_state = CelState::global();
+async fn initialize_global_js_variables() {
+    let js_state = JsState::global();
 
     // Initialize are_tests_passing to false by default
     // This variable is used by the test workflow to track test status
-    if cel_state.get("are_tests_passing").is_err() {
-        let _ = cel_state.set("are_tests_passing", "false");
-    }
+    let _ = js_state.set("are_tests_passing", "false").await;
 }
 
 /// Perform graceful shutdown before process exit
@@ -419,8 +417,8 @@ async fn main() {
     // Check for --cwd flag and change directory FIRST
     handle_cwd_flag(&args);
 
-    // Initialize global CEL variables used by workflows
-    initialize_global_cel_variables();
+    // Initialize global JS variables used by workflows
+    initialize_global_js_variables().await;
 
     // Extract --model flag for global override
     let model_override = extract_model_flag(&args);

@@ -27,7 +27,7 @@ swissarmyhammer = { path = "../swissarmyhammer" }
 swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-cel = { path = "../swissarmyhammer-cel" }
+swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }

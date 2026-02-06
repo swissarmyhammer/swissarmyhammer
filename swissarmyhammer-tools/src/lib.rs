@@ -72,7 +72,7 @@ pub mod test_utils;
 pub use health_registry::collect_all_health_checks;
 pub use mcp::McpServer;
 pub use mcp::{
-    register_cel_tools, register_file_tools, register_flow_tools, register_git_tools,
+    register_file_tools, register_flow_tools, register_git_tools, register_js_tools,
     register_kanban_tools, register_questions_tools, register_shell_tools,
     register_treesitter_tools, register_web_fetch_tools, register_web_search_tools,
 };

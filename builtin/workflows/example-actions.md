@@ -27,7 +27,7 @@ stateDiagram-v2
     FailurePath --> HandleError
     HandleError --> WaitExample
     WaitExample --> BranchDecision
-    BranchDecision --> Branch1: example_var.contains("Hello")
+    BranchDecision --> Branch1: example_var.includes("Hello")
     BranchDecision --> Branch2: is_error == true
     BranchDecision --> DefaultBranch: default
     Branch1 --> Complete
@@ -97,7 +97,7 @@ When actions complete, Swiss Army Hammer automatically sets variables based on t
 - `total_cost_usd`: Cost of the Claude API call
 - `session_id`: Claude session identifier
 
-### Using Variables in CEL Expressions
+### Using Variables in JavaScript Expressions
 
 You can use any of these variables in transition conditions:
 
@@ -122,8 +122,8 @@ This workflow demonstrates branching with the following conditional transitions:
 
 ### Choice State Branching (BranchDecision State)
 The `BranchDecision` state is a choice state that evaluates conditions to determine the next state:
-- **Branch1**: Selected when `example_var` contains "Hello" (CEL: `example_var.contains("Hello")`)
-- **Branch2**: Selected when there is an error (CEL: `is_error == true`)
+- **Branch1**: Selected when `example_var` contains "Hello" (JS: `example_var.includes("Hello")`)
+- **Branch2**: Selected when there is an error (JS: `is_error == true`)
 - **DefaultBranch**: Selected when no other conditions match
 
 ### Transition Conditions

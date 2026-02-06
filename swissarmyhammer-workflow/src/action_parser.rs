@@ -1,7 +1,7 @@
 //! Action parsing utilities for workflow state descriptions
 
 use crate::actions::{
-    AbortAction, ActionError, ActionResult, CelSetAction, LogAction, LogLevel, PromptAction,
+    AbortAction, ActionError, ActionResult, JsSetAction, LogAction, LogLevel, PromptAction,
     SetVariableAction, ShellAction, SubWorkflowAction, WaitAction,
 };
 use chumsky::prelude::*;
@@ -294,15 +294,21 @@ impl ActionParser {
         }
     }
 
-    /// Parse a cel_set action from description
-    /// Format: cel_set variable_name value
-    pub fn parse_cel_set_action(&self, description: &str) -> ActionResult<Option<CelSetAction>> {
+    /// Parse a js_set action from description (also accepts legacy cel_set keyword)
+    /// Format: js_set variable_name value
+    pub fn parse_js_set_action(&self, description: &str) -> ActionResult<Option<JsSetAction>> {
         let value_parser = choice((
             Self::quoted_string(),
             none_of('"').repeated().at_least(1).collect::<String>(),
         ));
 
-        let parser = Self::case_insensitive("cel_set")
+        // Accept both "cel_set" and "js_set" keywords
+        let keyword = choice((
+            Self::case_insensitive("js_set"),
+            Self::case_insensitive("cel_set"),
+        ));
+
+        let parser = keyword
             .then_ignore(Self::whitespace())
             .ignore_then(Self::identifier())
             .then_ignore(Self::whitespace())
@@ -317,7 +323,7 @@ impl ActionParser {
                     ));
                 }
 
-                Ok(Some(CelSetAction::new(var_name, value)))
+                Ok(Some(JsSetAction::new(var_name, value)))
             }
             Err(_) => Ok(None),
         }

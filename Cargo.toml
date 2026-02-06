@@ -19,7 +19,7 @@ members = [
     "swissarmyhammer-workflow",
     "swissarmyhammer-agent",
     "swissarmyhammer-mcp-proxy",
-    "swissarmyhammer-cel",
+    "swissarmyhammer-js",
     "markdowndown",
     "llama-agent",
     "llama-common",
@@ -226,7 +226,8 @@ typed-builder = "0.20"
 nix = { version = "0.29", features = ["signal", "process"] }
 include_dir = "0.7"
 lru = "0.12"
-cel-interpreter = "0.8"
+rquickjs = { version = "0.11", features = ["futures", "loader"] }
+swissarmyhammer-js = { path = "swissarmyhammer-js" }
 chumsky = "0.10.1"
 zstd = "0.13"
 memmap2 = "0.9"

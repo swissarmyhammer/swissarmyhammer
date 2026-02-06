@@ -73,9 +73,6 @@ tree-sitter-dart = { workspace = true }
 # Mermaid parsing
 mermaid-parser = { workspace = true }
 
-# CEL expression evaluation
-cel-interpreter = { workspace = true }
-
 # Parser combinator library for action parsing
 chumsky = { workspace = true }
 

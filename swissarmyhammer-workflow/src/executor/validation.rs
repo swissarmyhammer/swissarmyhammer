@@ -2,14 +2,14 @@
 //!
 //! This module provides comprehensive condition evaluation and validation for workflow
 //! transitions, with a focus on security and performance. It supports multiple condition
-//! types including CEL (Common Expression Language) expressions for complex logic.
+//! types including JavaScript expressions for complex logic.
 //!
 //! # Architecture
 //!
 //! The module is organized around the following key components:
-//! - **Security Validation**: Prevents CEL injection attacks and resource exhaustion
-//! - **Expression Compilation**: Caches compiled CEL programs for performance
-//! - **Context Management**: Converts workflow data to CEL-compatible formats
+//! - **Security Validation**: Prevents injection attacks and resource exhaustion
+//! - **Expression Evaluation**: Uses rquickjs (QuickJS-NG) for JavaScript evaluation
+//! - **Context Management**: Converts workflow data to JS-compatible formats
 //! - **Choice State Validation**: Ensures deterministic behavior in choice states
 //!
 //! # Condition Types
@@ -20,8 +20,8 @@
 //! - `OnSuccess`: Evaluates based on last action success
 //! - `OnFailure`: Evaluates based on last action failure
 //!
-//! ## Custom CEL Expressions
-//! - `Custom`: Evaluates user-provided CEL expressions
+//! ## Custom JavaScript Expressions
+//! - `Custom`: Evaluates user-provided JavaScript expressions
 //! - Supports complex boolean logic, variable access, and text processing
 //! - Includes comprehensive security validation
 //!
@@ -34,92 +34,45 @@
 //! - **Quote Validation**: Detects suspicious quote patterns
 //!
 //! ## Execution Safety
-//! - **Timeout Protection**: Limits expression execution time
-//! - **Resource Limits**: Prevents resource exhaustion attacks
-//! - **Sandboxed Execution**: CEL expressions run in isolated context
-//!
-//! # Performance Optimizations
-//!
-//! ## Compilation Caching
-//! - CEL programs are compiled once and cached for reuse
-//! - Significant performance improvement for repeated evaluations
-//! - Cache is managed per executor instance
-//!
-//! ## Efficient Type Conversion
-//! - JSON to CEL type mapping uses built-in conversions
-//! - Fallback to string representation for unsupported types
-//! - Minimal memory allocation for common cases
-//!
-//! # Usage Examples
-//!
-//! ```rust,ignore
-//! # use std::collections::HashMap;
-//! # use serde_json::Value;
-//! # use swissarmyhammer_workflow::{WorkflowExecutor, TransitionCondition, ConditionType};
-//! # let mut executor = WorkflowExecutor::new();
-//! # let context = HashMap::<String, Value>::new();
-//! // Simple condition evaluation
-//! let condition = TransitionCondition {
-//!     condition_type: ConditionType::Custom,
-//!     expression: Some("count > 10".to_string()),
-//! };
-//! let result = executor.evaluate_condition(&condition, &context)?;
-//!
-//! // Complex condition with multiple variables
-//! let condition = TransitionCondition {
-//!     condition_type: ConditionType::Custom,
-//!     expression: Some("status == \"active\" && count > threshold".to_string()),
-//! };
-//! let result = executor.evaluate_condition(&condition, &context)?;
-//!
-//! // Default fallback condition
-//! let condition = TransitionCondition {
-//!     condition_type: ConditionType::Custom,
-//!     expression: Some("default".to_string()),
-//! };
-//! let result = executor.evaluate_condition(&condition, &context)?; // Always true
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! # Error Handling
-//!
-//! All functions return `ExecutorResult<T>` with detailed error messages.
-//! Error types include:
-//! - `ExecutorError::ExpressionError`: CEL compilation or evaluation errors
-//! - `ExecutorError::ExecutionFailed`: Workflow execution errors
-//!
-//! # Thread Safety
-//!
-//! The module is designed to be thread-safe when used with proper synchronization.
-//! Each `WorkflowExecutor` maintains its own CEL program cache.
-//!
-//! # Future Enhancements
-//!
-//! - Custom CEL functions for domain-specific operations
-//! - Advanced caching strategies with TTL and size limits
-//! - Metrics and monitoring for CEL expression performance
-//! - Support for async CEL operations
+//! - **Timeout Protection**: Limits expression execution time via interrupt handler
+//! - **Resource Limits**: Memory and stack size limits on JS runtime
+//! - **Sandboxed Execution**: Fresh JS runtime per evaluation, isolated from global state
 
 use super::core::WorkflowExecutor;
 use super::{ExecutionEventType, ExecutorError, ExecutorResult, LAST_ACTION_RESULT_KEY};
 use crate::{ConditionType, StateId, TransitionCondition, WorkflowRun};
-use cel_interpreter::{Context, Value as CelValue};
+use rquickjs::{CatchResultExt, CaughtError, Context, Object, Runtime};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use swissarmyhammer_common::Pretty;
 
-// Security constants for CEL expression evaluation
+// Security constants for expression evaluation
 const MAX_EXPRESSION_LENGTH: usize = 500;
 const MAX_EXECUTION_TIME: Duration = Duration::from_millis(100);
 const DEFAULT_VARIABLE_NAME: &str = "default";
 const RESULT_VARIABLE_NAME: &str = "result";
 
-// Forbidden patterns that could be dangerous
+// Forbidden patterns that could be dangerous in JS expressions
 const FORBIDDEN_PATTERNS: &[&str] = &[
-    "import", "load", "eval", "exec", "system", "process", "file", "read", "write", "delete",
-    "create", "mkdir", "rmdir", "chmod", "chown", "kill", "spawn",
+    "import",
+    "require",
+    "eval",
+    "exec",
+    "system",
+    "file",
+    "read",
+    "write",
+    "delete",
+    "mkdir",
+    "rmdir",
+    "chmod",
+    "chown",
+    "kill",
+    "spawn",
+    "Function",
+    "setTimeout",
+    "setInterval",
 ];
 
 // Result keys to look for in context
@@ -299,10 +252,10 @@ impl WorkflowExecutor {
             ConditionType::OnFailure => Ok(self.evaluate_action_condition(context, false, false)),
             ConditionType::Custom => {
                 if let Some(expression) = &condition.expression {
-                    self.evaluate_cel_expression(expression, context)
+                    self.evaluate_js_expression(expression, context)
                 } else {
                     Err(ExecutorError::ExpressionError(
-                        "CEL expression error: Custom condition requires an expression to be specified".to_string(),
+                        "Custom condition requires an expression to be specified".to_string(),
                     ))
                 }
             }
@@ -357,6 +310,7 @@ impl WorkflowExecutor {
             .iter()
             .filter(|ct| matches!(ct, crate::ConditionType::OnSuccess))
             .count();
+
         let failure_count = condition_types
             .iter()
             .filter(|ct| matches!(ct, crate::ConditionType::OnFailure))
@@ -394,11 +348,11 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    /// Validate and sanitize a CEL expression for security
-    fn validate_cel_expression(&self, expression: &str) -> ExecutorResult<()> {
+    /// Validate and sanitize an expression for security
+    fn validate_expression(&self, expression: &str) -> ExecutorResult<()> {
         if expression.len() > MAX_EXPRESSION_LENGTH {
             return Err(ExecutorError::ExpressionError(format!(
-                "CEL expression too long: {} characters (max {})",
+                "Expression too long: {} characters (max {})",
                 expression.len(),
                 MAX_EXPRESSION_LENGTH
             )));
@@ -411,36 +365,36 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    /// Check for forbidden patterns in CEL expression
+    /// Check for forbidden patterns in expression
     fn check_forbidden_patterns(expression: &str) -> ExecutorResult<()> {
         let expr_lower = expression.to_lowercase();
         for pattern in FORBIDDEN_PATTERNS {
-            if expr_lower.contains(pattern) {
+            if expr_lower.contains(&pattern.to_lowercase()) {
                 return Err(ExecutorError::ExpressionError(format!(
-                    "CEL expression contains forbidden pattern: '{pattern}'"
+                    "Expression contains forbidden pattern: '{pattern}'"
                 )));
             }
         }
         Ok(())
     }
 
-    /// Validate quote patterns in CEL expression
+    /// Validate quote patterns in expression
     fn validate_quote_patterns(expression: &str) -> ExecutorResult<()> {
         if expression.contains("\"\"\"") || expression.contains("'''") {
             return Err(ExecutorError::ExpressionError(
-                "CEL expression contains suspicious quote patterns".to_string(),
+                "Expression contains suspicious quote patterns".to_string(),
             ));
         }
         Ok(())
     }
 
-    /// Validate nesting depth in CEL expression
+    /// Validate nesting depth in expression
     fn validate_nesting_depth(expression: &str) -> ExecutorResult<()> {
         let max_depth = Self::calculate_nesting_depth(expression);
 
         if max_depth > 10 {
             return Err(ExecutorError::ExpressionError(format!(
-                "CEL expression has excessive nesting depth: {max_depth} (max 10)"
+                "Expression has excessive nesting depth: {max_depth} (max 10)"
             )));
         }
 
@@ -468,119 +422,214 @@ impl WorkflowExecutor {
         max_depth
     }
 
-    /// Evaluate a CEL expression with the given context
-    fn evaluate_cel_expression(
+    /// Evaluate a JavaScript expression with the given context.
+    ///
+    /// Creates a fresh rquickjs Runtime+Context per evaluation for isolation.
+    /// Global variables from JsState are copied in, plus workflow-specific variables.
+    fn evaluate_js_expression(
         &mut self,
         expression: &str,
         context: &HashMap<String, Value>,
     ) -> ExecutorResult<bool> {
         let evaluation_start = Instant::now();
 
-        self.validate_cel_expression(expression)?;
-        let program = self.compile_cel_program(expression)?;
-        let cel_context = self.prepare_cel_context(context)?;
+        self.validate_expression(expression)?;
 
-        let execution_start = Instant::now();
-        let result = self.execute_cel_program(&program, &cel_context, expression)?;
-        let execution_duration = execution_start.elapsed();
-
-        if execution_duration > MAX_EXECUTION_TIME {
-            return Err(ExecutorError::ExpressionError(format!(
-                "CEL execution timeout: Expression '{}' exceeded maximum execution time ({} ms, limit: {} ms)",
-                expression,
-                execution_duration.as_millis(),
-                MAX_EXECUTION_TIME.as_millis()
-            )));
+        // Handle "default" specially - it's a JS reserved word but used as a workflow
+        // fallback condition that always evaluates to true
+        if expression.trim() == DEFAULT_VARIABLE_NAME {
+            let total_time = evaluation_start.elapsed();
+            self.log_js_evaluation(total_time, expression, context);
+            return Ok(true);
         }
 
-        let boolean_result = Self::cel_value_to_bool_static(&result, expression)?;
+        // Create a fresh isolated runtime for this evaluation
+        let rt = Runtime::new().map_err(|e| {
+            ExecutorError::ExpressionError(format!("JS runtime creation failed: {}", e))
+        })?;
+        rt.set_memory_limit(10 * 1024 * 1024); // 10 MB
+        rt.set_max_stack_size(512 * 1024); // 512 KB
 
-        self.log_cel_evaluation(evaluation_start.elapsed(), expression, context);
-        self.log_cel_debug(expression, context, &result, boolean_result);
+        // Set timeout interrupt handler
+        let timeout = MAX_EXECUTION_TIME;
+        let start = Instant::now();
+        rt.set_interrupt_handler(Some(Box::new(move || start.elapsed() > timeout)));
+
+        let js_ctx = Context::full(&rt).map_err(|e| {
+            ExecutorError::ExpressionError(format!("JS context creation failed: {}", e))
+        })?;
+
+        // Inject variables and evaluate
+        let result: ExecutorResult<Value> = js_ctx.with(|ctx| {
+            let globals = ctx.globals();
+
+            // 1. Copy global JS state variables (context stacking)
+            self.inject_global_js_variables(&ctx, &globals)?;
+
+            // 2. Add default=true variable
+            globals.set(DEFAULT_VARIABLE_NAME, true).map_err(|e| {
+                ExecutorError::ExpressionError(format!(
+                    "Failed to add '{}' variable: {}",
+                    DEFAULT_VARIABLE_NAME, e
+                ))
+            })?;
+
+            // 3. Add workflow context variables
+            self.inject_context_variables(&ctx, &globals, context)?;
+
+            // 4. Add result variable fallback
+            self.inject_result_fallback(&ctx, &globals, context)?;
+
+            // 5. Evaluate the expression
+            let eval_result: rquickjs::Value = ctx
+                .eval(expression.as_bytes())
+                .catch(&ctx)
+                .map_err(|e| match e {
+                    CaughtError::Exception(ex) => {
+                        let msg = format!("{}", ex);
+                        // Undeclared variable -> treat as false
+                        if msg.contains("is not defined") || msg.contains("not defined") {
+                            tracing::debug!(
+                                "JS expression '{}' references undefined variable, treating as false: {}",
+                                expression,
+                                msg
+                            );
+                            return ExecutorError::ExpressionError("__UNDEFINED__".to_string());
+                        }
+                        ExecutorError::ExpressionError(format!(
+                            "JS evaluation failed: '{expression}' ({msg})"
+                        ))
+                    }
+                    CaughtError::Value(v) => {
+                        let s: std::result::Result<String, _> = v.get();
+                        ExecutorError::ExpressionError(format!(
+                            "JS threw: {}",
+                            s.unwrap_or_else(|_| "unknown".to_string())
+                        ))
+                    }
+                    CaughtError::Error(e) => ExecutorError::ExpressionError(format!(
+                        "JS error evaluating '{expression}': {e}"
+                    )),
+                })?;
+
+            // Convert to JSON
+            swissarmyhammer_js::bridge::js_to_json(&ctx, eval_result)
+                .map_err(|e| ExecutorError::ExpressionError(format!("Type conversion failed: {}", e)))
+        });
+
+        // Handle the undefined variable sentinel
+        let json_result = match result {
+            Ok(v) => v,
+            Err(ExecutorError::ExpressionError(ref msg)) if msg == "__UNDEFINED__" => {
+                Value::Bool(false)
+            }
+            Err(e) => return Err(e),
+        };
+
+        let boolean_result = Self::json_value_to_bool(&json_result, expression)?;
+
+        let total_time = evaluation_start.elapsed();
+        self.log_js_evaluation(total_time, expression, context);
+        self.log_js_debug(expression, context, &json_result, boolean_result);
 
         Ok(boolean_result)
     }
 
-    /// Compile CEL program from expression
-    fn compile_cel_program(&self, expression: &str) -> ExecutorResult<cel_interpreter::Program> {
-        cel_interpreter::Program::compile(expression).map_err(|e| {
-            ExecutorError::ExpressionError(format!(
-                "CEL compilation failed: Unable to compile expression '{expression}' ({e})"
-            ))
-        })
-    }
-
-    /// Prepare CEL context with workflow variables
-    ///
-    /// This creates a stacked context where global CEL variables (like abort)
-    /// are accessible alongside workflow-specific variables.
-    fn prepare_cel_context(&self, context: &HashMap<String, Value>) -> ExecutorResult<Context<'_>> {
-        let mut cel_context = Context::default();
-
-        // Copy global CEL variables to the context (context stacking)
-        let global_state = swissarmyhammer_cel::CelState::global();
-        global_state
-            .copy_to_context(&mut cel_context)
-            .map_err(|e| {
-                ExecutorError::ExpressionError(format!(
-                    "CEL context error: Failed to copy global variables ({e})"
-                ))
-            })?;
-
-        // Add workflow-specific variables on top
-        Self::add_default_variable(&mut cel_context)?;
-        Self::add_context_variables(&mut cel_context, context)?;
-        Self::add_result_variable_fallback(&mut cel_context, context)?;
-
-        Ok(cel_context)
-    }
-
-    /// Add default variable to CEL context
-    fn add_default_variable(cel_context: &mut Context) -> ExecutorResult<()> {
-        cel_context
-            .add_variable(DEFAULT_VARIABLE_NAME, true)
-            .map_err(|e| {
-                ExecutorError::ExpressionError(format!(
-                    "CEL context error: Failed to add '{DEFAULT_VARIABLE_NAME}' variable ({e})"
-                ))
-            })
-    }
-
-    /// Add all context variables to CEL context
-    fn add_context_variables(
-        cel_context: &mut Context,
-        context: &HashMap<String, Value>,
+    /// Inject global JS state variables into evaluation context
+    fn inject_global_js_variables<'js>(
+        &self,
+        ctx: &rquickjs::Ctx<'js>,
+        globals: &Object<'js>,
     ) -> ExecutorResult<()> {
-        for (key, value) in context {
-            if key == RESULT_VARIABLE_NAME {
-                tracing::debug!("Adding 'result' variable to CEL context: {}", Pretty(value));
-            }
+        // Get variables from the async JsState.
+        // The JS worker thread communicates via std::sync::mpsc channels + oneshot replies.
+        // We spawn a dedicated thread with its own tokio runtime to bridge async->sync,
+        // which works regardless of whether we're in a single-thread or multi-thread runtime.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            let js_state = swissarmyhammer_js::JsState::global();
+            let result = rt.block_on(js_state.get_all_variables());
+            let _ = tx.send(result);
+        });
+        let global_vars = rx.recv().map_err(|e| {
+            ExecutorError::ExpressionError(format!(
+                "Failed to get global JS variables: {}",
+                e
+            ))
+        })?;
 
-            Self::add_json_variable_to_cel_context_static(cel_context, key, value).map_err(
-                |e| {
-                    ExecutorError::ExpressionError(format!(
-                        "CEL context error: Failed to add variable '{key}' ({e})"
-                    ))
-                },
-            )?;
+        let global_vars = global_vars.map_err(|e| {
+            ExecutorError::ExpressionError(format!("Failed to get global JS variables: {}", e))
+        })?;
+
+        for (name, value) in &global_vars {
+            match swissarmyhammer_js::bridge::json_to_js(ctx, value) {
+                Ok(js_val) => {
+                    let _ = globals.set(name.as_str(), js_val);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to inject global variable '{}': {}", name, e);
+                }
+            }
         }
 
         Ok(())
     }
 
-    /// Add result variable as text fallback if not already present
-    fn add_result_variable_fallback(
-        cel_context: &mut Context,
+    /// Inject workflow context variables into JS globals
+    fn inject_context_variables<'js>(
+        &self,
+        ctx: &rquickjs::Ctx<'js>,
+        globals: &Object<'js>,
+        context: &HashMap<String, Value>,
+    ) -> ExecutorResult<()> {
+        for (key, value) in context {
+            if key == RESULT_VARIABLE_NAME {
+                tracing::debug!("Adding 'result' variable to JS context: {}", Pretty(value));
+            }
+
+            match swissarmyhammer_js::bridge::json_to_js(ctx, value) {
+                Ok(js_val) => {
+                    globals.set(key.as_str(), js_val).map_err(|e| {
+                        ExecutorError::ExpressionError(format!(
+                            "Failed to add variable '{}': {}",
+                            key, e
+                        ))
+                    })?;
+                }
+                Err(e) => {
+                    // Fallback: set as string
+                    let fallback = Self::json_value_to_string(value);
+                    let _ = globals.set(key.as_str(), fallback.as_str());
+                    tracing::warn!(
+                        "Variable '{}' injected as string fallback due to conversion error: {}",
+                        key,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Inject result variable fallback if not already present
+    fn inject_result_fallback<'js>(
+        &self,
+        _ctx: &rquickjs::Ctx<'js>,
+        globals: &Object<'js>,
         context: &HashMap<String, Value>,
     ) -> ExecutorResult<()> {
         if !context.contains_key(RESULT_VARIABLE_NAME) {
             tracing::debug!("'result' not in context, adding text fallback");
             let result_text = Self::extract_result_text_static(context);
-            cel_context
-                .add_variable(RESULT_VARIABLE_NAME, result_text)
+            globals
+                .set(RESULT_VARIABLE_NAME, result_text.as_str())
                 .map_err(|e| {
                     ExecutorError::ExpressionError(format!(
-                        "CEL context error: Failed to add '{RESULT_VARIABLE_NAME}' variable ({e})"
+                        "Failed to add '{}' variable: {}",
+                        RESULT_VARIABLE_NAME, e
                     ))
                 })?;
         } else {
@@ -590,34 +639,20 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    /// Execute CEL program with context (returns false if variables are undeclared, allowing lazy evaluation)
-    fn execute_cel_program(
-        &self,
-        program: &cel_interpreter::Program,
-        cel_context: &Context,
-        expression: &str,
-    ) -> ExecutorResult<CelValue> {
-        program.execute(cel_context).or_else(|e| {
-            let err_msg = e.to_string();
-            // If the error is about undeclared references, treat as false (variable doesn't exist yet)
-            // This allows workflows to reference variables that will be set during execution
-            if err_msg.contains("undeclared") || err_msg.contains("Undeclared") {
-                tracing::debug!(
-                    "CEL expression '{}' references undeclared variable, treating as false: {}",
-                    expression,
-                    err_msg
-                );
-                Ok(CelValue::Bool(false))
-            } else {
-                Err(ExecutorError::ExpressionError(format!(
-                    "CEL execution failed: Unable to execute expression '{expression}' ({e})"
-                )))
-            }
-        })
+    /// Convert a JSON value to a boolean (JS-style truthiness)
+    fn json_value_to_bool(value: &Value, _expression: &str) -> ExecutorResult<bool> {
+        match value {
+            Value::Bool(b) => Ok(*b),
+            Value::Number(n) => Ok(n.as_f64().map_or(false, |f| f != 0.0)),
+            Value::String(s) => Ok(!s.is_empty()),
+            Value::Null => Ok(false),
+            Value::Array(a) => Ok(!a.is_empty()),
+            Value::Object(_) => Ok(true),
+        }
     }
 
-    /// Log CEL evaluation performance
-    fn log_cel_evaluation(
+    /// Log JS evaluation performance
+    fn log_js_evaluation(
         &mut self,
         total_time: Duration,
         expression: &str,
@@ -626,7 +661,7 @@ impl WorkflowExecutor {
         self.log_event(
             ExecutionEventType::StateExecution,
             format!(
-                "CEL evaluation completed: total={:?}, variables={}",
+                "JS evaluation completed: total={:?}, variables={}",
                 total_time,
                 context.len() + 2
             ),
@@ -636,40 +671,40 @@ impl WorkflowExecutor {
             self.log_event(
                 ExecutionEventType::StateExecution,
                 format!(
-                    "CEL performance warning: Expression '{expression}' took {total_time:?} to evaluate (consider optimization)"
+                    "JS performance warning: Expression '{expression}' took {total_time:?} to evaluate (consider optimization)"
                 ),
             );
         }
     }
 
-    /// Log CEL debug information
-    fn log_cel_debug(
+    /// Log JS debug information
+    fn log_js_debug(
         &self,
         expression: &str,
         context: &HashMap<String, Value>,
-        result: &CelValue,
+        result: &Value,
         boolean_result: bool,
     ) {
         if let Some(result_value) = context.get("result") {
             tracing::debug!(
-                "CEL Debug - 'result' variable in context: {:?}",
+                "JS Debug - 'result' variable in context: {:?}",
                 result_value
             );
         } else {
-            tracing::debug!("CEL Debug - 'result' variable NOT in context");
+            tracing::debug!("JS Debug - 'result' variable NOT in context");
         }
 
         let result_text = Self::extract_result_text_static(context);
         let context_keys: Vec<String> = context.keys().cloned().collect();
 
-        #[derive(serde::Serialize, Debug)]
-        struct CelResult {
-            value: String,
-        }
-        let cel_result = CelResult {
-            value: format!("{:?}", result),
-        };
-        tracing::debug!("CEL Debug - Expression: '{}' | Result text: '{}' | CEL result: {} | Boolean: {} | Context keys: {}", expression, result_text, Pretty(&cel_result), boolean_result, Pretty(&context_keys));
+        tracing::debug!(
+            "JS Debug - Expression: '{}' | Result text: '{}' | JS result: {} | Boolean: {} | Context keys: {}",
+            expression,
+            result_text,
+            Pretty(result),
+            boolean_result,
+            Pretty(&context_keys)
+        );
     }
 
     /// Convert JSON value to string (helper for extraction)
@@ -681,7 +716,7 @@ impl WorkflowExecutor {
         }
     }
 
-    /// Extract result text from context for CEL evaluation (static version)
+    /// Extract result text from context for evaluation (static version)
     fn extract_result_text_static(context: &HashMap<String, Value>) -> String {
         for key in RESULT_KEYS {
             if let Some(value) = context.get(*key) {
@@ -690,96 +725,5 @@ impl WorkflowExecutor {
         }
 
         String::new()
-    }
-
-    /// Add JSON variable to CEL context (static version)
-    fn add_json_variable_to_cel_context_static(
-        cel_context: &mut Context,
-        key: &str,
-        value: &Value,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let cel_value = Self::json_to_cel_value(value).unwrap_or_else(|_| {
-            let fallback = Self::json_value_to_string(value);
-            cel_interpreter::Value::String(Arc::new(fallback))
-        });
-        cel_context.add_variable(key, cel_value)?;
-        Ok(())
-    }
-
-    /// Convert JSON object to CEL map
-    fn convert_object_to_cel_map(
-        obj: &serde_json::Map<String, Value>,
-    ) -> Result<std::collections::HashMap<String, cel_interpreter::Value>, Box<dyn std::error::Error>>
-    {
-        let mut cel_map = std::collections::HashMap::new();
-        for (k, v) in obj {
-            match Self::json_to_cel_value(v) {
-                Ok(cel_val) => {
-                    cel_map.insert(k.clone(), cel_val);
-                }
-                Err(_) => {
-                    let val_str = Self::json_value_to_string(v);
-                    cel_map.insert(k.clone(), cel_interpreter::Value::String(Arc::new(val_str)));
-                }
-            }
-        }
-        Ok(cel_map)
-    }
-
-    /// Convert JSON value to CEL value
-    fn json_to_cel_value(
-        value: &Value,
-    ) -> Result<cel_interpreter::Value, Box<dyn std::error::Error>> {
-        match value {
-            Value::Bool(b) => Ok(cel_interpreter::Value::Bool(*b)),
-            Value::Number(n) => Self::convert_number_to_cel_value(n),
-            Value::String(s) => Ok(cel_interpreter::Value::String(Arc::new(s.clone()))),
-            Value::Null => Ok(cel_interpreter::Value::Null),
-            Value::Array(arr) => Self::convert_array_to_cel_value(arr),
-            Value::Object(obj) => Self::convert_object_to_cel_value(obj),
-        }
-    }
-
-    /// Convert JSON number to CEL value
-    fn convert_number_to_cel_value(
-        n: &serde_json::Number,
-    ) -> Result<cel_interpreter::Value, Box<dyn std::error::Error>> {
-        if let Some(i) = n.as_i64() {
-            Ok(cel_interpreter::Value::Int(i))
-        } else if let Some(f) = n.as_f64() {
-            Ok(cel_interpreter::Value::Float(f))
-        } else {
-            Err("Invalid number format".into())
-        }
-    }
-
-    /// Convert JSON array to CEL value
-    fn convert_array_to_cel_value(
-        arr: &[Value],
-    ) -> Result<cel_interpreter::Value, Box<dyn std::error::Error>> {
-        let cel_list: Result<Vec<_>, _> = arr.iter().map(|v| Self::json_to_cel_value(v)).collect();
-        Ok(cel_interpreter::Value::List(cel_list?.into()))
-    }
-
-    /// Convert JSON object to CEL value
-    fn convert_object_to_cel_value(
-        obj: &serde_json::Map<String, Value>,
-    ) -> Result<cel_interpreter::Value, Box<dyn std::error::Error>> {
-        let cel_map = Self::convert_object_to_cel_map(obj)?;
-        Ok(cel_interpreter::Value::Map(cel_map.into()))
-    }
-
-    /// Convert CEL value to boolean (static version)
-    fn cel_value_to_bool_static(value: &CelValue, expression: &str) -> ExecutorResult<bool> {
-        match value {
-            CelValue::Bool(b) => Ok(*b),
-            CelValue::Int(i) => Ok(*i != 0),
-            CelValue::Float(f) => Ok(*f != 0.0),
-            CelValue::String(s) => Ok(!s.is_empty()),
-            CelValue::Null => Ok(false),
-            _ => Err(ExecutorError::ExpressionError(format!(
-                "CEL expression '{expression}' returned non-boolean result: {value:?}"
-            ))),
-        }
     }
 }

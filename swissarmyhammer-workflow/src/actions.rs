@@ -759,10 +759,10 @@ pub struct SetVariableAction {
     pub value: String,
 }
 
-/// Action that sets a variable in the global CEL context (shared between tools and flows)
+/// Action that sets a variable in the global JS context (shared between tools and flows)
 #[derive(Debug, Clone)]
-pub struct CelSetAction {
-    /// Variable name to set in global CEL context
+pub struct JsSetAction {
+    /// Variable name to set in global JS context
     pub variable_name: String,
     /// Value to set (supports boolean literals: "true", "false")
     pub value: String,
@@ -835,8 +835,8 @@ impl Action for SetVariableAction {
     impl_as_any!();
 }
 
-impl CelSetAction {
-    /// Create a new CEL set action
+impl JsSetAction {
+    /// Create a new JS set action
     pub fn new(variable_name: String, value: String) -> Self {
         Self {
             variable_name,
@@ -845,27 +845,28 @@ impl CelSetAction {
     }
 }
 
-impl VariableSubstitution for CelSetAction {}
+impl VariableSubstitution for JsSetAction {}
 
 #[async_trait::async_trait]
-impl Action for CelSetAction {
+impl Action for JsSetAction {
     async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         // Substitute variables in the value
         let substituted_value = self.substitute_string(&self.value, context);
 
-        // Set the variable in global CEL context (shared process-wide)
-        let cel_state = swissarmyhammer_cel::CelState::global();
-        cel_state
+        // Set the variable in global JS context (shared process-wide)
+        let js_state = swissarmyhammer_js::JsState::global();
+        js_state
             .set(&self.variable_name, &substituted_value)
+            .await
             .map_err(|e| {
                 ActionError::ExecutionError(format!(
-                    "Failed to set CEL variable '{}': {}",
+                    "Failed to set variable '{}': {}",
                     self.variable_name, e
                 ))
             })?;
 
         tracing::info!(
-            "Set global CEL variable '{}' = '{}'",
+            "Set global variable '{}' = '{}'",
             self.variable_name,
             substituted_value
         );
@@ -878,13 +879,13 @@ impl Action for CelSetAction {
 
     fn description(&self) -> String {
         format!(
-            "Set CEL variable '{}' to '{}'",
+            "Set JS variable '{}' to '{}'",
             self.variable_name, self.value
         )
     }
 
     fn action_type(&self) -> &'static str {
-        "cel_set"
+        "js_set"
     }
 
     impl_as_any!();
@@ -906,10 +907,10 @@ impl Action for AbortAction {
         let message = self.substitute_string(&self.message, context);
         tracing::error!("***Workflow Aborted***: {}", message);
 
-        // Set abort flag using CEL state
-        let cel_state = swissarmyhammer_cel::CelState::global();
-        if let Err(e) = cel_state.set("abort", "true") {
-            tracing::warn!("Failed to set CEL abort flag: {}", e);
+        // Set abort flag using JS state
+        let js_state = swissarmyhammer_js::JsState::global();
+        if let Err(e) = js_state.set("abort", "true").await {
+            tracing::warn!("Failed to set JS abort flag: {}", e);
         }
 
         // Set a special context variable to signal abort request (for backward compatibility)
@@ -2010,8 +2011,8 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
         return Ok(Some(Box::new(set_action)));
     }
 
-    if let Some(cel_set_action) = parser.parse_cel_set_action(description)? {
-        return Ok(Some(Box::new(cel_set_action)));
+    if let Some(js_set_action) = parser.parse_js_set_action(description)? {
+        return Ok(Some(Box::new(js_set_action)));
     }
 
     if let Some(sub_workflow_action) = parser.parse_sub_workflow_action(description)? {

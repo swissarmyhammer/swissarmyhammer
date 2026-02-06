@@ -13,7 +13,7 @@ use std::sync::Arc;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
-    register_cel_tools, register_file_tools, register_flow_tools, register_git_tools,
+    register_file_tools, register_flow_tools, register_git_tools, register_js_tools,
     register_kanban_tools, register_questions_tools, register_shell_tools,
     register_treesitter_tools, register_web_fetch_tools, register_web_search_tools,
 };
@@ -102,7 +102,7 @@ impl CliToolContext {
     /// This should mirror the registration in `swissarmyhammer_tools::mcp::server::register_all_tools`
     async fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
-        register_cel_tools(&mut tool_registry);
+        register_js_tools(&mut tool_registry);
         register_file_tools(&mut tool_registry).await;
         register_flow_tools(&mut tool_registry);
         register_git_tools(&mut tool_registry);

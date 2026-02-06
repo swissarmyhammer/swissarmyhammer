@@ -11,5 +11,5 @@ Use the kanban MCP tool with `op: "list tasks"` to get all tasks.
 
 Check if any tasks are NOT in the "done" column.
 
-If there are tasks not in the done column, `cel_set` are_todos_done to `false`
-If all tasks are in the done column (or there are no tasks), `cel_set` are_todos_done to `true`
+If there are tasks not in the done column, use `js` with `op: "set expression"`, `name: "are_todos_done"`, `expression: "false"`
+If all tasks are in the done column (or there are no tasks), use `js` with `op: "set expression"`, `name: "are_todos_done"`, `expression: "true"`

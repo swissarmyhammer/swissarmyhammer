@@ -33,7 +33,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
-swissarmyhammer-cel = { path = "../swissarmyhammer-cel" }
+swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 # ACP agent creation and execution (unified interface)
 swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
 
@@ -75,14 +75,11 @@ tree-sitter-dart = { workspace = true }
 # Mermaid parsing
 mermaid-parser = { workspace = true }
 
-# CEL expression evaluation
-cel-interpreter = { workspace = true }
+# JS expression evaluation
+rquickjs = { workspace = true }
 
 # Parser combinator library for action parsing
 chumsky = { workspace = true }
-
-# Module initialization
-ctor = { workspace = true }
 
 # Performance optimizations
 lru = { workspace = true }

@@ -23,7 +23,7 @@ swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
-swissarmyhammer-cel = { path = "../swissarmyhammer-cel" }
+swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }
 # ACP agents (direct usage, no executor wrapper)
 claude-agent = { path = "../claude-agent" }

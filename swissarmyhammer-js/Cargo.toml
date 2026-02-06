@@ -1,0 +1,29 @@
+[package]
+name = "swissarmyhammer-js"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "JavaScript expression engine for SwissArmyHammer using rquickjs (QuickJS-NG)"
+
+[dependencies]
+# JS engine
+rquickjs = { workspace = true }
+
+# Workspace dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+once_cell = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+# Operations framework
+swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-operations-macros = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }

@@ -14,11 +14,11 @@ The goal is to:
 Use the kanban MCP tool with `op: "next task"`. This will get the next pending task from the todo column.
 
 If there are any pending tasks
-- use the `cel_set` tool to set name `are_todos_done` to value `false`
+- use the `js` tool with `op: "set expression"`, `name: "are_todos_done"`, `expression: "false"`
 - execute the Task Process below
 
 If there are no pending tasks
-- use the `cel_set` tool to set name `are_todos_done` to value `true`
+- use the `js` tool with `op: "set expression"`, `name: "are_todos_done"`, `expression: "true"`
 - you are done, report "No pending tasks, all work complete!"
 
 ## Rules
@@ -34,5 +34,5 @@ If there are no pending tasks
 - Perform the work described in the task
 - Verify the work is complete and correct
 - Use `kanban` with `op: "complete task"` and the task's `id` to mark it as done
-  - DO NOT set `are_todos_done` -- there might be more tasks remaining that have been created dynamically
+  - DO NOT set `are_todos_done` via `js` tool -- there might be more tasks remaining that have been created dynamically
 - Report your progress

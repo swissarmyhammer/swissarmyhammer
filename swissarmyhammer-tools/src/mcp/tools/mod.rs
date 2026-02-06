@@ -35,8 +35,8 @@
 //! - **Documentation**: Comprehensive descriptions co-located with implementation
 //! - **Type Safety**: Strong typing through schema validation and Rust's type system
 
-pub mod cel;
 pub mod files;
+pub mod js;
 pub mod flow;
 pub mod git;
 pub mod kanban;

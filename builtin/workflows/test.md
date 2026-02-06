@@ -29,7 +29,7 @@ stateDiagram-v2
 
 ## Initialization
 
-Before running the workflow, ensure `are_tests_passing` is initialized in CEL context
+Before running the workflow, ensure `are_tests_passing` is initialized in JS context
 
 ## Description
 

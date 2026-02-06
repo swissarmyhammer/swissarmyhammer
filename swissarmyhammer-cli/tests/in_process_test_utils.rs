@@ -577,8 +577,8 @@ fn handle_completion_command(shell: clap_complete::Shell) -> (String, String, i3
     (completion_output, String::new(), EXIT_SUCCESS)
 }
 
-// Note: Abort functionality has been migrated to CEL global state.
-// Workflow abort is now handled via CEL variables, not abort files.
+// Note: Abort functionality has been migrated to JS global state.
+// Workflow abort is now handled via JS variables, not abort files.
 
 /// Validate flow variables format
 fn validate_flow_variables(vars: Vec<String>) -> Result<(), (String, String, i32)> {
@@ -764,7 +764,7 @@ mod tests {
 
     /// Helper function to set up test environment
     fn setup_test() {
-        // Note: Abort functionality has been migrated to CEL global state.
+        // Note: Abort functionality has been migrated to JS global state.
         // No cleanup needed for abort files.
     }
 
