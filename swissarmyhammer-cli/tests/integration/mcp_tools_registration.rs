@@ -4,7 +4,7 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_js_tools, register_file_tools, register_kanban_tools, register_shell_tools,
+    register_file_tools, register_js_tools, register_kanban_tools, register_shell_tools,
     register_web_fetch_tools, register_web_search_tools,
 };
 

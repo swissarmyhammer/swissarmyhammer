@@ -95,10 +95,7 @@ impl McpTool for JsTool {
                     .or_else(|| arguments.get("key"))
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        McpError::invalid_params(
-                            "Missing required field: 'name' or 'key'",
-                            None,
-                        )
+                        McpError::invalid_params("Missing required field: 'name' or 'key'", None)
                     })?;
 
                 let expression = arguments
@@ -139,10 +136,7 @@ impl McpTool for JsTool {
                     .or_else(|| arguments.get("key"))
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        McpError::invalid_params(
-                            "Missing required field: 'name' or 'key'",
-                            None,
-                        )
+                        McpError::invalid_params("Missing required field: 'name' or 'key'", None)
                     })?;
 
                 let cmd = GetExpression {
@@ -164,8 +158,7 @@ impl McpTool for JsTool {
 
         match result {
             Ok(value) => Ok(BaseToolImpl::create_success_response(
-                serde_json::to_string_pretty(&value)
-                    .unwrap_or_else(|_| value.to_string()),
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
             )),
             Err(e) => Ok(BaseToolImpl::create_success_response(format!(
                 "Error: {}",

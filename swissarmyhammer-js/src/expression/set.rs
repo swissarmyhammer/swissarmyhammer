@@ -8,7 +8,7 @@ use crate::error::JsError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{ExecutionResult, Execute};
+use swissarmyhammer_operations::{Execute, ExecutionResult};
 use swissarmyhammer_operations_macros::operation;
 
 /// Evaluate a JavaScript expression and store the result as a named variable.
@@ -92,9 +92,7 @@ impl Execute<JsContext, JsError> for SetExpression {
         match ctx.state().set(&name, &expression).await {
             Ok(json_result) => {
                 tracing::info!("JS set '{}' = {:?}", name, json_result);
-                ExecutionResult::Unlogged {
-                    value: json_result,
-                }
+                ExecutionResult::Unlogged { value: json_result }
             }
             Err(e) => ExecutionResult::Failed {
                 error: JsError::evaluation(e),

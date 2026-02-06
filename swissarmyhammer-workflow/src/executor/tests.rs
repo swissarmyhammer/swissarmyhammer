@@ -2135,7 +2135,10 @@ async fn test_global_boolean_true_and_false_in_workflows() {
     );
 
     // Test 6: Set a flag to false and verify it blocks a condition
-    js_state.set("workflow_should_continue", "false").await.unwrap();
+    js_state
+        .set("workflow_should_continue", "false")
+        .await
+        .unwrap();
     let result = executor.evaluate_condition(
         &TransitionCondition {
             condition_type: ConditionType::Custom,

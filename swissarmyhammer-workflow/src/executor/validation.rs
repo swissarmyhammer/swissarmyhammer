@@ -553,10 +553,7 @@ impl WorkflowExecutor {
             let _ = tx.send(result);
         });
         let global_vars = rx.recv().map_err(|e| {
-            ExecutorError::ExpressionError(format!(
-                "Failed to get global JS variables: {}",
-                e
-            ))
+            ExecutorError::ExpressionError(format!("Failed to get global JS variables: {}", e))
         })?;
 
         let global_vars = global_vars.map_err(|e| {

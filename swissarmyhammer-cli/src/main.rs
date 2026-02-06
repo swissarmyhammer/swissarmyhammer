@@ -20,8 +20,8 @@ use mcp_integration::CliToolContext;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_js::JsState;
 use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_js::JsState;
 
 /// Track if we've already performed shutdown to prevent double-shutdown
 static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);

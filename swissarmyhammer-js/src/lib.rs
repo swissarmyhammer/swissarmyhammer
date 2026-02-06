@@ -133,33 +133,32 @@ impl JsWorker {
                 } => {
                     let result = ctx.with(|ctx| {
                         // Evaluate the expression
-                        let eval_result: rquickjs::Value =
-                            ctx.eval(expression.as_bytes()).catch(&ctx).map_err(
-                                |e| match e {
-                                    CaughtError::Exception(ex) => {
-                                        format!("JS error: {}", ex)
-                                    }
-                                    CaughtError::Value(v) => {
-                                        let s: std::result::Result<String, _> = v.get();
-                                        format!(
-                                            "JS threw: {}",
-                                            s.unwrap_or_else(|_| "unknown".to_string())
-                                        )
-                                    }
-                                    CaughtError::Error(e) => format!("Error: {}", e),
-                                },
-                            )?;
+                        let eval_result: rquickjs::Value = ctx
+                            .eval(expression.as_bytes())
+                            .catch(&ctx)
+                            .map_err(|e| match e {
+                                CaughtError::Exception(ex) => {
+                                    format!("JS error: {}", ex)
+                                }
+                                CaughtError::Value(v) => {
+                                    let s: std::result::Result<String, _> = v.get();
+                                    format!(
+                                        "JS threw: {}",
+                                        s.unwrap_or_else(|_| "unknown".to_string())
+                                    )
+                                }
+                                CaughtError::Error(e) => format!("Error: {}", e),
+                            })?;
 
                         // Convert result to JSON
-                        let json_result =
-                            bridge::js_to_json(&ctx, eval_result.clone())
-                                .map_err(|e| e.to_string())?;
+                        let json_result = bridge::js_to_json(&ctx, eval_result.clone())
+                            .map_err(|e| e.to_string())?;
 
                         // Assign the result to the named global
                         let globals = ctx.globals();
-                        globals.set(name.as_str(), eval_result).map_err(|e| {
-                            format!("Failed to set global '{}': {}", name, e)
-                        })?;
+                        globals
+                            .set(name.as_str(), eval_result)
+                            .map_err(|e| format!("Failed to set global '{}': {}", name, e))?;
 
                         Ok(json_result)
                     });
@@ -172,11 +171,8 @@ impl JsWorker {
                             let globals = ctx.globals();
                             let mut result = Vec::new();
                             // Use OwnedKey iteration to get property names
-                            let key_names: Vec<String> = globals
-                                .keys::<String>()
-                                .into_iter()
-                                .flatten()
-                                .collect();
+                            let key_names: Vec<String> =
+                                globals.keys::<String>().into_iter().flatten().collect();
                             for key in key_names {
                                 if bridge::is_builtin(&key) {
                                     continue;
@@ -204,22 +200,22 @@ impl JsWorker {
 
                 JsRequest::Get { expression, reply } => {
                     let result = ctx.with(|ctx| {
-                        let eval_result: rquickjs::Value =
-                            ctx.eval(expression.as_bytes()).catch(&ctx).map_err(
-                                |e| match e {
-                                    CaughtError::Exception(ex) => {
-                                        format!("JS error: {}", ex)
-                                    }
-                                    CaughtError::Value(v) => {
-                                        let s: std::result::Result<String, _> = v.get();
-                                        format!(
-                                            "JS threw: {}",
-                                            s.unwrap_or_else(|_| "unknown".to_string())
-                                        )
-                                    }
-                                    CaughtError::Error(e) => format!("Error: {}", e),
-                                },
-                            )?;
+                        let eval_result: rquickjs::Value = ctx
+                            .eval(expression.as_bytes())
+                            .catch(&ctx)
+                            .map_err(|e| match e {
+                                CaughtError::Exception(ex) => {
+                                    format!("JS error: {}", ex)
+                                }
+                                CaughtError::Value(v) => {
+                                    let s: std::result::Result<String, _> = v.get();
+                                    format!(
+                                        "JS threw: {}",
+                                        s.unwrap_or_else(|_| "unknown".to_string())
+                                    )
+                                }
+                                CaughtError::Error(e) => format!("Error: {}", e),
+                            })?;
 
                         bridge::js_to_json(&ctx, eval_result).map_err(|e| e.to_string())
                     });
@@ -271,7 +267,8 @@ impl JsState {
                 .map_err(|_| "JS worker thread has stopped".to_string())?;
         }
 
-        rx.await.map_err(|_| "JS worker did not respond".to_string())?
+        rx.await
+            .map_err(|_| "JS worker did not respond".to_string())?
     }
 
     /// Evaluate a JS expression and store the result as a named variable.
@@ -317,9 +314,7 @@ impl JsState {
     ///
     /// Used by workflow context stacking to copy global variables
     /// into a fresh evaluation context.
-    pub async fn get_all_variables(
-        &self,
-    ) -> Result<HashMap<String, serde_json::Value>, String> {
+    pub async fn get_all_variables(&self) -> Result<HashMap<String, serde_json::Value>, String> {
         self.send_request(|reply| JsRequest::GetAllVariables { reply })
             .await
     }
@@ -450,7 +445,10 @@ mod tests {
 
         // A script that creates side-effect variables during set
         let _ = state
-            .set("capture_y", "(function() { globalThis.side_var = 99; return 20; })()")
+            .set(
+                "capture_y",
+                "(function() { globalThis.side_var = 99; return 20; })()",
+            )
             .await;
 
         let vars = state.get_all_variables().await.unwrap();

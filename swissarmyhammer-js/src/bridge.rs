@@ -39,9 +39,9 @@ pub fn js_to_json<'js>(
     // Use JSON.stringify for everything else
     match ctx.json_stringify(value) {
         Ok(Some(js_string)) => {
-            let s: String = js_string
-                .to_string()
-                .map_err(|e| JsError::type_conversion(format!("String conversion failed: {}", e)))?;
+            let s: String = js_string.to_string().map_err(|e| {
+                JsError::type_conversion(format!("String conversion failed: {}", e))
+            })?;
             serde_json::from_str(&s)
                 .map_err(|e| JsError::type_conversion(format!("JSON parse failed: {}", e)))
         }

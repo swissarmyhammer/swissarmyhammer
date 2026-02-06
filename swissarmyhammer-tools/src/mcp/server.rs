@@ -20,8 +20,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_file_tools, register_flow_tools, register_git_tools,
-    register_js_tools, register_kanban_tools, register_questions_tools, register_shell_tools,
+    register_file_tools, register_flow_tools, register_git_tools, register_js_tools,
+    register_kanban_tools, register_questions_tools, register_shell_tools,
     register_treesitter_tools, register_web_fetch_tools, register_web_search_tools, ToolContext,
     ToolRegistry,
 };
