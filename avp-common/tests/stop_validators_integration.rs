@@ -14,13 +14,13 @@ use avp_common::{
     strategy::ClaudeCodeHookStrategy,
     turn::TurnStateManager,
     types::HookType,
-    validator::{ValidatorLoader, ValidatorRunner},
+    validator::ValidatorLoader,
 };
 use std::fs;
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_helpers::{
-    assert_validator_failed, assert_validator_passed, build_stop_input, cleanup_skip_agent_env,
+    build_stop_input, cleanup_skip_agent_env,
     create_context_with_playback, create_test_chain_factory, create_test_context,
     setup_turn_state_with_changes, HookInputBuilder,
 };

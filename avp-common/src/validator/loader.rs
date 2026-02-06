@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use swissarmyhammer_directory::{
-    AvpConfig, FileSource, ManagedDirectory, VirtualFileSystem, YamlExpander,
+    AvpConfig, ManagedDirectory, YamlExpander,
 };
 use swissarmyhammer_templating::partials::TemplateContentProvider;
 
@@ -140,15 +140,6 @@ impl ValidatorLoader {
         }
 
         Ok(())
-    }
-
-    /// Map VFS file source to validator source.
-    fn map_file_source(source: &FileSource) -> ValidatorSource {
-        match source {
-            FileSource::Builtin | FileSource::Dynamic => ValidatorSource::Builtin,
-            FileSource::User => ValidatorSource::User,
-            FileSource::Local => ValidatorSource::Project,
-        }
     }
 
     /// Parse content as a validator and insert into the collection.
