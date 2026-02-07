@@ -277,7 +277,10 @@ fn test_full_precedence_chain_builtin_user_project() {
     );
 
     // User-only RuleSet should exist
-    assert!(loader.get_ruleset("user-custom").is_some(), "User-only should exist");
+    assert!(
+        loader.get_ruleset("user-custom").is_some(),
+        "User-only should exist"
+    );
     assert_eq!(
         loader.get_ruleset("user-custom").unwrap().source,
         ValidatorSource::User

@@ -19,9 +19,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use swissarmyhammer_directory::{
-    AvpConfig, ManagedDirectory, YamlExpander,
-};
+use swissarmyhammer_directory::{AvpConfig, ManagedDirectory, YamlExpander};
 use swissarmyhammer_templating::partials::TemplateContentProvider;
 
 use crate::context::AvpContext;
@@ -370,11 +368,7 @@ impl ValidatorLoader {
                     self.rulesets.insert(ruleset.name().to_string(), ruleset);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse RuleSet at {}: {}",
-                        dir_path.display(),
-                        e
-                    );
+                    tracing::warn!("Failed to parse RuleSet at {}: {}", dir_path.display(), e);
                 }
             }
         }

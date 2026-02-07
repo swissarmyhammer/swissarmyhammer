@@ -372,12 +372,11 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
         });
     }
 
-    let manifest_content = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        AvpError::Validator {
+    let manifest_content =
+        std::fs::read_to_string(&manifest_path).map_err(|e| AvpError::Validator {
             validator: manifest_path.display().to_string(),
             message: format!("failed to read VALIDATOR.md: {}", e),
-        }
-    })?;
+        })?;
 
     let manifest = parse_ruleset_manifest(&manifest_content, dir_path, expander)?;
 

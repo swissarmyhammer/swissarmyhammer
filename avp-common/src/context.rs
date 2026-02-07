@@ -39,7 +39,6 @@ pub const NOTIFICATION_CHANNEL_CAPACITY: usize = 4096;
 /// Log file name within the AVP directory.
 const LOG_FILE_NAME: &str = "avp.log";
 
-
 /// Decision outcome for a hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
@@ -191,8 +190,7 @@ impl AvpContext {
 
         // Create a NotificationSender and forward from the injected receiver
         // This is for test/playback agents that provide a Receiver
-        let (notifier, _) =
-            claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
+        let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
         let notifier = Arc::new(notifier);
         let notifier_clone = Arc::clone(&notifier);
         tokio::spawn(async move {
@@ -218,10 +216,7 @@ impl AvpContext {
             project_dir,
             home_dir,
             log_file,
-            agent_handle: Arc::new(Mutex::new(Some(AgentHandle {
-                agent,
-                notifier,
-            }))),
+            agent_handle: Arc::new(Mutex::new(Some(AgentHandle { agent, notifier }))),
             turn_state,
             runner_cache: Mutex::new(None),
         })

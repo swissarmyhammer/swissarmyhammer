@@ -16,8 +16,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-/// Default registry URL
-const DEFAULT_REGISTRY_URL: &str = "https://registry.agentvalidatorprotocol.com";
+use crate::registry::{get_registry_url, RegistryError};
 
 /// Stored credentials
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,11 +48,6 @@ struct CallbackParams {
 struct CallbackState {
     expected_state: String,
     tx: Option<oneshot::Sender<Result<String, String>>>,
-}
-
-/// Get the registry URL from environment or default
-fn get_registry_url() -> String {
-    std::env::var("AVP_REGISTRY_URL").unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_string())
 }
 
 /// Get the credentials file path
@@ -175,7 +169,11 @@ async fn handle_callback(
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(Err(msg.clone()));
         }
-        let error_url = format!("{}/cli/error?message={}", registry_url, urlencoding::encode(&msg));
+        let error_url = format!(
+            "{}/cli/error?message={}",
+            registry_url,
+            urlencoding::encode(&msg)
+        );
         return Redirect::to(&error_url).into_response();
     }
 
@@ -185,14 +183,22 @@ async fn handle_callback(
             if let Some(tx) = state.tx.take() {
                 let _ = tx.send(Err("Invalid state parameter".to_string()));
             }
-            let error_url = format!("{}/cli/error?message={}", registry_url, urlencoding::encode("Invalid state parameter"));
+            let error_url = format!(
+                "{}/cli/error?message={}",
+                registry_url,
+                urlencoding::encode("Invalid state parameter")
+            );
             return Redirect::to(&error_url).into_response();
         }
     } else {
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(Err("Missing state parameter".to_string()));
         }
-        let error_url = format!("{}/cli/error?message={}", registry_url, urlencoding::encode("Missing state parameter"));
+        let error_url = format!(
+            "{}/cli/error?message={}",
+            registry_url,
+            urlencoding::encode("Missing state parameter")
+        );
         return Redirect::to(&error_url).into_response();
     }
 
@@ -207,13 +213,17 @@ async fn handle_callback(
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(Err("Missing authorization code".to_string()));
         }
-        let error_url = format!("{}/cli/error?message={}", registry_url, urlencoding::encode("Missing authorization code"));
+        let error_url = format!(
+            "{}/cli/error?message={}",
+            registry_url,
+            urlencoding::encode("Missing authorization code")
+        );
         Redirect::to(&error_url).into_response()
     }
 }
 
-/// Run the login flow
-pub async fn login() -> Result<(), String> {
+/// Run the login flow.
+pub async fn login() -> Result<(), RegistryError> {
     // Check if already logged in
     if let Some(creds) = load_credentials() {
         if !creds.token.is_empty() {
@@ -230,8 +240,7 @@ pub async fn login() -> Result<(), String> {
     let registry_url = get_registry_url();
 
     // Find available port
-    let port =
-        find_available_port().map_err(|e| format!("Failed to find available port: {}", e))?;
+    let port = find_available_port()?;
 
     // Generate state for CSRF protection
     let state_param = generate_state();
@@ -252,12 +261,12 @@ pub async fn login() -> Result<(), String> {
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
-        .map_err(|e| format!("Failed to bind to port {}: {}", port, e))?;
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::AddrInUse, e))?;
 
     // Build auth URL
     let redirect_uri = format!("http://localhost:{}/callback", port);
     let auth_url = format!(
-        "{}/cli/auth?redirect_uri={}&state={}",
+        "{}/cli/auth/start?redirect_uri={}&state={}",
         registry_url,
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(&state_param)
@@ -277,45 +286,77 @@ pub async fn login() -> Result<(), String> {
         axum::serve(listener, app).await.ok();
     });
 
+    // Show spinner while waiting for callback
+    let spinner = indicatif::ProgressBar::new_spinner();
+    spinner.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .template("{spinner} {msg}")
+            .unwrap(),
+    );
+    spinner.set_message("Waiting for authentication in browser...");
+    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+
     // Wait for callback with timeout
     let code = tokio::select! {
         result = rx => {
-            result.map_err(|_| "Callback channel closed unexpectedly".to_string())?
+            result.map_err(|_| {
+                spinner.finish_and_clear();
+                RegistryError::Validation("Callback channel closed unexpectedly".to_string())
+            })?
         }
         _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {
-            return Err("Login timed out after 5 minutes".to_string());
+            spinner.finish_and_clear();
+            return Err(RegistryError::Validation("Login timed out after 5 minutes".to_string()));
         }
     };
 
-    // Abort the server
+    // Abort the callback server immediately
     server.abort();
 
-    let code = code?;
+    let code = match code {
+        Ok(code) => {
+            spinner.finish_with_message("Authentication callback received");
+            code
+        }
+        Err(e) => {
+            spinner.finish_and_clear();
+            return Err(RegistryError::Unauthorized(e));
+        }
+    };
 
     // Exchange code for token
-    println!("Exchanging authorization code for token...");
+    let exchange_spinner = indicatif::ProgressBar::new_spinner();
+    exchange_spinner.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .template("{spinner} {msg}")
+            .unwrap(),
+    );
+    exchange_spinner.set_message("Exchanging authorization code for token...");
+    exchange_spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{}/api/auth/cli/token", registry_url))
         .json(&serde_json::json!({ "code": code }))
         .send()
-        .await
-        .map_err(|e| format!("Failed to exchange code: {}", e))?;
+        .await?;
 
     if !response.status().is_success() {
-        let status = response.status();
+        exchange_spinner.finish_and_clear();
+        let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Token exchange failed ({}): {}", status, body));
+        return Err(RegistryError::Api { status, body });
     }
 
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read token response: {}", e))?;
+    let body = response.text().await?;
 
-    let token_response: TokenResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse token response: {}. Body: {}", e, body))?;
+    let token_response: TokenResponse = serde_json::from_str(&body).map_err(|e| {
+        exchange_spinner.finish_and_clear();
+        RegistryError::Json(format!(
+            "Failed to parse token response: {}. Body: {}",
+            e, body
+        ))
+    })?;
 
     // Save credentials
     let creds = Credentials {
@@ -325,8 +366,9 @@ pub async fn login() -> Result<(), String> {
         name: token_response.name.clone(),
     };
 
-    save_credentials(&creds).map_err(|e| format!("Failed to save credentials: {}", e))?;
+    save_credentials(&creds)?;
 
+    exchange_spinner.finish_and_clear();
     println!(
         "Logged in as {} ({})",
         token_response.name, token_response.email
@@ -351,8 +393,8 @@ pub struct UserInfo {
     pub name: String,
 }
 
-/// Verify token and get user info
-async fn verify_token(token: &str) -> Result<UserInfo, String> {
+/// Verify token and get user info.
+async fn verify_token(token: &str) -> Result<UserInfo, RegistryError> {
     let registry_url = get_registry_url();
 
     let client = reqwest::Client::new();
@@ -360,32 +402,37 @@ async fn verify_token(token: &str) -> Result<UserInfo, String> {
         .get(format!("{}/api/auth/cli/verify", registry_url))
         .header("Authorization", format!("Bearer {}", token))
         .send()
-        .await
-        .map_err(|e| format!("Failed to verify token: {}", e))?;
+        .await?;
 
     if !response.status().is_success() {
-        let status = response.status();
+        let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Token verification failed ({}): {}", status, body));
+        return Err(RegistryError::Unauthorized(format!(
+            "Token verification failed ({}): {}",
+            status, body
+        )));
     }
 
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read verify response: {}", e))?;
+    let body = response.text().await?;
 
-    let verify_response: VerifyResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse verify response: {}. Body: {}", e, body))?;
+    let verify_response: VerifyResponse = serde_json::from_str(&body).map_err(|e| {
+        RegistryError::Json(format!(
+            "Failed to parse verify response: {}. Body: {}",
+            e, body
+        ))
+    })?;
 
     // Check if valid field exists and is true, or if we got email/name back
     let is_valid = verify_response.valid.unwrap_or(false)
         || (verify_response.email.is_some() && verify_response.name.is_some());
 
     if !is_valid {
-        return Err(verify_response
-            .error_description
-            .or(verify_response.error)
-            .unwrap_or_else(|| "Token is invalid".to_string()));
+        return Err(RegistryError::Unauthorized(
+            verify_response
+                .error_description
+                .or(verify_response.error)
+                .unwrap_or_else(|| "Token is invalid".to_string()),
+        ));
     }
 
     Ok(UserInfo {
@@ -394,52 +441,61 @@ async fn verify_token(token: &str) -> Result<UserInfo, String> {
     })
 }
 
-/// Run the logout flow
-pub async fn logout() -> Result<(), String> {
-    let creds = load_credentials().ok_or("Not logged in")?;
+/// Run the logout flow.
+pub async fn logout() -> Result<(), RegistryError> {
+    let creds = load_credentials().ok_or(RegistryError::AuthRequired)?;
 
     if creds.token.is_empty() {
-        return Err("Not logged in".to_string());
+        return Err(RegistryError::AuthRequired);
     }
 
     // Check if using environment variable token
     if std::env::var("AVP_TOKEN").is_ok() {
-        return Err(
+        return Err(RegistryError::Validation(
             "Cannot logout when using AVP_TOKEN environment variable. Unset the variable instead."
                 .to_string(),
-        );
+        ));
     }
 
     // Revoke token on server
-    println!("Revoking token...");
+    let spinner = indicatif::ProgressBar::new_spinner();
+    spinner.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .template("{spinner} {msg}")
+            .unwrap(),
+    );
+    spinner.set_message("Revoking token...");
+    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
     let client = reqwest::Client::new();
     let response = client
         .delete(format!("{}/api/auth/cli/token", creds.registry))
         .header("Authorization", format!("Bearer {}", creds.token))
         .send()
-        .await
-        .map_err(|e| format!("Failed to revoke token: {}", e))?;
+        .await?;
 
     // Even if server revocation fails, we still delete local credentials
     if !response.status().is_success() {
+        spinner.finish_and_clear();
         eprintln!("Warning: Server token revocation failed, removing local credentials anyway");
+    } else {
+        spinner.finish_with_message("Token revoked");
     }
 
     // Delete local credentials
-    delete_credentials().map_err(|e| format!("Failed to delete credentials: {}", e))?;
+    delete_credentials()?;
 
     println!("Logged out successfully");
 
     Ok(())
 }
 
-/// Run the whoami flow
-pub async fn whoami() -> Result<(), String> {
-    let creds = load_credentials().ok_or("Not logged in. Run 'avp login' first.")?;
+/// Run the whoami flow.
+pub async fn whoami() -> Result<(), RegistryError> {
+    let creds = load_credentials().ok_or(RegistryError::AuthRequired)?;
 
     if creds.token.is_empty() {
-        return Err("Not logged in. Run 'avp login' first.".to_string());
+        return Err(RegistryError::AuthRequired);
     }
 
     // Verify token with server
@@ -458,6 +514,7 @@ pub async fn whoami() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::DEFAULT_REGISTRY_URL;
     use serial_test::serial;
     use std::env;
 
@@ -587,14 +644,6 @@ mod tests {
         let port = find_available_port().unwrap();
         // Port should be non-privileged (>1024 typically)
         assert!(port > 1024);
-    }
-
-    #[test]
-    fn test_default_registry_url_constant() {
-        assert_eq!(
-            DEFAULT_REGISTRY_URL,
-            "https://registry.agentvalidatorprotocol.com"
-        );
     }
 
     // Environment variable tests - serialized to avoid race conditions

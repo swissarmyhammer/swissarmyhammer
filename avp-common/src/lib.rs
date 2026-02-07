@@ -13,6 +13,7 @@ pub mod chain;
 pub mod context;
 pub mod error;
 pub mod hooks;
+pub mod lockfile;
 pub mod strategy;
 pub mod turn;
 pub mod types;

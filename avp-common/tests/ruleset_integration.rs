@@ -73,7 +73,11 @@ fn test_ruleset_contains_rules() {
     );
 
     // Check for specific rules
-    let rule_names: Vec<&str> = security_rules.rules.iter().map(|r| r.name.as_str()).collect();
+    let rule_names: Vec<&str> = security_rules
+        .rules
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
     assert!(
         rule_names.contains(&"no-secrets"),
         "Should have no-secrets rule"

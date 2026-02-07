@@ -244,12 +244,7 @@ where
 
         let results = self
             .context
-            .execute_rulesets(
-                &rulesets,
-                hook_type,
-                &input_json,
-                changed_files.as_deref(),
-            )
+            .execute_rulesets(&rulesets, hook_type, &input_json, changed_files.as_deref())
             .await;
 
         self.handle_ruleset_results(&results, hook_type, ctx)

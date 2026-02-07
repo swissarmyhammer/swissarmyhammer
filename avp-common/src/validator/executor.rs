@@ -699,7 +699,10 @@ impl<'a> RuleSetSessionContext<'a> {
         );
 
         // RuleSet-specific fields
-        template_context.set("ruleset_name".to_string(), self.ruleset.name().to_string().into());
+        template_context.set(
+            "ruleset_name".to_string(),
+            self.ruleset.name().to_string().into(),
+        );
         template_context.set(
             "rule_count".to_string(),
             self.ruleset.rules.len().to_string().into(),
@@ -782,10 +785,7 @@ impl<'a, P: PartialLoader + Clone + 'static> RulePromptContext<'a, P> {
 
         format!(
             "# Rule: {}\n\n**Description**: {}\n**Severity**: {}\n\n{}",
-            self.rule.name,
-            self.rule.description,
-            severity,
-            rendered_body
+            self.rule.name, self.rule.description, severity, rendered_body
         )
     }
 }
@@ -811,7 +811,11 @@ pub fn log_ruleset_result(name: &str, executed: &ExecutedRuleSet) {
         name,
         passed_count,
         total_count,
-        if executed.passed() { "PASSED" } else { "FAILED" }
+        if executed.passed() {
+            "PASSED"
+        } else {
+            "FAILED"
+        }
     );
 
     // Log individual rule results
@@ -820,7 +824,11 @@ pub fn log_ruleset_result(name: &str, executed: &ExecutedRuleSet) {
             "  Rule '{}' [{}]: {} - {}",
             rule_result.rule_name,
             rule_result.severity,
-            if rule_result.passed() { "PASSED" } else { "FAILED" },
+            if rule_result.passed() {
+                "PASSED"
+            } else {
+                "FAILED"
+            },
             rule_result.message()
         );
     }

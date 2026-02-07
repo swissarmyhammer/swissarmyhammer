@@ -36,9 +36,10 @@ use crate::error::AvpError;
 use crate::types::HookType;
 use crate::validator::{
     create_executed_ruleset, create_executed_validator, is_rate_limit_error, log_ruleset_result,
-    log_validator_result, parse_validator_response, render_validator_prompt_with_partials_and_changed_files,
-    ExecutedRuleSet, ExecutedValidator, RulePromptContext, RuleResult, RuleSet, RuleSetSessionContext,
-    Validator, ValidatorLoader, ValidatorResult, VALIDATOR_PROMPT_NAME,
+    log_validator_result, parse_validator_response,
+    render_validator_prompt_with_partials_and_changed_files, ExecutedRuleSet, ExecutedValidator,
+    RulePromptContext, RuleResult, RuleSet, RuleSetSessionContext, Validator, ValidatorLoader,
+    ValidatorResult, VALIDATOR_PROMPT_NAME,
 };
 
 /// Minimum concurrency level for parallel validator execution.
@@ -582,14 +583,16 @@ impl ValidatorRunner {
                 if let Ok(entries) = std::fs::read_dir(&partials_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+                        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md")
+                        {
                             if let Ok(content) = std::fs::read_to_string(&path) {
                                 if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
                                     // Strip .liquid suffix if present (e.g. "test-remediation.liquid" -> "test-remediation")
                                     let base_name = name.strip_suffix(".liquid").unwrap_or(name);
 
                                     // Register with RuleSet-scoped name
-                                    let scoped_name = format!("{}/_partials/{}", ruleset.name(), base_name);
+                                    let scoped_name =
+                                        format!("{}/_partials/{}", ruleset.name(), base_name);
                                     partials.add(&scoped_name, &content);
                                     // Also register with just the base name for easy reference
                                     partials.add(base_name, &content);
@@ -802,8 +805,9 @@ impl ValidatorRunner {
         );
 
         // Initialize the session
-        let session_ctx = RuleSetSessionContext::new(&self.prompt_library, ruleset, hook_type, context)
-            .with_changed_files(changed_files);
+        let session_ctx =
+            RuleSetSessionContext::new(&self.prompt_library, ruleset, hook_type, context)
+                .with_changed_files(changed_files);
 
         let init_prompt = match session_ctx.render_session_init() {
             Ok(prompt) => prompt,
@@ -819,7 +823,10 @@ impl ValidatorRunner {
                         vec![RuleResult {
                             rule_name: "session-init".to_string(),
                             severity: ruleset.manifest.severity,
-                            result: ValidatorResult::fail(format!("Failed to render session init: {}", e)),
+                            result: ValidatorResult::fail(format!(
+                                "Failed to render session init: {}",
+                                e
+                            )),
                         }],
                     ),
                     false,
@@ -828,11 +835,17 @@ impl ValidatorRunner {
         };
 
         // Initialize agent and create session for multi-turn conversation
-        use agent_client_protocol::{InitializeRequest, NewSessionRequest, PromptRequest, ContentBlock, TextContent};
+        use agent_client_protocol::{
+            ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, TextContent,
+        };
 
         let init_request = InitializeRequest::new(1.into());
         if let Err(e) = self.agent.initialize(init_request).await {
-            tracing::error!("Failed to initialize agent for RuleSet '{}': {}", ruleset.name(), e);
+            tracing::error!(
+                "Failed to initialize agent for RuleSet '{}': {}",
+                ruleset.name(),
+                e
+            );
             return (
                 create_executed_ruleset(
                     ruleset,
@@ -852,14 +865,21 @@ impl ValidatorRunner {
         let session_response = match self.agent.new_session(session_request).await {
             Ok(resp) => resp,
             Err(e) => {
-                tracing::error!("Failed to create session for RuleSet '{}': {}", ruleset.name(), e);
+                tracing::error!(
+                    "Failed to create session for RuleSet '{}': {}",
+                    ruleset.name(),
+                    e
+                );
                 return (
                     create_executed_ruleset(
                         ruleset,
                         vec![RuleResult {
                             rule_name: "session-create".to_string(),
                             severity: ruleset.manifest.severity,
-                            result: ValidatorResult::fail(format!("Failed to create session: {}", e)),
+                            result: ValidatorResult::fail(format!(
+                                "Failed to create session: {}",
+                                e
+                            )),
                         }],
                     ),
                     false,
@@ -868,11 +888,7 @@ impl ValidatorRunner {
         };
 
         let session_id = session_response.session_id;
-        tracing::debug!(
-            "RuleSet '{}' got session_id={}",
-            ruleset.name(),
-            session_id
-        );
+        tracing::debug!("RuleSet '{}' got session_id={}", ruleset.name(), session_id);
 
         let mut rule_results = Vec::new();
         let mut is_rate_limited = false;
@@ -895,14 +911,21 @@ impl ValidatorRunner {
             }
             Err(e) => {
                 init_collector.abort();
-                tracing::error!("Failed to send init prompt for RuleSet '{}': {}", ruleset.name(), e);
+                tracing::error!(
+                    "Failed to send init prompt for RuleSet '{}': {}",
+                    ruleset.name(),
+                    e
+                );
                 return (
                     create_executed_ruleset(
                         ruleset,
                         vec![RuleResult {
                             rule_name: "session-init".to_string(),
                             severity: ruleset.manifest.severity,
-                            result: ValidatorResult::fail(format!("Failed to send init prompt: {}", e)),
+                            result: ValidatorResult::fail(format!(
+                                "Failed to send init prompt: {}",
+                                e
+                            )),
                         }],
                     ),
                     false,
@@ -1042,7 +1065,12 @@ impl ValidatorRunner {
 
             futures.push(async move {
                 let (result, is_rate_limit) = runner
-                    .execute_ruleset(&ruleset_clone, hook_type_clone, &context_clone, changed_files_clone.as_deref())
+                    .execute_ruleset(
+                        &ruleset_clone,
+                        hook_type_clone,
+                        &context_clone,
+                        changed_files_clone.as_deref(),
+                    )
                     .await;
                 (idx, result, is_rate_limit)
             });
@@ -1375,7 +1403,12 @@ mod tests {
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
         let runner = ValidatorRunner::new(Arc::new(agent), notifier);
         assert!(runner.is_ok(), "ValidatorRunner::new should succeed");
@@ -1399,7 +1432,12 @@ mod tests {
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
         let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
 
@@ -1417,7 +1455,12 @@ mod tests {
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
         let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();
@@ -1439,7 +1482,12 @@ mod tests {
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
         let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let context = serde_json::json!({"tool_name": "Write"});
@@ -1464,7 +1512,12 @@ mod tests {
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
         let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();
@@ -1487,7 +1540,12 @@ mod tests {
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move { let mut rx = rx; while let Ok(n) = rx.recv().await { let _ = notifier2.send_update(n).await; } });
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
         let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();

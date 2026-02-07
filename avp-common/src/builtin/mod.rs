@@ -51,10 +51,12 @@ pub fn load_builtins(loader: &mut ValidatorLoader) {
 
     // Load RuleSets from builtin/validators directory
     // The path is relative to the crate root where Cargo.toml is located
-    let builtin_validators_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../builtin/validators");
+    let builtin_validators_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../builtin/validators");
 
-    if let Err(e) = loader.load_rulesets_directory(&builtin_validators_path, ValidatorSource::Builtin) {
+    if let Err(e) =
+        loader.load_rulesets_directory(&builtin_validators_path, ValidatorSource::Builtin)
+    {
         tracing::error!("Failed to load builtin RuleSets: {}", e);
     }
 }
@@ -74,12 +76,24 @@ mod tests {
         load_builtins(&mut loader);
 
         // Should have loaded at least 5 RuleSets
-        assert!(loader.ruleset_count() >= 5, "Should have loaded at least 5 RuleSets");
+        assert!(
+            loader.ruleset_count() >= 5,
+            "Should have loaded at least 5 RuleSets"
+        );
 
         // Check for expected RuleSets
-        assert!(loader.get_ruleset("security-rules").is_some(), "Should have security-rules RuleSet");
-        assert!(loader.get_ruleset("command-safety").is_some(), "Should have command-safety RuleSet");
-        assert!(loader.get_ruleset("code-quality").is_some(), "Should have code-quality RuleSet");
+        assert!(
+            loader.get_ruleset("security-rules").is_some(),
+            "Should have security-rules RuleSet"
+        );
+        assert!(
+            loader.get_ruleset("command-safety").is_some(),
+            "Should have command-safety RuleSet"
+        );
+        assert!(
+            loader.get_ruleset("code-quality").is_some(),
+            "Should have code-quality RuleSet"
+        );
     }
 
     #[test]
@@ -87,9 +101,14 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        let ruleset = loader.get_ruleset("security-rules").expect("security-rules RuleSet should exist");
+        let ruleset = loader
+            .get_ruleset("security-rules")
+            .expect("security-rules RuleSet should exist");
         assert_eq!(ruleset.name(), "security-rules");
-        assert!(ruleset.rules.len() >= 2, "Should have at least 2 rules (no-secrets, input-validation)");
+        assert!(
+            ruleset.rules.len() >= 2,
+            "Should have at least 2 rules (no-secrets, input-validation)"
+        );
 
         // Check for no-secrets rule
         let has_no_secrets = ruleset.rules.iter().any(|r| r.name == "no-secrets");
@@ -101,7 +120,9 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        let ruleset = loader.get_ruleset("command-safety").expect("command-safety RuleSet should exist");
+        let ruleset = loader
+            .get_ruleset("command-safety")
+            .expect("command-safety RuleSet should exist");
         assert_eq!(ruleset.name(), "command-safety");
 
         // Check for safe-commands rule
@@ -114,9 +135,14 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        let ruleset = loader.get_ruleset("code-quality").expect("code-quality RuleSet should exist");
+        let ruleset = loader
+            .get_ruleset("code-quality")
+            .expect("code-quality RuleSet should exist");
         assert_eq!(ruleset.name(), "code-quality");
-        assert!(ruleset.rules.len() >= 10, "Should have at least 10 code quality rules");
+        assert!(
+            ruleset.rules.len() >= 10,
+            "Should have at least 10 code quality rules"
+        );
     }
 
     #[test]
@@ -140,7 +166,9 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        let ruleset = loader.get_ruleset("security-rules").expect("security-rules should be loaded");
+        let ruleset = loader
+            .get_ruleset("security-rules")
+            .expect("security-rules should be loaded");
 
         // The @file_groups/source_code should have been expanded in the manifest
         let match_criteria = ruleset
@@ -174,7 +202,9 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        let ruleset = loader.get_ruleset("test-integrity").expect("test-integrity should be loaded");
+        let ruleset = loader
+            .get_ruleset("test-integrity")
+            .expect("test-integrity should be loaded");
 
         // The @file_groups/source_code and @file_groups/test_files should have been expanded
         let match_criteria = ruleset

@@ -2,6 +2,7 @@
 //!
 //! Lists RuleSets and their rules from all sources (builtin, user, project)
 //! with name, description, trigger, severity, and source.
+//! Supports filtering by --global/--local and JSON output.
 
 use avp_common::builtin::load_builtins;
 use avp_common::validator::{ValidatorLoader, ValidatorSource};
@@ -20,11 +21,14 @@ const MAX_DESCRIPTION_LENGTH: usize = 50;
 ///
 /// * `verbose` - If true, includes description column in output.
 /// * `debug` - If true, shows diagnostic information about directories searched.
+/// * `global` - If true, show only global (user-level) validators.
+/// * `local` - If true, show only local (project-level) validators.
+/// * `json` - If true, output as JSON instead of table.
 ///
 /// # Returns
 ///
 /// Exit code: 0 on success.
-pub fn run_list(verbose: bool, debug: bool) -> i32 {
+pub fn run_list(verbose: bool, debug: bool, global: bool, local: bool, json: bool) -> i32 {
     let mut loader = ValidatorLoader::new();
 
     // Load builtins first (lowest precedence)
@@ -42,26 +46,65 @@ pub fn run_list(verbose: bool, debug: bool) -> i32 {
 
     let mut rulesets = loader.list_rulesets();
 
+    // Filter by source if requested
+    if global {
+        rulesets.retain(|rs| matches!(rs.source, ValidatorSource::User));
+    } else if local {
+        rulesets.retain(|rs| matches!(rs.source, ValidatorSource::Project));
+    }
+
     if rulesets.is_empty() {
-        println!("No RuleSets found.");
+        if json {
+            println!("{{\"validators\":[]}}");
+        } else {
+            println!("No RuleSets found.");
+        }
         return 0;
     }
 
     // Sort by name for consistent output
     rulesets.sort_by(|a, b| a.name().cmp(b.name()));
 
+    // JSON output mode
+    if json {
+        let validators: Vec<serde_json::Value> = rulesets
+            .iter()
+            .map(|rs| {
+                let rules: Vec<String> = rs.rules.iter().map(|r| r.name.clone()).collect();
+                serde_json::json!({
+                    "name": rs.name(),
+                    "description": rs.description(),
+                    "rules": rules,
+                    "trigger": rs.manifest.trigger.to_string(),
+                    "severity": rs.manifest.severity.to_string(),
+                    "source": source_label(&rs.source),
+                })
+            })
+            .collect();
+        let output = serde_json::json!({ "validators": validators });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return 0;
+    }
+
     // Build and print the table - one row per RuleSet, rules as multiline cell
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
 
     if verbose {
-        table.set_header(vec!["RuleSet", "Description", "Rules", "Trigger", "Severity", "Source"]);
+        table.set_header(vec![
+            "RuleSet",
+            "Description",
+            "Rules",
+            "Trigger",
+            "Severity",
+            "Source",
+        ]);
     } else {
         table.set_header(vec!["RuleSet", "Rules", "Trigger", "Severity", "Source"]);
     }
 
     for ruleset in &rulesets {
-        let source = source_emoji(&ruleset.source);
+        let source = source_label(&ruleset.source);
         let trigger = ruleset.manifest.trigger.to_string();
         let severity = ruleset.manifest.severity.to_string();
 
@@ -104,21 +147,17 @@ pub fn run_list(verbose: bool, debug: bool) -> i32 {
     println!("{table}");
 
     let total_rules: usize = rulesets.iter().map(|rs| rs.rules.len()).sum();
-    println!(
-        "\n{} RuleSet(s), {} rule(s)",
-        rulesets.len(),
-        total_rules
-    );
+    println!("\n{} RuleSet(s), {} rule(s)", rulesets.len(), total_rules);
 
     0
 }
 
-/// Get emoji representation for validator source.
-fn source_emoji(source: &ValidatorSource) -> String {
+/// Get string label for validator source with emoji icon.
+fn source_label(source: &ValidatorSource) -> String {
     match source {
-        ValidatorSource::Builtin => "builtin".to_string(),
-        ValidatorSource::User => "user".to_string(),
-        ValidatorSource::Project => "project".to_string(),
+        ValidatorSource::Builtin => "📦 Built-in".to_string(),
+        ValidatorSource::User => "👤 User".to_string(),
+        ValidatorSource::Project => "📁 Project".to_string(),
     }
 }
 
@@ -148,9 +187,7 @@ fn print_diagnostics(loader: &ValidatorLoader) {
             if diag.user_directory.exists {
                 println!("  Status: exists");
             } else {
-                println!(
-                    "  Status: does not exist (create this directory to add user validators)"
-                );
+                println!("  Status: does not exist (create this directory to add user validators)");
             }
         }
         None => {
@@ -200,10 +237,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_source_emoji() {
-        assert_eq!(source_emoji(&ValidatorSource::Builtin), "builtin");
-        assert_eq!(source_emoji(&ValidatorSource::User), "user");
-        assert_eq!(source_emoji(&ValidatorSource::Project), "project");
+    fn test_source_label() {
+        assert_eq!(source_label(&ValidatorSource::Builtin), "📦 Built-in");
+        assert_eq!(source_label(&ValidatorSource::User), "👤 User");
+        assert_eq!(source_label(&ValidatorSource::Project), "📁 Project");
     }
 
     #[test]
@@ -224,19 +261,25 @@ mod tests {
 
     #[test]
     fn test_run_list() {
-        let exit_code = run_list(false, false);
+        let exit_code = run_list(false, false, false, false, false);
         assert_eq!(exit_code, 0);
     }
 
     #[test]
     fn test_run_list_verbose() {
-        let exit_code = run_list(true, false);
+        let exit_code = run_list(true, false, false, false, false);
         assert_eq!(exit_code, 0);
     }
 
     #[test]
     fn test_run_list_debug() {
-        let exit_code = run_list(false, true);
+        let exit_code = run_list(false, true, false, false, false);
+        assert_eq!(exit_code, 0);
+    }
+
+    #[test]
+    fn test_run_list_json() {
+        let exit_code = run_list(false, false, false, false, true);
         assert_eq!(exit_code, 0);
     }
 }

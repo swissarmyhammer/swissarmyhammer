@@ -29,6 +29,7 @@ walkdir = { workspace = true }
 
 # File hashing and locking
 sha2 = { workspace = true }
+base64 = { workspace = true }
 fs2 = { workspace = true }
 
 # Git root finding and directory management

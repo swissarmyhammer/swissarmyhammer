@@ -561,9 +561,24 @@ mod tests {
         let (_temp, strategy) = create_test_strategy();
 
         // Should have at least the builtin RuleSets
-        assert!(strategy.validator_loader().ruleset_count() >= 5, "Should have at least 5 builtin RuleSets");
-        assert!(strategy.validator_loader().get_ruleset("security-rules").is_some(), "Should have security-rules");
-        assert!(strategy.validator_loader().get_ruleset("command-safety").is_some(), "Should have command-safety");
+        assert!(
+            strategy.validator_loader().ruleset_count() >= 5,
+            "Should have at least 5 builtin RuleSets"
+        );
+        assert!(
+            strategy
+                .validator_loader()
+                .get_ruleset("security-rules")
+                .is_some(),
+            "Should have security-rules"
+        );
+        assert!(
+            strategy
+                .validator_loader()
+                .get_ruleset("command-safety")
+                .is_some(),
+            "Should have command-safety"
+        );
     }
 
     #[test]
@@ -582,7 +597,10 @@ mod tests {
 
         // command-safety should match PreToolUse + Bash
         let names: Vec<_> = matching.iter().map(|rs| rs.name()).collect();
-        assert!(names.contains(&"command-safety"), "command-safety should match PreToolUse + Bash");
+        assert!(
+            names.contains(&"command-safety"),
+            "command-safety should match PreToolUse + Bash"
+        );
     }
 
     #[test]
@@ -601,6 +619,9 @@ mod tests {
 
         // security-rules should match PostToolUse + Write + *.ts
         let names: Vec<_> = matching.iter().map(|rs| rs.name()).collect();
-        assert!(names.contains(&"security-rules"), "security-rules should match PostToolUse + Write + source files");
+        assert!(
+            names.contains(&"security-rules"),
+            "security-rules should match PostToolUse + Write + source files"
+        );
     }
 }
