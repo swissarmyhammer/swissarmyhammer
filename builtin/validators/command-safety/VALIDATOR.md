@@ -1,7 +1,7 @@
 ---
 name: command-safety
 description: Block dangerous shell commands that could cause data loss or system damage
-version: 1.0.0
+version: "{{version}}"
 trigger: PreToolUse
 match:
   tools:

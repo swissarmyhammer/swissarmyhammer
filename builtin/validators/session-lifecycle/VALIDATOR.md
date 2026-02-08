@@ -1,7 +1,7 @@
 ---
 name: session-lifecycle
 description: Review session changes for consistency and completeness
-version: 1.0.0
+version: "{{version}}"
 trigger: Stop
 tags:
   - session

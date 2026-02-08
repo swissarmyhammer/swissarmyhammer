@@ -11,6 +11,21 @@ use super::types::*;
 /// Default registry URL -- the single source of truth.
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.agentvalidatorprotocol.com";
 
+/// Extract a human-readable message from a JSON error body.
+///
+/// Tries `error_description`, then `message`, then falls back to the raw body.
+fn extract_error_description(body: &str) -> String {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(desc) = json.get("error_description").and_then(|v| v.as_str()) {
+            return desc.to_string();
+        }
+        if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
+            return msg.to_string();
+        }
+    }
+    body.to_string()
+}
+
 /// Get the registry URL from environment or default.
 pub fn get_registry_url() -> String {
     std::env::var("AVP_REGISTRY_URL").unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_string())
@@ -71,15 +86,16 @@ impl RegistryClient {
 
         let status_code = status.as_u16();
         let body = response.text().await.unwrap_or_default();
+        let message = extract_error_description(&body);
 
         match status_code {
-            401 => Err(RegistryError::Unauthorized(body)),
-            403 => Err(RegistryError::Forbidden(body)),
-            404 => Err(RegistryError::NotFound(body)),
-            409 => Err(RegistryError::Conflict(body)),
+            401 => Err(RegistryError::Unauthorized(message)),
+            403 => Err(RegistryError::Forbidden(message)),
+            404 => Err(RegistryError::NotFound(message)),
+            409 => Err(RegistryError::Conflict(message)),
             _ => Err(RegistryError::Api {
                 status: status_code,
-                body,
+                body: message,
             }),
         }
     }

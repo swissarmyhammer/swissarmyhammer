@@ -1,7 +1,7 @@
 ---
 name: rust-conventions
 description: Rust language patterns and conventions validation
-version: 1.0.0
+version: "{{version}}"
 trigger: PostToolUse
 match:
   tools:

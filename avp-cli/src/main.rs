@@ -123,24 +123,33 @@ enum Commands {
     Install {
         /// Package name, optionally with @version (e.g. no-secrets@1.2.3)
         package: String,
+        /// Install to project (.avp/validators/) [default]
+        #[arg(long, visible_alias = "project")]
+        local: bool,
         /// Install globally (~/.avp/validators/)
-        #[arg(long)]
+        #[arg(long, visible_alias = "user")]
         global: bool,
     },
     /// Remove an installed package
     Uninstall {
         /// Package name
         name: String,
+        /// Remove from project (.avp/validators/) [default]
+        #[arg(long, visible_alias = "project")]
+        local: bool,
         /// Remove from global (~/.avp/validators/)
-        #[arg(long)]
+        #[arg(long, visible_alias = "user")]
         global: bool,
     },
     /// Create a new RuleSet from template
     New {
         /// RuleSet name (kebab-case)
         name: String,
+        /// Create in project (.avp/validators/) [default]
+        #[arg(long, visible_alias = "project")]
+        local: bool,
         /// Create in user-level directory (~/.avp/validators/)
-        #[arg(long)]
+        #[arg(long, visible_alias = "user")]
         global: bool,
     },
     /// Publish a package to the registry
@@ -163,8 +172,11 @@ enum Commands {
     Update {
         /// Specific package to update (all if omitted)
         name: Option<String>,
-        /// Update global packages
-        #[arg(long)]
+        /// Update project packages [default]
+        #[arg(long, visible_alias = "project")]
+        local: bool,
+        /// Update global (~/.avp/validators/) packages
+        #[arg(long, visible_alias = "user")]
         global: bool,
     },
 }
@@ -226,13 +238,15 @@ async fn main() {
             handle_registry_result(search::run_search(&query, tag.as_deref(), json).await)
         }
         Some(Commands::Info { name }) => handle_registry_result(info::run_info(&name).await),
-        Some(Commands::Install { package, global }) => {
+        Some(Commands::Install { package, global, .. }) => {
             handle_registry_result(package::run_install(&package, global).await)
         }
-        Some(Commands::Uninstall { name, global }) => {
+        Some(Commands::Uninstall { name, global, .. }) => {
             handle_registry_result(package::run_uninstall(&name, global).await)
         }
-        Some(Commands::New { name, global }) => handle_registry_result(new::run_new(&name, global)),
+        Some(Commands::New { name, global, .. }) => {
+            handle_registry_result(new::run_new(&name, global))
+        }
         Some(Commands::Publish { path, dry_run }) => {
             handle_registry_result(publish::run_publish(&path, dry_run).await)
         }
@@ -240,7 +254,7 @@ async fn main() {
             handle_registry_result(publish::run_unpublish(&name_version).await)
         }
         Some(Commands::Outdated) => handle_registry_result(outdated::run_outdated().await),
-        Some(Commands::Update { name, global }) => {
+        Some(Commands::Update { name, global, .. }) => {
             handle_registry_result(outdated::run_update(name.as_deref(), global).await)
         }
         None => {
@@ -573,10 +587,45 @@ mod tests {
     fn test_cli_parsing_install() {
         let cli = Cli::parse_from(["avp", "install", "no-secrets"]);
         match cli.command {
-            Some(Commands::Install { package, global }) => {
+            Some(Commands::Install {
+                package,
+                global,
+                local,
+            }) => {
                 assert_eq!(package, "no-secrets");
                 assert!(!global);
+                assert!(!local);
             }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_install_local() {
+        let cli = Cli::parse_from(["avp", "install", "no-secrets", "--local"]);
+        match cli.command {
+            Some(Commands::Install { local, global, .. }) => {
+                assert!(local);
+                assert!(!global);
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_install_project_alias() {
+        let cli = Cli::parse_from(["avp", "install", "no-secrets", "--project"]);
+        match cli.command {
+            Some(Commands::Install { local, .. }) => assert!(local),
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_install_user_alias() {
+        let cli = Cli::parse_from(["avp", "install", "no-secrets", "--user"]);
+        match cli.command {
+            Some(Commands::Install { global, .. }) => assert!(global),
             _ => panic!("Expected Install command"),
         }
     }
@@ -605,8 +654,20 @@ mod tests {
     fn test_cli_parsing_uninstall() {
         let cli = Cli::parse_from(["avp", "uninstall", "no-secrets"]);
         match cli.command {
-            Some(Commands::Uninstall { name, global }) => {
+            Some(Commands::Uninstall { name, global, .. }) => {
                 assert_eq!(name, "no-secrets");
+                assert!(!global);
+            }
+            _ => panic!("Expected Uninstall command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_uninstall_local() {
+        let cli = Cli::parse_from(["avp", "uninstall", "no-secrets", "--local"]);
+        match cli.command {
+            Some(Commands::Uninstall { local, global, .. }) => {
+                assert!(local);
                 assert!(!global);
             }
             _ => panic!("Expected Uninstall command"),
@@ -617,7 +678,7 @@ mod tests {
     fn test_cli_parsing_new() {
         let cli = Cli::parse_from(["avp", "new", "my-validator"]);
         match cli.command {
-            Some(Commands::New { name, global }) => {
+            Some(Commands::New { name, global, .. }) => {
                 assert_eq!(name, "my-validator");
                 assert!(!global);
             }
@@ -626,10 +687,40 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parsing_new_local() {
+        let cli = Cli::parse_from(["avp", "new", "my-validator", "--local"]);
+        match cli.command {
+            Some(Commands::New { local, global, .. }) => {
+                assert!(local);
+                assert!(!global);
+            }
+            _ => panic!("Expected New command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_new_project_alias() {
+        let cli = Cli::parse_from(["avp", "new", "my-validator", "--project"]);
+        match cli.command {
+            Some(Commands::New { local, .. }) => assert!(local),
+            _ => panic!("Expected New command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_new_user_alias() {
+        let cli = Cli::parse_from(["avp", "new", "my-validator", "--user"]);
+        match cli.command {
+            Some(Commands::New { global, .. }) => assert!(global),
+            _ => panic!("Expected New command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parsing_new_global() {
         let cli = Cli::parse_from(["avp", "new", "my-validator", "--global"]);
         match cli.command {
-            Some(Commands::New { name, global }) => {
+            Some(Commands::New { name, global, .. }) => {
                 assert_eq!(name, "my-validator");
                 assert!(global);
             }
@@ -706,7 +797,7 @@ mod tests {
     fn test_cli_parsing_update() {
         let cli = Cli::parse_from(["avp", "update"]);
         match cli.command {
-            Some(Commands::Update { name, global }) => {
+            Some(Commands::Update { name, global, .. }) => {
                 assert_eq!(name, None);
                 assert!(!global);
             }

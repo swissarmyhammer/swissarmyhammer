@@ -1,7 +1,7 @@
 ---
 name: security-rules
 description: Critical security validations for code safety
-version: 1.0.0
+version: "{{version}}"
 trigger: PostToolUse
 match:
   tools:

@@ -19,9 +19,12 @@
 //! ---
 //! ```
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use swissarmyhammer_directory::{DirectoryConfig, YamlExpander};
+use swissarmyhammer_templating::TemplateEngine;
 
 use crate::error::AvpError;
 
@@ -35,6 +38,33 @@ const YAML_DELIMITER_LEN: usize = 3;
 
 /// Length of the closing YAML delimiter "\n---" (newline + delimiter).
 const YAML_CLOSING_DELIMITER_LEN: usize = 4;
+
+/// Shared template engine for frontmatter rendering.
+static TEMPLATE_ENGINE: LazyLock<TemplateEngine> = LazyLock::new(TemplateEngine::new);
+
+/// Standard Liquid template variables available in all frontmatter.
+///
+/// Currently provides:
+/// - `version` — AVP workspace version from Cargo.toml
+fn frontmatter_vars() -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    vars.insert("version".to_string(), crate::VERSION.to_string());
+    vars
+}
+
+/// Render Liquid template variables in a frontmatter string.
+///
+/// Falls back to the original string if rendering fails (e.g. the
+/// frontmatter contains non-template `{` characters that confuse Liquid).
+fn render_frontmatter(frontmatter: &str) -> String {
+    // Skip rendering if there are no template markers at all
+    if !frontmatter.contains("{{") {
+        return frontmatter.to_string();
+    }
+    TEMPLATE_ENGINE
+        .render(frontmatter, &frontmatter_vars())
+        .unwrap_or_else(|_| frontmatter.to_string())
+}
 
 /// Parse a validator from markdown content with YAML frontmatter.
 ///
@@ -127,9 +157,12 @@ fn parse_validator_internal<C: DirectoryConfig>(
     // Split on frontmatter delimiters
     let (frontmatter_str, body) = extract_frontmatter(content, &path)?;
 
+    // Render Liquid template variables before YAML parsing
+    let rendered = render_frontmatter(frontmatter_str);
+
     // Parse YAML frontmatter
     let mut yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(frontmatter_str).map_err(|e| AvpError::Validator {
+        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to parse YAML frontmatter: {}", e),
         })?;
@@ -240,9 +273,12 @@ pub fn parse_ruleset_manifest<C: DirectoryConfig>(
     // Extract frontmatter and body (body is unused for manifest, but validates format)
     let (frontmatter_str, _body) = extract_frontmatter(content, dir_path)?;
 
+    // Render Liquid template variables before YAML parsing
+    let rendered = render_frontmatter(frontmatter_str);
+
     // Parse YAML frontmatter
     let mut yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(frontmatter_str).map_err(|e| AvpError::Validator {
+        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
             validator: format!("{}/VALIDATOR.md", dir_path.display()),
             message: format!("failed to parse YAML frontmatter: {}", e),
         })?;
@@ -297,9 +333,12 @@ pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
     // Extract frontmatter and body
     let (frontmatter_str, body) = extract_frontmatter(content, path)?;
 
+    // Render Liquid template variables before YAML parsing
+    let rendered = render_frontmatter(frontmatter_str);
+
     // Parse YAML frontmatter
     let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(frontmatter_str).map_err(|e| AvpError::Validator {
+        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to parse YAML frontmatter: {}", e),
         })?;
@@ -793,5 +832,94 @@ Body.
         let match_criteria = validator.frontmatter.match_criteria.as_ref().unwrap();
         assert_eq!(match_criteria.tools, vec!["Bash"]);
         assert_eq!(match_criteria.files, vec!["*.sh"]);
+    }
+
+    // ── Liquid template rendering tests ──────────────────────────────
+
+    #[test]
+    fn test_render_frontmatter_version_variable() {
+        let input = r#"name: test
+version: "{{ version }}""#;
+        let result = render_frontmatter(input);
+        assert_eq!(
+            result,
+            format!("name: test\nversion: \"{}\"", crate::VERSION)
+        );
+    }
+
+    #[test]
+    fn test_render_frontmatter_no_templates_passthrough() {
+        let input = "name: test\nversion: 1.0.0";
+        let result = render_frontmatter(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_render_frontmatter_invalid_template_passthrough() {
+        // Invalid Liquid should fall back to the original string
+        let input = "name: {{ invalid | nonexistent_filter }}";
+        let result = render_frontmatter(input);
+        // Should not panic — returns original or rendered (filter may be ignored)
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ruleset_manifest_with_version_template() {
+        let content = r#"---
+name: test-ruleset
+description: Test
+version: "{{ version }}"
+trigger: PostToolUse
+---
+
+# Test
+"#;
+        let manifest =
+            parse_ruleset_manifest::<swissarmyhammer_directory::AvpConfig>(content, Path::new("test"), None)
+                .unwrap();
+        assert_eq!(manifest.version, crate::VERSION);
+    }
+
+    #[test]
+    fn test_parse_rule_with_version_template() {
+        let content = r#"---
+name: test-rule
+description: "Rule at {{ version }}"
+---
+
+Body.
+"#;
+        let rule = parse_rule(content, Path::new("test-rule.md")).unwrap();
+        assert_eq!(
+            rule.description,
+            format!("Rule at {}", crate::VERSION)
+        );
+    }
+
+    #[test]
+    fn test_parse_validator_with_version_template() {
+        let content = r#"---
+name: test-validator
+description: "Validator {{ version }}"
+---
+
+Body.
+"#;
+        let validator = parse_validator(
+            content,
+            PathBuf::from("test-validator.md"),
+            ValidatorSource::Builtin,
+        )
+        .unwrap();
+        assert_eq!(
+            validator.frontmatter.description,
+            format!("Validator {}", crate::VERSION)
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_vars_contains_version() {
+        let vars = frontmatter_vars();
+        assert_eq!(vars.get("version").unwrap(), crate::VERSION);
     }
 }

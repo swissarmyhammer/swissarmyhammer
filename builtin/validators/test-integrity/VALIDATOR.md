@@ -1,7 +1,7 @@
 ---
 name: test-integrity
 description: Ensure tests are not inappropriately skipped, disabled, or mocked
-version: 1.0.0
+version: "{{version}}"
 trigger: PostToolUse
 match:
   tools:

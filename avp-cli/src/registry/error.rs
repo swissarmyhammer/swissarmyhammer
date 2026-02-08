@@ -35,7 +35,7 @@ impl fmt::Display for RegistryError {
             Self::Http(e) => write!(f, "Network error: {}", e),
             Self::AuthRequired => write!(f, "Not logged in. Run 'avp login' first."),
             Self::Unauthorized(msg) => write!(f, "Authentication failed: {}", msg),
-            Self::NotFound(msg) => write!(f, "Not found: {}", msg),
+            Self::NotFound(msg) => write!(f, "{}", msg),
             Self::Conflict(msg) => write!(f, "Conflict: {}", msg),
             Self::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
             Self::Api { status, body } => write!(f, "API error ({}): {}", status, body),

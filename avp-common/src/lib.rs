@@ -26,3 +26,6 @@ pub use error::{AvpError, ChainError, ValidationError};
 pub use strategy::HookDispatcher;
 pub use types::{HookInput, HookOutput, HookType};
 pub use validator::{MatchContext, Severity, Validator, ValidatorLoader, ValidatorResult};
+
+/// AVP workspace version, inherited from the workspace Cargo.toml.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

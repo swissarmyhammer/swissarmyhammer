@@ -1,135 +1,171 @@
 //! AVP Outdated/Update - Check for and apply package updates.
+//!
+//! Scans local validators (builtin, user, project) and compares their
+//! versions against the registry to find available updates.
 
 use comfy_table::{presets::UTF8_FULL, Table};
 
-use avp_common::lockfile::Lockfile;
+use avp_common::builtin::load_builtins;
+use avp_common::validator::{ValidatorLoader, ValidatorSource};
 
 use crate::package;
-use crate::registry::types::InstalledPackage;
 use crate::registry::{RegistryClient, RegistryError};
 
-/// Run the outdated command.
-///
-/// Checks installed packages against the registry for available updates.
-pub async fn run_outdated() -> Result<(), RegistryError> {
-    let project_root = std::env::current_dir()?;
-    let lf = Lockfile::load(&project_root)?;
-
-    let packages = lf.list_packages();
-    if packages.is_empty() {
-        println!("No packages installed.");
-        return Ok(());
+/// Source label with emoji, matching `avp list` / `avp info` output.
+fn source_label(source: &ValidatorSource) -> &'static str {
+    match source {
+        ValidatorSource::Builtin => "📦 Built-in",
+        ValidatorSource::User => "👤 User",
+        ValidatorSource::Project => "📁 Project",
     }
+}
 
-    let installed: Vec<InstalledPackage> = packages
-        .iter()
-        .map(|(name, pkg)| InstalledPackage {
-            name: name.to_string(),
-            version: pkg.version.clone(),
+/// A local validator with its name, version, and source.
+struct LocalPackage {
+    name: String,
+    version: String,
+    source: ValidatorSource,
+}
+
+/// Collect all local validators from all sources.
+fn collect_local_packages() -> Vec<LocalPackage> {
+    let mut loader = ValidatorLoader::new();
+    load_builtins(&mut loader);
+    let _ = loader.load_all();
+
+    let mut packages: Vec<LocalPackage> = loader
+        .list_rulesets()
+        .into_iter()
+        .map(|rs| LocalPackage {
+            name: rs.name().to_string(),
+            version: rs.manifest.version.clone(),
+            source: rs.source.clone(),
         })
         .collect();
 
-    let client = RegistryClient::authenticated()?;
-    let response = client.check_updates(installed).await?;
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+    packages
+}
 
-    if response.updates.is_empty() {
-        println!("All packages are up to date.");
+/// Run the outdated command.
+///
+/// Scans all local validators and checks the registry for newer versions.
+/// Shows a table of all validators with local and registry versions.
+pub async fn run_outdated() -> Result<(), RegistryError> {
+    let packages = collect_local_packages();
+
+    if packages.is_empty() {
+        println!("No validators found.");
         return Ok(());
     }
 
+    println!(
+        "Checking {} validator(s) against registry...\n",
+        packages.len()
+    );
+
+    let client = RegistryClient::new();
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
-    table.set_header(vec!["Package", "Current", "Latest", "Type"]);
+    table.set_header(vec!["Validator", "Local", "Registry", "Status", "Source"]);
 
-    for update in &response.updates {
+    let mut updates_available = 0;
+
+    for pkg in &packages {
+        let (registry_version, status) = match client.package_info(&pkg.name).await {
+            Ok(detail) => {
+                if detail.latest == pkg.version {
+                    (detail.latest, "up to date".to_string())
+                } else {
+                    updates_available += 1;
+                    (detail.latest, "update available".to_string())
+                }
+            }
+            Err(RegistryError::NotFound(_)) => ("-".to_string(), "local only".to_string()),
+            Err(_) => ("-".to_string(), "check failed".to_string()),
+        };
+
         table.add_row(vec![
-            update.name.clone(),
-            update.current_version.clone(),
-            update.latest_version.clone(),
-            update.update_type.clone(),
+            pkg.name.clone(),
+            pkg.version.clone(),
+            registry_version,
+            status,
+            source_label(&pkg.source).to_string(),
         ]);
     }
 
     println!("{table}");
-    println!(
-        "\n{} package(s) have updates available.",
-        response.updates.len()
-    );
-    println!("Run 'avp update' to update all, or 'avp update <name>' for a specific package.");
+
+    if updates_available > 0 {
+        println!(
+            "\n{} update(s) available. Run 'avp update' to update all, or 'avp update <name>' for a specific package.",
+            updates_available
+        );
+    }
 
     Ok(())
 }
 
 /// Run the update command.
 ///
-/// Updates one or all installed packages to their latest versions.
+/// Updates one or all local validators to their latest registry versions.
 pub async fn run_update(name: Option<&str>, global: bool) -> Result<(), RegistryError> {
-    let project_root = std::env::current_dir()?;
-    let lf = Lockfile::load(&project_root)?;
+    let packages = collect_local_packages();
 
-    let packages = lf.list_packages();
     if packages.is_empty() {
-        println!("No packages installed.");
+        println!("No validators found.");
         return Ok(());
     }
 
+    let client = RegistryClient::new();
+
     // If a specific name is given, just update that one
     if let Some(name) = name {
-        let pkg = lf.get_package(name).ok_or_else(|| {
-            RegistryError::NotFound(format!("Package '{}' is not installed", name))
+        let pkg = packages.iter().find(|p| p.name == name).ok_or_else(|| {
+            RegistryError::NotFound(format!("Validator '{}' is not installed", name))
         })?;
+
         println!("Checking for updates to {}...", name);
 
-        let installed = vec![InstalledPackage {
-            name: name.to_string(),
-            version: pkg.version.clone(),
-        }];
+        let detail = client.package_info(name).await?;
 
-        let client = RegistryClient::authenticated()?;
-        let response = client.check_updates(installed).await?;
-
-        if response.updates.is_empty() {
+        if detail.latest == pkg.version {
             println!("{} is already up to date ({})", name, pkg.version);
             return Ok(());
         }
 
-        let update = &response.updates[0];
         println!(
             "Updating {}: {} -> {}",
-            name, update.current_version, update.latest_version
+            name, pkg.version, detail.latest
         );
-        package::install_package(name, &update.latest_version, global).await?;
+        package::install_package(name, &detail.latest, global).await?;
         return Ok(());
     }
 
-    // Update all
+    // Update all that have registry updates
     println!("Checking for updates...");
-    let installed: Vec<InstalledPackage> = packages
-        .iter()
-        .map(|(name, pkg)| InstalledPackage {
-            name: name.to_string(),
-            version: pkg.version.clone(),
-        })
-        .collect();
 
-    let client = RegistryClient::authenticated()?;
-    let response = client.check_updates(installed).await?;
+    let mut updated = 0;
 
-    if response.updates.is_empty() {
-        println!("All packages are up to date.");
-        return Ok(());
+    for pkg in &packages {
+        match client.package_info(&pkg.name).await {
+            Ok(detail) if detail.latest != pkg.version => {
+                println!(
+                    "  Updating {}: {} -> {}",
+                    pkg.name, pkg.version, detail.latest
+                );
+                package::install_package(&pkg.name, &detail.latest, global).await?;
+                updated += 1;
+            }
+            _ => {}
+        }
     }
 
-    println!("Updating {} package(s):\n", response.updates.len());
-
-    for update in &response.updates {
-        println!(
-            "  {}: {} -> {}",
-            update.name, update.current_version, update.latest_version
-        );
-        package::install_package(&update.name, &update.latest_version, global).await?;
+    if updated > 0 {
+        println!("\n{} package(s) updated.", updated);
+    } else {
+        println!("All validators are up to date.");
     }
 
-    println!("\nAll packages updated.");
     Ok(())
 }
