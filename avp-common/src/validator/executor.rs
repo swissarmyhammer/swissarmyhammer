@@ -137,6 +137,48 @@ impl<'a, P: PartialLoader + Clone + 'static> ValidatorRenderContext<'a, P> {
 /// Name of the validator prompt template in the prompts library.
 pub const VALIDATOR_PROMPT_NAME: &str = ".system/validator";
 
+/// Name of the rule prompt template in the prompts library.
+const RULE_PROMPT_NAME: &str = ".system/rule";
+
+/// Render a rule prompt using the `.system/rule` prompt template.
+///
+/// Uses the shared prompt rendering pipeline (PromptLibrary + Liquid templates).
+/// Falls back to a simple inline format if the template is unavailable.
+fn render_rule_prompt(
+    rule_name: &str,
+    rule_description: &str,
+    rule_severity: &str,
+    rule_body: &str,
+) -> String {
+    use swissarmyhammer_config::TemplateContext;
+
+    let mut prompt_library = PromptLibrary::new();
+    let mut resolver = swissarmyhammer_prompts::PromptResolver::new();
+    if resolver.load_all_prompts(&mut prompt_library).is_ok() {
+        let mut ctx = TemplateContext::new();
+        ctx.set("rule_name".to_string(), rule_name.to_string().into());
+        ctx.set(
+            "rule_description".to_string(),
+            rule_description.to_string().into(),
+        );
+        ctx.set(
+            "rule_severity".to_string(),
+            rule_severity.to_string().into(),
+        );
+        ctx.set("rule_body".to_string(), rule_body.to_string().into());
+
+        if let Ok(rendered) = prompt_library.render(RULE_PROMPT_NAME, &ctx) {
+            return rendered;
+        }
+    }
+
+    // Fallback if template is unavailable
+    format!(
+        "# Rule: {}\n\n**Description**: {}\n**Severity**: {}\n\n{}",
+        rule_name, rule_description, rule_severity, rule_body
+    )
+}
+
 /// Prefix for partial files in the validators directory.
 const PARTIALS_PREFIX: &str = "_partials/";
 
@@ -771,8 +813,8 @@ impl<'a, P: PartialLoader + Clone + 'static> RulePromptContext<'a, P> {
 
     /// Render the rule as a user message for the conversational flow.
     ///
-    /// This creates a message that presents the rule to the agent within
-    /// the ongoing RuleSet session.
+    /// Uses the `.system/rule` prompt template to wrap rule content with
+    /// consistent formatting and response format instructions.
     pub fn render(&self) -> String {
         // Render the rule body with partials if provided
         let rendered_body = match self.partials {
@@ -780,12 +822,14 @@ impl<'a, P: PartialLoader + Clone + 'static> RulePromptContext<'a, P> {
             None => self.rule.body.clone(),
         };
 
-        // Build the rule message
         let severity = self.rule.effective_severity(self.ruleset);
 
-        format!(
-            "# Rule: {}\n\n**Description**: {}\n**Severity**: {}\n\n{}",
-            self.rule.name, self.rule.description, severity, rendered_body
+        // Try to render via the .system/rule prompt template
+        render_rule_prompt(
+            &self.rule.name,
+            &self.rule.description,
+            &severity.to_string(),
+            &rendered_body,
         )
     }
 }

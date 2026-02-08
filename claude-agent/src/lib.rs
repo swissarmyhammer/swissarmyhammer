@@ -134,7 +134,10 @@ pub struct CreateAgentConfig {
 /// ```
 pub async fn create_agent(
     config: CreateAgentConfig,
-) -> Result<(ClaudeAgent, Arc<crate::agent_notifications::NotificationSender>)> {
+) -> Result<(
+    ClaudeAgent,
+    Arc<crate::agent_notifications::NotificationSender>,
+)> {
     let mut agent_config = AgentConfig::default();
     agent_config.claude.ephemeral = config.ephemeral;
     agent_config.mcp_servers = config.mcp_servers;

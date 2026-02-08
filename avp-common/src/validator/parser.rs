@@ -874,9 +874,12 @@ trigger: PostToolUse
 
 # Test
 "#;
-        let manifest =
-            parse_ruleset_manifest::<swissarmyhammer_directory::AvpConfig>(content, Path::new("test"), None)
-                .unwrap();
+        let manifest = parse_ruleset_manifest::<swissarmyhammer_directory::AvpConfig>(
+            content,
+            Path::new("test"),
+            None,
+        )
+        .unwrap();
         assert_eq!(manifest.version, crate::VERSION);
     }
 
@@ -890,10 +893,7 @@ description: "Rule at {{ version }}"
 Body.
 "#;
         let rule = parse_rule(content, Path::new("test-rule.md")).unwrap();
-        assert_eq!(
-            rule.description,
-            format!("Rule at {}", crate::VERSION)
-        );
+        assert_eq!(rule.description, format!("Rule at {}", crate::VERSION));
     }
 
     #[test]

@@ -11,7 +11,7 @@ tags:
   - security
   - blocking
   - bash
-severity: warn
+severity: error
 timeout: 30
 ---
 
@@ -26,5 +26,3 @@ This RuleSet evaluates shell commands for potentially destructive patterns inclu
 - Credential exposure
 - Git safety violations
 - Interactive editors that may hang
-
-All rules in this RuleSet have error severity and will block command execution if violations are found.

@@ -134,10 +134,7 @@ pub async fn run_update(name: Option<&str>, global: bool) -> Result<(), Registry
             return Ok(());
         }
 
-        println!(
-            "Updating {}: {} -> {}",
-            name, pkg.version, detail.latest
-        );
+        println!("Updating {}: {} -> {}", name, pkg.version, detail.latest);
         package::install_package(name, &detail.latest, global).await?;
         return Ok(());
     }

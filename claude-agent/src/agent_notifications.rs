@@ -119,7 +119,10 @@ impl NotificationSender {
     }
 
     /// Get the per-session sender for a specific session.
-    pub fn session_sender(&self, session_id: &str) -> Option<broadcast::Sender<SessionNotification>> {
+    pub fn session_sender(
+        &self,
+        session_id: &str,
+    ) -> Option<broadcast::Sender<SessionNotification>> {
         let sessions = self.sessions.read().unwrap();
         sessions.get(session_id).cloned()
     }

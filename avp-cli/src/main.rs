@@ -238,9 +238,9 @@ async fn main() {
             handle_registry_result(search::run_search(&query, tag.as_deref(), json).await)
         }
         Some(Commands::Info { name }) => handle_registry_result(info::run_info(&name).await),
-        Some(Commands::Install { package, global, .. }) => {
-            handle_registry_result(package::run_install(&package, global).await)
-        }
+        Some(Commands::Install {
+            package, global, ..
+        }) => handle_registry_result(package::run_install(&package, global).await),
         Some(Commands::Uninstall { name, global, .. }) => {
             handle_registry_result(package::run_uninstall(&name, global).await)
         }
