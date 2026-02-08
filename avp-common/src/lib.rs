@@ -3,8 +3,8 @@
 //! This crate provides the core types, chain of responsibility pattern,
 //! and hook dispatching logic for the Agent Validator Protocol.
 //!
-//! Includes code-quality validators that run on PostToolUse (Edit/Write)
-//! and session-summary validator that runs on the Stop hook.
+//! Frontmatter in VALIDATOR.md and rule files supports Liquid templating.
+//! Use `{{ version }}` to reference the workspace version.
 //!
 //! Validators can use MCP tools like treesitter for enhanced analysis.
 
@@ -28,4 +28,6 @@ pub use types::{HookInput, HookOutput, HookType};
 pub use validator::{MatchContext, Severity, Validator, ValidatorLoader, ValidatorResult};
 
 /// AVP workspace version, inherited from the workspace Cargo.toml.
+///
+/// Available in VALIDATOR.md and rule frontmatter as the Liquid variable `{{ version }}`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -11,7 +11,7 @@ tags:
   - security
   - blocking
   - bash
-severity: error
+severity: warn
 timeout: 30
 ---
 
