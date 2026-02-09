@@ -28,158 +28,16 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use avp::auth;
-use avp::doctor;
-use avp::info;
-use avp::install::{self, InstallTarget};
-use avp::list;
-use avp::new;
-use avp::outdated;
-use avp::package;
-use avp::publish;
+use avp::install;
 use avp::registry::RegistryError;
-use avp::search;
+use avp::{auth, doctor, info, list, new, outdated, package, publish, search};
+use avp::{Cli, Commands};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
 use avp_common::AvpError;
-
-/// AVP - Agent Validator Protocol
-///
-/// Claude Code hook processor that validates tool calls, file changes, and more.
-#[derive(Parser, Debug)]
-#[command(name = "avp")]
-#[command(version)]
-#[command(about = "Agent Validator Protocol - Claude Code hook processor")]
-struct Cli {
-    /// Enable debug output to stderr
-    #[arg(short, long, global = true)]
-    debug: bool,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Install AVP hooks into Claude Code settings
-    Init {
-        /// Where to install the hooks
-        #[arg(value_enum, default_value_t = InstallTarget::Project)]
-        target: InstallTarget,
-    },
-    /// Remove AVP hooks from Claude Code settings and delete .avp directory
-    Deinit {
-        /// Where to remove the hooks from
-        #[arg(value_enum, default_value_t = InstallTarget::Project)]
-        target: InstallTarget,
-    },
-    /// Diagnose AVP configuration and setup
-    Doctor {
-        /// Show detailed output including fix suggestions
-        #[arg(short, long)]
-        verbose: bool,
-    },
-    /// List all available validators
-    List {
-        /// Show detailed output including descriptions
-        #[arg(short, long)]
-        verbose: bool,
-        /// Show only global (user-level) validators
-        #[arg(long)]
-        global: bool,
-        /// Show only local (project-level) validators
-        #[arg(long)]
-        local: bool,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Authenticate with the AVP registry
-    Login,
-    /// Log out from the AVP registry
-    Logout,
-    /// Show current authenticated user
-    Whoami,
-    /// Search the AVP registry for packages
-    Search {
-        /// Search query
-        query: String,
-        /// Filter by tag
-        #[arg(long)]
-        tag: Option<String>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show detailed information about a package
-    Info {
-        /// Package name
-        name: String,
-    },
-    /// Install a package from the registry
-    Install {
-        /// Package name, optionally with @version (e.g. no-secrets@1.2.3)
-        package: String,
-        /// Install to project (.avp/validators/) [default]
-        #[arg(long, visible_alias = "project")]
-        local: bool,
-        /// Install globally (~/.avp/validators/)
-        #[arg(long, visible_alias = "user")]
-        global: bool,
-    },
-    /// Remove an installed package
-    Uninstall {
-        /// Package name
-        name: String,
-        /// Remove from project (.avp/validators/) [default]
-        #[arg(long, visible_alias = "project")]
-        local: bool,
-        /// Remove from global (~/.avp/validators/)
-        #[arg(long, visible_alias = "user")]
-        global: bool,
-    },
-    /// Create a new RuleSet from template
-    New {
-        /// RuleSet name (kebab-case)
-        name: String,
-        /// Create in project (.avp/validators/) [default]
-        #[arg(long, visible_alias = "project")]
-        local: bool,
-        /// Create in user-level directory (~/.avp/validators/)
-        #[arg(long, visible_alias = "user")]
-        global: bool,
-    },
-    /// Publish a package to the registry
-    Publish {
-        /// Path to the RuleSet directory to publish
-        #[arg(default_value = ".")]
-        path: std::path::PathBuf,
-        /// Validate and show what would be published without uploading
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Remove a published package version from the registry
-    Unpublish {
-        /// Package name@version (e.g. no-secrets@1.2.3)
-        name_version: String,
-    },
-    /// Check for available package updates
-    Outdated,
-    /// Update installed packages to latest versions
-    Update {
-        /// Specific package to update (all if omitted)
-        name: Option<String>,
-        /// Update project packages [default]
-        #[arg(long, visible_alias = "project")]
-        local: bool,
-        /// Update global (~/.avp/validators/) packages
-        #[arg(long, visible_alias = "user")]
-        global: bool,
-    },
-}
 
 /// Helper to run an async registry command and map errors to exit codes.
 fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
@@ -372,6 +230,7 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use avp::install::InstallTarget;
 
     #[test]
     fn test_cli_parsing_no_args() {

@@ -21,6 +21,10 @@ path = "src/lib.rs"
 name = "sah"
 path = "src/main.rs"
 
+[[bin]]
+name = "sah-generate-docs"
+path = "src/generate_docs.rs"
+
 [dependencies]
 # Library dependencies
 swissarmyhammer = { path = "../swissarmyhammer" }
@@ -84,6 +88,10 @@ sha2 = { workspace = true }
 git2 = { workspace = true }
 owo-colors = { workspace = true }
 reqwest.workspace = true
+
+# Documentation generation (used by sah-generate-docs binary)
+clap-markdown = { workspace = true }
+clap_mangen = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

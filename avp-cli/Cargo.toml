@@ -64,6 +64,12 @@ chrono = { workspace = true }
 walkdir = { workspace = true }
 thiserror = { workspace = true }
 
+[build-dependencies]
+clap = { workspace = true }
+clap-markdown = { workspace = true }
+clap_mangen = { workspace = true }
+clap_complete = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }

@@ -39,6 +39,8 @@
 //! ```
 
 pub mod auth;
+mod cli;
+pub use cli::{Cli, Commands};
 pub mod doctor;
 pub mod info;
 pub mod install;

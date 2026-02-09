@@ -128,6 +128,8 @@ simsimd = "6"
 # CLI specific dependencies
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+clap-markdown = "0.1"
+clap_mangen = "0.2"
 colored = "2"
 owo-colors = "4"
 is-terminal = "0.4"

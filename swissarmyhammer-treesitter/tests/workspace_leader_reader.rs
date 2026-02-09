@@ -6,8 +6,9 @@
 //! - WAL mode allows concurrent read access
 
 use std::collections::HashSet;
-use std::path::PathBuf;
-use swissarmyhammer_treesitter::{IndexDatabase, Workspace};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use swissarmyhammer_treesitter::{IndexDatabase, IndexStatus, Workspace};
 use tempfile::TempDir;
 
 /// Minimum similarity threshold for duplicate detection tests
@@ -16,12 +17,27 @@ const TEST_MIN_SIMILARITY: f32 = 0.5;
 /// Minimum chunk bytes for duplicate detection tests
 const TEST_MIN_CHUNK_BYTES: usize = 5;
 
-/// Timeout in seconds to wait for background indexing to complete in tests
-const BACKGROUND_INDEXING_TIMEOUT_SECS: u64 = 2;
+/// Maximum time to wait for background indexing before failing the test.
+const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Time to wait for background indexing to complete in tests
-const WAIT_FOR_BACKGROUND_INDEXING: std::time::Duration =
-    std::time::Duration::from_secs(BACKGROUND_INDEXING_TIMEOUT_SECS);
+/// Open a workspace and wait for background indexing to complete.
+async fn open_and_wait(dir: &Path) -> Workspace {
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let notify_clone = notify.clone();
+    let workspace = Workspace::new(dir)
+        .with_progress(move |status: IndexStatus| {
+            if status.is_complete() {
+                notify_clone.notify_one();
+            }
+        })
+        .open()
+        .await
+        .unwrap();
+    tokio::time::timeout(TEST_INDEX_TIMEOUT, notify.notified())
+        .await
+        .expect("background indexing did not complete within timeout");
+    workspace
+}
 
 // =============================================================================
 // Helper functions
@@ -86,10 +102,7 @@ fn database_path(workspace_root: &std::path::Path) -> PathBuf {
 async fn test_leader_creates_database() {
     let dir = create_test_workspace();
 
-    let workspace = Workspace::open(dir.path()).await.unwrap();
-
-    // Wait for background indexing to complete
-    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+    let workspace = open_and_wait(dir.path()).await;
 
     // With background indexing, open() returns Reader mode
     assert!(!workspace.is_leader());
@@ -106,10 +119,7 @@ async fn test_leader_creates_database() {
 async fn test_leader_indexes_files() {
     let dir = create_test_workspace();
 
-    let workspace = Workspace::open(dir.path()).await.unwrap();
-
-    // Wait for background indexing to complete
-    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+    let workspace = open_and_wait(dir.path()).await;
 
     // With background indexing, open() returns Reader mode
     assert!(!workspace.is_leader());
@@ -146,10 +156,7 @@ async fn test_leader_indexes_files() {
 async fn test_leader_can_query_duplicates() {
     let dir = create_test_workspace();
 
-    let workspace = Workspace::open(dir.path()).await.unwrap();
-
-    // Wait for background indexing to complete
-    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+    let workspace = open_and_wait(dir.path()).await;
 
     // With background indexing, open() returns Reader mode
     assert!(!workspace.is_leader());
@@ -165,10 +172,7 @@ async fn test_leader_can_query_duplicates() {
 async fn test_reader_cannot_run_tree_sitter_queries() {
     let dir = create_test_workspace();
 
-    let workspace = Workspace::open(dir.path()).await.unwrap();
-
-    // Wait for background indexing to complete
-    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+    let workspace = open_and_wait(dir.path()).await;
 
     // With background indexing, open() returns Reader mode
     assert!(!workspace.is_leader());
@@ -197,10 +201,7 @@ async fn test_reader_can_open_database_readonly() {
 
     // First, let background indexer create and populate the database
     {
-        let _workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete (database is created by background task)
-        tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+        let _workspace = open_and_wait(dir.path()).await;
 
         // Workspace dropped here
     }
@@ -220,10 +221,7 @@ async fn test_reader_can_query_chunks() {
 
     // Background indexer creates and populates the database
     {
-        let _workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+        let _workspace = open_and_wait(dir.path()).await;
     }
 
     // Reader queries the database
@@ -292,19 +290,12 @@ async fn test_new_leader_can_reopen_existing_database() {
 
     // First background indexer populates database
     let original_file_count = {
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
-
+        let workspace = open_and_wait(dir.path()).await;
         workspace.list_files().await.unwrap().len()
     };
 
     // New workspace opens existing database
-    let workspace = Workspace::open(dir.path()).await.unwrap();
-
-    // Wait for any background activity to settle
-    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+    let workspace = open_and_wait(dir.path()).await;
 
     let files = workspace.list_files().await.unwrap();
     assert_eq!(
@@ -351,10 +342,7 @@ async fn test_leader_detects_file_changes() {
 async fn test_empty_workspace_leader_succeeds() {
     let dir = TempDir::new().unwrap();
 
-    let workspace = Workspace::open(dir.path()).await.unwrap();
-
-    // Wait for background indexing to complete
-    tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+    let workspace = open_and_wait(dir.path()).await;
 
     // Empty workspace should be queryable
     let status = workspace.status().await.unwrap();
@@ -372,10 +360,7 @@ async fn test_empty_workspace_creates_database() {
     let dir = TempDir::new().unwrap();
 
     {
-        let _workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(WAIT_FOR_BACKGROUND_INDEXING).await;
+        let _workspace = open_and_wait(dir.path()).await;
     }
 
     // Database should exist even for empty workspace
