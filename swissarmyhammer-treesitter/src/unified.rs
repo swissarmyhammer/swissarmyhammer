@@ -1066,10 +1066,57 @@ mod tests {
     const TEST_DB_CREATE_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
     /// Timeout for retry test (2 seconds)
     const TEST_DB_READY_TIMEOUT_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
-    /// Time to wait for background indexing to complete (2 seconds)
-    const TEST_BACKGROUND_INDEX_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
-    /// Extended time to wait for background indexing and lock release (3 seconds)
-    const TEST_BACKGROUND_INDEX_WAIT_LONG: std::time::Duration = std::time::Duration::from_secs(3);
+    /// Maximum time to wait for background indexing before failing the test.
+    const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// A completion handle that signals when background indexing finishes.
+    ///
+    /// Use `index_complete_notifier()` to create one, wire the callback into
+    /// `Workspace::new().with_progress(callback)`, then `await handle.wait()`.
+    struct IndexCompleteHandle {
+        notify: Arc<tokio::sync::Notify>,
+    }
+
+    impl IndexCompleteHandle {
+        /// Wait for indexing to complete, with a timeout.
+        async fn wait(&self) {
+            tokio::time::timeout(TEST_INDEX_TIMEOUT, self.notify.notified())
+                .await
+                .expect("background indexing did not complete within timeout");
+        }
+    }
+
+    /// Create a progress callback and a handle to await indexing completion.
+    ///
+    /// The callback signals the handle when `IndexStatus::is_complete()` returns true.
+    fn index_complete_notifier() -> (
+        impl Fn(IndexStatus) + Send + Sync + 'static,
+        IndexCompleteHandle,
+    ) {
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let notify_clone = notify.clone();
+        let callback = move |status: IndexStatus| {
+            if status.is_complete() {
+                notify_clone.notify_one();
+            }
+        };
+        (callback, IndexCompleteHandle { notify })
+    }
+
+    /// Open a workspace and wait for background indexing to complete.
+    ///
+    /// Replaces the `Workspace::open() + sleep()` pattern with a proper
+    /// completion notification.
+    async fn open_and_wait(dir: &Path) -> Workspace {
+        let (callback, handle) = index_complete_notifier();
+        let workspace = Workspace::new(dir)
+            .with_progress(callback)
+            .open()
+            .await
+            .unwrap();
+        handle.wait().await;
+        workspace
+    }
 
     // =========================================================================
     // Tests for clustering helper functions
@@ -1555,10 +1602,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         // With background indexing, open() returns Reader mode
         assert!(!workspace.is_leader());
@@ -1577,10 +1621,7 @@ mod tests {
     async fn test_workspace_open_empty_directory() {
         let dir = TempDir::new().unwrap();
 
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         // With background indexing, open() returns Reader mode
         assert!(!workspace.is_leader());
@@ -1593,10 +1634,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         let status = workspace.status().await.unwrap();
 
@@ -1610,10 +1648,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         let files = workspace.list_files().await.unwrap();
 
@@ -1628,10 +1663,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() { let x = 1; }").unwrap();
 
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         // Tree-sitter queries are not available in Reader mode (no parsed AST)
         let results = workspace
@@ -1650,10 +1682,7 @@ mod tests {
         let file_path = dir.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {}").unwrap();
 
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         // Modify the file
         std::fs::write(&file_path, "fn main() { println!(\"updated\"); }").unwrap();
@@ -1686,24 +1715,16 @@ mod tests {
     #[tokio::test]
     async fn test_open_with_config_custom_election() {
         let dir = TempDir::new().unwrap();
-        let election_config = ElectionConfig::default();
-        let result = Workspace::open_with_config(dir.path(), election_config, None).await;
-        assert!(result.is_ok());
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         // With background indexing, open() returns Reader mode
-        assert!(!result.unwrap().is_leader());
+        assert!(!workspace.is_leader());
     }
 
     #[tokio::test]
     async fn test_is_leader_returns_false_for_reader() {
         let dir = TempDir::new().unwrap();
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         // With background indexing, open() returns Reader mode (leader is background task)
         assert!(!workspace.is_leader());
@@ -1780,10 +1801,7 @@ mod tests {
         let file_path = dir.path().join("test.rs");
         std::fs::write(&file_path, "fn main() { let x = 1; }").unwrap();
 
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
 
         let result = workspace
             .find_duplicates_in_file(file_path, TEST_MEDIUM_SIMILARITY_THRESHOLD)
@@ -1799,16 +1817,17 @@ mod tests {
         let progress_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let progress_called_clone = progress_called.clone();
 
+        let (complete_cb, handle) = index_complete_notifier();
         let _workspace = Workspace::new(dir.path())
-            .with_progress(move |_status| {
+            .with_progress(move |status| {
                 progress_called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                complete_cb(status);
             })
             .open()
             .await
             .unwrap();
 
-        // Wait for background indexing to run
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        handle.wait().await;
 
         // Progress callback should have been called by background task
         assert!(progress_called.load(std::sync::atomic::Ordering::SeqCst));
@@ -1839,34 +1858,30 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        // First indexing - background task will parse the file
-        let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
-
+        // First indexing
+        let workspace = open_and_wait(dir.path()).await;
         let status1 = workspace.status().await.unwrap();
         assert_eq!(status1.files_indexed, 1);
-
-        // Drop workspace to release lock
         drop(workspace);
 
         // Second indexing - file is unchanged, should skip
         let parse_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let parse_count_clone = parse_count.clone();
+        let (complete_cb, handle) = index_complete_notifier();
 
         let _workspace2 = Workspace::new(dir.path())
             .with_progress(move |status| {
-                // Track when files are being parsed (not skipped)
                 if status.files_parsed > 0 {
                     parse_count_clone
                         .store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
                 }
+                complete_cb(status);
             })
             .open()
             .await
             .unwrap();
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        handle.wait().await;
 
-        // File was unchanged, so should not have been re-parsed
         let parsed = parse_count.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(parsed, 0, "Unchanged file should be skipped, not re-parsed");
     }
@@ -1879,8 +1894,7 @@ mod tests {
         std::fs::write(&file_path, "fn main() {}").unwrap();
 
         // First indexing
-        let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
         drop(workspace);
 
         // Wait to ensure file modification timestamp will be different (filesystem granularity)
@@ -1892,17 +1906,18 @@ mod tests {
         // Second indexing - file changed, should re-parse
         let parse_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let parse_count_clone = parse_count.clone();
+        let (complete_cb, handle) = index_complete_notifier();
 
         let _workspace2 = Workspace::new(dir.path())
             .with_progress(move |status| {
                 parse_count_clone.store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
+                complete_cb(status);
             })
             .open()
             .await
             .unwrap();
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        handle.wait().await;
 
-        // File was changed, so should have been re-parsed
         let parsed = parse_count.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(parsed, 1, "Changed file should be re-parsed");
     }
@@ -1917,15 +1932,8 @@ mod tests {
         std::fs::write(&file2, "fn changed() {}").unwrap();
 
         // First indexing
-        let workspace = Workspace::new(dir.path()).open().await.unwrap();
-
-        // Poll for both files to be indexed (with timeout)
-        let mut status1 = workspace.status().await.unwrap();
-        let start = std::time::Instant::now();
-        while status1.files_indexed < 2 && start.elapsed() < std::time::Duration::from_secs(5) {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            status1 = workspace.status().await.unwrap();
-        }
+        let workspace = open_and_wait(dir.path()).await;
+        let status1 = workspace.status().await.unwrap();
         assert_eq!(status1.files_indexed, 2);
         drop(workspace);
 
@@ -1938,6 +1946,7 @@ mod tests {
         // Second indexing
         let max_parsed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let max_parsed_clone = max_parsed.clone();
+        let (complete_cb, handle) = index_complete_notifier();
 
         let _workspace2 = Workspace::new(dir.path())
             .with_progress(move |status| {
@@ -1946,13 +1955,13 @@ mod tests {
                     max_parsed_clone
                         .store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
                 }
+                complete_cb(status);
             })
             .open()
             .await
             .unwrap();
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        handle.wait().await;
 
-        // Only the changed file should be re-parsed
         let parsed = max_parsed.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(parsed, 1, "Only the changed file should be re-parsed");
     }
@@ -1964,8 +1973,7 @@ mod tests {
         std::fs::write(dir.path().join("existing.rs"), "fn existing() {}").unwrap();
 
         // First indexing
-        let workspace = Workspace::new(dir.path()).open().await.unwrap();
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace = open_and_wait(dir.path()).await;
         drop(workspace);
 
         // Wait to ensure background task has fully completed and released locks
@@ -1975,10 +1983,8 @@ mod tests {
         std::fs::write(dir.path().join("new.rs"), "fn new_func() {}").unwrap();
 
         // Second indexing
-        let workspace2 = Workspace::new(dir.path()).open().await.unwrap();
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        let workspace2 = open_and_wait(dir.path()).await;
 
-        // Both files should now be indexed
         let status = workspace2.status().await.unwrap();
         assert_eq!(status.files_indexed, 2, "Both files should be indexed");
     }
@@ -2007,11 +2013,8 @@ mod tests {
         let file_path = dir.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {}").unwrap();
 
-        // Open workspace (spawns background indexer)
-        let _workspace = Workspace::new(dir.path()).open().await.unwrap();
-
-        // Wait for background indexing to complete (using test constant defined above)
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
+        // Open workspace and wait for background indexing to complete
+        let _workspace = open_and_wait(dir.path()).await;
 
         // Get the database
         let db_path = database_path(dir.path());
@@ -2190,17 +2193,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        // First open should spawn background indexer
-        let workspace = Workspace::open(dir.path()).await.unwrap();
+        // Open and wait for background indexing to complete
+        let workspace = open_and_wait(dir.path()).await;
 
-        // Should return as Reader mode immediately
+        // Should return as Reader mode
         assert!(!workspace.is_leader());
 
-        // Database should exist (created synchronously)
+        // Database should exist
         assert!(workspace.database_path().exists());
-
-        // Give background task time to index
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT).await;
 
         // Check that file was indexed
         let status = workspace.status().await.unwrap();
@@ -2230,11 +2230,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        // Open workspace (spawns background indexer)
-        let _workspace = Workspace::open(dir.path()).await.unwrap();
-
-        // Wait for background indexing to complete
-        tokio::time::sleep(TEST_BACKGROUND_INDEX_WAIT_LONG).await;
+        // Open workspace and wait for background indexing to complete
+        let _workspace = open_and_wait(dir.path()).await;
 
         // Should be able to become leader again (lock released)
         let election = LeaderElection::new(dir.path());

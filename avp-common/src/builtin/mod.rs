@@ -16,17 +16,16 @@
 //!     - "@file_groups/source_code"
 //! ```
 
-use crate::validator::ValidatorLoader;
-
-// Include the generated builtin validators
-include!(concat!(env!("OUT_DIR"), "/builtin_validators.rs"));
+use crate::validator::{ValidatorLoader, ValidatorSource};
+use std::path::PathBuf;
 
 // Include the generated builtin YAML includes
 include!(concat!(env!("OUT_DIR"), "/builtin_includes.rs"));
 
-/// Load all builtin validators into a loader.
+/// Load all builtin RuleSets into a loader.
 ///
-/// This also loads builtin YAML includes so that `@` references work.
+/// This loads RuleSets from the builtin/validators directory and also loads
+/// builtin YAML includes so that `@` references work.
 /// Call this method before loading user or project validators to ensure
 /// builtins have the lowest precedence.
 ///
@@ -50,31 +49,21 @@ pub fn load_builtins(loader: &mut ValidatorLoader) {
         }
     }
 
-    // Then load validators
-    for (name, content) in get_builtin_validators() {
-        loader.add_builtin(name, content);
+    // Load RuleSets from builtin/validators directory
+    // The path is relative to the crate root where Cargo.toml is located
+    let builtin_validators_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../builtin/validators");
+
+    if let Err(e) =
+        loader.load_rulesets_directory(&builtin_validators_path, ValidatorSource::Builtin)
+    {
+        tracing::error!("Failed to load builtin RuleSets: {}", e);
     }
 }
 
 /// Get all builtin YAML includes as (name, content) tuples.
 pub fn includes_raw() -> Vec<(&'static str, &'static str)> {
     get_builtin_includes()
-}
-
-/// Get the names of all builtin validators.
-pub fn builtin_names() -> Vec<&'static str> {
-    get_builtin_validators()
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect()
-}
-
-/// Get all builtin validators as (name, content) tuples.
-///
-/// This provides direct access to the raw builtin validator content,
-/// which is useful for extracting partials for templating.
-pub fn validators_raw() -> Vec<(&'static str, &'static str)> {
-    get_builtin_validators()
 }
 
 #[cfg(test)]
@@ -86,52 +75,74 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        // Should have loaded at least 2 validators (no-secrets, safe-commands)
-        assert!(loader.len() >= 2);
-        assert!(loader.get("no-secrets").is_some());
-        assert!(loader.get("safe-commands").is_some());
-    }
-
-    #[test]
-    fn test_no_secrets_validator_parses() {
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        let validator = loader.get("no-secrets").unwrap();
-        assert_eq!(validator.name(), "no-secrets");
-        assert!(validator.body.contains("hardcoded secrets"));
-    }
-
-    #[test]
-    fn test_safe_commands_validator_parses() {
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        let validator = loader.get("safe-commands").unwrap();
-        assert_eq!(validator.name(), "safe-commands");
-        assert!(validator.body.contains("dangerous"));
-    }
-
-    #[test]
-    fn test_builtin_names() {
-        let names = builtin_names();
-        assert!(names.contains(&"no-secrets"));
-        assert!(names.contains(&"safe-commands"));
-    }
-
-    #[test]
-    fn test_get_builtin_validators() {
-        let validators = get_builtin_validators();
+        // Should have loaded at least 5 RuleSets
         assert!(
-            !validators.is_empty(),
-            "Should have at least one builtin validator"
+            loader.ruleset_count() >= 5,
+            "Should have loaded at least 5 RuleSets"
         );
 
-        // Each validator should have a non-empty name and content
-        for (name, content) in validators {
-            assert!(!name.is_empty(), "Validator name should not be empty");
-            assert!(!content.is_empty(), "Validator content should not be empty");
-        }
+        // Check for expected RuleSets
+        assert!(
+            loader.get_ruleset("security-rules").is_some(),
+            "Should have security-rules RuleSet"
+        );
+        assert!(
+            loader.get_ruleset("command-safety").is_some(),
+            "Should have command-safety RuleSet"
+        );
+        assert!(
+            loader.get_ruleset("code-quality").is_some(),
+            "Should have code-quality RuleSet"
+        );
+    }
+
+    #[test]
+    fn test_security_rules_ruleset_loads() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("security-rules")
+            .expect("security-rules RuleSet should exist");
+        assert_eq!(ruleset.name(), "security-rules");
+        assert!(
+            ruleset.rules.len() >= 2,
+            "Should have at least 2 rules (no-secrets, input-validation)"
+        );
+
+        // Check for no-secrets rule
+        let has_no_secrets = ruleset.rules.iter().any(|r| r.name == "no-secrets");
+        assert!(has_no_secrets, "Should have no-secrets rule");
+    }
+
+    #[test]
+    fn test_command_safety_ruleset_loads() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("command-safety")
+            .expect("command-safety RuleSet should exist");
+        assert_eq!(ruleset.name(), "command-safety");
+
+        // Check for safe-commands rule
+        let has_safe_commands = ruleset.rules.iter().any(|r| r.name == "safe-commands");
+        assert!(has_safe_commands, "Should have safe-commands rule");
+    }
+
+    #[test]
+    fn test_code_quality_ruleset_loads() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("code-quality")
+            .expect("code-quality RuleSet should exist");
+        assert_eq!(ruleset.name(), "code-quality");
+        assert!(
+            ruleset.rules.len() >= 10,
+            "Should have at least 10 code quality rules"
+        );
     }
 
     #[test]
@@ -151,18 +162,20 @@ mod tests {
     }
 
     #[test]
-    fn test_no_secrets_expands_file_groups() {
+    fn test_security_rules_expands_file_groups() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        let validator = loader.get("no-secrets").unwrap();
+        let ruleset = loader
+            .get_ruleset("security-rules")
+            .expect("security-rules should be loaded");
 
-        // The @file_groups/source_code should have been expanded
-        let match_criteria = validator
-            .frontmatter
+        // The @file_groups/source_code should have been expanded in the manifest
+        let match_criteria = ruleset
+            .manifest
             .match_criteria
             .as_ref()
-            .expect("no-secrets should have match criteria");
+            .expect("security-rules should have match criteria");
 
         // Should have actual file patterns, not the @reference
         assert!(
@@ -185,18 +198,20 @@ mod tests {
     }
 
     #[test]
-    fn test_no_test_cheating_expands_file_groups() {
+    fn test_test_integrity_expands_file_groups() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        let validator = loader.get("no-test-cheating").unwrap();
+        let ruleset = loader
+            .get_ruleset("test-integrity")
+            .expect("test-integrity should be loaded");
 
         // The @file_groups/source_code and @file_groups/test_files should have been expanded
-        let match_criteria = validator
-            .frontmatter
+        let match_criteria = ruleset
+            .manifest
             .match_criteria
             .as_ref()
-            .expect("no-test-cheating should have match criteria");
+            .expect("test-integrity should have match criteria");
 
         // Should have actual file patterns, not the @reference
         assert!(

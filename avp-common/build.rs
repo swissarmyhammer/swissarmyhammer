@@ -1,10 +1,8 @@
 use swissarmyhammer_build::BuiltinGenerator;
 
 fn main() {
-    // Generate builtin validators
-    BuiltinGenerator::new("validators")
-        .extensions(&["md"])
-        .generate();
+    // RuleSets are now loaded directly from builtin/validators/ at runtime
+    // No build-time generation needed for validators
 
     // Generate builtin YAML includes (file_groups, etc.)
     // These are loaded from the root builtin/ directory

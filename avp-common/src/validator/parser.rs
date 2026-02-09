@@ -19,19 +19,52 @@
 //! ---
 //! ```
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use swissarmyhammer_directory::{DirectoryConfig, YamlExpander};
+use swissarmyhammer_templating::TemplateEngine;
 
 use crate::error::AvpError;
 
-use super::types::{Validator, ValidatorFrontmatter, ValidatorSource};
+use super::types::{
+    Rule, RuleFrontmatter, RuleSet, RuleSetManifest, Validator, ValidatorFrontmatter,
+    ValidatorSource,
+};
 
 /// Length of the YAML frontmatter opening delimiter "---".
 const YAML_DELIMITER_LEN: usize = 3;
 
 /// Length of the closing YAML delimiter "\n---" (newline + delimiter).
 const YAML_CLOSING_DELIMITER_LEN: usize = 4;
+
+/// Shared template engine for frontmatter rendering.
+static TEMPLATE_ENGINE: LazyLock<TemplateEngine> = LazyLock::new(TemplateEngine::new);
+
+/// Standard Liquid template variables available in all frontmatter.
+///
+/// Currently provides:
+/// - `version` — AVP workspace version from Cargo.toml
+fn frontmatter_vars() -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    vars.insert("version".to_string(), crate::VERSION.to_string());
+    vars
+}
+
+/// Render Liquid template variables in a frontmatter string.
+///
+/// Falls back to the original string if rendering fails (e.g. the
+/// frontmatter contains non-template `{` characters that confuse Liquid).
+fn render_frontmatter(frontmatter: &str) -> String {
+    // Skip rendering if there are no template markers at all
+    if !frontmatter.contains("{{") {
+        return frontmatter.to_string();
+    }
+    TEMPLATE_ENGINE
+        .render(frontmatter, &frontmatter_vars())
+        .unwrap_or_else(|_| frontmatter.to_string())
+}
 
 /// Parse a validator from markdown content with YAML frontmatter.
 ///
@@ -124,9 +157,12 @@ fn parse_validator_internal<C: DirectoryConfig>(
     // Split on frontmatter delimiters
     let (frontmatter_str, body) = extract_frontmatter(content, &path)?;
 
+    // Render Liquid template variables before YAML parsing
+    let rendered = render_frontmatter(frontmatter_str);
+
     // Parse YAML frontmatter
     let mut yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(frontmatter_str).map_err(|e| AvpError::Validator {
+        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to parse YAML frontmatter: {}", e),
         })?;
@@ -193,6 +229,276 @@ fn extract_frontmatter<'a>(content: &'a str, _path: &Path) -> Result<(&'a str, &
     let body = &rest[end_idx + YAML_CLOSING_DELIMITER_LEN..].trim();
 
     Ok((frontmatter, body))
+}
+
+// ============================================================================
+// RuleSet Parsing Functions (New Architecture)
+// ============================================================================
+
+/// Parse a RuleSet manifest from VALIDATOR.md content.
+///
+/// # Format
+///
+/// ```markdown
+/// ---
+/// name: security-rules
+/// description: Critical security validations
+/// version: 1.0.0
+/// trigger: PostToolUse
+/// match:
+///   tools: [Write, Edit]
+///   files: ["@file_groups/source_code"]
+/// severity: error
+/// ---
+///
+/// # Security Rules RuleSet
+///
+/// Common security validations...
+/// ```
+///
+/// # Arguments
+///
+/// * `content` - The full VALIDATOR.md file content
+/// * `dir_path` - The RuleSet directory path (for error messages and defaults)
+/// * `expander` - Optional YAML expander for `@` references
+///
+/// # Returns
+///
+/// A parsed `RuleSetManifest` or an error if parsing fails.
+pub fn parse_ruleset_manifest<C: DirectoryConfig>(
+    content: &str,
+    dir_path: &Path,
+    expander: Option<&YamlExpander<C>>,
+) -> Result<RuleSetManifest, AvpError> {
+    // Extract frontmatter and body (body is unused for manifest, but validates format)
+    let (frontmatter_str, _body) = extract_frontmatter(content, dir_path)?;
+
+    // Render Liquid template variables before YAML parsing
+    let rendered = render_frontmatter(frontmatter_str);
+
+    // Parse YAML frontmatter
+    let mut yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
+            validator: format!("{}/VALIDATOR.md", dir_path.display()),
+            message: format!("failed to parse YAML frontmatter: {}", e),
+        })?;
+
+    // Expand includes if an expander is provided
+    if let Some(exp) = expander {
+        yaml_value = exp.expand(yaml_value).map_err(|e| AvpError::Validator {
+            validator: format!("{}/VALIDATOR.md", dir_path.display()),
+            message: format!("failed to expand YAML includes: {}", e),
+        })?;
+    }
+
+    // Deserialize to typed manifest
+    let mut manifest: RuleSetManifest =
+        serde_yaml::from_value(yaml_value).map_err(|e| AvpError::Validator {
+            validator: format!("{}/VALIDATOR.md", dir_path.display()),
+            message: format!("failed to deserialize manifest: {}", e),
+        })?;
+
+    // Apply defaults (name from directory, description, version)
+    manifest.apply_defaults(dir_path);
+
+    Ok(manifest)
+}
+
+/// Parse a rule from a rule file within a RuleSet.
+///
+/// # Format
+///
+/// ```markdown
+/// ---
+/// name: no-secrets
+/// description: Detect hardcoded secrets, API keys, and credentials
+/// severity: error
+/// timeout: 60
+/// ---
+///
+/// # No Secrets Rule
+///
+/// You are a security validator that checks for hardcoded secrets...
+/// ```
+///
+/// # Arguments
+///
+/// * `content` - The full rule file content
+/// * `path` - The path to the rule file (for error messages and defaults)
+///
+/// # Returns
+///
+/// A parsed `Rule` or an error if parsing fails.
+pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
+    // Extract frontmatter and body
+    let (frontmatter_str, body) = extract_frontmatter(content, path)?;
+
+    // Render Liquid template variables before YAML parsing
+    let rendered = render_frontmatter(frontmatter_str);
+
+    // Parse YAML frontmatter
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
+            validator: path.display().to_string(),
+            message: format!("failed to parse YAML frontmatter: {}", e),
+        })?;
+
+    // Deserialize to typed frontmatter
+    let mut frontmatter: RuleFrontmatter =
+        serde_yaml::from_value(yaml_value).map_err(|e| AvpError::Validator {
+            validator: path.display().to_string(),
+            message: format!("failed to deserialize frontmatter: {}", e),
+        })?;
+
+    // Apply defaults (name from file stem, description)
+    frontmatter.apply_defaults(path);
+
+    Ok(Rule {
+        name: frontmatter.name,
+        description: frontmatter.description,
+        body: body.to_string(),
+        severity: frontmatter.severity,
+        timeout: frontmatter.timeout,
+    })
+}
+
+/// Parse a complete RuleSet from a directory.
+///
+/// # Directory Structure
+///
+/// ```
+/// ruleset-name/
+/// ├── VALIDATOR.md      (required: manifest)
+/// └── rules/            (required directory)
+///     ├── rule1.md
+///     ├── rule2.md
+///     └── ...
+/// ```
+///
+/// # Arguments
+///
+/// * `dir_path` - Path to the RuleSet directory
+/// * `source` - Where this RuleSet came from (builtin, user, project)
+/// * `expander` - Optional YAML expander for manifest `@` references
+///
+/// # Returns
+///
+/// A parsed `RuleSet` with manifest and all rules, or an error if:
+/// - VALIDATOR.md is missing
+/// - VALIDATOR.md is invalid
+/// - rules/ directory is missing
+/// - Any rule file is invalid
+/// - Duplicate rule names are found
+pub fn parse_ruleset_directory<C: DirectoryConfig>(
+    dir_path: &Path,
+    source: ValidatorSource,
+    expander: Option<&YamlExpander<C>>,
+) -> Result<RuleSet, AvpError> {
+    // Verify directory exists
+    if !dir_path.is_dir() {
+        return Err(AvpError::Validator {
+            validator: dir_path.display().to_string(),
+            message: "not a directory".to_string(),
+        });
+    }
+
+    // Load and parse VALIDATOR.md manifest
+    let manifest_path = dir_path.join("VALIDATOR.md");
+    if !manifest_path.exists() {
+        return Err(AvpError::Validator {
+            validator: dir_path.display().to_string(),
+            message: "missing VALIDATOR.md manifest".to_string(),
+        });
+    }
+
+    let manifest_content =
+        std::fs::read_to_string(&manifest_path).map_err(|e| AvpError::Validator {
+            validator: manifest_path.display().to_string(),
+            message: format!("failed to read VALIDATOR.md: {}", e),
+        })?;
+
+    let manifest = parse_ruleset_manifest(&manifest_content, dir_path, expander)?;
+
+    // Load rules from rules/ directory
+    let rules_dir = dir_path.join("rules");
+    if !rules_dir.exists() {
+        return Err(AvpError::Validator {
+            validator: dir_path.display().to_string(),
+            message: "missing rules/ directory".to_string(),
+        });
+    }
+
+    if !rules_dir.is_dir() {
+        return Err(AvpError::Validator {
+            validator: dir_path.display().to_string(),
+            message: "rules/ is not a directory".to_string(),
+        });
+    }
+
+    // Collect all .md files in rules/ directory
+    let mut rules = Vec::new();
+    let mut rule_names = std::collections::HashSet::new();
+
+    let entries = std::fs::read_dir(&rules_dir).map_err(|e| AvpError::Validator {
+        validator: rules_dir.display().to_string(),
+        message: format!("failed to read rules/ directory: {}", e),
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| AvpError::Validator {
+            validator: rules_dir.display().to_string(),
+            message: format!("failed to read directory entry: {}", e),
+        })?;
+
+        let path = entry.path();
+
+        // Skip non-files and non-.md files
+        if !path.is_file() {
+            continue;
+        }
+
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+
+        // Skip partials
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with('_'))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        // Parse the rule
+        let rule_content = std::fs::read_to_string(&path).map_err(|e| AvpError::Validator {
+            validator: path.display().to_string(),
+            message: format!("failed to read rule file: {}", e),
+        })?;
+
+        let rule = parse_rule(&rule_content, &path)?;
+
+        // Check for duplicate rule names
+        if !rule_names.insert(rule.name.clone()) {
+            return Err(AvpError::Validator {
+                validator: dir_path.display().to_string(),
+                message: format!("duplicate rule name '{}' in RuleSet", rule.name),
+            });
+        }
+
+        rules.push(rule);
+    }
+
+    // Sort rules by name for deterministic ordering
+    rules.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(RuleSet {
+        manifest,
+        rules,
+        source,
+        base_path: dir_path.to_path_buf(),
+    })
 }
 
 #[cfg(test)]
@@ -526,5 +832,94 @@ Body.
         let match_criteria = validator.frontmatter.match_criteria.as_ref().unwrap();
         assert_eq!(match_criteria.tools, vec!["Bash"]);
         assert_eq!(match_criteria.files, vec!["*.sh"]);
+    }
+
+    // ── Liquid template rendering tests ──────────────────────────────
+
+    #[test]
+    fn test_render_frontmatter_version_variable() {
+        let input = r#"name: test
+version: "{{ version }}""#;
+        let result = render_frontmatter(input);
+        assert_eq!(
+            result,
+            format!("name: test\nversion: \"{}\"", crate::VERSION)
+        );
+    }
+
+    #[test]
+    fn test_render_frontmatter_no_templates_passthrough() {
+        let input = "name: test\nversion: 1.0.0";
+        let result = render_frontmatter(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_render_frontmatter_invalid_template_passthrough() {
+        // Invalid Liquid should fall back to the original string
+        let input = "name: {{ invalid | nonexistent_filter }}";
+        let result = render_frontmatter(input);
+        // Should not panic — returns original or rendered (filter may be ignored)
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ruleset_manifest_with_version_template() {
+        let content = r#"---
+name: test-ruleset
+description: Test
+version: "{{ version }}"
+trigger: PostToolUse
+---
+
+# Test
+"#;
+        let manifest = parse_ruleset_manifest::<swissarmyhammer_directory::AvpConfig>(
+            content,
+            Path::new("test"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(manifest.version, crate::VERSION);
+    }
+
+    #[test]
+    fn test_parse_rule_with_version_template() {
+        let content = r#"---
+name: test-rule
+description: "Rule at {{ version }}"
+---
+
+Body.
+"#;
+        let rule = parse_rule(content, Path::new("test-rule.md")).unwrap();
+        assert_eq!(rule.description, format!("Rule at {}", crate::VERSION));
+    }
+
+    #[test]
+    fn test_parse_validator_with_version_template() {
+        let content = r#"---
+name: test-validator
+description: "Validator {{ version }}"
+---
+
+Body.
+"#;
+        let validator = parse_validator(
+            content,
+            PathBuf::from("test-validator.md"),
+            ValidatorSource::Builtin,
+        )
+        .unwrap();
+        assert_eq!(
+            validator.frontmatter.description,
+            format!("Validator {}", crate::VERSION)
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_vars_contains_version() {
+        let vars = frontmatter_vars();
+        assert_eq!(vars.get("version").unwrap(), crate::VERSION);
     }
 }

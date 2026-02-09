@@ -113,6 +113,18 @@ impl ClaudeCodeHookStrategy {
         self.validator_loader.matching(&ctx)
     }
 
+    /// Find RuleSets matching a hook event.
+    ///
+    /// Returns all RuleSets that match the given hook type and input context.
+    pub fn matching_rulesets(
+        &self,
+        hook_type: HookType,
+        input: &serde_json::Value,
+    ) -> Vec<&crate::validator::RuleSet> {
+        let ctx = crate::validator::MatchContext::from_json(hook_type, input);
+        self.validator_loader.matching_rulesets(&ctx)
+    }
+
     /// Get the validator loader for external access.
     pub fn validator_loader(&self) -> &ValidatorLoader {
         &self.validator_loader
@@ -545,18 +557,33 @@ mod tests {
 
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_validators_loaded() {
+    fn test_rulesets_loaded() {
         let (_temp, strategy) = create_test_strategy();
 
-        // Should have at least the builtin validators
-        assert!(strategy.validator_loader().len() >= 2);
-        assert!(strategy.validator_loader().get("no-secrets").is_some());
-        assert!(strategy.validator_loader().get("safe-commands").is_some());
+        // Should have at least the builtin RuleSets
+        assert!(
+            strategy.validator_loader().ruleset_count() >= 5,
+            "Should have at least 5 builtin RuleSets"
+        );
+        assert!(
+            strategy
+                .validator_loader()
+                .get_ruleset("security-rules")
+                .is_some(),
+            "Should have security-rules"
+        );
+        assert!(
+            strategy
+                .validator_loader()
+                .get_ruleset("command-safety")
+                .is_some(),
+            "Should have command-safety"
+        );
     }
 
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_matching_validators_pre_tool_use() {
+    fn test_matching_rulesets_pre_tool_use() {
         let (_temp, strategy) = create_test_strategy();
 
         let input = serde_json::json!({
@@ -565,16 +592,20 @@ mod tests {
             "tool_input": {"command": "ls"}
         });
 
-        let matching = strategy.matching_validators(HookType::PreToolUse, &input);
+        let ctx = crate::validator::MatchContext::from_json(HookType::PreToolUse, &input);
+        let matching = strategy.validator_loader().matching_rulesets(&ctx);
 
-        // safe-commands should match PreToolUse + Bash
-        let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
-        assert!(names.contains(&"safe-commands"));
+        // command-safety should match PreToolUse + Bash
+        let names: Vec<_> = matching.iter().map(|rs| rs.name()).collect();
+        assert!(
+            names.contains(&"command-safety"),
+            "command-safety should match PreToolUse + Bash"
+        );
     }
 
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_matching_validators_post_tool_use() {
+    fn test_matching_rulesets_post_tool_use() {
         let (_temp, strategy) = create_test_strategy();
 
         let input = serde_json::json!({
@@ -583,10 +614,14 @@ mod tests {
             "tool_input": {"file_path": "test.ts"}
         });
 
-        let matching = strategy.matching_validators(HookType::PostToolUse, &input);
+        let ctx = crate::validator::MatchContext::from_json(HookType::PostToolUse, &input);
+        let matching = strategy.validator_loader().matching_rulesets(&ctx);
 
-        // no-secrets should match PostToolUse + Write + *.ts
-        let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
-        assert!(names.contains(&"no-secrets"));
+        // security-rules should match PostToolUse + Write + *.ts
+        let names: Vec<_> = matching.iter().map(|rs| rs.name()).collect();
+        assert!(
+            names.contains(&"security-rules"),
+            "security-rules should match PostToolUse + Write + source files"
+        );
     }
 }

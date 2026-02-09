@@ -517,6 +517,371 @@ impl ExecutedValidator {
     }
 }
 
+// ============================================================================
+// RuleSet Types (New Architecture)
+// ============================================================================
+
+/// Manifest for a RuleSet, parsed from VALIDATOR.md.
+///
+/// The manifest defines shared configuration for all rules in the RuleSet:
+/// - Common trigger and match criteria
+/// - Default severity and timeout (rules can override)
+/// - Metadata like name, version, tags
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleSetManifest {
+    /// Unique identifier for this RuleSet.
+    pub name: String,
+
+    /// Human-readable description of the RuleSet's purpose.
+    pub description: String,
+
+    /// Semantic version (e.g., "1.0.0").
+    pub version: String,
+
+    /// Hook event type that triggers all rules in this RuleSet.
+    /// Rules inherit this and cannot override.
+    #[serde(default = "default_trigger")]
+    pub trigger: HookType,
+
+    /// Match criteria for filtering which events trigger this RuleSet.
+    /// Rules inherit this and cannot override.
+    #[serde(default, rename = "match")]
+    pub match_criteria: Option<ValidatorMatch>,
+
+    /// Optional regex pattern for matching lifecycle events.
+    /// Rules inherit this and cannot override.
+    #[serde(default, rename = "triggerMatcher")]
+    pub trigger_matcher: Option<String>,
+
+    /// Tags for categorization and organization.
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Default severity for rules (rules can override).
+    #[serde(default)]
+    pub severity: Severity,
+
+    /// Default timeout in seconds (rules can override).
+    #[serde(default = "default_timeout")]
+    pub timeout: u32,
+
+    /// Run only once per session (applies to entire RuleSet).
+    #[serde(default)]
+    pub once: bool,
+}
+
+impl RuleSetManifest {
+    /// Apply defaults based on the directory path.
+    ///
+    /// This fills in missing fields:
+    /// - `name`: Directory name if empty
+    /// - `description`: "RuleSet: {name}" if empty
+    pub fn apply_defaults(&mut self, dir_path: &std::path::Path) {
+        // Default name to directory name
+        if self.name.is_empty() {
+            self.name = dir_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unnamed")
+                .to_string();
+        }
+
+        // Default description
+        if self.description.is_empty() {
+            self.description = format!("RuleSet: {}", self.name);
+        }
+
+        // Default version
+        if self.version.is_empty() {
+            self.version = "1.0.0".to_string();
+        }
+    }
+}
+
+/// Individual rule within a RuleSet.
+///
+/// Rules contain the actual validation logic and can override certain
+/// RuleSet defaults (severity, timeout) while inheriting trigger and match criteria.
+#[derive(Debug, Clone)]
+pub struct Rule {
+    /// Unique identifier for this rule within the RuleSet.
+    pub name: String,
+
+    /// Human-readable description of what this rule validates.
+    pub description: String,
+
+    /// Markdown body containing validation instructions.
+    pub body: String,
+
+    /// Override severity (if None, inherits from RuleSet).
+    pub severity: Option<Severity>,
+
+    /// Override timeout (if None, inherits from RuleSet).
+    pub timeout: Option<u32>,
+}
+
+impl Rule {
+    /// Get the effective severity for this rule.
+    ///
+    /// Returns the rule's override if present, otherwise the RuleSet default.
+    pub fn effective_severity(&self, ruleset: &RuleSet) -> Severity {
+        self.severity.unwrap_or(ruleset.manifest.severity)
+    }
+
+    /// Get the effective timeout for this rule.
+    ///
+    /// Returns the rule's override if present, otherwise the RuleSet default.
+    pub fn effective_timeout(&self, ruleset: &RuleSet) -> u32 {
+        self.timeout.unwrap_or(ruleset.manifest.timeout)
+    }
+}
+
+/// Frontmatter for individual rule files.
+///
+/// This is used during parsing to extract rule-specific configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleFrontmatter {
+    /// Rule identifier within the RuleSet.
+    pub name: String,
+
+    /// Human-readable description.
+    pub description: String,
+
+    /// Optional severity override.
+    #[serde(default)]
+    pub severity: Option<Severity>,
+
+    /// Optional timeout override.
+    #[serde(default)]
+    pub timeout: Option<u32>,
+}
+
+impl RuleFrontmatter {
+    /// Apply defaults based on the file path.
+    pub fn apply_defaults(&mut self, path: &std::path::Path) {
+        // Default name to file stem
+        if self.name.is_empty() {
+            self.name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unnamed")
+                .to_string();
+        }
+
+        // Default description
+        if self.description.is_empty() {
+            self.description = format!("Rule: {}", self.name);
+        }
+    }
+}
+
+/// A RuleSet package containing a manifest and multiple rules.
+///
+/// RuleSets are the new organizational structure for validators:
+/// - VALIDATOR.md contains the manifest with shared configuration
+/// - rules/ directory contains individual rule files
+/// - All rules in a RuleSet share the same trigger and match criteria
+#[derive(Debug, Clone)]
+pub struct RuleSet {
+    /// Parsed manifest from VALIDATOR.md.
+    pub manifest: RuleSetManifest,
+
+    /// Rules loaded from the rules/ directory.
+    pub rules: Vec<Rule>,
+
+    /// Source of this RuleSet (builtin, user, or project).
+    pub source: ValidatorSource,
+
+    /// Base path to the RuleSet directory.
+    pub base_path: PathBuf,
+}
+
+impl RuleSet {
+    /// Get the RuleSet name.
+    pub fn name(&self) -> &str {
+        &self.manifest.name
+    }
+
+    /// Get the RuleSet description.
+    pub fn description(&self) -> &str {
+        &self.manifest.description
+    }
+
+    /// Get the trigger hook type.
+    pub fn trigger(&self) -> HookType {
+        self.manifest.trigger
+    }
+
+    /// Check if this RuleSet matches the given context.
+    ///
+    /// A RuleSet matches if:
+    /// 1. The hook type matches the trigger
+    /// 2. If triggerMatcher is specified, the event context matches the regex
+    /// 3. If tools are specified in match criteria, the tool name matches
+    /// 4. If files are specified in match criteria, the file path matches a glob
+    ///
+    /// Note: This checks RuleSet-level matching. Individual rules inherit this
+    /// matching behavior.
+    pub fn matches(&self, ctx: &MatchContext) -> bool {
+        // Must match hook type
+        if self.manifest.trigger != ctx.hook_type {
+            return false;
+        }
+
+        // Check triggerMatcher regex if present
+        if !self.matches_trigger_regex(ctx) {
+            return false;
+        }
+
+        // Check match criteria if present
+        if let Some(match_criteria) = &self.manifest.match_criteria {
+            if !self.matches_tools(match_criteria, ctx) {
+                return false;
+            }
+            if !self.matches_files(match_criteria, ctx) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Check if the event context matches the triggerMatcher regex.
+    fn matches_trigger_regex(&self, ctx: &MatchContext) -> bool {
+        let Some(trigger_matcher) = &self.manifest.trigger_matcher else {
+            return true;
+        };
+
+        let Some(context) = &ctx.event_context else {
+            return false;
+        };
+
+        match regex::RegexBuilder::new(trigger_matcher)
+            .case_insensitive(true)
+            .build()
+        {
+            Ok(re) => re.is_match(context),
+            Err(e) => {
+                tracing::warn!(
+                    "Invalid triggerMatcher regex '{}' in RuleSet '{}': {}",
+                    trigger_matcher,
+                    self.manifest.name,
+                    e
+                );
+                false
+            }
+        }
+    }
+
+    /// Check if the tool name matches any of the tool patterns.
+    fn matches_tools(&self, match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
+        if match_criteria.tools.is_empty() {
+            return true;
+        }
+
+        let Some(name) = &ctx.tool_name else {
+            return false;
+        };
+
+        match_criteria.tools.iter().any(|pattern| {
+            let anchored = format!("^(?:{})$", pattern);
+            regex::RegexBuilder::new(&anchored)
+                .case_insensitive(true)
+                .build()
+                .map(|re| re.is_match(name))
+                .unwrap_or_else(|_| pattern.eq_ignore_ascii_case(name))
+        })
+    }
+
+    /// Check if the file path matches any of the file glob patterns.
+    fn matches_files(&self, match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
+        // Skip file matching for Stop hooks
+        if match_criteria.files.is_empty() || ctx.hook_type == HookType::Stop {
+            return true;
+        }
+
+        let Some(path) = &ctx.file_path else {
+            return false;
+        };
+
+        let match_options = glob::MatchOptions {
+            case_sensitive: false,
+            ..Default::default()
+        };
+
+        match_criteria.files.iter().any(|pattern| {
+            glob::Pattern::new(pattern)
+                .map(|p| p.matches_with(path, match_options))
+                .unwrap_or(false)
+        })
+    }
+}
+
+/// Result of executing a single rule within a RuleSet session.
+#[derive(Debug, Clone)]
+pub struct RuleResult {
+    /// Name of the rule that was executed.
+    pub rule_name: String,
+    /// Severity of this rule.
+    pub severity: Severity,
+    /// Result returned by the agent for this rule.
+    pub result: ValidatorResult,
+}
+
+impl RuleResult {
+    /// Check if the rule validation passed.
+    pub fn passed(&self) -> bool {
+        self.result.passed()
+    }
+
+    /// Check if this is a blocking failure (failed + error severity).
+    pub fn is_blocking(&self) -> bool {
+        !self.result.passed() && self.severity == Severity::Error
+    }
+
+    /// Get the message from the result.
+    pub fn message(&self) -> &str {
+        self.result.message()
+    }
+}
+
+/// Result of executing an entire RuleSet in a single agent session.
+///
+/// A RuleSet execution involves one agent session where all rules are
+/// evaluated sequentially as a conversational flow.
+#[derive(Debug, Clone)]
+pub struct ExecutedRuleSet {
+    /// Name of the RuleSet that was executed.
+    pub ruleset_name: String,
+    /// Results for each rule in the RuleSet.
+    pub rule_results: Vec<RuleResult>,
+}
+
+impl ExecutedRuleSet {
+    /// Check if all rules in the RuleSet passed.
+    pub fn passed(&self) -> bool {
+        self.rule_results.iter().all(|r| r.passed())
+    }
+
+    /// Check if any rule is a blocking failure.
+    pub fn has_blocking_failure(&self) -> bool {
+        self.rule_results.iter().any(|r| r.is_blocking())
+    }
+
+    /// Get all failed rules.
+    pub fn failed_rules(&self) -> Vec<&RuleResult> {
+        self.rule_results.iter().filter(|r| !r.passed()).collect()
+    }
+
+    /// Get all blocking failures.
+    pub fn blocking_failures(&self) -> Vec<&RuleResult> {
+        self.rule_results
+            .iter()
+            .filter(|r| r.is_blocking())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

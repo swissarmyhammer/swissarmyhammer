@@ -26,7 +26,7 @@ use tokio::sync::{broadcast, Mutex};
 use crate::error::AvpError;
 use crate::turn::TurnStateManager;
 use crate::types::HookType;
-use crate::validator::{ExecutedValidator, Validator, ValidatorRunner};
+use crate::validator::{ExecutedRuleSet, ExecutedValidator, RuleSet, Validator, ValidatorRunner};
 
 /// Capacity for the broadcast channel used for session notifications.
 /// Capacity for notification broadcast channels.
@@ -46,38 +46,6 @@ type InitDirectoriesResult = (
     Option<Arc<StdMutex<File>>>,
 );
 
-/// Spawn a task to forward notifications from a receiver to a sender.
-///
-/// This is used when injecting an agent to bridge its notification receiver
-/// to our internal broadcast channel.
-fn spawn_notification_forwarder(
-    mut rx: broadcast::Receiver<SessionNotification>,
-    tx: broadcast::Sender<SessionNotification>,
-) {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(notification) => {
-                    let _ = tx.send(notification);
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    // Channel buffer overflowed - some messages were dropped
-                    // Continue forwarding remaining messages
-                    tracing::warn!(
-                        skipped_messages = n,
-                        "Notification forwarder lagged - some messages may be lost"
-                    );
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    // Channel closed - no more messages
-                    tracing::trace!("Notification forwarder channel closed");
-                    break;
-                }
-            }
-        }
-    });
-}
 
 /// Decision outcome for a hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,10 +92,10 @@ pub struct ValidatorEvent<'a> {
     pub hook_type: &'a str,
 }
 
-/// Holds the agent and notification channel.
+/// Holds the agent and notification sender.
 struct AgentHandle {
     agent: Arc<dyn Agent + Send + Sync>,
-    notifications: broadcast::Sender<SessionNotification>,
+    notifier: Arc<claude_agent::NotificationSender>,
 }
 
 /// AVP Context - manages the AVP directory, logging, agent access, turn state, and validator execution.
@@ -228,9 +196,25 @@ impl AvpContext {
     ) -> Result<Self, AvpError> {
         let (project_dir, home_dir, log_file) = Self::init_directories()?;
 
-        // Create broadcast channel and forward notifications from injected receiver
-        let (tx, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
-        spawn_notification_forwarder(notifications, tx.clone());
+        // Create a NotificationSender and forward from the injected receiver
+        // This is for test/playback agents that provide a Receiver
+        let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
+        let notifier = Arc::new(notifier);
+        let notifier_clone = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = notifications;
+            loop {
+                match rx.recv().await {
+                    Ok(notification) => {
+                        let _ = notifier_clone.send_update(notification).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "with_agent notification forwarder lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
 
         // Create turn state manager
         let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
@@ -240,10 +224,7 @@ impl AvpContext {
             project_dir,
             home_dir,
             log_file,
-            agent_handle: Arc::new(Mutex::new(Some(AgentHandle {
-                agent,
-                notifications: tx,
-            }))),
+            agent_handle: Arc::new(Mutex::new(Some(AgentHandle { agent, notifier }))),
             turn_state,
             runner_cache: Mutex::new(None),
         })
@@ -266,13 +247,13 @@ impl AvpContext {
     /// Get the agent for validator execution.
     ///
     /// Creates an ephemeral ClaudeAgent on first access if not already created.
-    /// Returns a reference to the agent and a notification receiver.
+    /// Returns a reference to the agent and the notification sender (for per-session subscribing).
     pub async fn agent(
         &self,
     ) -> Result<
         (
             Arc<dyn Agent + Send + Sync>,
-            broadcast::Receiver<SessionNotification>,
+            Arc<claude_agent::NotificationSender>,
         ),
         AvpError,
     > {
@@ -283,12 +264,9 @@ impl AvpContext {
             let start = std::time::Instant::now();
 
             let config = CreateAgentConfig::builder().ephemeral(true).build();
-            let (agent, notifications) = claude_agent::create_agent(config)
+            let (agent, notifier) = claude_agent::create_agent(config)
                 .await
                 .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
-
-            let (tx, _) = broadcast::channel(NOTIFICATION_CHANNEL_CAPACITY);
-            spawn_notification_forwarder(notifications, tx.clone());
 
             tracing::debug!(
                 "Ephemeral ClaudeAgent created in {:.2}s",
@@ -297,12 +275,12 @@ impl AvpContext {
 
             *guard = Some(AgentHandle {
                 agent: Arc::new(agent),
-                notifications: tx,
+                notifier,
             });
         }
 
         let handle = guard.as_ref().unwrap();
-        Ok((Arc::clone(&handle.agent), handle.notifications.subscribe()))
+        Ok((Arc::clone(&handle.agent), Arc::clone(&handle.notifier)))
     }
 
     /// Get the project AVP directory path.
@@ -546,6 +524,144 @@ impl AvpContext {
                         "Validator '{}' matched (runner unavailable)",
                         validator.name()
                     )),
+                }
+            })
+            .collect()
+    }
+
+    // ========================================================================
+    // RuleSet Execution (New Architecture)
+    // ========================================================================
+
+    /// Execute RuleSets using the cached runner.
+    ///
+    /// Each RuleSet runs in a single agent session with rules evaluated sequentially.
+    /// RuleSets execute in parallel with adaptive concurrency control.
+    ///
+    /// The runner is created lazily on first access and reused for subsequent calls.
+    /// If the agent is unavailable, placeholder pass results are returned.
+    pub async fn execute_rulesets(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Vec<ExecutedRuleSet> {
+        if rulesets.is_empty() {
+            return Vec::new();
+        }
+
+        if self.is_agent_skipped() {
+            return self.placeholder_ruleset_results(rulesets, hook_type);
+        }
+
+        let results = self
+            .run_rulesets_with_fallback(rulesets, hook_type, input, changed_files)
+            .await;
+
+        self.log_ruleset_results(&results, hook_type);
+        results
+    }
+
+    /// Run RuleSets with cached runner, falling back to placeholders on error.
+    async fn run_rulesets_with_fallback(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Vec<ExecutedRuleSet> {
+        match self
+            .execute_rulesets_with_cached_runner(rulesets, hook_type, input, changed_files)
+            .await
+        {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::warn!("Failed to execute RuleSets: {} - using placeholders", e);
+                self.placeholder_ruleset_results(rulesets, hook_type)
+            }
+        }
+    }
+
+    /// Log results for each executed RuleSet.
+    fn log_ruleset_results(&self, results: &[ExecutedRuleSet], hook_type: HookType) {
+        let hook_type_str = hook_type.to_string();
+        for ruleset_result in results {
+            for rule_result in &ruleset_result.rule_results {
+                self.log_validator(&ValidatorEvent {
+                    name: &format!("{}:{}", ruleset_result.ruleset_name, rule_result.rule_name),
+                    passed: rule_result.passed(),
+                    message: rule_result.message(),
+                    hook_type: &hook_type_str,
+                });
+            }
+        }
+    }
+
+    /// Execute RuleSets with the cached runner.
+    async fn execute_rulesets_with_cached_runner(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+        input: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Result<Vec<ExecutedRuleSet>, AvpError> {
+        let mut guard = self.runner_cache.lock().await;
+
+        // Create runner if not cached
+        if guard.is_none() {
+            tracing::debug!("Creating cached ValidatorRunner...");
+            let (agent, notifications) = self.agent().await?;
+            let runner = ValidatorRunner::new(agent, notifications)?;
+            *guard = Some(runner);
+            tracing::debug!("ValidatorRunner cached successfully");
+        }
+
+        // Execute with the cached runner
+        let runner = guard.as_ref().unwrap();
+        tracing::debug!(
+            "Executing {} RuleSets via cached ACP runner for hook {}",
+            rulesets.len(),
+            hook_type
+        );
+        Ok(runner
+            .execute_rulesets(rulesets, hook_type, input, changed_files)
+            .await)
+    }
+
+    /// Generate placeholder pass results when agent is unavailable.
+    fn placeholder_ruleset_results(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+    ) -> Vec<ExecutedRuleSet> {
+        rulesets
+            .iter()
+            .map(|ruleset| {
+                tracing::debug!(
+                    "Would execute RuleSet '{}' ({}) with {} rules for hook {}",
+                    ruleset.name(),
+                    ruleset.source,
+                    ruleset.rules.len(),
+                    hook_type
+                );
+
+                let rule_results = ruleset
+                    .rules
+                    .iter()
+                    .map(|rule| crate::validator::RuleResult {
+                        rule_name: rule.name.clone(),
+                        severity: rule.effective_severity(ruleset),
+                        result: crate::validator::ValidatorResult::pass(format!(
+                            "Rule '{}' matched (runner unavailable)",
+                            rule.name
+                        )),
+                    })
+                    .collect();
+
+                crate::validator::ExecutedRuleSet {
+                    ruleset_name: ruleset.name().to_string(),
+                    rule_results,
                 }
             })
             .collect()

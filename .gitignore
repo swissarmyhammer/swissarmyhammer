@@ -179,8 +179,10 @@ acp-conformance/.swissarmyhammer/
 .treesitter-index.db-shm
 .treesitter-index.db-wal
 
-# AVP local state
-.avp/
+# AVP local state (logs, locks) but NOT validators
+.avp/*
+!.avp/validators/
+!.avp/.gitignore
 
 # Kanban test artifacts
 .kanban/

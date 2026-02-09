@@ -130,6 +130,8 @@ simsimd = "6"
 # CLI specific dependencies
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+clap-markdown = "0.1"
+clap_mangen = "0.2"
 colored = "2"
 owo-colors = "4"
 is-terminal = "0.4"
@@ -157,7 +159,7 @@ atty = "0.2"
 tar = "0.4"
 flate2 = "1.0"
 zip = "0.6"
-reqwest = { version = "0.12", features = ["json", "stream", "gzip", "cookies", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "stream", "gzip", "cookies", "rustls-tls", "multipart"] }
 git2 = { version = "0.18", default-features = false, features = ["vendored-libgit2"] }
 fs_extra = "1.3"
 url = "2.5"

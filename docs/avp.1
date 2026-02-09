@@ -1,0 +1,75 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH avp 1  "avp 0.5.0" 
+.SH NAME
+avp \- Agent Validator Protocol \- Claude Code hook processor
+.SH SYNOPSIS
+\fBavp\fR [\fB\-d\fR|\fB\-\-debug\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+AVP \- Agent Validator Protocol
+.PP
+Claude Code hook processor that validates tool calls, file changes, and more.
+.SH OPTIONS
+.TP
+\fB\-d\fR, \fB\-\-debug\fR
+Enable debug output to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+avp\-init(1)
+Install AVP hooks into Claude Code settings
+.TP
+avp\-deinit(1)
+Remove AVP hooks from Claude Code settings and delete .avp directory
+.TP
+avp\-doctor(1)
+Diagnose AVP configuration and setup
+.TP
+avp\-list(1)
+List all available validators
+.TP
+avp\-login(1)
+Authenticate with the AVP registry
+.TP
+avp\-logout(1)
+Log out from the AVP registry
+.TP
+avp\-whoami(1)
+Show current authenticated user
+.TP
+avp\-search(1)
+Search the AVP registry for packages
+.TP
+avp\-info(1)
+Show detailed information about a package
+.TP
+avp\-install(1)
+Install a package from the registry
+.TP
+avp\-uninstall(1)
+Remove an installed package
+.TP
+avp\-new(1)
+Create a new RuleSet from template
+.TP
+avp\-publish(1)
+Publish a package to the registry
+.TP
+avp\-unpublish(1)
+Remove a published package version from the registry
+.TP
+avp\-outdated(1)
+Check for available package updates
+.TP
+avp\-update(1)
+Update installed packages to latest versions
+.TP
+avp\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.5.0

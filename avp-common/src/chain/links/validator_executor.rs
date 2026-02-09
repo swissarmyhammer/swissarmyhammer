@@ -72,48 +72,50 @@ impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
         }
     }
 
-    /// Handle validator results, returning appropriate ChainResult.
+    /// Handle RuleSet results, returning appropriate ChainResult.
     ///
     /// This produces agent-agnostic output with validator block info.
     /// Agent strategies transform this into their platform-specific format.
-    fn handle_validator_results(
+    fn handle_ruleset_results(
         &self,
-        results: &[crate::validator::ExecutedValidator],
+        results: &[crate::validator::ExecutedRuleSet],
         hook_type: HookType,
         ctx: &mut ChainContext,
     ) -> ChainResult {
-        if let Some(blocking) = results.iter().find(|r| r.is_blocking()) {
-            tracing::info!(
-                "ValidatorExecutorLink: Validator '{}' blocked chain for {:?}",
-                blocking.name,
-                hook_type
-            );
+        // Find the first blocking failure across all RuleSets
+        for ruleset_result in results {
+            if let Some(blocking) = ruleset_result.blocking_failures().first() {
+                let full_name = format!("{}:{}", ruleset_result.ruleset_name, blocking.rule_name);
+                tracing::info!(
+                    "ValidatorExecutorLink: Rule '{}' blocked chain for {:?}",
+                    full_name,
+                    hook_type
+                );
 
-            // Set exit code for hooks that use stderr-only format.
-            // Hooks with JSON output format will have exit code 0 (set by default).
-            // Agent strategies determine the final exit code during transformation.
-            let uses_stderr_only = matches!(
-                hook_type,
-                HookType::SessionStart
-                    | HookType::SessionEnd
-                    | HookType::Notification
-                    | HookType::SubagentStart
-                    | HookType::PreCompact
-                    | HookType::Setup
-            );
-            if uses_stderr_only {
-                ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
+                // Set exit code for hooks that use stderr-only format
+                let uses_stderr_only = matches!(
+                    hook_type,
+                    HookType::SessionStart
+                        | HookType::SessionEnd
+                        | HookType::Notification
+                        | HookType::SubagentStart
+                        | HookType::PreCompact
+                        | HookType::Setup
+                );
+                if uses_stderr_only {
+                    ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
+                }
+
+                // Return agent-agnostic validator block info
+                return ChainResult::stop(LinkOutput::from_validator_block(
+                    &full_name,
+                    blocking.message(),
+                    hook_type,
+                ));
             }
-
-            // Return agent-agnostic validator block info
-            ChainResult::stop(LinkOutput::from_validator_block(
-                &blocking.name,
-                blocking.message(),
-                hook_type,
-            ))
-        } else {
-            ChainResult::continue_empty()
         }
+
+        ChainResult::continue_empty()
     }
 }
 
@@ -215,16 +217,19 @@ where
 {
     async fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult {
         let hook_type = input.hook_type();
-        let validators = self.loader.matching(&build_match_context(input));
+        let match_ctx = build_match_context(input);
 
-        if validators.is_empty() {
-            tracing::trace!("ValidatorExecutorLink: No validators for {:?}", hook_type);
+        // Use new RuleSet architecture
+        let rulesets = self.loader.matching_rulesets(&match_ctx);
+
+        if rulesets.is_empty() {
+            tracing::trace!("ValidatorExecutorLink: No RuleSets for {:?}", hook_type);
             return ChainResult::continue_empty();
         }
 
         tracing::debug!(
-            "ValidatorExecutorLink: Executing {} validators for {:?}",
-            validators.len(),
+            "ValidatorExecutorLink: Executing {} RuleSets for {:?}",
+            rulesets.len(),
             hook_type
         );
 
@@ -239,15 +244,10 @@ where
 
         let results = self
             .context
-            .execute_validators(
-                &validators,
-                hook_type,
-                &input_json,
-                changed_files.as_deref(),
-            )
+            .execute_rulesets(&rulesets, hook_type, &input_json, changed_files.as_deref())
             .await;
 
-        self.handle_validator_results(&results, hook_type, ctx)
+        self.handle_ruleset_results(&results, hook_type, ctx)
     }
 
     fn name(&self) -> &'static str {

@@ -6,6 +6,7 @@
 //! - Chain of Responsibility with Success/BlockingError starters
 //! - JSON serialization and validation
 //! - Validator execution via ACP agent
+//! - Package management via the AVP registry
 //!
 //! # Quick Start
 //!
@@ -36,36 +37,20 @@
 //!     assert_eq!(exit_code, 0);
 //! }
 //! ```
-//!
-//! # Architecture
-//!
-//! ## Context
-//!
-//! The `AvpContext` manages the `.avp` directory structure and provides:
-//! - Logging of hook events to `.avp/avp.log`
-//! - Access to validator directories (builtin, user, project)
-//!
-//! ## Strategy Pattern
-//!
-//! The dispatcher routes hooks to agent-specific strategies:
-//!
-//! ```rust,no_run
-//! use avp::context::AvpContext;
-//! use avp::strategy::{HookDispatcher, ClaudeCodeHookStrategy};
-//!
-//! let context = AvpContext::init().unwrap();
-//!
-//! // Create dispatcher with Claude Code strategy
-//! let dispatcher = HookDispatcher::with_defaults(context);
-//!
-//! // Or register custom strategies manually
-//! // let mut dispatcher = HookDispatcher::new();
-//! // dispatcher.register(ClaudeCodeHookStrategy::new(context));
-//! ```
 
+pub mod auth;
+mod cli;
+pub use cli::{Cli, Commands};
 pub mod doctor;
+pub mod info;
 pub mod install;
 pub mod list;
+pub mod new;
+pub mod outdated;
+pub mod package;
+pub mod publish;
+pub mod registry;
+pub mod search;
 
 // Re-export everything from avp-common for backwards compatibility
 pub use avp_common::*;

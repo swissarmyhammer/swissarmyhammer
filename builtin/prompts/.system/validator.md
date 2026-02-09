@@ -1,18 +1,19 @@
 ---
 name: .system/validator
 title: Validator Check
-description: Internal prompt for executing validators against hook events
+description: Internal prompt for executing validators against hook events (RuleSet architecture)
 hidden: true
 tags:
   - avp
   - validation
   - internal
+  - ruleset
 parameters:
   - name: validator_content
-    description: The validator instructions (markdown body)
+    description: The rule instructions (markdown body) or RuleSet context
     required: true
   - name: validator_name
-    description: Name of the validator being executed
+    description: Name of the RuleSet or individual rule being executed
     required: true
   - name: hook_context
     description: The hook event context as JSON
@@ -23,9 +24,19 @@ parameters:
   - name: changed_files
     description: List of files that changed during this turn (optional, typically for Stop hooks)
     required: false
+  - name: ruleset_name
+    description: Name of the RuleSet (for RuleSet-based execution)
+    required: false
+  - name: rule_count
+    description: Number of rules in the RuleSet (for session-based execution)
+    required: false
 ---
 
-You are validating a {{ hook_type }} hook event against the following validator:
+You are validating a {{ hook_type }} hook event{% if ruleset_name %} for the {{ ruleset_name }} RuleSet{% endif %}.
+
+{% if rule_count %}
+This RuleSet contains {{ rule_count }} rule(s) that will be evaluated sequentially in this session.
+{% endif %}
 
 ---
 {{ validator_content }}

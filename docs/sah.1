@@ -1,0 +1,94 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH swissarmyhammer 1  "swissarmyhammer 0.5.0" 
+.SH NAME
+swissarmyhammer \- An MCP server for managing prompts as markdown files
+.SH SYNOPSIS
+\fBswissarmyhammer\fR [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-d\fR|\fB\-\-debug\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-\-format\fR] [\fB\-\-model\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+.PP
+swissarmyhammer is an MCP (Model Context Protocol) server that manages
+prompts as markdown files. It supports file watching, template substitution,
+and seamless integration with Claude Code.
+.PP
+Global arguments can be used with any command to control output and behavior:
+  \-\-verbose     Show detailed information and debug output
+  \-\-format      Set output format (table, json, yaml) for commands that support it  
+  \-\-debug       Enable debug mode with comprehensive tracing
+  \-\-quiet       Suppress all output except errors
+  \-\-model       Override model for all use cases (runtime only, doesn\*(Aqt modify config)
+.PP
+Main commands:
+  serve         Run as MCP server (default when invoked via stdio)
+  doctor        Diagnose configuration and setup issues
+  prompt        Manage and test prompts with interactive capabilities
+  flow          Execute and manage workflows for complex task automation
+  agent         Manage and interact with specialized agents for specific use cases
+  validate      Validate prompt files and workflows for syntax and best practices
+  completion    Generate shell completion scripts
+.PP
+Example usage:
+  swissarmyhammer serve                           # Run as MCP server
+  swissarmyhammer doctor                          # Check configuration
+  swissarmyhammer \-\-verbose prompt list          # List prompts with details
+  swissarmyhammer \-\-format=json prompt list      # List prompts as JSON
+  swissarmyhammer \-\-debug prompt test help       # Test prompt with debug info
+  swissarmyhammer agent list                     # List available agents
+  swissarmyhammer agent use claude\-code          # Apply Claude Code agent to project
+  swissarmyhammer flow run code\-review           # Execute code review workflow
+.SH OPTIONS
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Enable verbose logging
+.TP
+\fB\-d\fR, \fB\-\-debug\fR
+Enable debug logging
+.TP
+\fB\-q\fR, \fB\-\-quiet\fR
+Suppress all output except errors
+.TP
+\fB\-\-format\fR \fI<FORMAT>\fR
+Global output format
+.br
+
+.br
+[\fIpossible values: \fRtable, json, yaml]
+.TP
+\fB\-\-model\fR \fI<MODEL>\fR
+Override model for all use cases (runtime only, doesn\*(Aqt modify config)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+swissarmyhammer\-serve(1)
+Run as MCP server (default when invoked via stdio)
+.TP
+swissarmyhammer\-doctor(1)
+Diagnose configuration and setup issues
+.TP
+swissarmyhammer\-prompt(1)
+Manage and test prompts
+.TP
+swissarmyhammer\-flow(1)
+Execute and manage workflows
+.TP
+swissarmyhammer\-completion(1)
+Generate shell completion scripts
+.TP
+swissarmyhammer\-validate(1)
+Validate prompt files and workflows for syntax and best practices
+.TP
+swissarmyhammer\-model(1)
+Manage and interact with models
+.TP
+swissarmyhammer\-agent(1)
+Manage and interact with Agent Client Protocol server
+.TP
+swissarmyhammer\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.5.0

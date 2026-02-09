@@ -62,6 +62,7 @@ pub mod url_validation;
 
 // Re-exports for convenient access to main types
 pub use agent::{ClaudeAgent, RawMessageManager};
+pub use agent_notifications::NotificationSender;
 pub use claude_process::SpawnConfig;
 pub use config::{AgentConfig, McpServerConfig};
 pub use error::{AgentError, Result};
@@ -132,11 +133,16 @@ pub struct CreateAgentConfig {
 /// ```
 pub async fn create_agent(
     config: CreateAgentConfig,
-) -> Result<(ClaudeAgent, broadcast::Receiver<SessionNotification>)> {
+) -> Result<(
+    ClaudeAgent,
+    Arc<crate::agent_notifications::NotificationSender>,
+)> {
     let mut agent_config = AgentConfig::default();
     agent_config.claude.ephemeral = config.ephemeral;
     agent_config.mcp_servers = config.mcp_servers;
-    ClaudeAgent::new(agent_config).await
+    let (agent, _receiver) = ClaudeAgent::new(agent_config).await?;
+    let notifier = Arc::clone(&agent.notification_sender);
+    Ok((agent, notifier))
 }
 
 /// Execute a prompt and collect the response content.
@@ -263,7 +269,7 @@ async fn process_notification(
 }
 
 /// Spawn a task to collect text from session notifications.
-fn spawn_notification_collector(
+pub fn spawn_notification_collector(
     mut notifications: broadcast::Receiver<SessionNotification>,
     session_id: agent_client_protocol::SessionId,
 ) -> (
@@ -306,7 +312,7 @@ fn spawn_notification_collector(
 }
 
 /// Collect the response content after prompt execution.
-async fn collect_response_content(
+pub async fn collect_response_content(
     collector: tokio::task::JoinHandle<()>,
     collected_text: Arc<tokio::sync::Mutex<String>>,
     notification_count: Arc<std::sync::atomic::AtomicUsize>,

@@ -1,0 +1,7 @@
+# AVP logs and state
+# This file is automatically created by swissarmyhammer-directory
+
+# Log files
+*.log
+
+# Keep validators/ directory (should be committed)

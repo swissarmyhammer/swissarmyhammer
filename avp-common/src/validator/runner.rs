@@ -22,6 +22,7 @@
 //! - Concurrency is reduced when rate limits or timeouts are detected
 //! - Concurrency gradually recovers after successful executions
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -34,9 +35,11 @@ use tokio::sync::{broadcast, Semaphore};
 use crate::error::AvpError;
 use crate::types::HookType;
 use crate::validator::{
-    create_executed_validator, is_rate_limit_error, log_validator_result, parse_validator_response,
-    render_validator_prompt_with_partials_and_changed_files, ExecutedValidator, Validator,
-    ValidatorLoader, VALIDATOR_PROMPT_NAME,
+    create_executed_ruleset, create_executed_validator, is_rate_limit_error, log_ruleset_result,
+    log_validator_result, parse_validator_response,
+    render_validator_prompt_with_partials_and_changed_files, ExecutedRuleSet, ExecutedValidator,
+    RulePromptContext, RuleResult, RuleSet, RuleSetSessionContext, Validator, ValidatorLoader,
+    ValidatorResult, VALIDATOR_PROMPT_NAME,
 };
 
 /// Minimum concurrency level for parallel validator execution.
@@ -475,55 +478,31 @@ pub struct ValidatorRunner {
     partials: HashMapPartialLoader,
     /// Agent for executing prompts
     agent: Arc<dyn Agent + Send + Sync>,
-    /// Notification sender for resubscription
-    notifications: broadcast::Sender<SessionNotification>,
+    /// Notification sender with per-session channels
+    notifier: Arc<claude_agent::NotificationSender>,
     /// Concurrency limiter for parallel execution
     concurrency: Arc<ConcurrencyLimiter>,
 }
 
 impl ValidatorRunner {
-    /// Create a new ValidatorRunner with the given agent.
+    /// Create a new ValidatorRunner with the given agent and notification sender.
     ///
-    /// The agent and notifications should be obtained from `AvpContext::agent()`.
+    /// Takes the NotificationSender which provides per-session channels.
+    /// Each RuleSet session subscribes to its own channel - no cross-session
+    /// notification bleed.
     pub fn new(
         agent: Arc<dyn Agent + Send + Sync>,
-        notifications: broadcast::Receiver<SessionNotification>,
+        notifier: Arc<claude_agent::NotificationSender>,
     ) -> Result<Self, AvpError> {
         let prompt_library = Self::load_prompt_library()?;
         let partials = Self::load_validator_partials();
         let concurrency = Arc::new(ConcurrencyLimiter::new());
 
-        // Create a sender so we can resubscribe for each validator execution
-        let (tx, _) = broadcast::channel(crate::context::NOTIFICATION_CHANNEL_CAPACITY);
-        let tx_clone = tx.clone();
-
-        // Forward notifications from the provided receiver to our sender
-        tokio::spawn(async move {
-            let mut rx = notifications;
-            loop {
-                match rx.recv().await {
-                    Ok(notification) => {
-                        let _ = tx_clone.send(notification);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(
-                            skipped_messages = n,
-                            "ValidatorRunner notification forwarder lagged"
-                        );
-                        continue;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
-                }
-            }
-        });
-
         Ok(Self {
             prompt_library: Arc::new(prompt_library),
             partials,
             agent,
-            notifications: tx,
+            notifier,
             concurrency,
         })
     }
@@ -581,17 +560,56 @@ impl ValidatorRunner {
     /// Extract partials from a ValidatorLoader.
     ///
     /// Uses shared partial detection logic from executor module.
+    /// Also loads partials from RuleSet _partials/ directories.
     fn extract_partials_from_loader(loader: &ValidatorLoader) -> HashMapPartialLoader {
         use crate::validator::{add_partial_with_aliases, is_partial};
 
         let mut partials = HashMapPartialLoader::empty();
 
+        // Load partials from legacy validators (for backward compatibility)
         for validator in loader.list() {
             let name = validator.name();
             let body = &validator.body;
 
             if is_partial(name, body) {
                 add_partial_with_aliases(&mut partials, name, body);
+            }
+        }
+
+        // Load partials from RuleSet _partials/ directories
+        for ruleset in loader.list_rulesets() {
+            let partials_dir = ruleset.base_path.join("_partials");
+            if partials_dir.exists() && partials_dir.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&partials_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md")
+                        {
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                                    // Strip .liquid suffix if present (e.g. "test-remediation.liquid" -> "test-remediation")
+                                    let base_name = name.strip_suffix(".liquid").unwrap_or(name);
+
+                                    // Register with RuleSet-scoped name
+                                    let scoped_name =
+                                        format!("{}/_partials/{}", ruleset.name(), base_name);
+                                    partials.add(&scoped_name, &content);
+                                    // Also register with just the base name for easy reference
+                                    partials.add(base_name, &content);
+                                    // And the full name with .liquid for explicit references
+                                    if base_name != name {
+                                        partials.add(name, &content);
+                                    }
+                                    tracing::debug!(
+                                        "Loaded partial '{}' from RuleSet '{}' _partials/",
+                                        name,
+                                        ruleset.name()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -628,7 +646,7 @@ impl ValidatorRunner {
             Err(e) => return (create_render_error(validator, &e), false),
         };
 
-        let notifications = self.notifications.subscribe();
+        let notifications = self.notifier.sender().subscribe();
         let response =
             claude_agent::execute_prompt_with_agent(&*self.agent, notifications, prompt_text).await;
 
@@ -713,7 +731,7 @@ impl ValidatorRunner {
             prompt_library: Arc::clone(&self.prompt_library),
             partials: self.partials.clone(),
             agent: Arc::clone(&self.agent),
-            notifications_tx: self.notifications.clone(),
+            notifications_tx: self.notifier.sender(),
         }
     }
 
@@ -748,6 +766,338 @@ impl ValidatorRunner {
     /// are detected, then recovers after consecutive successes.
     pub fn current_concurrency(&self) -> usize {
         self.concurrency.current_max()
+    }
+
+    // ========================================================================
+    // RuleSet Execution (New Architecture)
+    // ========================================================================
+
+    /// Execute a single RuleSet as one agent session with conversational rule evaluation.
+    ///
+    /// This starts one agent session for the RuleSet and evaluates each rule
+    /// sequentially as part of the conversation, maintaining context across rules.
+    ///
+    /// # Arguments
+    ///
+    /// * `ruleset` - The RuleSet to execute
+    /// * `hook_type` - The hook event type
+    /// * `context` - Hook event context as JSON
+    /// * `changed_files` - Optional list of changed files (for Stop hooks)
+    ///
+    /// # Returns
+    ///
+    /// Returns an `ExecutedRuleSet` with results for all rules, and a boolean
+    /// indicating if rate limiting was detected.
+    pub async fn execute_ruleset(
+        &self,
+        ruleset: &RuleSet,
+        hook_type: HookType,
+        context: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> (ExecutedRuleSet, bool) {
+        // Acquire concurrency permit for this RuleSet
+        let _permit = self.concurrency.acquire().await;
+
+        tracing::debug!(
+            "Executing RuleSet '{}' with {} rules in a single session",
+            ruleset.name(),
+            ruleset.rules.len()
+        );
+
+        // Initialize the session
+        let session_ctx =
+            RuleSetSessionContext::new(&self.prompt_library, ruleset, hook_type, context)
+                .with_changed_files(changed_files);
+
+        let init_prompt = match session_ctx.render_session_init() {
+            Ok(prompt) => prompt,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to render RuleSet '{}' session init: {}",
+                    ruleset.name(),
+                    e
+                );
+                return (
+                    create_executed_ruleset(
+                        ruleset,
+                        vec![RuleResult {
+                            rule_name: "session-init".to_string(),
+                            severity: ruleset.manifest.severity,
+                            result: ValidatorResult::fail(format!(
+                                "Failed to render session init: {}",
+                                e
+                            )),
+                        }],
+                    ),
+                    false,
+                );
+            }
+        };
+
+        // Initialize agent and create session for multi-turn conversation
+        use agent_client_protocol::{
+            ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, TextContent,
+        };
+
+        let init_request = InitializeRequest::new(1.into());
+        if let Err(e) = self.agent.initialize(init_request).await {
+            tracing::error!(
+                "Failed to initialize agent for RuleSet '{}': {}",
+                ruleset.name(),
+                e
+            );
+            return (
+                create_executed_ruleset(
+                    ruleset,
+                    vec![RuleResult {
+                        rule_name: "session-init".to_string(),
+                        severity: ruleset.manifest.severity,
+                        result: ValidatorResult::fail(format!("Failed to initialize agent: {}", e)),
+                    }],
+                ),
+                false,
+            );
+        }
+
+        // Create session
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
+        let session_request = NewSessionRequest::new(cwd);
+        let session_response = match self.agent.new_session(session_request).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to create session for RuleSet '{}': {}",
+                    ruleset.name(),
+                    e
+                );
+                return (
+                    create_executed_ruleset(
+                        ruleset,
+                        vec![RuleResult {
+                            rule_name: "session-create".to_string(),
+                            severity: ruleset.manifest.severity,
+                            result: ValidatorResult::fail(format!(
+                                "Failed to create session: {}",
+                                e
+                            )),
+                        }],
+                    ),
+                    false,
+                );
+            }
+        };
+
+        let session_id = session_response.session_id;
+        tracing::debug!("RuleSet '{}' got session_id={}", ruleset.name(), session_id);
+
+        let mut rule_results = Vec::new();
+        let mut is_rate_limited = false;
+
+        // Send initialization prompt as first message
+        let init_request = PromptRequest::new(
+            session_id.clone(),
+            vec![ContentBlock::Text(TextContent::new(init_prompt))],
+        );
+
+        // Subscribe to this session's dedicated notification channel
+        let init_notifications = self.notifier.subscribe_session(&session_id.0);
+        let (init_collector, _init_text, _, _) =
+            claude_agent::spawn_notification_collector(init_notifications, session_id.clone());
+
+        match self.agent.prompt(init_request).await {
+            Ok(_init_response) => {
+                // prompt() returned - collector already has everything, discard it
+                init_collector.abort();
+            }
+            Err(e) => {
+                init_collector.abort();
+                tracing::error!(
+                    "Failed to send init prompt for RuleSet '{}': {}",
+                    ruleset.name(),
+                    e
+                );
+                return (
+                    create_executed_ruleset(
+                        ruleset,
+                        vec![RuleResult {
+                            rule_name: "session-init".to_string(),
+                            severity: ruleset.manifest.severity,
+                            result: ValidatorResult::fail(format!(
+                                "Failed to send init prompt: {}",
+                                e
+                            )),
+                        }],
+                    ),
+                    false,
+                );
+            }
+        }
+
+        // Execute each rule sequentially in the same session
+        for rule in &ruleset.rules {
+            let rule_ctx = RulePromptContext::with_partials(rule, ruleset, Some(&self.partials));
+            let rule_prompt = rule_ctx.render();
+
+            let rule_request = PromptRequest::new(
+                session_id.clone(),
+                vec![ContentBlock::Text(TextContent::new(rule_prompt))],
+            );
+
+            // Spawn collector BEFORE prompt - it runs concurrently, collecting
+            // notifications as they stream in during prompt execution
+            let rule_notifications = self.notifier.subscribe_session(&session_id.0);
+            let (rule_collector, rule_text, _, _) =
+                claude_agent::spawn_notification_collector(rule_notifications, session_id.clone());
+
+            let response = self.agent.prompt(rule_request).await;
+
+            // prompt() returned - collector has already received all content
+            rule_collector.abort();
+
+            match response {
+                Ok(prompt_response) => {
+                    let content = rule_text.lock().await.clone();
+
+                    if content.is_empty() {
+                        tracing::warn!(
+                            "RuleSet '{}' rule '{}' returned empty content (stop_reason: {:?})",
+                            ruleset.name(),
+                            rule.name,
+                            prompt_response.stop_reason
+                        );
+                    }
+
+                    let result = parse_validator_response(&content, &prompt_response.stop_reason);
+                    let rule_result = RuleResult {
+                        rule_name: rule.name.clone(),
+                        severity: rule.effective_severity(ruleset),
+                        result,
+                    };
+                    rule_results.push(rule_result);
+                    self.concurrency.report_success();
+                }
+                Err(e) => {
+                    let error_str = e.to_string();
+                    is_rate_limited = is_rate_limit_error(&error_str);
+
+                    if is_rate_limited {
+                        self.concurrency.report_rate_limit();
+                        tracing::warn!(
+                            "Rate limit/timeout for RuleSet '{}' rule '{}': {}",
+                            ruleset.name(),
+                            rule.name,
+                            e
+                        );
+                    } else {
+                        tracing::error!(
+                            "Agent execution failed for RuleSet '{}' rule '{}': {}",
+                            ruleset.name(),
+                            rule.name,
+                            e
+                        );
+                    }
+
+                    let rule_result = RuleResult {
+                        rule_name: rule.name.clone(),
+                        severity: rule.effective_severity(ruleset),
+                        result: ValidatorResult::fail(format!("Agent execution failed: {}", e)),
+                    };
+                    rule_results.push(rule_result);
+
+                    // Stop executing remaining rules if rate limited
+                    if is_rate_limited {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let executed = create_executed_ruleset(ruleset, rule_results);
+        log_ruleset_result(ruleset.name(), &executed);
+
+        (executed, is_rate_limited)
+    }
+
+    /// Execute multiple RuleSets against a hook event context.
+    ///
+    /// Executes RuleSets in parallel with adaptive concurrency control.
+    /// Each RuleSet runs in its own agent session with rules evaluated sequentially.
+    ///
+    /// # Arguments
+    ///
+    /// * `rulesets` - Slice of RuleSets to execute
+    /// * `hook_type` - The hook event type
+    /// * `context` - Hook event context as JSON
+    /// * `changed_files` - Optional list of changed files (for Stop hooks)
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of `ExecutedRuleSet` results, one per RuleSet.
+    pub async fn execute_rulesets(
+        &self,
+        rulesets: &[&RuleSet],
+        hook_type: HookType,
+        context: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> Vec<ExecutedRuleSet> {
+        if rulesets.is_empty() {
+            return Vec::new();
+        }
+
+        tracing::debug!(
+            "Executing {} RuleSets in parallel (max_concurrency={})",
+            rulesets.len(),
+            self.concurrency.current_max()
+        );
+
+        // Create futures for parallel execution
+        let changed_files_owned: Option<Vec<String>> = changed_files.map(|f| f.to_vec());
+        let mut futures = FuturesUnordered::new();
+
+        for (idx, ruleset) in rulesets.iter().enumerate() {
+            let ruleset_clone = (*ruleset).clone();
+            let hook_type_clone = hook_type;
+            let context_clone = context.clone();
+            let changed_files_clone = changed_files_owned.clone();
+
+            // Create a task that executes this RuleSet
+            let runner = self.clone_for_task();
+
+            futures.push(async move {
+                let (result, is_rate_limit) = runner
+                    .execute_ruleset(
+                        &ruleset_clone,
+                        hook_type_clone,
+                        &context_clone,
+                        changed_files_clone.as_deref(),
+                    )
+                    .await;
+                (idx, result, is_rate_limit)
+            });
+        }
+
+        // Collect results preserving order
+        let mut results: Vec<Option<ExecutedRuleSet>> = vec![None; rulesets.len()];
+
+        while let Some((idx, result, _is_rate_limit)) = futures.next().await {
+            results[idx] = Some(result);
+        }
+
+        results.into_iter().flatten().collect()
+    }
+
+    /// Clone the runner for task execution.
+    ///
+    /// Creates a lightweight clone that shares the underlying resources
+    /// (agent, prompt library, partials, concurrency limiter).
+    fn clone_for_task(&self) -> Self {
+        Self {
+            prompt_library: Arc::clone(&self.prompt_library),
+            partials: self.partials.clone(),
+            agent: Arc::clone(&self.agent),
+            notifier: Arc::clone(&self.notifier),
+            concurrency: Arc::clone(&self.concurrency),
+        }
     }
 }
 
@@ -1049,9 +1399,18 @@ mod tests {
     async fn test_validator_runner_new() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications);
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier);
         assert!(runner.is_ok(), "ValidatorRunner::new should succeed");
 
         let runner = runner.unwrap();
@@ -1069,9 +1428,18 @@ mod tests {
     async fn test_validator_runner_current_concurrency() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
 
         // current_concurrency should return a valid value
         let concurrency = runner.current_concurrency();
@@ -1083,9 +1451,18 @@ mod tests {
     async fn test_validator_runner_execute_validator_pass() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
 
@@ -1101,9 +1478,18 @@ mod tests {
     async fn test_validator_runner_execute_validators_empty() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let context = serde_json::json!({"tool_name": "Write"});
 
         // Empty validators list should return empty results
@@ -1122,9 +1508,18 @@ mod tests {
     async fn test_validator_runner_execute_validator_with_changed_files() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"session_id": "test"});
         let changed_files = vec!["src/lib.rs".to_string(), "src/main.rs".to_string()];
@@ -1141,9 +1536,18 @@ mod tests {
     async fn test_validator_runner_execute_validator_fail() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_FAIL);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let notifications = agent.subscribe_notifications();
+        let rx = agent.subscribe_notifications();
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+        let notifier2 = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = rx;
+            while let Ok(n) = rx.recv().await {
+                let _ = notifier2.send_update(n).await;
+            }
+        });
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifications).unwrap();
+        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
         let validator = create_test_validator();
         let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
 

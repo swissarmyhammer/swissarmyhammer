@@ -3,29 +3,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use clap::ValueEnum;
 use serde_json::{json, Map, Value};
 
-/// Target location for install/uninstall operations.
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum InstallTarget {
-    /// Project-level settings (.claude/settings.json)
-    Project,
-    /// Local project settings, not committed (.claude/settings.local.json)
-    Local,
-    /// User-level settings (~/.claude/settings.json)
-    User,
-}
-
-impl std::fmt::Display for InstallTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InstallTarget::Project => write!(f, "project"),
-            InstallTarget::Local => write!(f, "local"),
-            InstallTarget::User => write!(f, "user"),
-        }
-    }
-}
+// Re-export InstallTarget from the self-contained cli module.
+pub use crate::cli::InstallTarget;
 
 /// Get the settings file path for the given target.
 pub fn settings_path(target: InstallTarget) -> PathBuf {
