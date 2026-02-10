@@ -158,7 +158,11 @@ impl EmbeddingModel {
         Ok(())
     }
 
-    /// Ensure context exists, creating if needed
+    /// Ensure context exists, creating if needed.
+    ///
+    /// Uses `max_sequence_length` from config when set to limit the context
+    /// window (and thus KV cache allocation). Falls back to the model's full
+    /// context size from metadata.
     fn ensure_context(&mut self) -> Result<()> {
         if self.context.is_some() {
             return Ok(());
@@ -170,14 +174,18 @@ impl EmbeddingModel {
             .as_ref()
             .ok_or(EmbeddingError::ModelNotLoaded)?;
 
-        info!("Creating LlamaContext");
-        let batch_size = metadata.context_size as u32;
-        let n_ctx = NonZeroU32::new(batch_size);
+        let ctx_size = self
+            .config
+            .max_sequence_length
+            .unwrap_or(metadata.context_size) as u32;
+
+        info!("Creating LlamaContext with n_ctx={}", ctx_size);
+        let n_ctx = NonZeroU32::new(ctx_size);
         let params = LlamaContextParams::default()
             .with_embeddings(true)
             .with_n_ctx(n_ctx)
-            .with_n_batch(batch_size)
-            .with_n_ubatch(batch_size);
+            .with_n_batch(ctx_size)
+            .with_n_ubatch(ctx_size);
 
         let ctx = model
             .new_context(&self.backend, params)
@@ -209,13 +217,12 @@ impl EmbeddingModel {
             .as_mut()
             .ok_or(EmbeddingError::ModelNotLoaded)?;
 
-        embed_single(
-            ctx,
-            model,
-            text,
-            metadata.context_size,
-            self.config.normalize_embeddings,
-        )
+        let max_seq = self
+            .config
+            .max_sequence_length
+            .unwrap_or(metadata.context_size);
+
+        embed_single(ctx, model, text, max_seq, self.config.normalize_embeddings)
     }
 
     /// Get embedding dimension
