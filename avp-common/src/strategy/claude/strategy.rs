@@ -561,9 +561,11 @@ mod tests {
         let (_temp, strategy) = create_test_strategy();
 
         // Should have at least the builtin RuleSets
+        // (security-rules, command-safety, code-quality, test-integrity)
         assert!(
-            strategy.validator_loader().ruleset_count() >= 5,
-            "Should have at least 5 builtin RuleSets"
+            strategy.validator_loader().ruleset_count() >= 4,
+            "Should have at least 4 builtin RuleSets, got {}",
+            strategy.validator_loader().ruleset_count()
         );
         assert!(
             strategy

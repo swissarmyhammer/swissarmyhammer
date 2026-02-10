@@ -39,21 +39,14 @@ fn test_stop_rulesets_load() {
         .filter(|rs| rs.trigger() == HookType::Stop)
         .collect();
 
+    // session-lifecycle was the only Stop RuleSet and has been removed
     assert!(
-        !stop_rulesets.is_empty(),
-        "Should have at least one Stop RuleSet"
+        stop_rulesets.is_empty(),
+        "No builtin Stop RuleSets should be loaded (session-lifecycle removed)"
     );
-
-    // session-lifecycle is the Stop RuleSet for session-level review
-    let ruleset = loader.get_ruleset("session-lifecycle");
     assert!(
-        ruleset.is_some(),
-        "Stop RuleSet 'session-lifecycle' should be loaded"
-    );
-    assert_eq!(
-        ruleset.unwrap().trigger(),
-        HookType::Stop,
-        "RuleSet 'session-lifecycle' should have Stop trigger"
+        loader.get_ruleset("session-lifecycle").is_none(),
+        "session-lifecycle should not be loaded (removed)"
     );
 }
 
@@ -100,11 +93,10 @@ fn test_stop_rulesets_match_stop_hook() {
     // Should have Stop RuleSets matching
     let names: Vec<_> = matching.iter().map(|rs| rs.name()).collect();
 
-    // session-lifecycle is the Stop RuleSet
+    // session-lifecycle was removed; verify it does not match
     assert!(
-        names.contains(&"session-lifecycle"),
-        "session-lifecycle should match Stop hook, got: {:?}",
-        names
+        !names.contains(&"session-lifecycle"),
+        "session-lifecycle should not match Stop hook (removed)"
     );
 
     // code-quality RuleSet is PostToolUse and should NOT match Stop
@@ -147,7 +139,7 @@ fn test_stop_rulesets_do_not_match_other_hooks() {
     // Stop RuleSets should NOT match PreToolUse
     assert!(
         !names.contains(&"session-lifecycle"),
-        "Stop RuleSet should not match PreToolUse"
+        "Removed Stop RuleSet should not match PreToolUse"
     );
     assert!(
         !names.contains(&"code-quality"),
@@ -352,11 +344,45 @@ async fn test_stop_chain_executes_validators() {
     cleanup_skip_agent_env();
 }
 
-/// Helper: Execute Stop chain with a failing validator and return Claude-specific output.
+/// Helper: Create a test Stop RuleSet on disk in the temp directory.
+///
+/// This replaces the removed builtin session-lifecycle for testing the
+/// Stop hook blocking mechanism.
+fn create_test_stop_ruleset(temp: &TempDir) {
+    use test_helpers::{minimal_rule, ruleset_manifest_with_settings};
+
+    let ruleset_dir = temp.path().join("validators").join("test-stop-ruleset");
+    fs::create_dir_all(ruleset_dir.join("rules")).unwrap();
+
+    fs::write(
+        ruleset_dir.join("VALIDATOR.md"),
+        ruleset_manifest_with_settings(
+            "test-stop-ruleset",
+            "Test Stop RuleSet for integration tests",
+            "Stop",
+            "error",
+        ),
+    )
+    .unwrap();
+
+    fs::write(
+        ruleset_dir.join("rules").join("test-rule.md"),
+        minimal_rule("test-rule", "Test rule for Stop hook validation"),
+    )
+    .unwrap();
+}
+
+/// Helper: Execute Stop chain with a test Stop RuleSet and return Claude-specific output.
+///
+/// Uses a playback fixture that simulates a failing validator to test the
+/// blocking output format (decision, reason, JSON serialization).
 async fn execute_blocking_stop_chain(temp: &TempDir) -> (avp_common::types::HookOutput, i32) {
     use avp_common::chain::ChainFactory;
     use avp_common::types::{HookType, StopInput};
+    use avp_common::validator::ValidatorSource;
     use test_helpers::transform_chain_to_claude_output;
+
+    create_test_stop_ruleset(temp);
 
     let context = create_context_with_playback(temp, "stop_cognitive_complexity_fail.json");
     let turn_state = Arc::new(TurnStateManager::new(temp.path()));
@@ -369,6 +395,9 @@ async fn execute_blocking_stop_chain(temp: &TempDir) -> (avp_common::types::Hook
 
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
+    loader
+        .load_rulesets_directory(&temp.path().join("validators"), ValidatorSource::Project)
+        .unwrap();
 
     let factory = ChainFactory::new(Arc::new(context), Arc::new(loader), turn_state);
     let mut chain = factory.stop_chain();
@@ -384,7 +413,6 @@ async fn execute_blocking_stop_chain(temp: &TempDir) -> (avp_common::types::Hook
     .unwrap();
 
     let (chain_output, _) = chain.execute(&input).await.unwrap();
-    // Transform chain output to Claude-specific format for testing
     transform_chain_to_claude_output(chain_output, HookType::Stop)
 }
 
@@ -479,10 +507,10 @@ fn test_stop_rulesets_count_matches_rulesets_not_files() {
     // NOT multiplied by number of changed files
     let ruleset_count = matching.len();
 
-    // We should have at least 1 Stop RuleSet (session-lifecycle)
-    assert!(
-        ruleset_count >= 1,
-        "Should have at least 1 Stop RuleSet, got: {}",
+    // session-lifecycle was the only Stop RuleSet; with it removed, expect 0
+    assert_eq!(
+        ruleset_count, 0,
+        "No builtin Stop RuleSets should be loaded (session-lifecycle removed), got: {}",
         ruleset_count
     );
 

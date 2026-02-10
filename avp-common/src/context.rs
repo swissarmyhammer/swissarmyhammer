@@ -46,7 +46,6 @@ type InitDirectoriesResult = (
     Option<Arc<StdMutex<File>>>,
 );
 
-
 /// Decision outcome for a hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {

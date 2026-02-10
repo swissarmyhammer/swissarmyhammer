@@ -75,10 +75,12 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        // Should have loaded at least 5 RuleSets
+        // Should have loaded at least 4 RuleSets
+        // (security-rules, command-safety, code-quality, test-integrity)
         assert!(
-            loader.ruleset_count() >= 5,
-            "Should have loaded at least 5 RuleSets"
+            loader.ruleset_count() >= 4,
+            "Should have loaded at least 4 RuleSets, got {}",
+            loader.ruleset_count()
         );
 
         // Check for expected RuleSets

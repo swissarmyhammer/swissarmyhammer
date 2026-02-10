@@ -23,10 +23,11 @@ fn test_load_builtin_rulesets() {
     let mut loader = ValidatorLoader::new();
     load_builtins(&mut loader);
 
-    // Should have loaded at least 5 RuleSets
+    // Should have loaded at least 4 RuleSets
+    // (security-rules, command-safety, code-quality, test-integrity)
     assert!(
-        loader.ruleset_count() >= 5,
-        "Should have at least 5 builtin RuleSets, got {}",
+        loader.ruleset_count() >= 4,
+        "Should have at least 4 builtin RuleSets, got {}",
         loader.ruleset_count()
     );
 
@@ -44,16 +45,16 @@ fn test_load_builtin_rulesets() {
         "Should have code-quality"
     );
     assert!(
-        loader.get_ruleset("rust-conventions").is_some(),
-        "Should have rust-conventions"
+        loader.get_ruleset("rust-conventions").is_none(),
+        "rust-conventions should not be loaded (removed, replaced by dtolnay)"
     );
     assert!(
         loader.get_ruleset("test-integrity").is_some(),
         "Should have test-integrity"
     );
     assert!(
-        loader.get_ruleset("session-lifecycle").is_some(),
-        "Should have session-lifecycle"
+        loader.get_ruleset("session-lifecycle").is_none(),
+        "session-lifecycle should not be loaded (removed)"
     );
 }
 
@@ -317,7 +318,8 @@ fn test_ruleset_matching() {
 
     let matching = loader.matching_rulesets(&ctx);
 
-    // Should match security-rules, code-quality, rust-conventions, test-integrity
+    // Should match security-rules, code-quality, test-integrity
+    // (rust-conventions removed, replaced by dtolnay project validator)
     let names: Vec<&str> = matching.iter().map(|rs| rs.name()).collect();
 
     assert!(
@@ -329,8 +331,8 @@ fn test_ruleset_matching() {
         "code-quality should match PostToolUse + Write + .rs"
     );
     assert!(
-        names.contains(&"rust-conventions"),
-        "rust-conventions should match PostToolUse + Write + .rs"
+        !names.contains(&"rust-conventions"),
+        "rust-conventions should not match (removed)"
     );
 }
 
