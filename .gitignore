@@ -179,6 +179,9 @@ acp-conformance/.swissarmyhammer/
 .treesitter-index.db-shm
 .treesitter-index.db-wal
 
+# Generated man pages (built at compile time, included in release archives)
+docs/*.1
+
 # AVP local state (logs, locks) but NOT validators
 .avp/*
 !.avp/validators/
