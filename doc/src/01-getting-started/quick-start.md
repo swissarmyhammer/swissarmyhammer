@@ -6,16 +6,17 @@ Get up and running with SwissArmyHammer in 5 minutes. This guide will show you h
 
 SwissArmyHammer's most powerful feature is its ability to transform natural language specifications into complete, tested applications. Here's how:
 
-### Step 1: Verify Installation
+### Step 1: Verify Installation and Initialize
 
-First, make sure SwissArmyHammer is properly installed:
+First, make sure SwissArmyHammer is properly installed and configured:
 
 ```bash
 sah --version
+sah init
 sah doctor
 ```
 
-The `doctor` command will check your installation and suggest any needed fixes.
+`sah init` registers SwissArmyHammer as an MCP server in Claude Code and sets up the project directory. The `doctor` command checks your installation and suggests any needed fixes.
 
 ### Step 2: Create a Specification
 
@@ -157,15 +158,13 @@ You should see the rendered prompt with your variables substituted.
 
 ## Step 4: Configure Claude Code Integration
 
-Add SwissArmyHammer as an MCP server for Claude Code:
+If you haven't already run `sah init`, do so now:
 
 ```bash
-# Add the MCP server
-claude mcp add --scope user sah sah serve
+sah init
 
 # Verify it's working
-claude mcp list
-claude mcp status sah
+sah doctor
 ```
 
 ## Step 5: Use in Claude Code

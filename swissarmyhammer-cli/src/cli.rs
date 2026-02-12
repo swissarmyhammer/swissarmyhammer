@@ -57,6 +57,27 @@ impl From<PromptSource> for PromptSourceArg {
     }
 }
 
+/// Target location for init/deinit operations.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
+pub enum InstallTarget {
+    /// Project-level settings (.claude/settings.json)
+    Project,
+    /// Local project settings, not committed (.claude/settings.local.json)
+    Local,
+    /// User-level settings (~/.claude/settings.json)
+    User,
+}
+
+impl std::fmt::Display for InstallTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstallTarget::Project => write!(f, "project"),
+            InstallTarget::Local => write!(f, "local"),
+            InstallTarget::User => write!(f, "user"),
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "swissarmyhammer")]
 #[command(version)]
@@ -137,6 +158,51 @@ Example:
     Serve {
         #[command(subcommand)]
         subcommand: Option<ServeSubcommand>,
+    },
+    /// Initialize sah MCP server in Claude Code settings
+    #[command(long_about = "
+Initialize SwissArmyHammer for use with Claude Code.
+
+This command:
+1. Registers sah as an MCP server in Claude Code settings
+2. Creates the .swissarmyhammer/ project directory with prompts/ and workflows/
+
+The command is idempotent - safe to run multiple times.
+
+Targets:
+  project   Write to .mcp.json (default, shared with team via git)
+  local     Write to ~/.claude.json per-project config (personal, not committed)
+  user      Write to ~/.claude.json global config (all projects)
+
+Examples:
+  sah init              # Project-level setup (default)
+  sah init user         # Global setup for all projects
+  sah init local        # Personal setup, not committed to git
+")]
+    Init {
+        /// Where to install the MCP server configuration
+        #[arg(value_enum, default_value_t = InstallTarget::Project)]
+        target: InstallTarget,
+    },
+    /// Remove sah MCP server from Claude Code settings
+    #[command(long_about = "
+Remove SwissArmyHammer MCP server configuration from Claude Code settings.
+
+By default, only the MCP server entry is removed from the settings file.
+Use --remove-directory to also delete the .swissarmyhammer/ project directory.
+
+Examples:
+  sah deinit                     # Remove from project settings
+  sah deinit user                # Remove from user settings
+  sah deinit --remove-directory  # Also remove .swissarmyhammer/
+")]
+    Deinit {
+        /// Where to remove the MCP server configuration from
+        #[arg(value_enum, default_value_t = InstallTarget::Project)]
+        target: InstallTarget,
+        /// Also remove .swissarmyhammer/ project directory
+        #[arg(long)]
+        remove_directory: bool,
     },
     /// Diagnose configuration and setup issues
     #[command(long_about = commands::doctor::DESCRIPTION)]
@@ -526,6 +592,103 @@ mod tests {
             cli.command,
             Some(Commands::Serve { subcommand: _ })
         ));
+    }
+
+    #[test]
+    fn test_cli_init_default() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "init"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Init {
+                target: InstallTarget::Project
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_init_user() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "init", "user"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Init {
+                target: InstallTarget::User
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_init_local() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "init", "local"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Init {
+                target: InstallTarget::Local
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_deinit_default() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "deinit"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Deinit {
+            target,
+            remove_directory,
+        }) = cli.command
+        {
+            assert_eq!(target, InstallTarget::Project);
+            assert!(!remove_directory);
+        } else {
+            unreachable!("Expected Deinit command");
+        }
+    }
+
+    #[test]
+    fn test_cli_deinit_with_remove_directory() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "deinit", "--remove-directory"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Deinit {
+            target,
+            remove_directory,
+        }) = cli.command
+        {
+            assert_eq!(target, InstallTarget::Project);
+            assert!(remove_directory);
+        } else {
+            unreachable!("Expected Deinit command");
+        }
+    }
+
+    #[test]
+    fn test_cli_deinit_user_with_remove_directory() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "deinit", "user", "--remove-directory"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Deinit {
+            target,
+            remove_directory,
+        }) = cli.command
+        {
+            assert_eq!(target, InstallTarget::User);
+            assert!(remove_directory);
+        } else {
+            unreachable!("Expected Deinit command");
+        }
     }
 
     #[test]
