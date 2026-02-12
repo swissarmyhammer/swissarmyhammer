@@ -43,5 +43,6 @@ pub mod questions;
 pub mod shell;
 pub mod todo;
 pub mod treesitter;
+pub mod web;
 pub mod web_fetch;
 pub mod web_search;

@@ -16,7 +16,7 @@ const EXPECTED_CORE_TOOLS: &[&str] = &[
     "files_write",
     "files_edit",
     "shell_execute",
-    "web_fetch",
+    "web",
 ];
 
 /// Helper function to set up tool comparison tests

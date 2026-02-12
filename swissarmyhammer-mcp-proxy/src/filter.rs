@@ -98,7 +98,7 @@ mod tests {
         .unwrap();
 
         assert!(filter.is_allowed("files_read"));
-        assert!(filter.is_allowed("web_fetch"));
+        assert!(filter.is_allowed("web"));
         assert!(!filter.is_allowed("shell_execute")); // Denied
     }
 
@@ -126,16 +126,16 @@ mod tests {
     #[test]
     fn test_complex_patterns() {
         let filter = ToolFilter::new(
-            vec!["^(files|web)_.*".to_string()], // Allow files_* and web_*
+            vec!["^(files_.*|web)$".to_string()], // Allow files_* and web
             vec![".*_(write|edit|delete)$".to_string()], // Deny mutations
         )
         .unwrap();
 
         assert!(filter.is_allowed("files_read"));
-        assert!(filter.is_allowed("web_fetch"));
+        assert!(filter.is_allowed("web"));
         // Allow wins over deny, so these are allowed
         assert!(filter.is_allowed("files_write"));
-        assert!(filter.is_allowed("web_edit"));
+        assert!(!filter.is_allowed("web_edit")); // Not in allow list
         assert!(!filter.is_allowed("shell_execute")); // Not in allow list
     }
 

@@ -185,6 +185,9 @@ hyper = "1.0"
 # Web fetch dependencies
 markdowndown = { path = "markdowndown" }
 
+# Operations pattern (from main repo)
+swissarmyhammer-operations = { path = "../swissarmyhammer/swissarmyhammer-operations" }
+
 # Llama-agent dependencies
 llama-cpp-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs", features = ["metal", "sampler"] }
 llama-agent = { path = "llama-agent" }

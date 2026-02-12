@@ -6611,6 +6611,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-operations"
+version = "0.6.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-operations-macros",
+ "ulid",
+]
+
+[[package]]
+name = "swissarmyhammer-operations-macros"
+version = "0.6.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "swissarmyhammer-project-detection"
 version = "0.5.0"
 dependencies = [
@@ -6753,6 +6774,7 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-git",
  "swissarmyhammer-mcp-proxy",
+ "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",

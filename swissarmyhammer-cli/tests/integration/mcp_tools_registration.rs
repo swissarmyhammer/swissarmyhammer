@@ -5,7 +5,7 @@
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
     register_cel_tools, register_file_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, register_web_search_tools,
+    register_web_tools,
 };
 
 /// Test that verifies all expected MCP tools are registered
@@ -18,18 +18,17 @@ async fn test_mcp_tools_are_registered() {
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
-    register_web_fetch_tools(&mut registry);
-    register_web_search_tools(&mut registry);
+    register_web_tools(&mut registry);
 
     let tool_count = registry.len();
     println!("📊 Registered {} MCP tools", tool_count);
 
-    // We should have a significant number of tools. The threshold of 13 is based on the
+    // We should have a significant number of tools. The threshold of 12 is based on the
     // minimum set of core tools across all categories (files, shell, todos, web, etc.).
     // This acts as a smoke test to catch missing tool registrations.
     assert!(
-        tool_count >= 13,
-        "Expected at least 13 tools, got {}. This suggests tools are not being registered properly.",
+        tool_count >= 12,
+        "Expected at least 12 tools, got {}. This suggests tools are not being registered properly.",
         tool_count
     );
 
@@ -45,8 +44,7 @@ async fn test_mcp_tools_are_registered() {
         "shell_execute",
         "todo_create",
         "todo_show",
-        "web_fetch",
-        "web_search",
+        "web",
     ];
 
     let mut missing_tools = Vec::new();
@@ -127,14 +125,13 @@ async fn test_cli_categories_are_available() {
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
-    register_web_fetch_tools(&mut registry);
-    register_web_search_tools(&mut registry);
+    register_web_tools(&mut registry);
 
     let categories = registry.get_cli_categories();
     println!("📋 CLI Categories: {:?}", categories);
 
     // These categories should be available (excluding hidden tools like CEL and notify)
-    let expected_categories = ["file", "shell", "todo", "web-search"];
+    let expected_categories = ["file", "shell", "todo", "web"];
 
     for &expected_cat in &expected_categories {
         assert!(
@@ -181,8 +178,7 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
-    register_web_fetch_tools(&mut registry);
-    register_web_search_tools(&mut registry);
+    register_web_tools(&mut registry);
 
     let unsupported_constructs = ["oneOf", "allOf", "anyOf"];
     let mut violations = Vec::new();

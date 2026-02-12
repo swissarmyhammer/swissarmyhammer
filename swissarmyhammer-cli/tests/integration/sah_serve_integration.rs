@@ -61,8 +61,7 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "todo_create",
     "todo_show",
     "todo_mark_complete",
-    "web_fetch",
-    "web_search",
+    "web",
 ];
 
 /// Comprehensive integration test for sah serve MCP tools

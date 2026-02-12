@@ -14,7 +14,7 @@ use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
     register_file_tools, register_flow_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, register_web_search_tools,
+    register_web_tools,
 };
 use tokio::sync::RwLock;
 
@@ -103,8 +103,7 @@ impl CliToolContext {
         register_flow_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_todo_tools(&mut tool_registry);
-        register_web_fetch_tools(&mut tool_registry);
-        register_web_search_tools(&mut tool_registry);
+        register_web_tools(&mut tool_registry);
         tool_registry
     }
 
