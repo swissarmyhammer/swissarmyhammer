@@ -1773,14 +1773,9 @@ register_tool_category!(
     "Register all kanban board tools with the registry"
 );
 register_tool_category!(
-    register_web_fetch_tools,
-    web_fetch,
-    "Register all web fetch-related tools with the registry"
-);
-register_tool_category!(
-    register_web_search_tools,
-    web_search,
-    "Register all web search-related tools with the registry"
+    register_web_tools,
+    web,
+    "Register all web-related tools with the registry"
 );
 register_tool_category!(
     register_treesitter_tools,
@@ -1809,8 +1804,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_treesitter_tools(&mut registry);
-    register_web_fetch_tools(&mut registry);
-    register_web_search_tools(&mut registry);
+    register_web_tools(&mut registry);
 
     registry
 }
@@ -2123,9 +2117,9 @@ mod tests {
         "Read and return file contents from the local filesystem"
     );
     test_tool!(
-        WebSearchTool,
-        "web_search",
-        "Perform comprehensive web searches using DuckDuckGo"
+        WebTool,
+        "web_search_and_fetch",
+        "Search the web and fetch URL content"
     );
     test_tool!(
         ShellExecuteTool,
@@ -2154,7 +2148,7 @@ mod tests {
     fn test_cli_category_extraction() {
         // Test known categories
         assert_eq!(FilesReadTool.cli_category(), Some("file"));
-        assert_eq!(WebSearchTool.cli_category(), Some("web"));
+        assert_eq!(WebTool.cli_category(), Some("web"));
         assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
 
@@ -2169,7 +2163,7 @@ mod tests {
     fn test_cli_name_extraction() {
         // Test action extraction
         assert_eq!(FilesReadTool.cli_name(), "read");
-        assert_eq!(WebSearchTool.cli_name(), "search");
+        assert_eq!(WebTool.cli_name(), "search_and_fetch");
         assert_eq!(ShellExecuteTool.cli_name(), "execute");
         assert_eq!(OutlineGenerateTool.cli_name(), "generate");
 

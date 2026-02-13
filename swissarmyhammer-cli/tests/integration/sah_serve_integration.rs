@@ -59,8 +59,7 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "files_grep",
     "shell_execute",
     "kanban",
-    "web_fetch",
-    "web_search",
+    "web",
 ];
 
 /// Comprehensive integration test for sah serve MCP tools

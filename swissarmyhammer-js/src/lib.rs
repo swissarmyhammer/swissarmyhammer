@@ -172,7 +172,7 @@ impl JsWorker {
                             let mut result = Vec::new();
                             // Use OwnedKey iteration to get property names
                             let key_names: Vec<String> =
-                                globals.keys::<String>().into_iter().flatten().collect();
+                                globals.keys::<String>().flatten().collect();
                             for key in key_names {
                                 if bridge::is_builtin(&key) {
                                     continue;

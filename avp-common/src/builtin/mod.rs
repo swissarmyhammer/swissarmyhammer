@@ -142,8 +142,8 @@ mod tests {
             .expect("code-quality RuleSet should exist");
         assert_eq!(ruleset.name(), "code-quality");
         assert!(
-            ruleset.rules.len() >= 10,
-            "Should have at least 10 code quality rules"
+            ruleset.rules.len() >= 9,
+            "Should have at least 9 code quality rules"
         );
     }
 

@@ -8,7 +8,7 @@ fn test_filter_logic() {
     assert!(filter.is_allowed("files_read"));
     assert!(filter.is_allowed("files_write"));
     assert!(!filter.is_allowed("shell_execute"));
-    assert!(!filter.is_allowed("web_fetch"));
+    assert!(!filter.is_allowed("web"));
 }
 
 #[test]

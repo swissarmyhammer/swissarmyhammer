@@ -18,5 +18,5 @@ host = ["aarch64-apple-darwin"]
 publish-jobs = ["homebrew"]
 # Skip checking whether the specified configuration files are up to date
 allow-dirty = ["ci", "msi"]
-# Include man pages in release archives (generated at build time by build.rs)
-include = ["docs/*.1", "completions/*"]
+# Include shell completions in release archives
+include = ["completions/*"]

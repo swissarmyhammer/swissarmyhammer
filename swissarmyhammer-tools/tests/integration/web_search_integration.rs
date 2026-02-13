@@ -1,6 +1,7 @@
-//! Integration tests for web_search functionality
+//! Integration tests for web search functionality
 //!
-//! These tests verify that web_search works end-to-end with real Chrome/Chromium browser.
+//! These tests verify that the unified web tool's search operation works end-to-end
+//! with real Chrome/Chromium browser.
 //! Tests are marked with #[ignore] by default since they require Chrome to be installed.
 //! Run with: `cargo test --test integration web_search -- --ignored`
 
@@ -10,7 +11,8 @@ use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
-use swissarmyhammer_tools::mcp::tools::web_search::{chrome_detection, search::WebSearchTool};
+use swissarmyhammer_tools::mcp::tools::web::WebTool;
+use swissarmyhammer_tools::mcp::tools::web_search::chrome_detection;
 
 /// Helper function to create a test context for integration tests
 async fn create_test_context() -> ToolContext {
@@ -47,7 +49,7 @@ fn test_chrome_detection_on_system() {
     );
 }
 
-/// Test web_search with real Chrome (ignored by default)
+/// Test web search with real Chrome (ignored by default)
 ///
 /// This test requires Chrome to be installed and will launch a real browser.
 /// Run with: `cargo test --test integration test_web_search_real_chrome -- --ignored --nocapture`
@@ -67,11 +69,12 @@ async fn test_web_search_real_chrome() {
         chrome_result.path.as_ref().unwrap().display()
     );
 
-    let tool = WebSearchTool::new();
+    let tool = WebTool::new();
     let context = create_test_context().await;
 
     // Perform a simple search without content fetching for speed
     let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("search url"));
     args.insert("query".to_string(), json!("rust programming language"));
     args.insert("results_count".to_string(), json!(3));
     args.insert("fetch_content".to_string(), json!(false));
@@ -115,7 +118,7 @@ async fn test_web_search_real_chrome() {
     println!("Search time: {}ms", response["metadata"]["search_time_ms"]);
 }
 
-/// Test web_search with content fetching (ignored by default - slower)
+/// Test web search with content fetching (ignored by default - slower)
 ///
 /// Run with: `cargo test --test integration test_web_search_with_content -- --ignored --nocapture`
 #[tokio::test]
@@ -128,11 +131,12 @@ async fn test_web_search_with_content() {
         return;
     }
 
-    let tool = WebSearchTool::new();
+    let tool = WebTool::new();
     let context = create_test_context().await;
 
     // Perform search with content fetching (slower)
     let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("search url"));
     args.insert("query".to_string(), json!("rust programming"));
     args.insert("results_count".to_string(), json!(2));
     args.insert("fetch_content".to_string(), json!(true));
@@ -171,7 +175,7 @@ async fn test_web_search_with_content() {
     }
 }
 
-/// Test web_search error handling when Chrome launches but search fails
+/// Test web search error handling when Chrome launches but search fails
 #[tokio::test]
 #[ignore]
 async fn test_web_search_error_handling() {
@@ -181,11 +185,12 @@ async fn test_web_search_error_handling() {
         return;
     }
 
-    let tool = WebSearchTool::new();
+    let tool = WebTool::new();
     let context = create_test_context().await;
 
     // Try an empty query (should fail validation)
     let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("search url"));
     args.insert("query".to_string(), json!(""));
 
     let result = tool.execute(args, &context).await;

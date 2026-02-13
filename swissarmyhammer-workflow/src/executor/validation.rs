@@ -547,7 +547,13 @@ impl WorkflowExecutor {
         // which works regardless of whether we're in a single-thread or multi-thread runtime.
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Failed to create tokio runtime: {}", e)));
+                    return;
+                }
+            };
             let js_state = swissarmyhammer_js::JsState::global();
             let result = rt.block_on(js_state.get_all_variables());
             let _ = tx.send(result);
@@ -640,7 +646,7 @@ impl WorkflowExecutor {
     fn json_value_to_bool(value: &Value, _expression: &str) -> ExecutorResult<bool> {
         match value {
             Value::Bool(b) => Ok(*b),
-            Value::Number(n) => Ok(n.as_f64().map_or(false, |f| f != 0.0)),
+            Value::Number(n) => Ok(n.as_f64().is_some_and(|f| f != 0.0)),
             Value::String(s) => Ok(!s.is_empty()),
             Value::Null => Ok(false),
             Value::Array(a) => Ok(!a.is_empty()),

@@ -818,7 +818,7 @@ pub fn tool_call_to_acp(
 /// assert_eq!(infer_tool_kind("fs_write"), ToolKind::Edit);
 /// assert_eq!(infer_tool_kind("fs_delete"), ToolKind::Delete);
 /// assert_eq!(infer_tool_kind("shell_execute"), ToolKind::Execute);
-/// assert_eq!(infer_tool_kind("web_fetch"), ToolKind::Fetch);
+/// assert_eq!(infer_tool_kind("web"), ToolKind::Fetch);
 /// assert_eq!(infer_tool_kind("some_tool"), ToolKind::Other);
 /// ```
 pub fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::ToolKind {
@@ -2467,7 +2467,7 @@ mod tests {
         use agent_client_protocol::ToolKind;
 
         assert_eq!(infer_tool_kind("http_get"), ToolKind::Fetch);
-        assert_eq!(infer_tool_kind("web_fetch"), ToolKind::Fetch);
+        assert_eq!(infer_tool_kind("web"), ToolKind::Fetch);
         assert_eq!(infer_tool_kind("fetch_url"), ToolKind::Fetch);
     }
 
@@ -2506,7 +2506,7 @@ mod tests {
         assert_eq!(infer_tool_kind("mcp__files_read"), ToolKind::Read);
         assert_eq!(infer_tool_kind("mcp__files_write"), ToolKind::Edit);
         assert_eq!(infer_tool_kind("mcp__shell_execute"), ToolKind::Execute);
-        assert_eq!(infer_tool_kind("mcp__web_fetch"), ToolKind::Fetch);
+        assert_eq!(infer_tool_kind("mcp__web"), ToolKind::Fetch);
     }
 
     #[test]
@@ -2605,7 +2605,7 @@ mod tests {
             ("fs_write", ToolKind::Edit),
             ("fs_delete", ToolKind::Delete),
             ("shell_execute", ToolKind::Execute),
-            ("web_fetch", ToolKind::Fetch),
+            ("web", ToolKind::Fetch),
             ("search_files", ToolKind::Search),
             ("move_file", ToolKind::Move),
             ("think", ToolKind::Think),
@@ -2918,7 +2918,7 @@ mod tests {
         // Network operations should require permission
         assert!(needs_permission("http_get"));
         assert!(needs_permission("http_post"));
-        assert!(needs_permission("web_fetch"));
+        assert!(needs_permission("web"));
         assert!(needs_permission("fetch_url")); // contains fetch but also url-like
     }
 
@@ -2929,7 +2929,7 @@ mod tests {
         assert!(needs_permission("mcp__files_write"));
         assert!(needs_permission("mcp__shell_execute"));
         assert!(!needs_permission("mcp__files_list"));
-        assert!(needs_permission("mcp__web_fetch"));
+        assert!(needs_permission("mcp__web"));
     }
 
     #[test]
@@ -3006,7 +3006,7 @@ mod tests {
         // fetch by itself might be read, but with http/web it requires permission
         assert!(!needs_permission("fetch")); // Plain fetch - could be data retrieval
         assert!(needs_permission("http_fetch")); // Network fetch
-        assert!(needs_permission("web_fetch")); // Network fetch
+        assert!(needs_permission("web")); // Network tool
         assert!(!needs_permission("fetch_from_cache")); // Local fetch
     }
 
@@ -3035,7 +3035,6 @@ mod tests {
         assert!(needs_permission("mcp__swissarmyhammer__shell_execute"));
         assert!(!needs_permission("mcp__swissarmyhammer__files_glob"));
         assert!(!needs_permission("mcp__swissarmyhammer__files_grep"));
-        assert!(needs_permission("mcp__swissarmyhammer__web_search"));
-        assert!(needs_permission("mcp__swissarmyhammer__web_fetch"));
+        assert!(needs_permission("mcp__swissarmyhammer__web"));
     }
 }

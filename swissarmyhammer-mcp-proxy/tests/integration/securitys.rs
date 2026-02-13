@@ -105,7 +105,7 @@ fn test_deny_patterns_enforced() {
 
     // Allowed tools
     assert!(filter.is_allowed("files_read"));
-    assert!(filter.is_allowed("web_fetch"));
+    assert!(filter.is_allowed("web"));
 
     // Variations - these should still be blocked or allowed based on pattern matching
     assert!(filter.is_allowed("Shell_execute")); // Case variation doesn't match deny pattern, and no allow patterns, so allowed

@@ -11,7 +11,7 @@ use swissarmyhammer_common::health::HealthCheck;
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
     register_file_tools, register_flow_tools, register_git_tools, register_kanban_tools,
-    register_shell_tools, register_web_fetch_tools, register_web_search_tools,
+    register_shell_tools, register_treesitter_tools, register_web_tools,
 };
 
 /// Collect all tool health checks from MCP tools
@@ -36,8 +36,8 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
     register_git_tools(&mut tool_registry);
     register_shell_tools(&mut tool_registry);
     register_kanban_tools(&mut tool_registry);
-    register_web_fetch_tools(&mut tool_registry);
-    register_web_search_tools(&mut tool_registry);
+    register_treesitter_tools(&mut tool_registry);
+    register_web_tools(&mut tool_registry);
 
     // Collect health checks from all tools
     // Since McpTool extends Doctorable, all tools can provide health checks

@@ -57,9 +57,5 @@
 pub mod fetch;
 pub mod security;
 
-use crate::mcp::tool_registry::ToolRegistry;
-
-/// Register all web fetch-related tools with the registry
-pub fn register_web_fetch_tools(registry: &mut ToolRegistry) {
-    registry.register(fetch::WebFetchTool::new());
-}
+// Registration is handled by the unified `web` tool module.
+// This module is kept as an internal utility providing fetch pipeline components.

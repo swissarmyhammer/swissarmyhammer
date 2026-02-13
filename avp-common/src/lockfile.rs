@@ -67,12 +67,8 @@ impl Lockfile {
     /// Save lockfile to the project root directory.
     pub fn save(&self, project_root: &Path) -> Result<(), std::io::Error> {
         let path = Self::path(project_root);
-        let contents = serde_json::to_string_pretty(self).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to serialize lockfile: {}", e),
-            )
-        })?;
+        let contents = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::other(format!("Failed to serialize lockfile: {}", e)))?;
         std::fs::write(&path, contents)?;
         Ok(())
     }

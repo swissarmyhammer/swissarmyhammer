@@ -4,12 +4,12 @@
 //! via `#[path = ...]` includes. Functions are parameterized by binary name to
 //! support different CLI tools.
 
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::path::Path;
 
 /// Wrap an io::Error with additional context.
 fn io_context(msg: String, err: Error) -> Error {
-    Error::new(ErrorKind::Other, format!("{msg}: {err}"))
+    Error::other(format!("{msg}: {err}"))
 }
 
 /// Generate markdown CLI reference for mdbook.

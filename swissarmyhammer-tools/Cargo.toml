@@ -21,7 +21,6 @@ swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
-swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }
@@ -82,6 +81,9 @@ markdowndown = { workspace = true }
 url = { workspace = true }
 futures-util = { workspace = true }
 libc = { workspace = true }
+
+# Operations pattern
+swissarmyhammer-operations = { workspace = true }
 
 # Web search dependencies
 chromiumoxide = { workspace = true }

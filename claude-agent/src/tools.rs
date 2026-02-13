@@ -3476,7 +3476,7 @@ mod tests {
             ToolKind::Execute
         );
         assert_eq!(
-            ToolKind::classify_tool("mcp__web_fetch", &json!({})),
+            ToolKind::classify_tool("mcp__web", &json!({})),
             ToolKind::Fetch
         );
 
