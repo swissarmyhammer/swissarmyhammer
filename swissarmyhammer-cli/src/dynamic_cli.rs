@@ -740,7 +740,7 @@ const BASE_CLI_LONG_ABOUT: &str = "
 SwissArmyHammer - The only coding assistant you'll ever need
 
 Commands are organized into three types:
-- Static commands (serve, doctor, validate, model, prompt, rule, flow)
+- Static commands (serve, init, deinit, doctor, validate, model, prompt, rule, flow)
 - Workflow shortcuts (do, plan, review, etc.) - use 'sah flow list' to see all
 - Tool commands (file, issue, memo, search, shell, web-search)
 
@@ -780,6 +780,38 @@ The server exposes MCP tools through HTTP endpoints and provides:
 Example:
   swissarmyhammer serve http --port 8080 --host 127.0.0.1
   swissarmyhammer serve http --port 0  # Random port
+";
+
+const INIT_COMMAND_LONG_ABOUT: &str = "
+Initialize SwissArmyHammer for use with Claude Code.
+
+This command:
+1. Registers sah as an MCP server in Claude Code settings
+2. Creates the .swissarmyhammer/ project directory with prompts/ and workflows/
+
+The command is idempotent - safe to run multiple times.
+
+Targets:
+  project   Write to .mcp.json (default, shared with team via git)
+  local     Write to ~/.claude.json per-project config (personal, not committed)
+  user      Write to ~/.claude.json global config (all projects)
+
+Examples:
+  sah init              # Project-level setup (default)
+  sah init user         # Global setup for all projects
+  sah init local        # Personal setup, not committed to git
+";
+
+const DEINIT_COMMAND_LONG_ABOUT: &str = "
+Remove SwissArmyHammer MCP server configuration from Claude Code settings.
+
+By default, only the MCP server entry is removed from the settings file.
+Use --remove-directory to also delete the .swissarmyhammer/ project directory.
+
+Examples:
+  sah deinit                     # Remove from project settings
+  sah deinit user                # Remove from user settings
+  sah deinit --remove-directory  # Also remove .swissarmyhammer/
 ";
 
 const DOCTOR_COMMAND_LONG_ABOUT: &str = "
@@ -1808,6 +1840,52 @@ impl CliBuilder {
         .subcommand(Self::build_serve_http_subcommand())
     }
 
+    /// Build the init command
+    fn build_init_command() -> Command {
+        Self::build_command_with_args(
+            CommandConfig {
+                name: "init",
+                about: "Initialize sah MCP server in Claude Code settings",
+                long_about: INIT_COMMAND_LONG_ABOUT,
+            },
+            Self::build_args_from_specs(&[ArgSpec::new(
+                "target",
+                "Where to install the MCP server configuration",
+            )
+            .value_parser(ArgSpecValueParser::Strings(vec![
+                "project", "local", "user",
+            ]))
+            .default_value("project".to_string())]),
+        )
+    }
+
+    /// Build the deinit command
+    fn build_deinit_command() -> Command {
+        Self::build_command_with_args(
+            CommandConfig {
+                name: "deinit",
+                about: "Remove sah MCP server from Claude Code settings",
+                long_about: DEINIT_COMMAND_LONG_ABOUT,
+            },
+            Self::build_args_from_specs(&[
+                ArgSpec::new(
+                    "target",
+                    "Where to remove the MCP server configuration from",
+                )
+                .value_parser(ArgSpecValueParser::Strings(vec![
+                    "project", "local", "user",
+                ]))
+                .default_value("project".to_string()),
+                ArgSpec::new(
+                    "remove-directory",
+                    "Also remove .swissarmyhammer/ project directory",
+                )
+                .long("remove-directory")
+                .action(ArgSpecAction::SetTrue),
+            ]),
+        )
+    }
+
     /// Build the doctor command
     fn build_doctor_command() -> Command {
         Self::build_command_with_docs(CommandConfig {
@@ -1878,9 +1956,11 @@ impl CliBuilder {
         Self::add_workflow_commands(cli)
     }
 
-    /// Add server-related commands (serve, doctor, validate)
+    /// Add server-related commands (serve, init, deinit, doctor, validate)
     fn add_server_commands(cli: Command) -> Command {
         cli.subcommand(Self::build_serve_command())
+            .subcommand(Self::build_init_command())
+            .subcommand(Self::build_deinit_command())
             .subcommand(Self::build_doctor_command())
             .subcommand(Self::build_validate_command())
     }

@@ -1,0 +1,153 @@
+//! Remove sah MCP server configuration from Claude Code settings.
+
+use std::fs;
+
+use serde_json::json;
+
+use crate::cli::InstallTarget;
+
+use super::settings;
+
+/// Uninstall sah MCP server from the specified target.
+pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {
+    match target {
+        InstallTarget::Project => uninstall_project(),
+        InstallTarget::Local => uninstall_local(),
+        InstallTarget::User => uninstall_user(),
+    }?;
+
+    // Remove .swissarmyhammer directory if requested
+    if remove_directory {
+        let sah_dir = std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?
+            .join(".swissarmyhammer");
+
+        if sah_dir.exists() {
+            fs::remove_dir_all(&sah_dir)
+                .map_err(|e| format!("Failed to remove {}: {}", sah_dir.display(), e))?;
+            println!("Removed {}", sah_dir.display());
+        }
+    }
+
+    Ok(())
+}
+
+/// Uninstall from project-level `.mcp.json`.
+fn uninstall_project() -> Result<(), String> {
+    let path = settings::mcp_json_path();
+
+    if !path.exists() {
+        println!("No {} file found, nothing to uninstall", path.display());
+        return Ok(());
+    }
+
+    let mut mcp_settings = settings::read_settings(&path)?;
+    let changed = settings::remove_mcp_server(&mut mcp_settings);
+
+    // If mcpServers is now empty, clean it up
+    if let Some(mcp_servers) = mcp_settings.get("mcpServers").and_then(|m| m.as_object()) {
+        if mcp_servers.is_empty() {
+            mcp_settings.as_object_mut().unwrap().remove("mcpServers");
+        }
+    }
+
+    // Delete file if empty, otherwise write back
+    if mcp_settings == json!({}) {
+        fs::remove_file(&path)
+            .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
+        println!(
+            "sah MCP server uninstalled, removed empty {}",
+            path.display()
+        );
+    } else if changed {
+        settings::write_settings(&path, &mcp_settings)?;
+        println!("sah MCP server uninstalled from {}", path.display());
+    } else {
+        println!("sah MCP server was not configured in {}", path.display());
+    }
+
+    Ok(())
+}
+
+/// Uninstall from user-level `~/.claude.json` top-level `mcpServers`.
+fn uninstall_user() -> Result<(), String> {
+    let path = settings::claude_json_path();
+
+    if !path.exists() {
+        println!("No {} file found, nothing to uninstall", path.display());
+        return Ok(());
+    }
+
+    let mut root = settings::read_settings(&path)?;
+    let changed = settings::remove_mcp_server(&mut root);
+
+    // Clean up empty mcpServers object
+    if let Some(mcp_servers) = root.get("mcpServers").and_then(|m| m.as_object()) {
+        if mcp_servers.is_empty() {
+            root.as_object_mut().unwrap().remove("mcpServers");
+        }
+    }
+
+    if changed {
+        settings::write_settings(&path, &root)?;
+        println!(
+            "sah MCP server uninstalled from {} (user scope)",
+            path.display()
+        );
+    } else {
+        println!(
+            "sah MCP server was not configured in {} (user scope)",
+            path.display()
+        );
+    }
+
+    Ok(())
+}
+
+/// Uninstall from local scope: `~/.claude.json` under `projects.<project-path>.mcpServers`.
+fn uninstall_local() -> Result<(), String> {
+    let path = settings::claude_json_path();
+    let key = settings::project_key()?;
+
+    if !path.exists() {
+        println!("No {} file found, nothing to uninstall", path.display());
+        return Ok(());
+    }
+
+    let mut root = settings::read_settings(&path)?;
+
+    // Navigate to the project entry
+    let changed = if let Some(projects) = root.get_mut("projects") {
+        if let Some(entry) = projects.get_mut(&key) {
+            let changed = settings::remove_mcp_server(entry);
+            // Clean up empty mcpServers in project entry
+            if let Some(mcp_servers) = entry.get("mcpServers").and_then(|m| m.as_object()) {
+                if mcp_servers.is_empty() {
+                    entry.as_object_mut().unwrap().remove("mcpServers");
+                }
+            }
+            changed
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if changed {
+        settings::write_settings(&path, &root)?;
+        println!(
+            "sah MCP server uninstalled from {} (local scope, project: {})",
+            path.display(),
+            key
+        );
+    } else {
+        println!(
+            "sah MCP server was not configured in {} (local scope, project: {})",
+            path.display(),
+            key
+        );
+    }
+
+    Ok(())
+}

@@ -26,34 +26,59 @@ The `doctor` command checks your installation and configuration.
 
 ## Claude Code Integration
 
-Configure SwissArmyHammer as an MCP server for Claude Code:
+Initialize SwissArmyHammer for your project:
 
 ```bash
-# Add SwissArmyHammer as an MCP server
-claude mcp add --scope user sah sah serve
-
-# Verify the connection
-claude mcp list
+sah init
 ```
 
-Once configured, SwissArmyHammer tools will be available in Claude Code automatically.
+This does two things:
+1. Registers `sah` as an MCP server in `.mcp.json`
+2. Creates the `.swissarmyhammer/` project directory with `prompts/` and `workflows/`
+
+Verify the setup:
+```bash
+sah doctor
+```
+
+### Scope Options
+
+By default, `sah init` writes to project settings. You can choose a different scope:
+
+| Target  | File                             | Use case                           |
+|---------|----------------------------------|------------------------------------|
+| project | `.mcp.json`                      | Shared with team (default)         |
+| local   | `~/.claude.json` (per-project)   | Personal, not committed            |
+| user    | `~/.claude.json` (global)        | Applies to all projects            |
+
+```bash
+sah init user      # Install globally
+sah init local     # Install locally (not committed)
+```
+
+### Removing Configuration
+
+```bash
+sah deinit                     # Remove from project settings
+sah deinit --remove-directory  # Also remove .swissarmyhammer/
+sah deinit user                # Remove from user settings
+```
+
+### Manual Configuration (Alternative)
+
+If you prefer manual setup:
+```bash
+claude mcp add --scope user sah sah serve
+```
 
 ## Directory Setup
 
-SwissArmyHammer creates directories as needed, but you can set them up manually:
+`sah init` creates the project directory automatically. For user-level directories, set them up manually:
 
-### User Directory (Optional)
 ```bash
-# Personal prompts and workflows
+# Personal prompts and workflows (optional)
 mkdir -p ~/.swissarmyhammer/prompts
 mkdir -p ~/.swissarmyhammer/workflows
-```
-
-### Project Directory (Optional)
-```bash
-# Project-specific prompts and workflows
-mkdir -p .swissarmyhammer/prompts
-mkdir -p .swissarmyhammer/workflows
 ```
 
 Built-in prompts and workflows are embedded in the binary and available immediately.

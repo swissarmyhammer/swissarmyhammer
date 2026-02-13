@@ -592,6 +592,8 @@ async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: 
 async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolContext>) -> i32 {
     match context.matches.subcommand() {
         Some(("serve", sub_matches)) => commands::serve::handle_command(sub_matches, context).await,
+        Some(("init", sub_matches)) => handle_init_command(sub_matches),
+        Some(("deinit", sub_matches)) => handle_deinit_command(sub_matches),
         Some(("doctor", _)) => handle_doctor_command(context).await,
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, context).await,
         // "rule" command is now dynamically generated from MCP tools
@@ -1136,6 +1138,39 @@ fn extract_clap_value(
 ) -> Option<serde_json::Value> {
     let extractor = ValueExtractor::from_schema(prop_schema);
     extractor.extract(matches, prop_name)
+}
+
+fn parse_install_target(matches: &clap::ArgMatches) -> cli::InstallTarget {
+    matches
+        .get_one::<String>("target")
+        .map(|s| match s.as_str() {
+            "local" => cli::InstallTarget::Local,
+            "user" => cli::InstallTarget::User,
+            _ => cli::InstallTarget::Project,
+        })
+        .unwrap_or(cli::InstallTarget::Project)
+}
+
+fn handle_init_command(matches: &clap::ArgMatches) -> i32 {
+    match commands::install::init::install(parse_install_target(matches)) {
+        Ok(()) => EXIT_SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
+
+fn handle_deinit_command(matches: &clap::ArgMatches) -> i32 {
+    let remove_directory = matches.get_flag("remove-directory");
+
+    match commands::install::deinit::uninstall(parse_install_target(matches), remove_directory) {
+        Ok(()) => EXIT_SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            EXIT_ERROR
+        }
+    }
 }
 
 async fn handle_doctor_command(cli_context: &CliContext) -> i32 {
