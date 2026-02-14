@@ -112,7 +112,7 @@ impl ServerHandler for EchoService {
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ServerInfo, McpError> {
         if let Some(http_request_part) = context.extensions.get::<http::request::Parts>() {

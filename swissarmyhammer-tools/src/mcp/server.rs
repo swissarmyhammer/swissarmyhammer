@@ -147,6 +147,8 @@ fn create_server_capabilities() -> ServerCapabilities {
         logging: None,
         completions: None,
         experimental: None,
+        extensions: None,
+        tasks: None,
     }
 }
 
@@ -157,6 +159,7 @@ fn create_server_implementation() -> Implementation {
         version: crate::VERSION.into(),
         icons: None,
         title: Some("SwissArmyHammer MCP Server".into()),
+        description: None,
         website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
     }
 }
@@ -918,7 +921,7 @@ impl McpServer {
 impl ServerHandler for McpServer {
     async fn initialize(
         &self,
-        request: InitializeRequestParam,
+        request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<InitializeResult, McpError> {
         tracing::info!(
@@ -948,7 +951,7 @@ impl ServerHandler for McpServer {
 
     async fn list_prompts(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListPromptsResult, McpError> {
         let library = self.library.read().await;
@@ -1002,7 +1005,7 @@ impl ServerHandler for McpServer {
 
     async fn get_prompt(
         &self,
-        request: GetPromptRequestParam,
+        request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetPromptResult, McpError> {
         let library = self.library.read().await;
@@ -1036,7 +1039,7 @@ impl ServerHandler for McpServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
         Ok(ListToolsResult {
@@ -1048,7 +1051,7 @@ impl ServerHandler for McpServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
         tracing::debug!(

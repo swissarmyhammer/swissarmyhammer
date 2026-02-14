@@ -194,9 +194,11 @@ impl UnifiedMCPClient {
 
     /// Call a tool with arguments
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<String, MCPError> {
-        let params = CallToolRequestParam {
+        let params = CallToolRequestParams {
             name: name.to_string().into(),
             arguments: arguments.as_object().cloned(),
+            meta: None,
+            task: None,
         };
 
         let result = timeout(self.default_timeout, self.service.call_tool(params))
@@ -235,7 +237,7 @@ impl UnifiedMCPClient {
         name: &str,
         arguments: Option<HashMap<String, Value>>,
     ) -> Result<Vec<String>, MCPError> {
-        let params = GetPromptRequestParam {
+        let params = GetPromptRequestParams {
             name: name.to_string(),
             arguments: arguments.map(|map| {
                 let mut json_map = serde_json::Map::new();
@@ -244,6 +246,7 @@ impl UnifiedMCPClient {
                 }
                 json_map
             }),
+            meta: None,
         };
 
         let result = timeout(self.default_timeout, self.service.get_prompt(params))

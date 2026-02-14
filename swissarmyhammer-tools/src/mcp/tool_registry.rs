@@ -1023,6 +1023,7 @@ impl ToolRegistry {
                     icons: None,
                     title: Some(McpTool::name(tool.as_ref()).into()),
                     meta: None,
+                    execution: None,
                 }
             })
             .collect()

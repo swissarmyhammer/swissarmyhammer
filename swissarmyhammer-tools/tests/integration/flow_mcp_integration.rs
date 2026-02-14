@@ -11,7 +11,7 @@
 //! - Validate error handling
 
 use rmcp::{
-    model::{CallToolRequestParam, ClientInfo},
+    model::{CallToolRequestParams, ClientInfo},
     service::RunningService,
 };
 use serde_json::json;
@@ -54,7 +54,7 @@ async fn call_flow_list(
     verbose: bool,
 ) -> rmcp::model::CallToolResult {
     client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "flow".into(),
             arguments: json!({
                 "flow_name": "list",
@@ -63,6 +63,8 @@ async fn call_flow_list(
             })
             .as_object()
             .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("Flow list should succeed")
@@ -246,7 +248,7 @@ async fn try_execute_workflow(
     client: &RunningService<rmcp::RoleClient, ClientInfo>,
     workflow_name: &str,
 ) -> Result<rmcp::model::CallToolResult, String> {
-    let exec_future = client.call_tool(CallToolRequestParam {
+    let exec_future = client.call_tool(CallToolRequestParams {
         name: "flow".into(),
         arguments: json!({
             "flow_name": workflow_name,
@@ -256,6 +258,8 @@ async fn try_execute_workflow(
         })
         .as_object()
         .cloned(),
+        meta: None,
+        task: None,
     });
 
     timeout(Duration::from_secs(2), exec_future)
@@ -327,7 +331,7 @@ async fn test_flow_missing_required_parameter() {
 
         let exec_result = env
             .client()
-            .call_tool(CallToolRequestParam {
+            .call_tool(CallToolRequestParams {
                 name: "flow".into(),
                 arguments: json!({
                     "flow_name": workflow_name,
@@ -335,6 +339,8 @@ async fn test_flow_missing_required_parameter() {
                 })
                 .as_object()
                 .cloned(),
+                meta: None,
+                task: None,
             })
             .await;
 
