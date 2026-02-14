@@ -43,7 +43,7 @@ Claude Code hook processor that validates tool calls, file changes, and more.
 * `info` — Show detailed information about a package
 * `install` — Install a package from the registry
 * `uninstall` — Remove an installed package
-* `new` — Create a new RuleSet from template
+* `new` — Create a new Validator from template
 * `publish` — Publish a package to the registry
 * `unpublish` — Remove a published package version from the registry
 * `outdated` — Check for available package updates
@@ -217,7 +217,7 @@ Remove an installed package
 
 ## `avp new`
 
-Create a new RuleSet from template
+Create a new Validator from template
 
 **Usage:** `avp new [OPTIONS] <NAME>`
 

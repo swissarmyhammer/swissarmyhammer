@@ -124,7 +124,7 @@ pub enum Commands {
         #[arg(long, visible_alias = "user")]
         global: bool,
     },
-    /// Create a new RuleSet from template
+    /// Create a new Validator from template
     New {
         /// RuleSet name (kebab-case)
         name: String,

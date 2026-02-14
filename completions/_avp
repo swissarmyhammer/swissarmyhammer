@@ -301,7 +301,7 @@ _avp_commands() {
 'info:Show detailed information about a package' \
 'install:Install a package from the registry' \
 'uninstall:Remove an installed package' \
-'new:Create a new RuleSet from template' \
+'new:Create a new Validator from template' \
 'publish:Publish a package to the registry' \
 'unpublish:Remove a published package version from the registry' \
 'outdated:Check for available package updates' \
@@ -334,7 +334,7 @@ _avp__help_commands() {
 'info:Show detailed information about a package' \
 'install:Install a package from the registry' \
 'uninstall:Remove an installed package' \
-'new:Create a new RuleSet from template' \
+'new:Create a new Validator from template' \
 'publish:Publish a package to the registry' \
 'unpublish:Remove a published package version from the registry' \
 'outdated:Check for available package updates' \
