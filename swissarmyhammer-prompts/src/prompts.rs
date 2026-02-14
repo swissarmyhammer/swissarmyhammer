@@ -588,7 +588,7 @@ impl Prompt {
 /// let mut library = PromptLibrary::new();
 ///
 /// // Load prompts from a directory
-/// let count = library.add_directory("./.swissarmyhammer/prompts").unwrap();
+/// let count = library.add_directory("./.prompts").unwrap();
 /// println!("Loaded {} prompts", count);
 ///
 /// // Get a specific prompt
@@ -680,7 +680,7 @@ impl PromptLibrary {
     /// use swissarmyhammer::PromptLibrary;
     ///
     /// let mut library = PromptLibrary::new();
-    /// let count = library.add_directory("./.swissarmyhammer/prompts").unwrap();
+    /// let count = library.add_directory("./.prompts").unwrap();
     /// println!("Loaded {} prompts from directory", count);
     /// ```
     pub fn add_directory(&mut self, path: impl AsRef<Path>) -> Result<usize> {

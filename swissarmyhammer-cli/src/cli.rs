@@ -165,7 +165,7 @@ Initialize SwissArmyHammer for use with Claude Code.
 
 This command:
 1. Registers sah as an MCP server in Claude Code settings
-2. Creates the .swissarmyhammer/ project directory with prompts/ and workflows/
+2. Creates the .swissarmyhammer/ project directory (workflows/) and .prompts/
 
 The command is idempotent - safe to run multiple times.
 

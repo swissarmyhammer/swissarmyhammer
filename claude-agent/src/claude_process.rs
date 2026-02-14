@@ -138,6 +138,7 @@ const CLAUDE_CLI_ARGS: &[&str] = &[
     "stream-json",                    // emit newline-delimited JSON on stdout
     "--dangerously-skip-permissions", // ACP server handles permission checks
     "--include-partial-messages",     // Emit partial messages for immediate streaming
+    "--no-session-persistence", // Disable built-in session persistence (we manage it ourselves)
     // NOTE: This causes Claude to send a duplicate final combined message and empty terminator
     // We filter these out in the streaming loop (skip large chunks and empty chunks)
     "--replay-user-messages", // Re-emit user messages for transcript recording
@@ -381,7 +382,9 @@ impl ClaudeProcess {
             .args(CLAUDE_CLI_ARGS)
             .arg("--session-id")
             .arg(claude_session_uuid)
-            .env("AVP_VALIDATOR_CONTEXT", "1");
+            .env("CLAUDE_ACP", "1")
+            // Allow spawning Claude from within a Claude Code session
+            .env_remove("CLAUDECODE");
         command
     }
 
@@ -409,7 +412,6 @@ impl ClaudeProcess {
         if config.ephemeral {
             tracing::info!("Spawning Claude in ephemeral mode (haiku, no session persistence)");
             command.arg("--model").arg("haiku");
-            command.arg("--no-session-persistence");
         }
     }
 

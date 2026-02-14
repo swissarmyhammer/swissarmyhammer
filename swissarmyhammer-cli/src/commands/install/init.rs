@@ -84,7 +84,7 @@ fn install_local() -> Result<(), String> {
     Ok(())
 }
 
-/// Create the .swissarmyhammer project directory with prompts and workflows subdirectories.
+/// Create the project directory structure with .prompts, .swissarmyhammer, and workflows.
 fn create_project_structure() -> Result<(), String> {
     use swissarmyhammer_common::SwissarmyhammerDirectory;
 
@@ -97,9 +97,13 @@ fn create_project_structure() -> Result<(), String> {
         })
         .map_err(|e: String| e)?;
 
-    sah_dir
-        .ensure_subdir("prompts")
-        .map_err(|e| format!("Failed to create prompts directory: {}", e))?;
+    // Create .prompts/ as a sibling to .swissarmyhammer/ (dot-directory path for PromptResolver)
+    let project_root = sah_dir.root().parent().ok_or_else(|| {
+        "Failed to determine project root from .swissarmyhammer directory".to_string()
+    })?;
+    let prompts_dir = project_root.join(".prompts");
+    std::fs::create_dir_all(&prompts_dir)
+        .map_err(|e| format!("Failed to create .prompts directory: {}", e))?;
 
     sah_dir
         .ensure_subdir("workflows")

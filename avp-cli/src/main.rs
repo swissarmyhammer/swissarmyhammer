@@ -33,7 +33,7 @@ use tracing_subscriber::EnvFilter;
 
 use avp::install;
 use avp::registry::RegistryError;
-use avp::{auth, doctor, info, list, new, outdated, package, publish, search};
+use avp::{auth, doctor, edit, info, list, new, outdated, package, publish, search};
 use avp::{Cli, Commands};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
@@ -101,6 +101,9 @@ async fn main() {
         }) => handle_registry_result(package::run_install(&package, global).await),
         Some(Commands::Uninstall { name, global, .. }) => {
             handle_registry_result(package::run_uninstall(&name, global).await)
+        }
+        Some(Commands::Edit { name, global, .. }) => {
+            handle_registry_result(edit::run_edit(&name, global))
         }
         Some(Commands::New { name, global, .. }) => {
             handle_registry_result(new::run_new(&name, global))

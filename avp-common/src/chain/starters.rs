@@ -180,7 +180,7 @@ where
 
 /// A starter that checks for validator context and short-circuits if detected.
 ///
-/// When AVP spawns validator agents, those agents have AVP_VALIDATOR_CONTEXT=1 set.
+/// When AVP spawns validator agents, those agents have CLAUDE_ACP=1 set.
 /// This prevents infinite recursion where validator agents' hooks trigger more validators.
 ///
 /// **IMPORTANT: ALL hooks are skipped when in validator context.**
@@ -205,7 +205,7 @@ impl<I: HookInputType> ValidatorContextStarter<I> {
 
     /// Check if we're running inside a validator context.
     fn in_validator_context() -> bool {
-        std::env::var("AVP_VALIDATOR_CONTEXT").is_ok()
+        std::env::var("CLAUDE_ACP").is_ok()
     }
 }
 

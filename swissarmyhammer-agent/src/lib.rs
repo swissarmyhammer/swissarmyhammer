@@ -242,6 +242,14 @@ pub struct AcpAgentHandle {
     pub notification_rx: broadcast::Receiver<SessionNotification>,
 }
 
+/// Options for agent creation
+#[derive(Debug, Clone, Default)]
+pub struct CreateAgentOptions {
+    /// Use ephemeral mode (haiku model, no session persistence).
+    /// Ideal for quick, stateless operations like scaffold generation.
+    pub ephemeral: bool,
+}
+
 /// Create an ACP agent based on model configuration
 ///
 /// Returns an AcpAgentHandle containing the agent and notification receiver.
@@ -261,9 +269,20 @@ pub async fn create_agent(
     config: &ModelConfig,
     mcp_config: Option<McpServerConfig>,
 ) -> AcpResult<AcpAgentHandle> {
+    create_agent_with_options(config, mcp_config, CreateAgentOptions::default()).await
+}
+
+/// Create an ACP agent with additional options
+///
+/// Like `create_agent` but accepts options for ephemeral mode, etc.
+pub async fn create_agent_with_options(
+    config: &ModelConfig,
+    mcp_config: Option<McpServerConfig>,
+    options: CreateAgentOptions,
+) -> AcpResult<AcpAgentHandle> {
     let (agent_name, handle) = match config.executor_type() {
         ModelExecutorType::ClaudeCode => {
-            let handle = create_claude_agent(mcp_config).await?;
+            let handle = create_claude_agent(mcp_config, options.ephemeral).await?;
             ("Claude", handle)
         }
         ModelExecutorType::LlamaAgent => {
@@ -293,7 +312,10 @@ pub async fn create_agent(
 }
 
 /// Create a Claude ACP agent
-async fn create_claude_agent(mcp_config: Option<McpServerConfig>) -> AcpResult<AcpAgentHandle> {
+async fn create_claude_agent(
+    mcp_config: Option<McpServerConfig>,
+    ephemeral: bool,
+) -> AcpResult<AcpAgentHandle> {
     // Check if Claude CLI is available (claude-agent requires this)
     if which::which("claude").is_err() {
         return Err(AcpError::AgentNotAvailable(
@@ -304,7 +326,7 @@ async fn create_claude_agent(mcp_config: Option<McpServerConfig>) -> AcpResult<A
 
     // Create Claude agent configuration with MCP servers
     // Increase max prompt length for rule checking which may include very large files
-    let agent_config = if let Some(mcp) = mcp_config {
+    let mut agent_config = if let Some(mcp) = mcp_config {
         claude_agent::AgentConfig {
             max_prompt_length: MAX_PROMPT_LENGTH_BYTES,
             mcp_servers: vec![claude_agent::config::McpServerConfig::Http(
@@ -323,6 +345,8 @@ async fn create_claude_agent(mcp_config: Option<McpServerConfig>) -> AcpResult<A
             ..Default::default()
         }
     };
+
+    agent_config.claude.ephemeral = ephemeral;
 
     // Create the Claude agent
     let (agent, notification_rx) =
@@ -1004,6 +1028,18 @@ mod tests {
             agent_client_protocol::PromptResponse::new(StopReason::EndTurn).meta(meta);
         let response = build_agent_response(prompt_result, "".to_string(), 0);
         assert_eq!(response.content, "From metadata");
+    }
+
+    #[test]
+    fn test_create_agent_options_defaults_to_non_ephemeral() {
+        let options = CreateAgentOptions::default();
+        assert!(!options.ephemeral);
+    }
+
+    #[test]
+    fn test_create_agent_options_enables_ephemeral_mode() {
+        let options = CreateAgentOptions { ephemeral: true };
+        assert!(options.ephemeral);
     }
 
     // Note: Tests for create_agent() and execute_prompt() require external agent installations

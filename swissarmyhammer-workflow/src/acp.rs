@@ -14,6 +14,6 @@
 //! ```
 
 pub use swissarmyhammer_agent::{
-    create_agent, execute_prompt, AcpAgentHandle, AcpError, AcpResult, AgentResponse,
-    AgentResponseType, McpServerConfig,
+    create_agent, create_agent_with_options, execute_prompt, AcpAgentHandle, AcpError, AcpResult,
+    AgentResponse, AgentResponseType, CreateAgentOptions, McpServerConfig,
 };

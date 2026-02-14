@@ -15,10 +15,16 @@ pub struct PromptResolver {
 
 impl PromptResolver {
     /// Create a new PromptResolver
+    ///
+    /// Configures the VFS to load prompts from dot-directory paths:
+    /// - `~/.prompts` (user prompts)
+    /// - `{git_root}/.prompts` (local/project prompts)
     pub fn new() -> Self {
+        let mut vfs = VirtualFileSystem::new("prompts");
+        vfs.use_dot_directory_paths();
         Self {
             prompt_sources: HashMap::new(),
-            vfs: VirtualFileSystem::new("prompts"),
+            vfs,
         }
     }
 
@@ -30,8 +36,8 @@ impl PromptResolver {
 
     /// Load all prompts following the correct precedence:
     /// 1. Builtin prompts (least specific, embedded in binary)
-    /// 2. User prompts from ~/.swissarmyhammer/prompts
-    /// 3. Local prompts from .swissarmyhammer directories (most specific)
+    /// 2. User prompts from ~/.prompts
+    /// 3. Local prompts from .prompts in the project root (most specific)
     ///
     /// Also loads partials into the library's storage for template rendering.
     pub fn load_all_prompts(&mut self, library: &mut PromptLibrary) -> Result<()> {
@@ -93,7 +99,12 @@ impl PromptResolver {
                     .insert(name_with_liquid, file.source.clone());
             } else {
                 // Load regular prompts normally
-                let prompt = loader.load_from_string(&file.name, &file.content)?;
+                let mut prompt = loader.load_from_string(&file.name, &file.content)?;
+
+                // Set source path for file-based prompts (not builtins)
+                if file.source != FileSource::Builtin {
+                    prompt.source = Some(file.path.clone());
+                }
 
                 // Track the source
                 self.prompt_sources
@@ -131,16 +142,13 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
-    use swissarmyhammer_common::SwissarmyhammerDirectory;
     use tempfile::TempDir;
 
     #[test]
     fn test_prompt_resolver_loads_user_prompts() {
         // Skip isolated test environment setup for now
         let home_dir = std::env::var("HOME").unwrap();
-        let user_prompts_dir = PathBuf::from(&home_dir)
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join("prompts");
+        let user_prompts_dir = PathBuf::from(&home_dir).join(".prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
 
         // Create a test prompt file
@@ -169,10 +177,7 @@ mod tests {
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir_all(&git_dir).unwrap();
 
-        let local_prompts_dir = temp_dir
-            .path()
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join("prompts");
+        let local_prompts_dir = temp_dir.path().join(".prompts");
         fs::create_dir_all(&local_prompts_dir).unwrap();
 
         // Create a test prompt file with proper header
@@ -249,10 +254,7 @@ mod tests {
     fn test_user_prompt_overrides_builtin_source_tracking() {
         // Skip isolated test environment setup for now
         let temp_dir = TempDir::new().unwrap();
-        let user_prompts_dir = temp_dir
-            .path()
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join("prompts");
+        let user_prompts_dir = temp_dir.path().join(".prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
 
         // Create a user prompt with the same name as a builtin prompt

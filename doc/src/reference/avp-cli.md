@@ -16,6 +16,7 @@ This document contains the help content for the `avp` command-line program.
 * [`avp info`↴](#avp-info)
 * [`avp install`↴](#avp-install)
 * [`avp uninstall`↴](#avp-uninstall)
+* [`avp edit`↴](#avp-edit)
 * [`avp new`↴](#avp-new)
 * [`avp publish`↴](#avp-publish)
 * [`avp unpublish`↴](#avp-unpublish)
@@ -43,6 +44,7 @@ Claude Code hook processor that validates tool calls, file changes, and more.
 * `info` — Show detailed information about a package
 * `install` — Install a package from the registry
 * `uninstall` — Remove an installed package
+* `edit` — Edit an existing RuleSet in $EDITOR
 * `new` — Create a new RuleSet from template
 * `publish` — Publish a package to the registry
 * `unpublish` — Remove a published package version from the registry
@@ -212,6 +214,23 @@ Remove an installed package
 
 * `--local` [alias: `project`] — Remove from project (.avp/validators/) [default]
 * `--global` [alias: `user`] — Remove from global (~/.avp/validators/)
+
+
+
+## `avp edit`
+
+Edit an existing RuleSet in $EDITOR
+
+**Usage:** `avp edit [OPTIONS] <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — RuleSet name (kebab-case)
+
+###### **Options:**
+
+* `--local` [alias: `project`] — Edit in project (.avp/validators/) [default]
+* `--global` [alias: `user`] — Edit in user-level directory (~/.avp/validators/)
 
 
 

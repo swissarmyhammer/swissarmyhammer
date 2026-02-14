@@ -124,6 +124,17 @@ pub enum Commands {
         #[arg(long, visible_alias = "user")]
         global: bool,
     },
+    /// Edit an existing RuleSet in $EDITOR
+    Edit {
+        /// RuleSet name (kebab-case)
+        name: String,
+        /// Edit in project (.avp/validators/) [default]
+        #[arg(long, visible_alias = "project")]
+        local: bool,
+        /// Edit in user-level directory (~/.avp/validators/)
+        #[arg(long, visible_alias = "user")]
+        global: bool,
+    },
     /// Create a new RuleSet from template
     New {
         /// RuleSet name (kebab-case)

@@ -4,7 +4,10 @@
 
 pub mod cli;
 pub mod display;
+pub mod edit;
 pub mod list;
+pub mod new;
+pub mod show;
 pub mod test;
 
 use crate::error::{CliError, CliResult};
@@ -38,7 +41,18 @@ async fn run_prompt_command_typed(
         PromptCommand::List(_) => list::execute_list_command(context)
             .await
             .map_err(|e| CliError::new(e.to_string(), 1)),
-        PromptCommand::Test(test_cmd) => test::execute_test_command(test_cmd, context)
+        PromptCommand::Test(test_cmd) | PromptCommand::Render(test_cmd) => {
+            test::execute_test_command(test_cmd, context)
+                .await
+                .map_err(|e| CliError::new(e.to_string(), 1))
+        }
+        PromptCommand::New(new_cmd) => new::execute_new_command(new_cmd, context)
+            .await
+            .map_err(|e| CliError::new(e.to_string(), 1)),
+        PromptCommand::Show(show_cmd) => show::execute_show_command(show_cmd, context)
+            .await
+            .map_err(|e| CliError::new(e.to_string(), 1)),
+        PromptCommand::Edit(edit_cmd) => edit::execute_edit_command(edit_cmd, context)
             .await
             .map_err(|e| CliError::new(e.to_string(), 1)),
     }

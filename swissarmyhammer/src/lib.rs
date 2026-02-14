@@ -21,8 +21,8 @@
 //! let mut library = PromptLibrary::new();
 //!
 //! // Add prompts from a directory
-//! if std::path::Path::new("./.swissarmyhammer/prompts").exists() {
-//!     library.add_directory("./.swissarmyhammer/prompts")?;
+//! if std::path::Path::new("./.prompts").exists() {
+//!     library.add_directory("./.prompts")?;
 //! }
 //!
 //! // Render a prompt

@@ -98,8 +98,8 @@ sah validate || exit 1
 
 Prompts validated from:
 • Built-in prompts (embedded in binary)
-• User prompts (~/.swissarmyhammer/prompts/)
-• Project prompts (./.swissarmyhammer/prompts/)
+• User prompts (~/.prompts/)
+• Project prompts (./.prompts/)
 
 Workflows validated from:
 • Built-in workflows (embedded in binary)

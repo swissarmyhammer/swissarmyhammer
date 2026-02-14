@@ -106,7 +106,7 @@ impl ChainFactory {
     /// accumulated during the turn via the turn state. After validators run,
     /// the state is cleared for the next turn.
     ///
-    /// Important: When AVP_VALIDATOR_CONTEXT is set (subagent context),
+    /// Important: When CLAUDE_ACP is set (subagent context),
     /// we exit early in main.rs before any chain processing, so this
     /// cleanup won't incorrectly clear the main session's state.
     pub fn stop_chain(&self) -> Chain<StopInput> {
