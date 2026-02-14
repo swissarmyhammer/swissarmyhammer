@@ -35,8 +35,8 @@ mod transition;
 mod transition_key;
 
 pub use acp::{
-    create_agent, execute_prompt, AcpError, AcpResult, AgentResponse, AgentResponseType,
-    McpServerConfig,
+    create_agent, create_agent_with_options, execute_prompt, AcpError, AcpResult, AgentResponse,
+    AgentResponseType, CreateAgentOptions, McpServerConfig,
 };
 pub use actions::{
     is_valid_env_var_name, parse_action_from_description,

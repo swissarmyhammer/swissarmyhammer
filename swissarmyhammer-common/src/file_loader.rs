@@ -1,10 +1,20 @@
-//! Virtual file system for loading files from .swissarmyhammer directories
+//! Virtual file system for loading files from managed or dot-directories
 //!
-//! This module provides a unified way to load files from the hierarchical
-//! .swissarmyhammer directory structure, handling precedence and overrides.
+//! This module provides a unified way to load files from hierarchical
+//! directory structures, handling precedence and overrides.
 //!
 //! This module re-exports types from `swissarmyhammer-directory` with the
 //! `SwissarmyhammerConfig` configuration for backward compatibility.
+//!
+//! # Search Path Modes
+//!
+//! The VirtualFileSystem supports two modes:
+//!
+//! - **Managed directory mode** (default): Loads from `~/.swissarmyhammer/{subdirectory}`
+//!   and `{git_root}/.swissarmyhammer/{subdirectory}`.
+//!
+//! - **Dot-directory mode**: When configured via `use_dot_directory_paths()`, loads
+//!   from `~/.{subdirectory}` and `{git_root}/.{subdirectory}` (e.g., `~/.prompts`).
 //!
 //! # Error Handling
 //!
@@ -28,44 +38,41 @@
 //! appropriate levels (warn for security issues, debug for missing directories).
 
 // Re-export the shared file loader types
-pub use swissarmyhammer_directory::{FileEntry, FileSource, SwissarmyhammerConfig};
+pub use swissarmyhammer_directory::{FileEntry, FileSource, SearchPath, SwissarmyhammerConfig};
 
 /// Type alias for backward compatibility.
 ///
 /// `VirtualFileSystem` is now an alias for the generic
 /// `swissarmyhammer_directory::VirtualFileSystem<SwissarmyhammerConfig>`.
 ///
-/// # Example
+/// # Example — Managed directory mode (default)
 ///
 /// ```no_run
 /// use swissarmyhammer_common::file_loader::{VirtualFileSystem, FileSource};
 ///
 /// let mut vfs = VirtualFileSystem::new("prompts");
-///
-/// // Add a builtin file
 /// vfs.add_builtin("example", "This is a builtin prompt");
-///
-/// // Load all files following standard precedence
+/// // Loads from ~/.swissarmyhammer/prompts and ./.swissarmyhammer/prompts (subdirectory mode)
 /// vfs.load_all().unwrap();
+/// ```
 ///
-/// // Get a file by name
-/// if let Some(file) = vfs.get("example") {
-///     println!("Content: {}", file.content);
-///     println!("Source: {:?}", file.source);
-/// }
+/// # Example — Dot-directory mode
 ///
-/// // List all loaded files
-/// for file in vfs.list() {
-///     println!("File: {} from {:?}", file.name, file.source);
-/// }
+/// ```no_run
+/// use swissarmyhammer_common::file_loader::{VirtualFileSystem, FileSource};
+///
+/// let mut vfs = VirtualFileSystem::new("prompts");
+/// vfs.use_dot_directory_paths();
+/// // Loads from ~/.prompts and {git_root}/.prompts
+/// vfs.load_all().unwrap();
 /// ```
 ///
 /// # Precedence
 ///
 /// Files are loaded with the following precedence (later sources override earlier):
 /// 1. Builtin files (embedded in the binary)
-/// 2. User files (from ~/.swissarmyhammer)
-/// 3. Local files (from .swissarmyhammer directories in parent paths)
+/// 2. User files (from home directory)
+/// 3. Local files (from project directory)
 /// 4. Dynamic files (programmatically added)
 pub type VirtualFileSystem = swissarmyhammer_directory::VirtualFileSystem<SwissarmyhammerConfig>;
 

@@ -31,15 +31,13 @@ Template Features:
 
 Prompts are loaded from multiple sources with hierarchical precedence:
 • Built-in prompts (lowest) - Standard prompts included with the tool
-• User prompts (medium) - ~/.swissarmyhammer/prompts/ for personal templates
-• Project prompts (highest) - ./.swissarmyhammer/prompts/ for project-specific needs
+• User prompts (medium) - ~/.prompts/ for personal templates
+• Project prompts (highest) - ./.prompts/ for project-specific needs
 
 Higher precedence prompts override lower ones by name, allowing customization
 of built-in prompts or project-specific variants.
 
 ## Commands
-
-The prompt system provides two main commands:
 
 ### list - Discover Available Prompts
 
@@ -51,25 +49,57 @@ sah --format json prompt list        # Machine-readable output
 sah --format yaml prompt list        # YAML format output
 ```
 
-### test - Interactive Prompt Testing
+### new - Create a New Prompt
 
-Test prompts interactively with sample data before using in workflows:
+Scaffold a new prompt from a template:
+```bash
+sah prompt new code-review           # Create .prompts/code-review.md
+sah prompt new my-helper --user      # Create ~/.prompts/my-helper.md
+```
+
+The name must be kebab-case. A minimal markdown file with YAML frontmatter
+is created, with title and description derived from the name.
+
+### show - Display Prompt Details
+
+Show detailed information about a single prompt:
+```bash
+sah prompt show code-review          # Display metadata, parameters, template
+sah --format json prompt show help   # Machine-readable output
+sah --verbose prompt show plan       # Show full template body
+```
+
+### edit - Open Prompt in Editor
+
+Open a prompt's source file in your configured editor:
+```bash
+sah prompt edit code-review          # Opens in $VISUAL or $EDITOR
+```
+
+Only file-based prompts can be edited. Built-in prompts will suggest using
+`sah prompt new` to create an override.
+
+### test / render - Interactive Prompt Testing
+
+Test and render prompts with sample data before using in workflows.
+`render` is an alias for `test`.
 
 ```bash
 # Interactive mode - prompts for all parameters
 sah prompt test code-review
+sah prompt render code-review        # Same as test
 
 # Non-interactive - provide parameters directly
 sah prompt test help --var topic=git --var format=markdown
-sah prompt test code-review --var author=John --var version=1.0
+sah prompt render code-review --var author=John --var version=1.0
 
 # Debugging and troubleshooting
 sah --verbose prompt test plan       # Detailed execution information
 sah --debug prompt test help         # Full debug tracing
 ```
 
-The test command validates your template syntax, parameter usage, and output
-before integrating prompts into production workflows.
+The test/render command validates your template syntax, parameter usage, and
+output before integrating prompts into production workflows.
 
 ## Global Arguments
 
@@ -104,15 +134,23 @@ Integration:
 
 ## Common Workflows
 
+Create a new prompt:
+```bash
+sah prompt new code-review            # Scaffold in .prompts/
+sah prompt edit code-review           # Open in editor to customize
+```
+
 Discover available prompts:
 ```bash
 sah prompt list
 sah --verbose prompt list             # See parameter details
+sah prompt show code-review           # Detailed view of one prompt
 ```
 
 Test a prompt interactively:
 ```bash
 sah prompt test code-review           # Interactive parameter entry
+sah prompt render code-review         # Same thing, different name
 ```
 
 Test with specific parameters:
@@ -129,9 +167,17 @@ sah --format yaml prompt list > prompts.yaml
 
 ## Creating Custom Prompts
 
-Create prompts by adding markdown files with YAML frontmatter to:
-• ./swissarmyhammer/prompts/ - Project-specific prompts
-• ~/.swissarmyhammer/prompts/ - Personal prompt library
+Create prompts using the `new` command or by adding markdown files with YAML
+frontmatter manually:
+
+```bash
+sah prompt new code-review            # Creates .prompts/code-review.md
+sah prompt new my-helper --user       # Creates ~/.prompts/my-helper.md
+```
+
+Prompt locations:
+• ./.prompts/ - Project-specific prompts
+• ~/.prompts/ - Personal prompt library
 
 Example prompt structure:
 ```markdown

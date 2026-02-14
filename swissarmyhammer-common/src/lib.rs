@@ -21,6 +21,7 @@
 
 pub mod constants;
 pub mod directory;
+pub mod editor;
 pub mod env_loader;
 pub mod error;
 pub mod error_context;
@@ -52,7 +53,7 @@ pub use validation::*;
 pub use utils::{generate_monotonic_ulid, generate_monotonic_ulid_string};
 
 // Re-export file_loader for convenience
-pub use file_loader::{FileEntry, FileSource, VirtualFileSystem};
+pub use file_loader::{FileEntry, FileSource, SearchPath, VirtualFileSystem};
 
 // Re-export commonly used directory functions for convenience
 #[allow(deprecated)]
@@ -66,6 +67,9 @@ pub use directory::{DirectoryRootType, SwissarmyhammerDirectory};
 
 // Re-export error types for convenience
 pub use error::{ErrorSeverity, Result, Severity, SwissArmyHammerError};
+
+// Re-export editor utility for convenience
+pub use editor::open_in_editor;
 
 // Re-export env_loader for convenience
 pub use env_loader::EnvLoader;

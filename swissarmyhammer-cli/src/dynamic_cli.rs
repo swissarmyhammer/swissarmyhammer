@@ -787,7 +787,7 @@ Initialize SwissArmyHammer for use with Claude Code.
 
 This command:
 1. Registers sah as an MCP server in Claude Code settings
-2. Creates the .swissarmyhammer/ project directory with prompts/ and workflows/
+2. Creates the .swissarmyhammer/ project directory (workflows/) and .prompts/
 
 The command is idempotent - safe to run multiple times.
 
@@ -1988,6 +1988,10 @@ impl CliBuilder {
             vec![
                 Self::build_prompt_list_subcommand(),
                 Self::build_prompt_test_subcommand(),
+                Self::build_prompt_render_subcommand(),
+                Self::build_prompt_new_subcommand(),
+                Self::build_prompt_show_subcommand(),
+                Self::build_prompt_edit_subcommand(),
                 Self::build_prompt_validate_subcommand(),
             ],
         )
@@ -2054,6 +2058,73 @@ impl CliBuilder {
         Self::build_args_from_specs(&[ArgSpec::new("debug", "Show debug information")
             .long("debug")
             .action(ArgSpecAction::SetTrue)])
+    }
+
+    /// Build the prompt render subcommand (alias for test)
+    fn build_prompt_render_subcommand() -> Command {
+        let mut cmd = Command::new("render")
+            .about("Render a prompt template (alias for test)")
+            .long_about("Render a prompt template with variables. This is an alias for the 'test' subcommand.");
+
+        for arg in Self::create_test_input_args() {
+            cmd = cmd.arg(arg);
+        }
+        for arg in Self::create_test_output_args() {
+            cmd = cmd.arg(arg);
+        }
+        for arg in Self::create_test_debug_args() {
+            cmd = cmd.arg(arg);
+        }
+
+        cmd
+    }
+
+    /// Build the prompt new subcommand
+    fn build_prompt_new_subcommand() -> Command {
+        Command::new("new")
+            .about("Create a new prompt from a template")
+            .long_about("Scaffold a new prompt file. By default, calls the configured LLM to generate a rich skeleton with parameters, template logic, and documentation. Falls back to a static template if the model is unavailable.")
+            .arg(
+                Arg::new("name")
+                    .required(true)
+                    .help("Prompt name (kebab-case, e.g. code-review)"),
+            )
+            .arg(
+                Arg::new("user")
+                    .long("user")
+                    .help("Create in ~/.prompts/ instead of ./.prompts/")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("static")
+                    .long("static")
+                    .help("Use a static template instead of AI generation")
+                    .action(ArgAction::SetTrue),
+            )
+    }
+
+    /// Build the prompt show subcommand
+    fn build_prompt_show_subcommand() -> Command {
+        Command::new("show")
+            .about("Display detailed information about a prompt")
+            .long_about("Show a prompt's metadata, parameters, source path, and template content.")
+            .arg(
+                Arg::new("prompt_name")
+                    .required(true)
+                    .help("Name of the prompt to show"),
+            )
+    }
+
+    /// Build the prompt edit subcommand
+    fn build_prompt_edit_subcommand() -> Command {
+        Command::new("edit")
+            .about("Open a prompt in your editor")
+            .long_about("Open a prompt's source file in $VISUAL or $EDITOR. Built-in prompts cannot be edited directly; use 'sah prompt new' to create an override.")
+            .arg(
+                Arg::new("prompt_name")
+                    .required(true)
+                    .help("Name of the prompt to edit"),
+            )
     }
 
     /// Build the prompt validate subcommand

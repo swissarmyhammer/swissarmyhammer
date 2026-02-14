@@ -16,16 +16,23 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
         InstallTarget::User => uninstall_user(),
     }?;
 
-    // Remove .swissarmyhammer directory if requested
+    // Remove directories if requested
     if remove_directory {
-        let sah_dir = std::env::current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?
-            .join(".swissarmyhammer");
+        let cwd = std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?;
 
+        let sah_dir = cwd.join(".swissarmyhammer");
         if sah_dir.exists() {
             fs::remove_dir_all(&sah_dir)
                 .map_err(|e| format!("Failed to remove {}: {}", sah_dir.display(), e))?;
             println!("Removed {}", sah_dir.display());
+        }
+
+        let prompts_dir = cwd.join(".prompts");
+        if prompts_dir.exists() {
+            fs::remove_dir_all(&prompts_dir)
+                .map_err(|e| format!("Failed to remove {}: {}", prompts_dir.display(), e))?;
+            println!("Removed {}", prompts_dir.display());
         }
     }
 

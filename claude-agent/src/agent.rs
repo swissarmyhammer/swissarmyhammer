@@ -1218,12 +1218,21 @@ impl ClaudeAgent {
     ) {
         use crate::claude_process::SpawnConfig;
 
+        // Extract system_prompt from session metadata if present
+        let system_prompt = request
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("system_prompt"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         tracing::info!("Spawning Claude process for session: {}", session_id);
         let spawn_config = SpawnConfig::builder()
             .session_id(*session_id)
             .acp_session_id(protocol_session_id.clone())
             .cwd(request.cwd.clone())
             .mcp_servers(self.config.mcp_servers.clone())
+            .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
             .build();
 

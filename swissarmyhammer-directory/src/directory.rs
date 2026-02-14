@@ -193,24 +193,45 @@ impl<C: DirectoryConfig> ManagedDirectory<C> {
     }
 }
 
-/// Find the git repository root by walking up the directory tree.
+/// Find the nearest git repository root by walking up the directory tree.
 ///
-/// Returns `Some(path)` if a `.git` directory is found, `None` otherwise.
+/// A `.git` entry (directory or file) marks a git root. Worktrees have a
+/// `.git` file instead of a directory, but are still valid git roots.
+///
+/// Returns `Some(path)` if a git repository is found, `None` otherwise.
 pub fn find_git_repository_root() -> Option<PathBuf> {
-    let current_dir = std::env::current_dir().ok()?;
+    find_git_repository_root_from(&std::env::current_dir().ok()?)
+}
 
-    let mut path = current_dir.as_path();
+/// Find the nearest git repository root starting from a specific directory.
+///
+/// Walks up the directory tree looking for a `.git` entry (file or directory).
+/// Returns the first directory that contains `.git`.
+pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
+    let mut path = start_dir;
+    let max_depth = 20;
+    let mut depth = 0;
+
     loop {
-        let git_dir = path.join(".git");
-        if git_dir.exists() {
+        if depth >= max_depth {
+            break;
+        }
+
+        let git_path = path.join(".git");
+        if git_path.exists() {
             return Some(path.to_path_buf());
         }
 
         match path.parent() {
-            Some(parent) => path = parent,
-            None => return None,
+            Some(parent) => {
+                path = parent;
+                depth += 1;
+            }
+            None => break,
         }
     }
+
+    None
 }
 
 #[cfg(test)]
@@ -330,5 +351,75 @@ mod tests {
         let custom = DirectoryRootType::Custom(PathBuf::from("/tmp/test"));
         assert!(custom.to_string().contains("custom path"));
         assert!(custom.to_string().contains("/tmp/test"));
+    }
+
+    #[test]
+    fn test_find_git_root_from_direct() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+
+        let result = find_git_repository_root_from(temp.path());
+        assert_eq!(result, Some(temp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_git_root_from_subdirectory() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+
+        let subdir = temp.path().join("a").join("b").join("c");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let result = find_git_repository_root_from(&subdir);
+        assert_eq!(result, Some(temp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_git_root_not_found() {
+        let temp = TempDir::new().unwrap();
+        // No .git anywhere
+        let result = find_git_repository_root_from(temp.path());
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_find_git_root_returns_nearest_not_outermost() {
+        let temp = TempDir::new().unwrap();
+        // Outer git repo
+        let outer_git = temp.path().join(".git");
+        fs::create_dir_all(&outer_git).unwrap();
+        // Inner git repo (nested)
+        let inner = temp.path().join("inner");
+        let inner_git = inner.join(".git");
+        fs::create_dir_all(&inner_git).unwrap();
+
+        // Starting from inside the inner repo should find the NEAREST root
+        let result = find_git_repository_root_from(&inner);
+        assert_eq!(result, Some(inner));
+    }
+
+    #[test]
+    fn test_find_git_root_treats_worktree_as_root() {
+        let temp = TempDir::new().unwrap();
+        // Create main repo with .git directory
+        let main_repo = temp.path().join("main");
+        let main_git = main_repo.join(".git");
+        let worktrees_dir = main_git.join("worktrees").join("feature");
+        fs::create_dir_all(&worktrees_dir).unwrap();
+
+        // Create worktree with .git file (not directory)
+        let worktree = temp.path().join("feature");
+        fs::create_dir_all(&worktree).unwrap();
+        fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}", worktrees_dir.display()),
+        )
+        .unwrap();
+
+        // Worktree should be treated as its own git root
+        let result = find_git_repository_root_from(&worktree);
+        assert_eq!(result, Some(worktree));
     }
 }

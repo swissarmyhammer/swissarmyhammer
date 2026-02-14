@@ -33,7 +33,7 @@ use tracing_subscriber::EnvFilter;
 
 use avp::install;
 use avp::registry::RegistryError;
-use avp::{auth, doctor, info, list, new, outdated, package, publish, search};
+use avp::{auth, doctor, edit, info, list, new, outdated, package, publish, search};
 use avp::{Cli, Commands};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
@@ -101,6 +101,9 @@ async fn main() {
         }) => handle_registry_result(package::run_install(&package, global).await),
         Some(Commands::Uninstall { name, global, .. }) => {
             handle_registry_result(package::run_uninstall(&name, global).await)
+        }
+        Some(Commands::Edit { name, global, .. }) => {
+            handle_registry_result(edit::run_edit(&name, global))
         }
         Some(Commands::New { name, global, .. }) => {
             handle_registry_result(new::run_new(&name, global))
@@ -494,6 +497,65 @@ mod tests {
                 assert!(!global);
             }
             _ => panic!("Expected Uninstall command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset"]);
+        match cli.command {
+            Some(Commands::Edit {
+                name,
+                global,
+                local,
+            }) => {
+                assert_eq!(name, "my-ruleset");
+                assert!(!global);
+                assert!(!local);
+            }
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit_local() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset", "--local"]);
+        match cli.command {
+            Some(Commands::Edit { local, global, .. }) => {
+                assert!(local);
+                assert!(!global);
+            }
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit_project_alias() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset", "--project"]);
+        match cli.command {
+            Some(Commands::Edit { local, .. }) => assert!(local),
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit_global() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset", "--global"]);
+        match cli.command {
+            Some(Commands::Edit { name, global, .. }) => {
+                assert_eq!(name, "my-ruleset");
+                assert!(global);
+            }
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit_user_alias() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset", "--user"]);
+        match cli.command {
+            Some(Commands::Edit { global, .. }) => assert!(global),
+            _ => panic!("Expected Edit command"),
         }
     }
 

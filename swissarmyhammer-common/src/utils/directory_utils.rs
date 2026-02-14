@@ -7,79 +7,20 @@ use crate::directory::DIR_NAME;
 use crate::error::{Result, SwissArmyHammerError};
 use std::path::{Path, PathBuf};
 
-/// Maximum directory depth to search when looking for Git repositories
-/// This prevents infinite loops and excessive filesystem traversal
-const MAX_DIRECTORY_DEPTH: usize = 10;
-
-/// Walk up the directory tree until a predicate is satisfied
+/// Find the root-most git repository starting from current directory.
 ///
-/// This helper function traverses upward from a starting directory,
-/// applying a predicate to each directory until one matches or
-/// the maximum search depth is reached.
-///
-/// # Arguments
-///
-/// * `start_dir` - The directory to start searching from
-/// * `predicate` - A function that returns true when the desired directory is found
-///
-/// # Returns
-///
-/// * `Option<PathBuf>` - Some(path) if predicate matches, None otherwise
-fn walk_up_directory_tree<F>(start_dir: &Path, predicate: F) -> Option<PathBuf>
-where
-    F: Fn(&Path) -> bool,
-{
-    let mut path = start_dir;
-    let mut depth = 0;
-
-    loop {
-        if depth >= MAX_DIRECTORY_DEPTH {
-            break;
-        }
-
-        if predicate(path) {
-            return Some(path.to_path_buf());
-        }
-
-        match path.parent() {
-            Some(parent) => {
-                path = parent;
-                depth += 1;
-            }
-            None => break,
-        }
-    }
-
-    None
-}
-
-/// Find the Git repository root starting from current directory
-///
-/// Walks up the directory tree looking for .git directory to identify
-/// a Git repository. This function respects MAX_DIRECTORY_DEPTH to prevent
-/// infinite traversal and returns None if no Git repository is found.
-///
-/// # Returns
-///
-/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
+/// Delegates to [`swissarmyhammer_directory::find_git_repository_root`].
+/// Handles git worktrees and finds the outermost enclosing repo.
 pub fn find_git_repository_root() -> Option<PathBuf> {
-    find_git_repository_root_from(&std::env::current_dir().ok()?)
+    swissarmyhammer_directory::find_git_repository_root()
 }
 
-/// Find the Git repository root starting from a specific directory
+/// Find the root-most git repository starting from a specific directory.
 ///
-/// This function searches upwards from the given directory until it finds
-/// a .git directory or reaches the maximum search depth.
-///
-/// # Arguments
-///
-/// * `start_dir` - The directory to start searching from
-///
-/// # Returns
-///
-/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
+/// Delegates to [`swissarmyhammer_directory::find_git_repository_root_from`].
+/// Handles git worktrees and finds the outermost enclosing repo.
 pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
-    walk_up_directory_tree(start_dir, |path| path.join(".git").exists())
+    swissarmyhammer_directory::find_git_repository_root_from(start_dir)
 }
 
 /// Find the SwissArmyHammer directory for the current Git repository

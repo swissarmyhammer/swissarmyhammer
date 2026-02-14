@@ -22,6 +22,9 @@ _avp() {
             avp,doctor)
                 cmd="avp__doctor"
                 ;;
+            avp,edit)
+                cmd="avp__edit"
+                ;;
             avp,help)
                 cmd="avp__help"
                 ;;
@@ -72,6 +75,9 @@ _avp() {
                 ;;
             avp__help,doctor)
                 cmd="avp__help__doctor"
+                ;;
+            avp__help,edit)
+                cmd="avp__help__edit"
                 ;;
             avp__help,help)
                 cmd="avp__help__help"
@@ -125,7 +131,7 @@ _avp() {
 
     case "${cmd}" in
         avp)
-            opts="-d -h -V --debug --help --version init deinit doctor list login logout whoami search info install uninstall new publish unpublish outdated update help"
+            opts="-d -h -V --debug --help --version init deinit doctor list login logout whoami search info install uninstall edit new publish unpublish outdated update help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -166,8 +172,22 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        avp__edit)
+            opts="-d -h --project --local --user --global --debug --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         avp__help)
-            opts="init deinit doctor list login logout whoami search info install uninstall new publish unpublish outdated update help"
+            opts="init deinit doctor list login logout whoami search info install uninstall edit new publish unpublish outdated update help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -195,6 +215,20 @@ _avp() {
             return 0
             ;;
         avp__help__doctor)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        avp__help__edit)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
