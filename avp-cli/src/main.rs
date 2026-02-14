@@ -28,7 +28,7 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
 
 use avp::install;
@@ -139,45 +139,9 @@ async fn main() {
 async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
     // Check if stdin is a terminal (no piped input)
     if io::stdin().is_terminal() {
-        // Show help when run interactively without subcommand
-        println!("AVP - Agent Validator Protocol");
+        // Show clap-generated help when run interactively without subcommand
+        Cli::command().print_help().ok();
         println!();
-        println!("Usage:");
-        println!("  avp                           Process hook from stdin (pipe JSON)");
-        println!("  avp init [project|local|user] Install hooks (default: project)");
-        println!("  avp deinit [project|local|user] Remove hooks and .avp dir (default: project)");
-        println!("  avp list [-v]                 List all available validators");
-        println!("  avp doctor [-v]               Diagnose AVP setup");
-        println!();
-        println!("Authentication:");
-        println!("  avp login                     Authenticate with AVP registry");
-        println!("  avp logout                    Log out from AVP registry");
-        println!("  avp whoami                    Show current authenticated user");
-        println!();
-        println!("Package Management:");
-        println!("  avp search <query>            Search the registry for packages");
-        println!("  avp info <name>               Show detailed package information");
-        println!("  avp install <name>[@version]  Install a package from the registry");
-        println!("  avp uninstall <name>          Remove an installed package");
-        println!("  avp new <name> [--global]     Create a new RuleSet from template");
-        println!("  avp publish [path] [--dry-run] Publish a package (default: current dir)");
-        println!("  avp unpublish <name>@<ver>    Remove a published version");
-        println!("  avp outdated                  Check for available updates");
-        println!("  avp update [name]             Update installed packages");
-        println!();
-        println!("Examples:");
-        println!("  avp init                      Install to .claude/settings.json");
-        println!("  avp init user                 Install to ~/.claude/settings.json");
-        println!("  avp list                      Show all validators");
-        println!("  avp list -v                   Show validators with descriptions");
-        println!("  avp list --json               Output validators as JSON");
-        println!("  avp login                     Log in to registry");
-        println!("  avp search security           Search for security validators");
-        println!("  avp install no-secrets        Install a package");
-        println!("  avp new my-validator          Create a new RuleSet");
-        println!("  echo '{{...}}' | avp           Process a hook event");
-        println!();
-        println!("Run 'avp --help' for more information.");
         return Ok(0);
     }
 
