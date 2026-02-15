@@ -124,6 +124,32 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_names_path_traversal() {
+        assert!(!is_valid_package_name("../etc"));
+        assert!(!is_valid_package_name("foo/../../bar"));
+        assert!(!is_valid_package_name(".."));
+        assert!(!is_valid_package_name("foo/bar"));
+        assert!(!is_valid_package_name("a/b"));
+    }
+
+    #[test]
+    fn test_invalid_names_special_chars() {
+        assert!(!is_valid_package_name("foo\0bar"));
+        assert!(!is_valid_package_name("foo\\bar"));
+        assert!(!is_valid_package_name("."));
+        assert!(!is_valid_package_name("..."));
+    }
+
+    #[test]
+    fn test_valid_name_boundary() {
+        // Exactly 64 chars (max valid)
+        let max_name = "a".repeat(64);
+        assert!(is_valid_package_name(&max_name));
+        // Single char
+        assert!(is_valid_package_name("a"));
+    }
+
+    #[test]
     fn test_package_type_serde() {
         let json = serde_json::to_string(&PackageType::Skill).unwrap();
         assert_eq!(json, "\"skill\"");

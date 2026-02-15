@@ -199,6 +199,11 @@ fn parse_frontmatter(content: &str, filename: &str) -> Result<(String, String), 
     let version = yaml
         .get("version")
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            yaml.get("metadata")
+                .and_then(|m| m.get("version"))
+                .and_then(|v| v.as_str())
+        })
         .ok_or_else(|| {
             RegistryError::Validation(format!("Missing 'version' in {} frontmatter", filename))
         })?
@@ -297,6 +302,20 @@ trigger: PostToolUse
         let (name, version) = parse_frontmatter(content, "VALIDATOR.md").unwrap();
         assert_eq!(name, "test-validator");
         assert_eq!(version, "1.0.0");
+    }
+
+    #[test]
+    fn test_parse_frontmatter_metadata_version() {
+        let content = r#"---
+name: test-skill
+metadata:
+  version: "2.0.0"
+---
+# Body
+"#;
+        let (name, version) = parse_frontmatter(content, "SKILL.md").unwrap();
+        assert_eq!(name, "test-skill");
+        assert_eq!(version, "2.0.0");
     }
 
     #[test]

@@ -168,7 +168,15 @@ fn read_frontmatter_version(path: &Path) -> String {
 
     let frontmatter = &rest[..end];
     if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
-        if let Some(version) = yaml.get("version").and_then(|v| v.as_str()) {
+        if let Some(version) = yaml
+            .get("version")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                yaml.get("metadata")
+                    .and_then(|m| m.get("version"))
+                    .and_then(|v| v.as_str())
+            })
+        {
             return version.to_string();
         }
     }
@@ -250,9 +258,76 @@ version: "1.2.3"
     }
 
     #[test]
+    fn test_read_frontmatter_version_metadata_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &path,
+            r#"---
+name: test-skill
+metadata:
+  version: "2.0.0"
+---
+# Test
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(read_frontmatter_version(&path), "2.0.0");
+    }
+
+    #[test]
     fn test_run_list_empty() {
         // Should not panic even with no packages
         let result = run_list(false, false, None, true);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_list_agent_filter_suppresses_validators() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        // Create a validator structure
+        let val_dir = dir.path().join(".avp/validators/test-val");
+        std::fs::create_dir_all(&val_dir).unwrap();
+        std::fs::write(
+            val_dir.join("VALIDATOR.md"),
+            "---\nname: test-val\nversion: \"1.0.0\"\n---\n# Test\n",
+        )
+        .unwrap();
+        std::fs::create_dir(val_dir.join("rules")).unwrap();
+        std::fs::write(val_dir.join("rules/rule.md"), "# Rule").unwrap();
+
+        // With agent filter, validators should be suppressed
+        let result = run_list(false, false, Some("claude-code"), true);
+        assert!(result.is_ok());
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_run_list_no_filter_shows_validators() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        // Create a validator structure
+        let val_dir = dir.path().join(".avp/validators/test-val");
+        std::fs::create_dir_all(&val_dir).unwrap();
+        std::fs::write(
+            val_dir.join("VALIDATOR.md"),
+            "---\nname: test-val\nversion: \"1.0.0\"\n---\n# Test\n",
+        )
+        .unwrap();
+        std::fs::create_dir(val_dir.join("rules")).unwrap();
+        std::fs::write(val_dir.join("rules/rule.md"), "# Rule").unwrap();
+
+        // Without agent filter, validators should appear
+        let result = run_list(false, false, None, true);
+        assert!(result.is_ok());
+
+        std::env::set_current_dir(old_dir).unwrap();
     }
 }

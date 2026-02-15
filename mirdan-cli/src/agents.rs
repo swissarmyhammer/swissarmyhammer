@@ -362,6 +362,81 @@ mod tests {
         );
     }
 
+    fn mock_config() -> AgentsConfig {
+        AgentsConfig {
+            agents: vec![
+                AgentDef {
+                    id: "claude-code".to_string(),
+                    name: "Claude Code".to_string(),
+                    project_path: ".claude/skills".to_string(),
+                    global_path: "~/.claude/skills".to_string(),
+                    detect: vec![DetectMethod::Dir {
+                        dir: "/nonexistent/path/that/should/not/exist".to_string(),
+                    }],
+                },
+                AgentDef {
+                    id: "cursor".to_string(),
+                    name: "Cursor".to_string(),
+                    project_path: ".cursor/skills".to_string(),
+                    global_path: "~/.cursor/skills".to_string(),
+                    detect: vec![DetectMethod::Dir {
+                        dir: "/nonexistent/cursor/path".to_string(),
+                    }],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_id_valid() {
+        let config = mock_config();
+        assert!(validate_agent_id(&config, "claude-code").is_ok());
+        assert!(validate_agent_id(&config, "cursor").is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_id_invalid() {
+        let config = mock_config();
+        let err = validate_agent_id(&config, "nonexistent").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nonexistent"), "error should contain the invalid name");
+        assert!(msg.contains("claude-code"), "error should list valid IDs");
+        assert!(msg.contains("cursor"), "error should list valid IDs");
+    }
+
+    #[test]
+    fn test_resolve_target_agents_none_filter() {
+        let config = mock_config();
+        let result = resolve_target_agents(&config, None).unwrap();
+        // With None filter, returns detected agents (falls back to claude-code)
+        assert!(!result.is_empty());
+        assert_eq!(result[0].def.id, "claude-code");
+    }
+
+    #[test]
+    fn test_resolve_target_agents_some_filter() {
+        let config = mock_config();
+        let result = resolve_target_agents(&config, Some("claude-code")).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].def.id, "claude-code");
+    }
+
+    #[test]
+    fn test_resolve_target_agents_unknown() {
+        let config = mock_config();
+        let result = resolve_target_agents(&config, Some("nonexistent"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("nonexistent"));
+    }
+
+    #[test]
+    fn test_expand_tilde_bare() {
+        let expanded = expand_tilde("~");
+        // Bare "~" without trailing "/" should remain unchanged (no strip_prefix match)
+        assert_eq!(expanded, PathBuf::from("~"));
+    }
+
     #[test]
     fn test_agents_yaml_parsing() {
         let yaml = r#"

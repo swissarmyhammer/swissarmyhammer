@@ -13,6 +13,27 @@ use crate::lockfile::{self, LockedPackage, Lockfile};
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
 
+/// Sanitize a package name for use as a filesystem directory name.
+///
+/// If the name is a URL (e.g. `https://github.com/anthropics/skills/algorithmic-art`),
+/// strip the scheme and host to produce a path-safe name (e.g. `anthropics/skills/algorithmic-art`).
+fn sanitize_dir_name(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("https://") {
+        // Remove the host (first path segment)
+        if let Some((_host, path)) = rest.split_once('/') {
+            return path.to_string();
+        }
+        return rest.to_string();
+    }
+    if let Some(rest) = name.strip_prefix("http://") {
+        if let Some((_host, path)) = rest.split_once('/') {
+            return path.to_string();
+        }
+        return rest.to_string();
+    }
+    name.to_string()
+}
+
 /// Check if a package spec refers to a local path.
 fn is_local_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/') || Path::new(spec).is_dir()
@@ -135,6 +156,11 @@ fn read_frontmatter(path: &Path) -> Result<(String, String), RegistryError> {
     let version = yaml
         .get("version")
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            yaml.get("metadata")
+                .and_then(|m| m.get("version"))
+                .and_then(|v| v.as_str())
+        })
         .unwrap_or("0.0.0")
         .to_string();
 
@@ -241,12 +267,13 @@ async fn deploy_skill(
     }
 
     let mut targets = Vec::new();
+    let dir_name = sanitize_dir_name(name);
 
     for agent in &agents {
         let target_dir = if global {
-            agent_global_skill_dir(&agent.def).join(name)
+            agent_global_skill_dir(&agent.def).join(&dir_name)
         } else {
-            agent_project_skill_dir(&agent.def).join(name)
+            agent_project_skill_dir(&agent.def).join(&dir_name)
         };
 
         // Remove existing
@@ -268,7 +295,7 @@ fn deploy_validator(
     source_dir: &Path,
     global: bool,
 ) -> Result<Vec<String>, RegistryError> {
-    let target_dir = validators_dir(global).join(name);
+    let target_dir = validators_dir(global).join(sanitize_dir_name(name));
 
     if target_dir.exists() {
         std::fs::remove_dir_all(&target_dir)?;
@@ -323,11 +350,12 @@ fn uninstall_skill(
     let agents = agents::resolve_target_agents(&config, agent_filter)?;
 
     let mut removed = 0;
+    let dir_name = sanitize_dir_name(name);
     for agent in &agents {
         let target_dir = if global {
-            agent_global_skill_dir(&agent.def).join(name)
+            agent_global_skill_dir(&agent.def).join(&dir_name)
         } else {
-            agent_project_skill_dir(&agent.def).join(name)
+            agent_project_skill_dir(&agent.def).join(&dir_name)
         };
 
         if target_dir.exists() {
@@ -349,7 +377,7 @@ fn uninstall_skill(
 }
 
 fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {
-    let target_dir = validators_dir(global).join(name);
+    let target_dir = validators_dir(global).join(sanitize_dir_name(name));
 
     if !target_dir.exists() {
         let scope = if global { "global" } else { "project" };
@@ -367,7 +395,7 @@ fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {
 /// Guess the package type based on what's installed.
 fn guess_installed_type(name: &str, global: bool) -> PackageType {
     // Check validator dir first
-    if validators_dir(global).join(name).exists() {
+    if validators_dir(global).join(sanitize_dir_name(name)).exists() {
         return PackageType::Validator;
     }
     // Default to skill
@@ -507,6 +535,32 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_dir_name_url() {
+        assert_eq!(
+            sanitize_dir_name("https://github.com/anthropics/skills/algorithmic-art"),
+            "anthropics/skills/algorithmic-art"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_dir_name_http() {
+        assert_eq!(
+            sanitize_dir_name("http://example.com/foo/bar"),
+            "foo/bar"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_dir_name_plain() {
+        assert_eq!(sanitize_dir_name("no-secrets"), "no-secrets");
+    }
+
+    #[test]
+    fn test_sanitize_dir_name_host_only() {
+        assert_eq!(sanitize_dir_name("https://github.com"), "github.com");
+    }
+
+    #[test]
     fn test_is_local_path_relative() {
         assert!(is_local_path("./my-skill"));
         assert!(is_local_path("../other/skill"));
@@ -547,6 +601,36 @@ mod tests {
         let (name, version) = read_frontmatter(&md).unwrap();
         assert_eq!(name, "test-skill");
         assert_eq!(version, "0.0.0");
+    }
+
+    #[test]
+    fn test_read_frontmatter_metadata_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let md = dir.path().join("SKILL.md");
+        std::fs::write(
+            &md,
+            "---\nname: test-skill\nmetadata:\n  version: \"2.0.0\"\n---\n# Test\n",
+        )
+        .unwrap();
+
+        let (name, version) = read_frontmatter(&md).unwrap();
+        assert_eq!(name, "test-skill");
+        assert_eq!(version, "2.0.0");
+    }
+
+    #[test]
+    fn test_read_frontmatter_top_level_preferred() {
+        let dir = tempfile::tempdir().unwrap();
+        let md = dir.path().join("SKILL.md");
+        std::fs::write(
+            &md,
+            "---\nname: test-skill\nversion: \"1.0.0\"\nmetadata:\n  version: \"2.0.0\"\n---\n# Test\n",
+        )
+        .unwrap();
+
+        let (name, version) = read_frontmatter(&md).unwrap();
+        assert_eq!(name, "test-skill");
+        assert_eq!(version, "1.0.0");
     }
 
     #[test]
