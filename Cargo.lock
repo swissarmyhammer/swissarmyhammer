@@ -3900,6 +3900,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirdan-cli"
+version = "0.6.1"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "clap",
+ "clap-markdown",
+ "clap_complete",
+ "clap_mangen",
+ "comfy-table",
+ "dialoguer",
+ "dirs",
+ "futures-util",
+ "indicatif",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "sha2",
+ "swissarmyhammer-common",
+ "swissarmyhammer-doctor",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "walkdir",
+ "which 8.0.0",
+ "zip",
+]
+
+[[package]]
 name = "mockito"
 version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

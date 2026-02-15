@@ -1,0 +1,229 @@
+agents:
+  - id: claude-code
+    name: Claude Code
+    project_path: .claude/skills
+    global_path: "~/.claude/skills"
+    detect:
+      - dir: "~/.claude"
+      - command: claude
+  - id: cursor
+    name: Cursor
+    project_path: .cursor/skills
+    global_path: "~/.cursor/skills"
+    detect:
+      - dir: "~/.cursor"
+  - id: windsurf
+    name: Windsurf
+    project_path: .windsurf/skills
+    global_path: "~/.windsurf/skills"
+    detect:
+      - dir: "~/.windsurf"
+  - id: cline
+    name: Cline
+    project_path: .cline/skills
+    global_path: "~/.cline/skills"
+    detect:
+      - dir: "~/.cline"
+  - id: roo-code
+    name: Roo Code
+    project_path: .roo/skills
+    global_path: "~/.roo/skills"
+    detect:
+      - dir: "~/.roo"
+  - id: aider
+    name: Aider
+    project_path: .aider/skills
+    global_path: "~/.aider/skills"
+    detect:
+      - dir: "~/.aider"
+      - command: aider
+  - id: copilot
+    name: GitHub Copilot
+    project_path: .github/copilot/skills
+    global_path: "~/.config/github-copilot/skills"
+    detect:
+      - dir: "~/.config/github-copilot"
+  - id: continue
+    name: Continue
+    project_path: .continue/skills
+    global_path: "~/.continue/skills"
+    detect:
+      - dir: "~/.continue"
+  - id: amp
+    name: Amp
+    project_path: .amp/skills
+    global_path: "~/.config/amp/skills"
+    detect:
+      - dir: "~/.config/amp"
+      - command: amp
+  - id: zed-ai
+    name: Zed AI
+    project_path: .zed/skills
+    global_path: "~/.config/zed/skills"
+    detect:
+      - dir: "~/.config/zed"
+  - id: void
+    name: Void
+    project_path: .void/skills
+    global_path: "~/.void/skills"
+    detect:
+      - dir: "~/.void"
+  - id: pear-ai
+    name: PearAI
+    project_path: .pearai/skills
+    global_path: "~/.pearai/skills"
+    detect:
+      - dir: "~/.pearai"
+  - id: tabnine
+    name: Tabnine
+    project_path: .tabnine/skills
+    global_path: "~/.tabnine/skills"
+    detect:
+      - dir: "~/.tabnine"
+  - id: codeium
+    name: Codeium
+    project_path: .codeium/skills
+    global_path: "~/.codeium/skills"
+    detect:
+      - dir: "~/.codeium"
+  - id: sourcegraph-cody
+    name: Sourcegraph Cody
+    project_path: .cody/skills
+    global_path: "~/.cody/skills"
+    detect:
+      - dir: "~/.cody"
+  - id: amazon-q
+    name: Amazon Q Developer
+    project_path: .amazonq/skills
+    global_path: "~/.amazonq/skills"
+    detect:
+      - dir: "~/.amazonq"
+  - id: double
+    name: Double
+    project_path: .double/skills
+    global_path: "~/.double/skills"
+    detect:
+      - dir: "~/.double"
+  - id: codestory
+    name: CodeStory
+    project_path: .codestory/skills
+    global_path: "~/.codestory/skills"
+    detect:
+      - dir: "~/.codestory"
+  - id: replit-agent
+    name: Replit Agent
+    project_path: .replit/skills
+    global_path: "~/.replit/skills"
+    detect:
+      - dir: "~/.replit"
+  - id: bolt
+    name: Bolt
+    project_path: .bolt/skills
+    global_path: "~/.bolt/skills"
+    detect:
+      - dir: "~/.bolt"
+  - id: v0
+    name: v0
+    project_path: .v0/skills
+    global_path: "~/.v0/skills"
+    detect:
+      - dir: "~/.v0"
+  - id: lovable
+    name: Lovable
+    project_path: .lovable/skills
+    global_path: "~/.lovable/skills"
+    detect:
+      - dir: "~/.lovable"
+  - id: devin
+    name: Devin
+    project_path: .devin/skills
+    global_path: "~/.devin/skills"
+    detect:
+      - dir: "~/.devin"
+  - id: sweep
+    name: Sweep
+    project_path: .sweep/skills
+    global_path: "~/.sweep/skills"
+    detect:
+      - dir: "~/.sweep"
+  - id: codegen
+    name: Codegen
+    project_path: .codegen/skills
+    global_path: "~/.codegen/skills"
+    detect:
+      - dir: "~/.codegen"
+  - id: mentat
+    name: Mentat
+    project_path: .mentat/skills
+    global_path: "~/.mentat/skills"
+    detect:
+      - dir: "~/.mentat"
+      - command: mentat
+  - id: opendevin
+    name: OpenDevin
+    project_path: .opendevin/skills
+    global_path: "~/.opendevin/skills"
+    detect:
+      - dir: "~/.opendevin"
+  - id: swe-agent
+    name: SWE-agent
+    project_path: .swe-agent/skills
+    global_path: "~/.swe-agent/skills"
+    detect:
+      - dir: "~/.swe-agent"
+      - command: swe-agent
+  - id: auto-code-rover
+    name: AutoCodeRover
+    project_path: .autocoderover/skills
+    global_path: "~/.autocoderover/skills"
+    detect:
+      - dir: "~/.autocoderover"
+  - id: gpt-engineer
+    name: GPT Engineer
+    project_path: .gpt-engineer/skills
+    global_path: "~/.gpt-engineer/skills"
+    detect:
+      - dir: "~/.gpt-engineer"
+      - command: gpt-engineer
+  - id: smol-developer
+    name: Smol Developer
+    project_path: .smol-developer/skills
+    global_path: "~/.smol-developer/skills"
+    detect:
+      - dir: "~/.smol-developer"
+  - id: devon
+    name: Devon
+    project_path: .devon/skills
+    global_path: "~/.devon/skills"
+    detect:
+      - dir: "~/.devon"
+  - id: micro-agent
+    name: Micro Agent
+    project_path: .micro-agent/skills
+    global_path: "~/.micro-agent/skills"
+    detect:
+      - dir: "~/.micro-agent"
+  - id: magic-patterns
+    name: Magic Patterns
+    project_path: .magic-patterns/skills
+    global_path: "~/.magic-patterns/skills"
+    detect:
+      - dir: "~/.magic-patterns"
+  - id: safurai
+    name: Safurai
+    project_path: .safurai/skills
+    global_path: "~/.safurai/skills"
+    detect:
+      - dir: "~/.safurai"
+  - id: bito
+    name: Bito
+    project_path: .bito/skills
+    global_path: "~/.bito/skills"
+    detect:
+      - dir: "~/.bito"
+  - id: privy
+    name: Privy
+    project_path: .privy/skills
+    global_path: "~/.privy/skills"
+    detect:
+      - dir: "~/.privy"

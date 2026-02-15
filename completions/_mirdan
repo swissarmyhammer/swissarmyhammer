@@ -1,0 +1,610 @@
+#compdef mirdan
+
+autoload -U is-at-least
+
+_mirdan() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_mirdan_commands" \
+"*::: :->mirdan" \
+&& ret=0
+    case $state in
+    (mirdan)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:mirdan-command-$line[1]:"
+        case $line[1] in
+            (agents)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--all[Show all known agents, not just detected ones]' \
+'--json[Output as JSON]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(new)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_mirdan__new_commands" \
+"*::: :->new" \
+&& ret=0
+
+    case $state in
+    (new)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:mirdan-new-command-$line[1]:"
+        case $line[1] in
+            (skill)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--global[Create in agent global skill directories instead of project-level]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name -- Skill name (kebab-case, 1-64 chars):_default' \
+&& ret=0
+;;
+(validator)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--global[Create in ~/.avp/validators/ instead of .avp/validators/]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name -- Validator name (kebab-case, 1-64 chars):_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_mirdan__new__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:mirdan-new-help-command-$line[1]:"
+        case $line[1] in
+            (skill)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(validator)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--global[Install globally (~/.avp/validators/ for validators, agent global dirs for skills)]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':package -- Package name, name@version, or ./local-path:_default' \
+&& ret=0
+;;
+(uninstall)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--global[Remove from global locations]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name -- Package name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--skills[Show only skills]' \
+'--validators[Show only validators]' \
+'--json[Output as JSON]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(search)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--json[Output as JSON]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':query -- Search query:_default' \
+&& ret=0
+;;
+(info)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name -- Package name:_default' \
+&& ret=0
+;;
+(login)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(logout)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(whoami)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(publish)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--dry-run[Validate and show what would be published without uploading]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::path -- Path to the package directory to publish:_files' \
+&& ret=0
+;;
+(unpublish)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name_version -- Package name@version (e.g. my-skill@1.0.0):_default' \
+&& ret=0
+;;
+(outdated)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--global[Update global packages]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name -- Specific package to update (all if omitted):_default' \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-v[Show detailed output including fix suggestions]' \
+'--verbose[Show detailed output including fix suggestions]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_mirdan__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:mirdan-help-command-$line[1]:"
+        case $line[1] in
+            (agents)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(new)
+_arguments "${_arguments_options[@]}" : \
+":: :_mirdan__help__new_commands" \
+"*::: :->new" \
+&& ret=0
+
+    case $state in
+    (new)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:mirdan-help-new-command-$line[1]:"
+        case $line[1] in
+            (skill)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(validator)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(uninstall)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(search)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(info)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(login)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(logout)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(whoami)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(publish)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(unpublish)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(outdated)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_mirdan_commands] )) ||
+_mirdan_commands() {
+    local commands; commands=(
+'agents:Detect and list installed AI coding agents' \
+'new:Create a new skill or validator from template' \
+'install:Install a skill or validator package (type auto-detected from contents)' \
+'uninstall:Remove an installed skill or validator package' \
+'list:List installed skills and validators' \
+'search:Search the registry for skills and validators' \
+'info:Show detailed information about a package' \
+'login:Authenticate with the registry' \
+'logout:Log out from the registry and revoke token' \
+'whoami:Show current authenticated user' \
+'publish:Publish a skill or validator to the registry (type auto-detected)' \
+'unpublish:Remove a published package version from the registry' \
+'outdated:Check for available package updates' \
+'update:Update installed packages to latest versions' \
+'doctor:Diagnose Mirdan setup and configuration' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'mirdan commands' commands "$@"
+}
+(( $+functions[_mirdan__agents_commands] )) ||
+_mirdan__agents_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan agents commands' commands "$@"
+}
+(( $+functions[_mirdan__doctor_commands] )) ||
+_mirdan__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan doctor commands' commands "$@"
+}
+(( $+functions[_mirdan__help_commands] )) ||
+_mirdan__help_commands() {
+    local commands; commands=(
+'agents:Detect and list installed AI coding agents' \
+'new:Create a new skill or validator from template' \
+'install:Install a skill or validator package (type auto-detected from contents)' \
+'uninstall:Remove an installed skill or validator package' \
+'list:List installed skills and validators' \
+'search:Search the registry for skills and validators' \
+'info:Show detailed information about a package' \
+'login:Authenticate with the registry' \
+'logout:Log out from the registry and revoke token' \
+'whoami:Show current authenticated user' \
+'publish:Publish a skill or validator to the registry (type auto-detected)' \
+'unpublish:Remove a published package version from the registry' \
+'outdated:Check for available package updates' \
+'update:Update installed packages to latest versions' \
+'doctor:Diagnose Mirdan setup and configuration' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'mirdan help commands' commands "$@"
+}
+(( $+functions[_mirdan__help__agents_commands] )) ||
+_mirdan__help__agents_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help agents commands' commands "$@"
+}
+(( $+functions[_mirdan__help__doctor_commands] )) ||
+_mirdan__help__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help doctor commands' commands "$@"
+}
+(( $+functions[_mirdan__help__help_commands] )) ||
+_mirdan__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help help commands' commands "$@"
+}
+(( $+functions[_mirdan__help__info_commands] )) ||
+_mirdan__help__info_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help info commands' commands "$@"
+}
+(( $+functions[_mirdan__help__install_commands] )) ||
+_mirdan__help__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help install commands' commands "$@"
+}
+(( $+functions[_mirdan__help__list_commands] )) ||
+_mirdan__help__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help list commands' commands "$@"
+}
+(( $+functions[_mirdan__help__login_commands] )) ||
+_mirdan__help__login_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help login commands' commands "$@"
+}
+(( $+functions[_mirdan__help__logout_commands] )) ||
+_mirdan__help__logout_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help logout commands' commands "$@"
+}
+(( $+functions[_mirdan__help__new_commands] )) ||
+_mirdan__help__new_commands() {
+    local commands; commands=(
+'skill:Scaffold a new skill (agentskills.io spec)' \
+'validator:Scaffold a new validator (AVP spec)' \
+    )
+    _describe -t commands 'mirdan help new commands' commands "$@"
+}
+(( $+functions[_mirdan__help__new__skill_commands] )) ||
+_mirdan__help__new__skill_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help new skill commands' commands "$@"
+}
+(( $+functions[_mirdan__help__new__validator_commands] )) ||
+_mirdan__help__new__validator_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help new validator commands' commands "$@"
+}
+(( $+functions[_mirdan__help__outdated_commands] )) ||
+_mirdan__help__outdated_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help outdated commands' commands "$@"
+}
+(( $+functions[_mirdan__help__publish_commands] )) ||
+_mirdan__help__publish_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help publish commands' commands "$@"
+}
+(( $+functions[_mirdan__help__search_commands] )) ||
+_mirdan__help__search_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help search commands' commands "$@"
+}
+(( $+functions[_mirdan__help__uninstall_commands] )) ||
+_mirdan__help__uninstall_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help uninstall commands' commands "$@"
+}
+(( $+functions[_mirdan__help__unpublish_commands] )) ||
+_mirdan__help__unpublish_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help unpublish commands' commands "$@"
+}
+(( $+functions[_mirdan__help__update_commands] )) ||
+_mirdan__help__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help update commands' commands "$@"
+}
+(( $+functions[_mirdan__help__whoami_commands] )) ||
+_mirdan__help__whoami_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help whoami commands' commands "$@"
+}
+(( $+functions[_mirdan__info_commands] )) ||
+_mirdan__info_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan info commands' commands "$@"
+}
+(( $+functions[_mirdan__install_commands] )) ||
+_mirdan__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan install commands' commands "$@"
+}
+(( $+functions[_mirdan__list_commands] )) ||
+_mirdan__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan list commands' commands "$@"
+}
+(( $+functions[_mirdan__login_commands] )) ||
+_mirdan__login_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan login commands' commands "$@"
+}
+(( $+functions[_mirdan__logout_commands] )) ||
+_mirdan__logout_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan logout commands' commands "$@"
+}
+(( $+functions[_mirdan__new_commands] )) ||
+_mirdan__new_commands() {
+    local commands; commands=(
+'skill:Scaffold a new skill (agentskills.io spec)' \
+'validator:Scaffold a new validator (AVP spec)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'mirdan new commands' commands "$@"
+}
+(( $+functions[_mirdan__new__help_commands] )) ||
+_mirdan__new__help_commands() {
+    local commands; commands=(
+'skill:Scaffold a new skill (agentskills.io spec)' \
+'validator:Scaffold a new validator (AVP spec)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'mirdan new help commands' commands "$@"
+}
+(( $+functions[_mirdan__new__help__help_commands] )) ||
+_mirdan__new__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan new help help commands' commands "$@"
+}
+(( $+functions[_mirdan__new__help__skill_commands] )) ||
+_mirdan__new__help__skill_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan new help skill commands' commands "$@"
+}
+(( $+functions[_mirdan__new__help__validator_commands] )) ||
+_mirdan__new__help__validator_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan new help validator commands' commands "$@"
+}
+(( $+functions[_mirdan__new__skill_commands] )) ||
+_mirdan__new__skill_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan new skill commands' commands "$@"
+}
+(( $+functions[_mirdan__new__validator_commands] )) ||
+_mirdan__new__validator_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan new validator commands' commands "$@"
+}
+(( $+functions[_mirdan__outdated_commands] )) ||
+_mirdan__outdated_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan outdated commands' commands "$@"
+}
+(( $+functions[_mirdan__publish_commands] )) ||
+_mirdan__publish_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan publish commands' commands "$@"
+}
+(( $+functions[_mirdan__search_commands] )) ||
+_mirdan__search_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan search commands' commands "$@"
+}
+(( $+functions[_mirdan__uninstall_commands] )) ||
+_mirdan__uninstall_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan uninstall commands' commands "$@"
+}
+(( $+functions[_mirdan__unpublish_commands] )) ||
+_mirdan__unpublish_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan unpublish commands' commands "$@"
+}
+(( $+functions[_mirdan__update_commands] )) ||
+_mirdan__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan update commands' commands "$@"
+}
+(( $+functions[_mirdan__whoami_commands] )) ||
+_mirdan__whoami_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan whoami commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_mirdan" ]; then
+    _mirdan "$@"
+else
+    compdef _mirdan mirdan
+fi

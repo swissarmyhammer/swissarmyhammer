@@ -39,6 +39,7 @@ members = [
     "swissarmyhammer-kanban",
     "swissarmyhammer-operations",
     "swissarmyhammer-operations-macros",
+    "mirdan-cli",
 ]
 resolver = "2"
 
