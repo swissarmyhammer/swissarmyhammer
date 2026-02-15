@@ -20,6 +20,8 @@ pub struct PackageSummary {
     pub author: String,
     pub latest: String,
     pub tags: Vec<String>,
+    #[serde(rename = "type", default)]
+    pub package_type: Option<String>,
     pub downloads: u64,
     pub created_at: String,
     pub updated_at: String,
@@ -34,6 +36,8 @@ pub struct PackageDetail {
     pub author: String,
     pub license: Option<String>,
     pub tags: Vec<String>,
+    #[serde(rename = "type", default)]
+    pub package_type: Option<String>,
     pub versions: Vec<String>,
     pub latest: String,
     pub downloads: u64,
