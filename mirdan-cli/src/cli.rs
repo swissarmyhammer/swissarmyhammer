@@ -63,11 +63,17 @@ pub enum Commands {
 
     /// Install a skill or validator package (type auto-detected from contents)
     Install {
-        /// Package name, name@version, or ./local-path
+        /// Package name, name@version, ./local-path, owner/repo, or git URL
         package: String,
         /// Install globally (~/.avp/validators/ for validators, agent global dirs for skills)
         #[arg(long)]
         global: bool,
+        /// Treat package as a git URL (clone instead of registry lookup)
+        #[arg(long)]
+        git: bool,
+        /// Install a specific skill/validator by name from a multi-package repo
+        #[arg(long)]
+        skill: Option<String>,
     },
 
     /// Remove an installed skill or validator package

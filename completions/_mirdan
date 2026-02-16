@@ -115,13 +115,15 @@ esac
 ;;
 (install)
 _arguments "${_arguments_options[@]}" : \
+'--skill=[Install a specific skill/validator by name from a multi-package repo]:SKILL:_default' \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '--global[Install globally (~/.avp/validators/ for validators, agent global dirs for skills)]' \
+'--git[Treat package as a git URL (clone instead of registry lookup)]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':package -- Package name, name@version, or ./local-path:_default' \
+':package -- Package name, name@version, ./local-path, owner/repo, or git URL:_default' \
 && ret=0
 ;;
 (uninstall)

@@ -12,6 +12,7 @@ pub mod auth;
 mod cli;
 pub use cli::{Cli, Commands, NewKind};
 pub mod doctor;
+pub mod git_source;
 pub mod info;
 pub mod install;
 pub mod list;

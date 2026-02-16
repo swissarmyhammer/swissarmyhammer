@@ -481,12 +481,16 @@ _mirdan() {
             return 0
             ;;
         mirdan__install)
-            opts="-d -h --global --debug --agent --help <PACKAGE>"
+            opts="-d -h --global --git --skill --debug --agent --help <PACKAGE>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --skill)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --agent)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0

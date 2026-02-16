@@ -66,8 +66,10 @@ complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subco
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from help" -f -a "skill" -d 'Scaffold a new skill (agentskills.io spec)'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from help" -f -a "validator" -d 'Scaffold a new validator (AVP spec)'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c mirdan -n "__fish_mirdan_using_subcommand install" -l skill -d 'Install a specific skill/validator by name from a multi-package repo' -r
 complete -c mirdan -n "__fish_mirdan_using_subcommand install" -l agent -d 'Limit operations to a single agent (e.g. claude-code, cursor)' -r
 complete -c mirdan -n "__fish_mirdan_using_subcommand install" -l global -d 'Install globally (~/.avp/validators/ for validators, agent global dirs for skills)'
+complete -c mirdan -n "__fish_mirdan_using_subcommand install" -l git -d 'Treat package as a git URL (clone instead of registry lookup)'
 complete -c mirdan -n "__fish_mirdan_using_subcommand install" -s d -l debug -d 'Enable debug output to stderr'
 complete -c mirdan -n "__fish_mirdan_using_subcommand install" -s h -l help -d 'Print help'
 complete -c mirdan -n "__fish_mirdan_using_subcommand uninstall" -l agent -d 'Limit operations to a single agent (e.g. claude-code, cursor)' -r

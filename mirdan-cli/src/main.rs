@@ -90,7 +90,11 @@ async fn main() {
         Commands::Install {
             package,
             global,
-        } => handle_registry_result(install::run_install(&package, agent_filter, global).await),
+            git,
+            skill,
+        } => handle_registry_result(
+            install::run_install(&package, agent_filter, global, git, skill.as_deref()).await,
+        ),
 
         Commands::Uninstall {
             name,
@@ -214,9 +218,13 @@ mod tests {
             Commands::Install {
                 package,
                 global,
+                git,
+                skill,
             } => {
                 assert_eq!(package, "no-secrets");
                 assert!(!global);
+                assert!(!git);
+                assert_eq!(skill, None);
             }
             _ => panic!("Expected Install command"),
         }
@@ -238,6 +246,47 @@ mod tests {
         let cli = Cli::parse_from(["mirdan", "install", "pkg", "--global"]);
         match cli.command {
             Commands::Install { global, .. } => assert!(global),
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_install_git_flag() {
+        let cli = Cli::parse_from(["mirdan", "install", "--git", "https://github.com/owner/repo"]);
+        match cli.command {
+            Commands::Install { package, git, .. } => {
+                assert_eq!(package, "https://github.com/owner/repo");
+                assert!(git);
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_install_skill_flag() {
+        let cli = Cli::parse_from(["mirdan", "install", "owner/repo", "--skill", "my-skill"]);
+        match cli.command {
+            Commands::Install { package, skill, .. } => {
+                assert_eq!(package, "owner/repo");
+                assert_eq!(skill, Some("my-skill".to_string()));
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_install_git_and_skill() {
+        let cli = Cli::parse_from([
+            "mirdan", "install", "--git", "https://github.com/owner/repo", "--skill", "art",
+        ]);
+        match cli.command {
+            Commands::Install {
+                package, git, skill, ..
+            } => {
+                assert_eq!(package, "https://github.com/owner/repo");
+                assert!(git);
+                assert_eq!(skill, Some("art".to_string()));
+            }
             _ => panic!("Expected Install command"),
         }
     }

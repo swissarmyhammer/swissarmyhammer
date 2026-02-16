@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::agents::{self, agent_global_skill_dir, agent_project_skill_dir};
+use crate::git_source::{self, InstallSource};
 use crate::lockfile::{self, LockedPackage, Lockfile};
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
@@ -21,16 +22,12 @@ fn sanitize_dir_name(name: &str) -> String {
     store::sanitize_dir_name(name)
 }
 
-/// Check if a package spec refers to a local path.
-fn is_local_path(spec: &str) -> bool {
-    spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/') || Path::new(spec).is_dir()
-}
-
 /// Run the install command.
 ///
-/// Accepts three forms:
+/// Accepts multiple forms:
 /// - `name` or `name@version` — download from registry
 /// - `./local-path` — install from a local directory
+/// - `owner/repo` or git URL — clone from git (with `--git` flag or as fallback)
 ///
 /// Auto-detects type from contents:
 /// - SKILL.md -> deploy to each detected agent's skill directory
@@ -39,12 +36,39 @@ pub async fn run_install(
     package_spec: &str,
     agent_filter: Option<&str>,
     global: bool,
+    git: bool,
+    skill_select: Option<&str>,
 ) -> Result<(), RegistryError> {
-    if is_local_path(package_spec) {
-        return run_install_local(package_spec, agent_filter, global).await;
+    match git_source::classify_source(package_spec, git) {
+        InstallSource::LocalPath(path) => {
+            run_install_local(&path, agent_filter, global).await
+        }
+        InstallSource::GitRepo(source) => {
+            run_install_git(&source, agent_filter, global, skill_select).await
+        }
+        InstallSource::Registry(spec) => {
+            match run_install_registry(&spec, agent_filter, global).await {
+                Ok(()) => Ok(()),
+                Err(RegistryError::NotFound(_)) => {
+                    // Registry miss — try as git source before giving up
+                    match git_source::parse_git_source(package_spec, skill_select) {
+                        Ok(source) => {
+                            println!("  Not found in registry, trying as git repository...");
+                            run_install_git(&source, agent_filter, global, skill_select).await
+                        }
+                        Err(_) => {
+                            // Git parse also failed — report the original registry error
+                            Err(RegistryError::NotFound(format!(
+                                "Package '{}' not found in registry",
+                                spec
+                            )))
+                        }
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }
     }
-
-    run_install_registry(package_spec, agent_filter, global).await
 }
 
 /// Install a package from a local directory path.
@@ -110,6 +134,84 @@ async fn run_install_local(
         println!("  -> {}", target);
     }
 
+    Ok(())
+}
+
+/// Install packages from a git repository.
+///
+/// Clones the repo, discovers packages, and deploys each one.
+async fn run_install_git(
+    source: &git_source::GitSource,
+    agent_filter: Option<&str>,
+    global: bool,
+    skill_select: Option<&str>,
+) -> Result<(), RegistryError> {
+    println!("Cloning {}...", source.display_name);
+
+    let temp_dir = git_source::git_clone(source)?;
+
+    // Merge select from GitSource and the --skill flag (--skill takes precedence)
+    let select = skill_select.or(source.select.as_deref());
+
+    let packages = git_source::discover_packages(
+        temp_dir.path(),
+        source.subpath.as_deref(),
+        select,
+    )?;
+
+    println!(
+        "  Found {} package(s) in {}",
+        packages.len(),
+        source.display_name
+    );
+    for pkg in &packages {
+        println!("    - {} ({})", pkg.name, pkg.package_type);
+    }
+
+    let project_root = std::env::current_dir()?;
+    let mut lf = Lockfile::load(&project_root)?;
+
+    for pkg in &packages {
+        println!("\nInstalling {} ({})...", pkg.name, pkg.package_type);
+
+        let targets = match pkg.package_type {
+            PackageType::Skill => {
+                deploy_skill(&pkg.name, &pkg.path, agent_filter, global).await?
+            }
+            PackageType::Validator => deploy_validator(&pkg.name, &pkg.path, global)?,
+        };
+
+        // Read version from frontmatter
+        let md_file = match pkg.package_type {
+            PackageType::Skill => pkg.path.join("SKILL.md"),
+            PackageType::Validator => pkg.path.join("VALIDATOR.md"),
+        };
+        let version = read_frontmatter(&md_file)
+            .map(|(_, v)| v)
+            .unwrap_or_else(|_| "0.0.0".to_string());
+
+        lf.add_package(
+            pkg.name.clone(),
+            LockedPackage {
+                package_type: pkg.package_type,
+                version: version.clone(),
+                resolved: format!("git+{}", source.clone_url),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets: targets.clone(),
+            },
+        );
+
+        println!("Installed {}@{} ({}) from git", pkg.name, version, pkg.package_type);
+        for target in &targets {
+            println!("  -> {}", target);
+        }
+    }
+
+    lf.save(&project_root)?;
+    println!("  Updated mirdan-lock.json");
+
+    // temp_dir drops here, cleaning up the clone
     Ok(())
 }
 
@@ -305,7 +407,28 @@ fn deploy_validator(
     Ok(vec![target_path])
 }
 
+/// Find all package names in a lockfile that were installed from a given git URL or shorthand.
+///
+/// Parses `spec` as a git source, then matches against the `resolved` field
+/// of each lockfile entry (which uses the `git+<url>` format).
+/// Returns an empty vec if `spec` is not a valid git source or no packages match.
+pub fn find_packages_by_git_source(lf: &Lockfile, spec: &str) -> Vec<String> {
+    let git_src = match git_source::parse_git_source(spec, None) {
+        Ok(src) => src,
+        Err(_) => return Vec::new(),
+    };
+    let resolved_prefix = format!("git+{}", git_src.clone_url);
+    lf.packages
+        .iter()
+        .filter(|(_, pkg)| pkg.resolved == resolved_prefix)
+        .map(|(pkg_name, _)| pkg_name.clone())
+        .collect()
+}
+
 /// Run the uninstall command.
+///
+/// Accepts a package name or a git URL/shorthand. When given a URL,
+/// uninstalls all packages whose lockfile `resolved` field matches.
 pub async fn run_uninstall(
     name: &str,
     agent_filter: Option<&str>,
@@ -314,7 +437,34 @@ pub async fn run_uninstall(
     let project_root = std::env::current_dir()?;
     let lf = Lockfile::load(&project_root)?;
 
-    // Check lockfile for type info
+    // If not a direct package name, check if it's a git source and find matching packages
+    if lf.get_package(name).is_none() {
+        let matching = find_packages_by_git_source(&lf, name);
+
+        if !matching.is_empty() {
+            let mut lf = Lockfile::load(&project_root)?;
+            for pkg_name in &matching {
+                let pkg = lf.get_package(pkg_name).unwrap();
+                let pkg_type = pkg.package_type;
+                match pkg_type {
+                    PackageType::Skill => uninstall_skill(pkg_name, agent_filter, global)?,
+                    PackageType::Validator => uninstall_validator(pkg_name, global)?,
+                }
+                lf.remove_package(pkg_name);
+                println!("  Uninstalled {}", pkg_name);
+            }
+            lf.save(&project_root)?;
+            println!("  Updated mirdan-lock.json");
+            println!(
+                "\nUninstalled {} package(s) from {}",
+                matching.len(),
+                name
+            );
+            return Ok(());
+        }
+    }
+
+    // Direct package name lookup
     let pkg_type = lf
         .get_package(name)
         .map(|p| p.package_type)
@@ -434,7 +584,7 @@ pub async fn install_package(
     global: bool,
 ) -> Result<(), RegistryError> {
     let spec = format!("{}@{}", name, version);
-    run_install(&spec, agent_filter, global).await
+    run_install(&spec, agent_filter, global, false, None).await
 }
 
 /// Parse a package spec like "name" or "name@version".
@@ -585,23 +735,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_local_path_relative() {
-        assert!(is_local_path("./my-skill"));
-        assert!(is_local_path("../other/skill"));
-    }
-
-    #[test]
-    fn test_is_local_path_absolute() {
-        assert!(is_local_path("/tmp/skill"));
-    }
-
-    #[test]
-    fn test_is_local_path_registry() {
-        assert!(!is_local_path("no-secrets"));
-        assert!(!is_local_path("my-skill@1.0.0"));
-    }
-
-    #[test]
     fn test_read_frontmatter_skill() {
         let dir = tempfile::tempdir().unwrap();
         let md = dir.path().join("SKILL.md");
@@ -693,5 +826,391 @@ mod tests {
             std::fs::read_to_string(dst_path.join("file.txt")).unwrap(),
             "hello"
         );
+    }
+
+    // --- local skill: create, detect, read frontmatter, deploy as validator ---
+
+    /// Helper: create a local skill directory with SKILL.md.
+    fn make_local_skill(dir: &Path, name: &str, version: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!(
+                "---\nname: {}\nversion: \"{}\"\n---\n# {}\nA test skill.\n",
+                name, version, name
+            ),
+        )
+        .unwrap();
+    }
+
+    /// Helper: create a local validator directory with VALIDATOR.md + rules/.
+    fn make_local_validator(dir: &Path, name: &str, version: &str) {
+        std::fs::create_dir_all(dir.join("rules")).unwrap();
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            format!(
+                "---\nname: {}\nversion: \"{}\"\n---\n# {}\nA test validator.\n",
+                name, version, name
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rules/no-secrets.md"),
+            "# No Secrets\nDon't commit secrets.\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_local_skill_detection_and_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill_dir = dir.path().join("my-skill");
+        make_local_skill(&skill_dir, "my-skill", "1.2.3");
+
+        // detect_package_type recognises it as a Skill
+        let pkg_type = package_type::detect_package_type(&skill_dir);
+        assert_eq!(pkg_type, Some(PackageType::Skill));
+
+        // read_frontmatter extracts name + version
+        let (name, version) = read_frontmatter(&skill_dir.join("SKILL.md")).unwrap();
+        assert_eq!(name, "my-skill");
+        assert_eq!(version, "1.2.3");
+    }
+
+    #[test]
+    fn test_local_validator_detection_and_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let val_dir = dir.path().join("my-validator");
+        make_local_validator(&val_dir, "my-validator", "0.1.0");
+
+        let pkg_type = package_type::detect_package_type(&val_dir);
+        assert_eq!(pkg_type, Some(PackageType::Validator));
+
+        let (name, version) = read_frontmatter(&val_dir.join("VALIDATOR.md")).unwrap();
+        assert_eq!(name, "my-validator");
+        assert_eq!(version, "0.1.0");
+    }
+
+    // --- validator deploy + uninstall (no agents required) ---
+
+    #[test]
+    fn test_deploy_validator_creates_files() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Create a source validator
+        let src = work.path().join("src-val");
+        make_local_validator(&src, "test-val", "1.0.0");
+
+        // Deploy it (non-global → .avp/validators/)
+        let targets = deploy_validator("test-val", &src, false).unwrap();
+        assert_eq!(targets.len(), 1);
+
+        // Verify files exist on disk
+        let deployed = work.path().join(".avp/validators/test-val");
+        assert!(deployed.join("VALIDATOR.md").exists());
+        assert!(deployed.join("rules/no-secrets.md").exists());
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_deploy_and_uninstall_validator() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Deploy
+        let src = work.path().join("src-val");
+        make_local_validator(&src, "test-val", "1.0.0");
+        deploy_validator("test-val", &src, false).unwrap();
+
+        let deployed = work.path().join(".avp/validators/test-val");
+        assert!(deployed.exists());
+
+        // Uninstall
+        uninstall_validator("test-val", false).unwrap();
+        assert!(!deployed.exists(), "Validator dir should be removed");
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_uninstall_validator_not_found() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let result = uninstall_validator("nonexistent", false);
+        assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    // --- lockfile round-trip for git-installed packages ---
+
+    #[test]
+    fn test_lockfile_records_git_source() {
+        let work = tempfile::tempdir().unwrap();
+
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "skill-a".to_string(),
+            LockedPackage {
+                package_type: PackageType::Skill,
+                version: "1.0.0".to_string(),
+                resolved: "git+https://github.com/anthropics/skills.git".to_string(),
+                integrity: String::new(),
+                installed_at: "2026-02-16T00:00:00Z".to_string(),
+                targets: vec!["claude-code".to_string()],
+            },
+        );
+        lf.add_package(
+            "skill-b".to_string(),
+            LockedPackage {
+                package_type: PackageType::Skill,
+                version: "1.0.0".to_string(),
+                resolved: "git+https://github.com/anthropics/skills.git".to_string(),
+                integrity: String::new(),
+                installed_at: "2026-02-16T00:00:00Z".to_string(),
+                targets: vec!["claude-code".to_string()],
+            },
+        );
+        lf.add_package(
+            "other-pkg".to_string(),
+            LockedPackage {
+                package_type: PackageType::Validator,
+                version: "0.1.0".to_string(),
+                resolved: "https://registry.example.com/other-pkg-0.1.0.zip".to_string(),
+                integrity: "sha512-abc".to_string(),
+                installed_at: "2026-02-16T00:00:00Z".to_string(),
+                targets: vec![".avp/validators/".to_string()],
+            },
+        );
+
+        lf.save(work.path()).unwrap();
+        let loaded = Lockfile::load(work.path()).unwrap();
+        assert_eq!(loaded.packages.len(), 3);
+
+        // git packages have empty integrity, git+ resolved prefix
+        let a = loaded.get_package("skill-a").unwrap();
+        assert!(a.resolved.starts_with("git+"));
+        assert!(a.integrity.is_empty());
+
+        // registry package has integrity
+        let o = loaded.get_package("other-pkg").unwrap();
+        assert!(!o.resolved.starts_with("git+"));
+        assert!(!o.integrity.is_empty());
+    }
+
+    // --- uninstall-by-URL matching ---
+
+    #[test]
+    fn test_find_packages_by_git_url() {
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "skill-a".to_string(),
+            LockedPackage {
+                package_type: PackageType::Skill,
+                version: "1.0.0".to_string(),
+                resolved: "git+https://github.com/anthropics/skills.git".to_string(),
+                integrity: String::new(),
+                installed_at: String::new(),
+                targets: vec![],
+            },
+        );
+        lf.add_package(
+            "skill-b".to_string(),
+            LockedPackage {
+                package_type: PackageType::Skill,
+                version: "1.0.0".to_string(),
+                resolved: "git+https://github.com/anthropics/skills.git".to_string(),
+                integrity: String::new(),
+                installed_at: String::new(),
+                targets: vec![],
+            },
+        );
+        lf.add_package(
+            "other-pkg".to_string(),
+            LockedPackage {
+                package_type: PackageType::Validator,
+                version: "0.1.0".to_string(),
+                resolved: "git+https://github.com/other/repo.git".to_string(),
+                integrity: String::new(),
+                installed_at: String::new(),
+                targets: vec![],
+            },
+        );
+
+        // Full HTTPS URL → matches the two anthropics skills
+        let matched = find_packages_by_git_source(&lf, "https://github.com/anthropics/skills");
+        assert_eq!(matched.len(), 2);
+        assert!(matched.contains(&"skill-a".to_string()));
+        assert!(matched.contains(&"skill-b".to_string()));
+
+        // Shorthand → same result
+        let matched = find_packages_by_git_source(&lf, "anthropics/skills");
+        assert_eq!(matched.len(), 2);
+
+        // Different repo → only one match
+        let matched = find_packages_by_git_source(&lf, "other/repo");
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0], "other-pkg");
+
+        // No match
+        let matched = find_packages_by_git_source(&lf, "nobody/nothing");
+        assert!(matched.is_empty());
+
+        // Plain registry name → not a git source, empty
+        let matched = find_packages_by_git_source(&lf, "no-secrets");
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn test_find_packages_by_git_url_with_dot_git_suffix() {
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "my-skill".to_string(),
+            LockedPackage {
+                package_type: PackageType::Skill,
+                version: "1.0.0".to_string(),
+                resolved: "git+https://github.com/owner/repo.git".to_string(),
+                integrity: String::new(),
+                installed_at: String::new(),
+                targets: vec![],
+            },
+        );
+
+        // URL with .git suffix
+        let matched = find_packages_by_git_source(&lf, "https://github.com/owner/repo.git");
+        assert_eq!(matched.len(), 1);
+
+        // URL without .git suffix (parse_git_source appends it)
+        let matched = find_packages_by_git_source(&lf, "https://github.com/owner/repo");
+        assert_eq!(matched.len(), 1);
+
+        // Shorthand
+        let matched = find_packages_by_git_source(&lf, "owner/repo");
+        assert_eq!(matched.len(), 1);
+    }
+
+    // --- end-to-end: clone real repo → deploy validator → lockfile → uninstall ---
+
+    #[test]
+    fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Create and deploy
+        let src = work.path().join("src-val");
+        make_local_validator(&src, "e2e-val", "2.0.0");
+        let targets = deploy_validator("e2e-val", &src, false).unwrap();
+        assert!(!targets.is_empty());
+
+        // Write lockfile
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "e2e-val".to_string(),
+            LockedPackage {
+                package_type: PackageType::Validator,
+                version: "2.0.0".to_string(),
+                resolved: "file:src-val".to_string(),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets: targets.clone(),
+            },
+        );
+        lf.save(work.path()).unwrap();
+
+        // Verify on disk
+        let deployed = work.path().join(".avp/validators/e2e-val");
+        assert!(deployed.join("VALIDATOR.md").exists());
+
+        // Lockfile has the entry
+        let lf = Lockfile::load(work.path()).unwrap();
+        assert!(lf.get_package("e2e-val").is_some());
+
+        // Uninstall by name
+        uninstall_validator("e2e-val", false).unwrap();
+        assert!(!deployed.exists());
+
+        // Update lockfile
+        let mut lf = Lockfile::load(work.path()).unwrap();
+        lf.remove_package("e2e-val");
+        lf.save(work.path()).unwrap();
+        let lf = Lockfile::load(work.path()).unwrap();
+        assert!(lf.get_package("e2e-val").is_none());
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {
+        use crate::git_source;
+
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Clone anthropics/skills
+        let source = git_source::parse_git_source("anthropics/skills", None).unwrap();
+        let clone_dir = git_source::git_clone(&source).unwrap();
+
+        // Discover packages
+        let packages =
+            git_source::discover_packages(clone_dir.path(), None, None).unwrap();
+        assert!(!packages.is_empty());
+
+        // Pick first package, deploy it as if it were a validator (create a
+        // synthetic validator from its directory to avoid needing agents)
+        let pkg = &packages[0];
+        let val_src = work.path().join("synthetic-val");
+        make_local_validator(&val_src, &pkg.name, "1.0.0");
+        deploy_validator(&pkg.name, &val_src, false).unwrap();
+
+        // Write lockfile with git+ resolved
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            pkg.name.clone(),
+            LockedPackage {
+                package_type: PackageType::Validator,
+                version: "1.0.0".to_string(),
+                resolved: format!("git+{}", source.clone_url),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets: vec![".avp/validators/".to_string()],
+            },
+        );
+        lf.save(work.path()).unwrap();
+
+        // Verify deploy
+        let deployed = work.path().join(".avp/validators").join(sanitize_dir_name(&pkg.name));
+        assert!(deployed.exists());
+
+        // find_packages_by_git_source matches via URL
+        let lf = Lockfile::load(work.path()).unwrap();
+        let matched =
+            find_packages_by_git_source(&lf, "https://github.com/anthropics/skills");
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0], pkg.name);
+
+        // Also matches via shorthand
+        let matched = find_packages_by_git_source(&lf, "anthropics/skills");
+        assert_eq!(matched.len(), 1);
+
+        // Uninstall by name
+        uninstall_validator(&pkg.name, false).unwrap();
+        assert!(!deployed.exists());
+
+        // Clean lockfile
+        let mut lf = Lockfile::load(work.path()).unwrap();
+        lf.remove_package(&pkg.name);
+        lf.save(work.path()).unwrap();
+        let lf = Lockfile::load(work.path()).unwrap();
+        assert!(lf.packages.is_empty());
+
+        std::env::set_current_dir(old_dir).unwrap();
     }
 }

@@ -129,11 +129,13 @@ Install a skill or validator package (type auto-detected from contents)
 
 ###### **Arguments:**
 
-* `<PACKAGE>` — Package name, name@version, or ./local-path
+* `<PACKAGE>` — Package name, name@version, ./local-path, owner/repo, or git URL
 
 ###### **Options:**
 
 * `--global` — Install globally (~/.avp/validators/ for validators, agent global dirs for skills)
+* `--git` — Treat package as a git URL (clone instead of registry lookup)
+* `--skill <SKILL>` — Install a specific skill/validator by name from a multi-package repo
 
 
 

@@ -163,18 +163,18 @@ fn scan_validators(dir: &Path, location: &str, packages: &mut Vec<InstalledPacka
 fn read_frontmatter_version(path: &Path) -> String {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return "unknown".to_string(),
+        Err(_) => return "latest".to_string(),
     };
 
     let content = content.trim();
     if !content.starts_with("---") {
-        return "unknown".to_string();
+        return "latest".to_string();
     }
 
     let rest = &content[3..];
     let end = match rest.find("---") {
         Some(pos) => pos,
-        None => return "unknown".to_string(),
+        None => return "latest".to_string(),
     };
 
     let frontmatter = &rest[..end];
@@ -192,7 +192,7 @@ fn read_frontmatter_version(path: &Path) -> String {
         }
     }
 
-    "unknown".to_string()
+    "latest".to_string()
 }
 
 /// Merge packages with the same name (combining targets).
@@ -243,7 +243,7 @@ version: "1.2.3"
         let path = dir.path().join("SKILL.md");
         std::fs::write(&path, "# No frontmatter").unwrap();
 
-        assert_eq!(read_frontmatter_version(&path), "unknown");
+        assert_eq!(read_frontmatter_version(&path), "latest");
     }
 
     #[test]
