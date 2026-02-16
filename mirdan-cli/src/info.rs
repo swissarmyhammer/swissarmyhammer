@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::agents::{self, agent_project_skill_dir};
 use crate::lockfile::Lockfile;
 use crate::registry::{RegistryClient, RegistryError};
+use crate::store;
 
 /// Run the info command.
 ///
@@ -54,32 +55,13 @@ fn show_lockfile_info(name: &str) -> bool {
     true
 }
 
-/// Sanitize a package name for use as a filesystem directory name.
-///
-/// If the name is a URL, strip the scheme and host.
-fn sanitize_dir_name(name: &str) -> String {
-    if let Some(rest) = name.strip_prefix("https://") {
-        if let Some((_host, path)) = rest.split_once('/') {
-            return path.to_string();
-        }
-        return rest.to_string();
-    }
-    if let Some(rest) = name.strip_prefix("http://") {
-        if let Some((_host, path)) = rest.split_once('/') {
-            return path.to_string();
-        }
-        return rest.to_string();
-    }
-    name.to_string()
-}
-
 /// Show info from locally installed packages.
 fn show_local_info(name: &str, agent_filter: Option<&str>) -> bool {
-    let dir_name = sanitize_dir_name(name);
+    let sanitized = store::sanitize_dir_name(name);
 
     // Check validator dirs (skip when --agent is set: validators are not agent-scoped)
     if agent_filter.is_none() {
-        let local_val = Path::new(".avp/validators").join(&dir_name);
+        let local_val = Path::new(".avp/validators").join(&sanitized);
         if local_val.exists() && local_val.join("VALIDATOR.md").exists() {
             let version = read_frontmatter_field(&local_val.join("VALIDATOR.md"), "version");
             let description =
@@ -92,12 +74,13 @@ fn show_local_info(name: &str, agent_filter: Option<&str>) -> bool {
         }
     }
 
-    // Check skill dirs in target agents
+    // Check skill dirs in target agents (using symlink_name for the lookup)
     if let Ok(config) = agents::load_agents_config() {
         let agents = agents::resolve_target_agents(&config, agent_filter)
             .unwrap_or_default();
         for agent in &agents {
-            let skill_dir = agent_project_skill_dir(&agent.def).join(&dir_name);
+            let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
+            let skill_dir = agent_project_skill_dir(&agent.def).join(&link_name);
             if skill_dir.exists() && skill_dir.join("SKILL.md").exists() {
                 let version = read_frontmatter_field(&skill_dir.join("SKILL.md"), "version");
                 let description =
@@ -109,6 +92,18 @@ fn show_local_info(name: &str, agent_filter: Option<&str>) -> bool {
                 return true;
             }
         }
+    }
+
+    // Also check the central store directly as a fallback
+    let store_path = store::skill_store_dir(false).join(&sanitized);
+    if store_path.exists() && store_path.join("SKILL.md").exists() {
+        let version = read_frontmatter_field(&store_path.join("SKILL.md"), "version");
+        let description = read_frontmatter_field(&store_path.join("SKILL.md"), "description");
+
+        println!("{}@{} (local skill, store)\n", name, version);
+        println!("  Description: {}", description);
+        println!("  Path:        {}", store_path.display());
+        return true;
     }
 
     false

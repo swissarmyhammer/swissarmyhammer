@@ -20,6 +20,19 @@ pub struct AgentsConfig {
     pub agents: Vec<AgentDef>,
 }
 
+/// Policy for computing symlink names when linking from agent skill dirs to the
+/// central `.skills/` store.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SymlinkPolicy {
+    /// Use only the last path segment (e.g. `"anthropics/skills/algorithmic-art"` → `"algorithmic-art"`).
+    /// This is the default, suitable for agents that require flat skill directories.
+    #[default]
+    LastSegment,
+    /// Preserve the full sanitized path (for agents that support subdirectories).
+    FullPath,
+}
+
 /// A single agent definition.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentDef {
@@ -28,6 +41,8 @@ pub struct AgentDef {
     pub project_path: String,
     pub global_path: String,
     pub detect: Vec<DetectMethod>,
+    #[serde(default)]
+    pub symlink_policy: SymlinkPolicy,
 }
 
 /// How to detect if an agent is installed.
@@ -340,6 +355,7 @@ mod tests {
                 detect: vec![DetectMethod::Dir {
                     dir: "/nonexistent/path/that/should/not/exist".to_string(),
                 }],
+                symlink_policy: SymlinkPolicy::default(),
             }],
         };
         let detected = get_detected_agents(&config);
@@ -355,6 +371,7 @@ mod tests {
             project_path: ".test/skills".to_string(),
             global_path: "~/.test/skills".to_string(),
             detect: vec![],
+            symlink_policy: SymlinkPolicy::default(),
         };
         assert_eq!(
             agent_project_skill_dir(&def),
@@ -373,6 +390,7 @@ mod tests {
                     detect: vec![DetectMethod::Dir {
                         dir: "/nonexistent/path/that/should/not/exist".to_string(),
                     }],
+                    symlink_policy: SymlinkPolicy::default(),
                 },
                 AgentDef {
                     id: "cursor".to_string(),
@@ -382,6 +400,7 @@ mod tests {
                     detect: vec![DetectMethod::Dir {
                         dir: "/nonexistent/cursor/path".to_string(),
                     }],
+                    symlink_policy: SymlinkPolicy::default(),
                 },
             ],
         }

@@ -12,26 +12,13 @@ use crate::agents::{self, agent_global_skill_dir, agent_project_skill_dir};
 use crate::lockfile::{self, LockedPackage, Lockfile};
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
+use crate::store;
 
 /// Sanitize a package name for use as a filesystem directory name.
 ///
-/// If the name is a URL (e.g. `https://github.com/anthropics/skills/algorithmic-art`),
-/// strip the scheme and host to produce a path-safe name (e.g. `anthropics/skills/algorithmic-art`).
+/// Delegates to [`store::sanitize_dir_name`].
 fn sanitize_dir_name(name: &str) -> String {
-    if let Some(rest) = name.strip_prefix("https://") {
-        // Remove the host (first path segment)
-        if let Some((_host, path)) = rest.split_once('/') {
-            return path.to_string();
-        }
-        return rest.to_string();
-    }
-    if let Some(rest) = name.strip_prefix("http://") {
-        if let Some((_host, path)) = rest.split_once('/') {
-            return path.to_string();
-        }
-        return rest.to_string();
-    }
-    name.to_string()
+    store::sanitize_dir_name(name)
 }
 
 /// Check if a package spec refers to a local path.
@@ -250,7 +237,7 @@ async fn run_install_registry(
     Ok(())
 }
 
-/// Deploy a skill to detected agent directories.
+/// Deploy a skill to the central store, then symlink into each agent's skill directory.
 async fn deploy_skill(
     name: &str,
     source_dir: &Path,
@@ -266,23 +253,33 @@ async fn deploy_skill(
         ));
     }
 
+    // 1. Copy source into the central store
+    let sanitized = sanitize_dir_name(name);
+    let store_path = store::skill_store_dir(global).join(&sanitized);
+
+    // Remove existing store entry
+    store::remove_if_exists(&store_path)?;
+
+    copy_dir_recursive(source_dir, &store_path)?;
+    println!("  Stored in {}", store_path.display());
+
+    // 2. Create symlinks from each agent's skill directory
     let mut targets = Vec::new();
-    let dir_name = sanitize_dir_name(name);
 
     for agent in &agents {
-        let target_dir = if global {
-            agent_global_skill_dir(&agent.def).join(&dir_name)
+        let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
+        let agent_skill_dir = if global {
+            agent_global_skill_dir(&agent.def)
         } else {
-            agent_project_skill_dir(&agent.def).join(&dir_name)
+            agent_project_skill_dir(&agent.def)
         };
+        let link_path = agent_skill_dir.join(&link_name);
 
-        // Remove existing
-        if target_dir.exists() {
-            std::fs::remove_dir_all(&target_dir)?;
-        }
+        // Remove existing (real dir or stale symlink)
+        store::remove_if_exists(&link_path)?;
 
-        copy_dir_recursive(source_dir, &target_dir)?;
-        println!("  Deployed to {} ({})", target_dir.display(), agent.def.name);
+        store::create_skill_link(&store_path, &link_path)?;
+        println!("  Linked {} -> {} ({})", link_path.display(), store_path.display(), agent.def.name);
         targets.push(agent.def.id.clone());
     }
 
@@ -349,18 +346,23 @@ fn uninstall_skill(
     let config = agents::load_agents_config()?;
     let agents = agents::resolve_target_agents(&config, agent_filter)?;
 
-    let mut removed = 0;
-    let dir_name = sanitize_dir_name(name);
-    for agent in &agents {
-        let target_dir = if global {
-            agent_global_skill_dir(&agent.def).join(&dir_name)
-        } else {
-            agent_project_skill_dir(&agent.def).join(&dir_name)
-        };
+    let sanitized = sanitize_dir_name(name);
 
-        if target_dir.exists() {
-            std::fs::remove_dir_all(&target_dir)?;
-            println!("  Removed from {} ({})", target_dir.display(), agent.def.name);
+    // 1. Remove symlinks from each agent's skill directory
+    let mut removed = 0;
+    for agent in &agents {
+        let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
+        let agent_skill_dir = if global {
+            agent_global_skill_dir(&agent.def)
+        } else {
+            agent_project_skill_dir(&agent.def)
+        };
+        let link_path = agent_skill_dir.join(&link_name);
+
+        // Check if the path exists (symlink or real dir)
+        if std::fs::symlink_metadata(&link_path).is_ok() {
+            store::remove_if_exists(&link_path)?;
+            println!("  Removed from {} ({})", link_path.display(), agent.def.name);
             removed += 1;
         }
     }
@@ -371,6 +373,28 @@ fn uninstall_skill(
             "Skill '{}' not found in any agent ({} scope)",
             name, scope
         )));
+    }
+
+    // 2. Remove store entry if no remaining symlinks reference it
+    let store_path = store::skill_store_dir(global).join(&sanitized);
+    if store_path.exists() {
+        // Collect all agent skill dirs to check for remaining references
+        let all_agents = agents::get_detected_agents(&config);
+        let all_skill_dirs: Vec<PathBuf> = all_agents
+            .iter()
+            .map(|a| {
+                if global {
+                    agent_global_skill_dir(&a.def)
+                } else {
+                    agent_project_skill_dir(&a.def)
+                }
+            })
+            .collect();
+
+        if !store::store_entry_still_referenced(&store_path, &all_skill_dirs) {
+            std::fs::remove_dir_all(&store_path)?;
+            println!("  Removed store entry {}", store_path.display());
+        }
     }
 
     Ok(())
