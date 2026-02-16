@@ -227,11 +227,11 @@ Publish a skill or validator to the registry (type auto-detected)
 
 Auto-detects package type from directory contents: - SKILL.md present -> publishes as a skill - VALIDATOR.md + rules/ present -> publishes as a validator
 
-**Usage:** `mirdan publish [OPTIONS] [PATH]`
+**Usage:** `mirdan publish [OPTIONS] [SOURCE]`
 
 ###### **Arguments:**
 
-* `<PATH>` — Path to the package directory to publish
+* `<SOURCE>` — Path or git URL to the package directory to publish
 
   Default value: `.`
 

@@ -237,6 +237,47 @@ impl RegistryClient {
         Ok(result)
     }
 
+    /// Register a marketplace repository for skill discovery.
+    pub async fn register_marketplace(
+        &self,
+        source: &str,
+    ) -> Result<MarketplaceResponse, RegistryError> {
+        let auth = self.auth_header().ok_or(RegistryError::AuthRequired)?;
+        let url = format!("{}/api/marketplaces", self.registry_url);
+
+        let body = serde_json::json!({ "source": source });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", &auth)
+            .json(&body)
+            .send()
+            .await?;
+        let response = self.check_response(response).await?;
+        let result = response.json().await?;
+        Ok(result)
+    }
+
+    /// Trigger skill discovery sync for a marketplace.
+    pub async fn sync_marketplace(
+        &self,
+        id: &str,
+    ) -> Result<MarketplaceSyncResponse, RegistryError> {
+        let auth = self.auth_header().ok_or(RegistryError::AuthRequired)?;
+        let url = format!("{}/api/marketplaces/{}/sync", self.registry_url, id);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", &auth)
+            .send()
+            .await?;
+        let response = self.check_response(response).await?;
+        let result = response.json().await?;
+        Ok(result)
+    }
+
     /// Unpublish (delete) a specific version.
     pub async fn unpublish(&self, name: &str, version: &str) -> Result<(), RegistryError> {
         let auth = self.auth_header().ok_or(RegistryError::AuthRequired)?;

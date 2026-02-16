@@ -203,7 +203,7 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-'::path -- Path to the package directory to publish:_files' \
+'::source -- Path or git URL to the package directory to publish:_default' \
 && ret=0
 ;;
 (unpublish)

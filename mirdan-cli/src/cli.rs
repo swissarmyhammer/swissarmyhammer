@@ -4,8 +4,6 @@
 //! `build.rs` can compile it independently via `#[path = "src/cli.rs"]` to
 //! generate documentation, man pages, and shell completions at build time.
 
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand};
 
 /// Mirdan - Universal skill and validator package manager for AI coding agents.
@@ -127,9 +125,9 @@ pub enum Commands {
     ///   - SKILL.md present -> publishes as a skill
     ///   - VALIDATOR.md + rules/ present -> publishes as a validator
     Publish {
-        /// Path to the package directory to publish
+        /// Path or git URL to the package directory to publish
         #[arg(default_value = ".")]
-        path: PathBuf,
+        source: String,
         /// Validate and show what would be published without uploading
         #[arg(long)]
         dry_run: bool,

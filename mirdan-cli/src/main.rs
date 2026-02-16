@@ -113,8 +113,8 @@ async fn main() {
         Commands::Logout => handle_registry_result(auth::logout().await),
         Commands::Whoami => handle_registry_result(auth::whoami().await),
 
-        Commands::Publish { path, dry_run } => {
-            handle_registry_result(publish::run_publish(&path, dry_run).await)
+        Commands::Publish { source, dry_run } => {
+            handle_registry_result(publish::run_publish(&source, dry_run).await)
         }
 
         Commands::Unpublish { name_version } => {
@@ -355,8 +355,8 @@ mod tests {
     fn test_cli_parsing_publish() {
         let cli = Cli::parse_from(["mirdan", "publish"]);
         match cli.command {
-            Commands::Publish { path, dry_run } => {
-                assert_eq!(path, std::path::PathBuf::from("."));
+            Commands::Publish { source, dry_run } => {
+                assert_eq!(source, ".");
                 assert!(!dry_run);
             }
             _ => panic!("Expected Publish command"),
@@ -368,6 +368,18 @@ mod tests {
         let cli = Cli::parse_from(["mirdan", "publish", "--dry-run"]);
         match cli.command {
             Commands::Publish { dry_run, .. } => assert!(dry_run),
+            _ => panic!("Expected Publish command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_publish_url() {
+        let cli = Cli::parse_from(["mirdan", "publish", "https://github.com/obra/superpowers"]);
+        match cli.command {
+            Commands::Publish { source, dry_run } => {
+                assert_eq!(source, "https://github.com/obra/superpowers");
+                assert!(!dry_run);
+            }
             _ => panic!("Expected Publish command"),
         }
     }

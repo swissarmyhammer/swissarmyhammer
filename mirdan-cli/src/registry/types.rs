@@ -123,3 +123,39 @@ pub struct UnpublishResponse {
     pub name: String,
     pub version: String,
 }
+
+/// Response from `POST /api/marketplaces` (register marketplace).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceResponse {
+    pub id: String,
+    pub url: String,
+    pub provider: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub registered_by: String,
+    pub is_seed: bool,
+    pub status: String,
+    pub skill_count: u64,
+    pub created_at: String,
+}
+
+/// A discovered skill from a marketplace sync.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredSkill {
+    pub qualified_name: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// Response from `POST /api/marketplaces/:id/sync`.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceSyncResponse {
+    pub status: String,
+    pub skill_count: u64,
+    pub discovery_mode: String,
+    #[serde(default)]
+    pub skills: Vec<DiscoveredSkill>,
+}

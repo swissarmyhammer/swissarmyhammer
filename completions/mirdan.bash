@@ -681,7 +681,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__publish)
-            opts="-d -h --dry-run --debug --agent --help [PATH]"
+            opts="-d -h --dry-run --debug --agent --help [SOURCE]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

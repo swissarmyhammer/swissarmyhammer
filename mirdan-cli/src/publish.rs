@@ -1,63 +1,100 @@
 //! Mirdan Publish - Publish and unpublish packages.
 //!
-//! Auto-detects package type from directory contents:
-//! - SKILL.md present -> publish as skill
-//! - VALIDATOR.md + rules/ present -> publish as validator
+//! Two modes:
+//! - **URL source**: Registers a marketplace via `POST /api/marketplaces` and
+//!   triggers a sync. The registry clones and discovers skills server-side.
+//! - **Local path**: Zips the directory and uploads via `POST /api/packages`.
 
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 use walkdir::WalkDir;
 
-use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
+
+/// Check if a source string looks like a git URL or owner/repo shorthand.
+fn is_remote_source(source: &str) -> bool {
+    source.starts_with("https://")
+        || source.starts_with("http://")
+        || source.starts_with("git@")
+        || is_owner_repo(source)
+}
+
+/// Check if a source looks like `owner/repo` shorthand (no spaces, exactly one slash,
+/// no leading dot or slash).
+fn is_owner_repo(source: &str) -> bool {
+    let parts: Vec<&str> = source.split('/').collect();
+    parts.len() == 2
+        && !parts[0].is_empty()
+        && !parts[1].is_empty()
+        && !source.starts_with('.')
+        && !source.starts_with('/')
+        && !source.contains(' ')
+}
 
 /// Run the publish command.
 ///
-/// Validates the given directory and publishes it to the registry.
-pub async fn run_publish(path: &Path, dry_run: bool) -> Result<(), RegistryError> {
+/// - For URLs or `owner/repo` shorthand: registers as a marketplace and triggers sync.
+/// - For local paths: zips and uploads to the package registry.
+pub async fn run_publish(source: &str, dry_run: bool) -> Result<(), RegistryError> {
+    if is_remote_source(source) {
+        run_publish_marketplace(source, dry_run).await
+    } else {
+        run_publish_local(source, dry_run).await
+    }
+}
+
+/// Register a marketplace and trigger sync.
+async fn run_publish_marketplace(source: &str, dry_run: bool) -> Result<(), RegistryError> {
+    println!("Registering marketplace: {}", source);
+
+    if dry_run {
+        println!("\n[dry-run] Would register marketplace: {}", source);
+        println!("[dry-run] No changes made.");
+        return Ok(());
+    }
+
+    let client = RegistryClient::authenticated()?;
+    let marketplace = client.register_marketplace(source).await?;
+
+    println!("  ID:       {}", marketplace.id);
+    println!("  URL:      {}", marketplace.url);
+    println!("  Provider: {}", marketplace.provider);
+
+    // Trigger sync to discover skills
+    println!("Syncing marketplace...");
+    let sync = client.sync_marketplace(&marketplace.id).await?;
+
+    println!(
+        "\nDiscovered {} skill(s) via {}",
+        sync.skill_count, sync.discovery_mode
+    );
+    for skill in &sync.skills {
+        println!("  - {}", skill.qualified_name);
+    }
+
+    Ok(())
+}
+
+/// Zip a local directory and upload to the package registry.
+async fn run_publish_local(source: &str, dry_run: bool) -> Result<(), RegistryError> {
+    let path = Path::new(source);
     let dir = path.canonicalize().map_err(|e| {
         RegistryError::Validation(format!("Cannot resolve path '{}': {}", path.display(), e))
     })?;
 
-    // Detect package type
-    let pkg_type = package_type::detect_package_type(&dir).ok_or_else(|| {
-        RegistryError::Validation(
-            "Cannot determine package type. Directory must contain SKILL.md (skill) \
-             or VALIDATOR.md + rules/ (validator)."
-                .to_string(),
-        )
-    })?;
+    let dir_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "package".to_string());
 
-    println!("Detected package type: {}", pkg_type);
-
-    // Validate structure
-    let (name, version) = match pkg_type {
-        PackageType::Skill => validate_skill(&dir)?,
-        PackageType::Validator => validate_validator(&dir)?,
-    };
-
-    println!("  Name:    {}", name);
-    println!("  Version: {}", version);
-
-    // Create ZIP archive
-    println!("Creating package archive...");
-    let archive = create_zip(&dir, &name)?;
+    println!("Creating package archive from {}...", source);
+    let archive = create_zip(&dir, &dir_name)?;
     let size = archive.len();
     println!("  Archive size: {} bytes", size);
 
-    if size > 10 * 1024 * 1024 {
-        return Err(RegistryError::Validation(format!(
-            "Package too large: {} bytes (max 10MB)",
-            size
-        )));
-    }
-
     if dry_run {
-        println!(
-            "\n[dry-run] Would publish {}@{} ({}) ({} bytes)",
-            name, version, pkg_type, size
-        );
+        println!("\n[dry-run] Would upload archive ({} bytes)", size);
         println!("[dry-run] No changes made.");
         return Ok(());
     }
@@ -110,106 +147,6 @@ fn parse_name_version(spec: &str) -> Result<(String, String), RegistryError> {
             spec
         ))),
     }
-}
-
-/// Validate a skill directory and return (name, version).
-fn validate_skill(dir: &Path) -> Result<(String, String), RegistryError> {
-    let skill_md = dir.join("SKILL.md");
-    if !skill_md.exists() {
-        return Err(RegistryError::Validation(format!(
-            "SKILL.md not found in {}",
-            dir.display()
-        )));
-    }
-
-    let content = std::fs::read_to_string(&skill_md)?;
-    let (name, version) = parse_frontmatter(&content, "SKILL.md")?;
-
-    // Validate name per agentskills.io spec
-    if !crate::package_type::is_valid_package_name(&name) {
-        return Err(RegistryError::Validation(format!(
-            "Invalid skill name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens.",
-            name
-        )));
-    }
-
-    Ok((name, version))
-}
-
-/// Validate a validator directory and return (name, version).
-fn validate_validator(dir: &Path) -> Result<(String, String), RegistryError> {
-    let validator_md = dir.join("VALIDATOR.md");
-    if !validator_md.exists() {
-        return Err(RegistryError::Validation(format!(
-            "VALIDATOR.md not found in {}",
-            dir.display()
-        )));
-    }
-
-    let content = std::fs::read_to_string(&validator_md)?;
-    let (name, version) = parse_frontmatter(&content, "VALIDATOR.md")?;
-
-    let rules_dir = dir.join("rules");
-    if !rules_dir.exists() || !rules_dir.is_dir() {
-        return Err(RegistryError::Validation(
-            "rules/ directory not found".to_string(),
-        ));
-    }
-
-    let has_rules = std::fs::read_dir(&rules_dir)?
-        .filter_map(|e| e.ok())
-        .any(|e| e.path().extension().is_some_and(|ext| ext == "md"));
-
-    if !has_rules {
-        return Err(RegistryError::Validation(
-            "rules/ directory must contain at least one .md file".to_string(),
-        ));
-    }
-
-    Ok((name, version))
-}
-
-/// Parse name and version from YAML frontmatter.
-fn parse_frontmatter(content: &str, filename: &str) -> Result<(String, String), RegistryError> {
-    let content = content.trim();
-    if !content.starts_with("---") {
-        return Err(RegistryError::Validation(format!(
-            "{} must start with YAML frontmatter (---)",
-            filename
-        )));
-    }
-
-    let rest = &content[3..];
-    let end = rest.find("---").ok_or_else(|| {
-        RegistryError::Validation(format!("No closing --- in {} frontmatter", filename))
-    })?;
-
-    let frontmatter = &rest[..end];
-    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter)
-        .map_err(|e| RegistryError::Validation(format!("Invalid YAML frontmatter: {}", e)))?;
-
-    let name = yaml
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            RegistryError::Validation(format!("Missing 'name' in {} frontmatter", filename))
-        })?
-        .to_string();
-
-    let version = yaml
-        .get("version")
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            yaml.get("metadata")
-                .and_then(|m| m.get("version"))
-                .and_then(|v| v.as_str())
-        })
-        .ok_or_else(|| {
-            RegistryError::Validation(format!("Missing 'version' in {} frontmatter", filename))
-        })?
-        .to_string();
-
-    Ok((name, version))
 }
 
 /// Create a ZIP archive of a package directory.
@@ -277,102 +214,44 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_frontmatter_skill() {
-        let content = r#"---
-name: test-skill
-version: "1.0.0"
-description: "A test skill"
----
-# Body
-"#;
-        let (name, version) = parse_frontmatter(content, "SKILL.md").unwrap();
-        assert_eq!(name, "test-skill");
-        assert_eq!(version, "1.0.0");
+    fn test_is_remote_source_https() {
+        assert!(is_remote_source("https://github.com/obra/superpowers"));
     }
 
     #[test]
-    fn test_parse_frontmatter_validator() {
-        let content = r#"---
-name: test-validator
-version: "1.0.0"
-trigger: PostToolUse
----
-# Body
-"#;
-        let (name, version) = parse_frontmatter(content, "VALIDATOR.md").unwrap();
-        assert_eq!(name, "test-validator");
-        assert_eq!(version, "1.0.0");
+    fn test_is_remote_source_http() {
+        assert!(is_remote_source("http://github.com/obra/superpowers"));
     }
 
     #[test]
-    fn test_parse_frontmatter_metadata_version() {
-        let content = r#"---
-name: test-skill
-metadata:
-  version: "2.0.0"
----
-# Body
-"#;
-        let (name, version) = parse_frontmatter(content, "SKILL.md").unwrap();
-        assert_eq!(name, "test-skill");
-        assert_eq!(version, "2.0.0");
+    fn test_is_remote_source_ssh() {
+        assert!(is_remote_source("git@github.com:obra/superpowers.git"));
     }
 
     #[test]
-    fn test_parse_frontmatter_missing_name() {
-        let content = r#"---
-version: "1.0.0"
----
-"#;
-        assert!(parse_frontmatter(content, "SKILL.md").is_err());
+    fn test_is_remote_source_owner_repo() {
+        assert!(is_remote_source("obra/superpowers"));
+        assert!(is_remote_source("anthropics/skills"));
     }
 
     #[test]
-    fn test_parse_frontmatter_no_frontmatter() {
-        let content = "# No frontmatter";
-        assert!(parse_frontmatter(content, "SKILL.md").is_err());
+    fn test_is_remote_source_local_path() {
+        assert!(!is_remote_source("."));
+        assert!(!is_remote_source("./my-skill"));
+        assert!(!is_remote_source("/tmp/my-skill"));
+        assert!(!is_remote_source("../other"));
     }
 
     #[test]
-    fn test_validate_skill() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("SKILL.md"),
-            r#"---
-name: test-skill
-version: "0.1.0"
-description: "A test"
----
-# Test
-"#,
-        )
-        .unwrap();
-
-        let (name, version) = validate_skill(dir.path()).unwrap();
-        assert_eq!(name, "test-skill");
-        assert_eq!(version, "0.1.0");
-    }
-
-    #[test]
-    fn test_validate_validator() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("VALIDATOR.md"),
-            r#"---
-name: test-val
-version: "0.1.0"
-trigger: PostToolUse
----
-# Test
-"#,
-        )
-        .unwrap();
-        let rules_dir = dir.path().join("rules");
-        std::fs::create_dir(&rules_dir).unwrap();
-        std::fs::write(rules_dir.join("example.md"), "# Rule").unwrap();
-
-        let (name, version) = validate_validator(dir.path()).unwrap();
-        assert_eq!(name, "test-val");
-        assert_eq!(version, "0.1.0");
+    fn test_is_owner_repo() {
+        assert!(is_owner_repo("obra/superpowers"));
+        assert!(is_owner_repo("anthropics/skills"));
+        assert!(!is_owner_repo("just-a-name"));
+        assert!(!is_owner_repo("a/b/c"));
+        assert!(!is_owner_repo("./relative/path"));
+        assert!(!is_owner_repo("/absolute/path"));
+        assert!(!is_owner_repo("has space/repo"));
+        assert!(!is_owner_repo("/foo"));
+        assert!(!is_owner_repo("foo/"));
     }
 }
