@@ -9,22 +9,22 @@ use crate::package_type::PackageType;
 use crate::registry::RegistryError;
 
 /// An installed package found during scanning.
-struct InstalledPackage {
-    name: String,
-    package_type: PackageType,
-    version: String,
-    targets: Vec<String>,
+pub struct InstalledPackage {
+    pub name: String,
+    pub package_type: PackageType,
+    pub version: String,
+    pub targets: Vec<String>,
 }
 
-/// Run the list command.
+/// Discover installed packages by scanning the filesystem.
 ///
 /// Scans agent skill directories and .avp/validators/ for installed packages.
-pub fn run_list(
+/// Returns a deduplicated, sorted list.
+pub fn discover_packages(
     skills_only: bool,
     validators_only: bool,
     agent_filter: Option<&str>,
-    json: bool,
-) -> Result<(), RegistryError> {
+) -> Vec<InstalledPackage> {
     let mut packages: Vec<InstalledPackage> = Vec::new();
 
     // Scan skills from agent directories
@@ -58,8 +58,19 @@ pub fn run_list(
         }
     }
 
-    // Deduplicate by name (merge targets)
-    let packages = merge_packages(packages);
+    merge_packages(packages)
+}
+
+/// Run the list command.
+///
+/// Scans agent skill directories and .avp/validators/ for installed packages.
+pub fn run_list(
+    skills_only: bool,
+    validators_only: bool,
+    agent_filter: Option<&str>,
+    json: bool,
+) -> Result<(), RegistryError> {
+    let packages = discover_packages(skills_only, validators_only, agent_filter);
 
     if json {
         let entries: Vec<serde_json::Value> = packages

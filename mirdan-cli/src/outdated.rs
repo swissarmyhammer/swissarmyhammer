@@ -1,29 +1,29 @@
 //! Mirdan Outdated/Update - Check for and apply package updates.
 //!
-//! Scans the lockfile for installed packages and compares versions
+//! Scans installed packages on the filesystem and compares versions
 //! against the registry.
 
 use comfy_table::{presets::UTF8_FULL, Table};
 
 use crate::install;
-use crate::lockfile::Lockfile;
+use crate::list;
 use crate::registry::{RegistryClient, RegistryError};
 
 /// Run the outdated command.
 ///
-/// Scans the lockfile and checks the registry for newer versions.
+/// Discovers installed packages from the filesystem and checks the registry
+/// for newer versions.
 pub async fn run_outdated() -> Result<(), RegistryError> {
-    let project_root = std::env::current_dir()?;
-    let lf = Lockfile::load(&project_root)?;
+    let packages = list::discover_packages(false, false, None);
 
-    if lf.packages.is_empty() {
+    if packages.is_empty() {
         println!("No packages installed. Run 'mirdan install <package>' to install one.");
         return Ok(());
     }
 
     println!(
         "Checking {} package(s) against registry...\n",
-        lf.packages.len()
+        packages.len()
     );
 
     let client = RegistryClient::new();
@@ -33,8 +33,8 @@ pub async fn run_outdated() -> Result<(), RegistryError> {
 
     let mut updates_available = 0;
 
-    for (name, pkg) in &lf.packages {
-        let (registry_version, status) = match client.package_info(name).await {
+    for pkg in &packages {
+        let (registry_version, status) = match client.package_info(&pkg.name).await {
             Ok(detail) => {
                 if detail.latest == pkg.version {
                     (detail.latest, "up to date".to_string())
@@ -48,7 +48,7 @@ pub async fn run_outdated() -> Result<(), RegistryError> {
         };
 
         table.add_row(vec![
-            name.clone(),
+            pkg.name.clone(),
             pkg.package_type.to_string(),
             pkg.version.clone(),
             registry_version,
@@ -76,10 +76,9 @@ pub async fn run_update(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
-    let project_root = std::env::current_dir()?;
-    let lf = Lockfile::load(&project_root)?;
+    let packages = list::discover_packages(false, false, agent_filter);
 
-    if lf.packages.is_empty() {
+    if packages.is_empty() {
         println!("No packages installed.");
         return Ok(());
     }
@@ -88,7 +87,7 @@ pub async fn run_update(
 
     // If a specific name is given, just update that one
     if let Some(name) = name {
-        let pkg = lf.get_package(name).ok_or_else(|| {
+        let pkg = packages.iter().find(|p| p.name == name).ok_or_else(|| {
             RegistryError::NotFound(format!("Package '{}' is not installed", name))
         })?;
 
@@ -110,17 +109,12 @@ pub async fn run_update(
     println!("Checking for updates...");
 
     let mut updated = 0;
-    let names: Vec<(String, String)> = lf
-        .packages
-        .iter()
-        .map(|(n, p)| (n.clone(), p.version.clone()))
-        .collect();
 
-    for (name, version) in &names {
-        match client.package_info(name).await {
-            Ok(detail) if detail.latest != *version => {
-                println!("  Updating {}: {} -> {}", name, version, detail.latest);
-                install::install_package(name, &detail.latest, agent_filter, global).await?;
+    for pkg in &packages {
+        match client.package_info(&pkg.name).await {
+            Ok(detail) if detail.latest != pkg.version => {
+                println!("  Updating {}: {} -> {}", pkg.name, pkg.version, detail.latest);
+                install::install_package(&pkg.name, &detail.latest, agent_filter, global).await?;
                 updated += 1;
             }
             _ => {}
