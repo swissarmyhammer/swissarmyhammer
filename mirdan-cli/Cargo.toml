@@ -15,6 +15,9 @@ path = "src/lib.rs"
 name = "mirdan"
 path = "src/main.rs"
 
+[package.metadata.dist]
+formula = "mirdan"
+
 [dependencies]
 # Shared doctor infrastructure
 swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
