@@ -35,6 +35,10 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub debug: bool,
 
+    /// Skip confirmation prompts (useful for CI/CD)
+    #[arg(short = 'y', long, global = true)]
+    pub yes: bool,
+
     /// Limit operations to a single agent (e.g. claude-code, cursor)
     #[arg(long, global = true, value_name = "AGENT_ID")]
     pub agent: Option<String>,

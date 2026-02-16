@@ -110,7 +110,7 @@ async fn run_publish_local(source: &str, dry_run: bool) -> Result<(), RegistryEr
 }
 
 /// Run the unpublish command.
-pub async fn run_unpublish(name_version: &str) -> Result<(), RegistryError> {
+pub async fn run_unpublish(name_version: &str, skip_confirm: bool) -> Result<(), RegistryError> {
     let (name, version) = parse_name_version(name_version)?;
 
     println!(
@@ -118,15 +118,17 @@ pub async fn run_unpublish(name_version: &str) -> Result<(), RegistryError> {
         version, name
     );
 
-    let confirmed = dialoguer::Confirm::new()
-        .with_prompt("Are you sure?")
-        .default(false)
-        .interact()
-        .map_err(|e| RegistryError::Validation(e.to_string()))?;
+    if !skip_confirm {
+        let confirmed = dialoguer::Confirm::new()
+            .with_prompt("Are you sure?")
+            .default(false)
+            .interact()
+            .map_err(|e| RegistryError::Validation(e.to_string()))?;
 
-    if !confirmed {
-        println!("Cancelled.");
-        return Ok(());
+        if !confirmed {
+            println!("Cancelled.");
+            return Ok(());
+        }
     }
 
     let client = RegistryClient::authenticated()?;

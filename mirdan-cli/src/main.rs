@@ -122,7 +122,7 @@ async fn main() {
         }
 
         Commands::Unpublish { name_version } => {
-            handle_registry_result(publish::run_unpublish(&name_version).await)
+            handle_registry_result(publish::run_unpublish(&name_version, cli.yes).await)
         }
 
         Commands::Outdated => handle_registry_result(outdated::run_outdated().await),
@@ -514,5 +514,29 @@ mod tests {
     fn test_cli_parsing_no_agent() {
         let cli = Cli::parse_from(["mirdan", "list"]);
         assert_eq!(cli.agent, None);
+    }
+
+    #[test]
+    fn test_cli_parsing_yes_global() {
+        let cli = Cli::parse_from(["mirdan", "--yes", "unpublish", "pkg@1.0.0"]);
+        assert!(cli.yes);
+    }
+
+    #[test]
+    fn test_cli_parsing_yes_short() {
+        let cli = Cli::parse_from(["mirdan", "-y", "unpublish", "pkg@1.0.0"]);
+        assert!(cli.yes);
+    }
+
+    #[test]
+    fn test_cli_parsing_yes_after_subcommand() {
+        let cli = Cli::parse_from(["mirdan", "unpublish", "pkg@1.0.0", "--yes"]);
+        assert!(cli.yes);
+    }
+
+    #[test]
+    fn test_cli_parsing_no_yes_default() {
+        let cli = Cli::parse_from(["mirdan", "list"]);
+        assert!(!cli.yes);
     }
 }

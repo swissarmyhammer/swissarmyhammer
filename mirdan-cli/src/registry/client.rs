@@ -238,6 +238,9 @@ impl RegistryClient {
     }
 
     /// Register a marketplace repository for skill discovery.
+    ///
+    /// On 409 Conflict (already registered), attempts to parse the existing
+    /// marketplace from the response body so callers can still trigger a sync.
     pub async fn register_marketplace(
         &self,
         source: &str,
@@ -254,6 +257,27 @@ impl RegistryClient {
             .json(&body)
             .send()
             .await?;
+
+        let status = response.status();
+        if status.as_u16() == 409 {
+            // Try to parse existing marketplace from conflict response
+            let body = response.text().await.unwrap_or_default();
+            if let Ok(marketplace) = serde_json::from_str::<MarketplaceResponse>(&body) {
+                return Ok(marketplace);
+            }
+            // If the body contains an embedded marketplace object
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                if let Some(mp) = json.get("marketplace") {
+                    if let Ok(marketplace) =
+                        serde_json::from_value::<MarketplaceResponse>(mp.clone())
+                    {
+                        return Ok(marketplace);
+                    }
+                }
+            }
+            return Err(RegistryError::Conflict(extract_error_description(&body)));
+        }
+
         let response = self.check_response(response).await?;
         let result = response.json().await?;
         Ok(result)

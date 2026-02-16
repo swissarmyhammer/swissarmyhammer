@@ -143,7 +143,7 @@ _mirdan() {
 
     case "${cmd}" in
         mirdan)
-            opts="-d -h -V --debug --agent --help --version agents new install uninstall list search info login logout whoami publish unpublish outdated update doctor help"
+            opts="-d -y -h -V --debug --yes --agent --help --version agents new install uninstall list search info login logout whoami publish unpublish outdated update doctor help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -161,7 +161,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__agents)
-            opts="-d -h --all --json --debug --agent --help"
+            opts="-d -y -h --all --json --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -179,7 +179,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__doctor)
-            opts="-v -d -h --verbose --debug --agent --help"
+            opts="-v -d -y -h --verbose --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -463,7 +463,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__info)
-            opts="-d -h --debug --agent --help <NAME>"
+            opts="-d -y -h --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -481,7 +481,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__install)
-            opts="-d -h --global --git --skill --debug --agent --help <PACKAGE>"
+            opts="-d -y -h --global --git --skill --debug --yes --agent --help <PACKAGE>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -503,7 +503,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__list)
-            opts="-d -h --skills --validators --json --debug --agent --help"
+            opts="-d -y -h --skills --validators --json --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -521,7 +521,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__login)
-            opts="-d -h --debug --agent --help"
+            opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -539,7 +539,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__logout)
-            opts="-d -h --debug --agent --help"
+            opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -557,7 +557,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__new)
-            opts="-d -h --debug --agent --help skill validator help"
+            opts="-d -y -h --debug --yes --agent --help skill validator help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -631,7 +631,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__new__skill)
-            opts="-d -h --global --debug --agent --help <NAME>"
+            opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -649,7 +649,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__new__validator)
-            opts="-d -h --global --debug --agent --help <NAME>"
+            opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -667,7 +667,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__outdated)
-            opts="-d -h --debug --agent --help"
+            opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -685,7 +685,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__publish)
-            opts="-d -h --dry-run --debug --agent --help [SOURCE]"
+            opts="-d -y -h --dry-run --debug --yes --agent --help [SOURCE]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -703,7 +703,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__search)
-            opts="-d -h --json --debug --agent --help <QUERY>"
+            opts="-d -y -h --json --debug --yes --agent --help <QUERY>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -721,7 +721,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__uninstall)
-            opts="-d -h --global --debug --agent --help <NAME>"
+            opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -739,7 +739,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__unpublish)
-            opts="-d -h --debug --agent --help <NAME_VERSION>"
+            opts="-d -y -h --debug --yes --agent --help <NAME_VERSION>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -757,7 +757,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__update)
-            opts="-d -h --global --debug --agent --help [NAME]"
+            opts="-d -y -h --global --debug --yes --agent --help [NAME]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -775,7 +775,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__whoami)
-            opts="-d -h --debug --agent --help"
+            opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

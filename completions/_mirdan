@@ -18,6 +18,8 @@ _mirdan() {
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '-V[Print version]' \
@@ -38,6 +40,8 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output as JSON]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -47,6 +51,8 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ":: :_mirdan__new_commands" \
@@ -65,6 +71,8 @@ _arguments "${_arguments_options[@]}" : \
 '--global[Create in agent global skill directories instead of project-level]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':name -- Skill name (kebab-case, 1-64 chars):_default' \
@@ -76,6 +84,8 @@ _arguments "${_arguments_options[@]}" : \
 '--global[Create in ~/.avp/validators/ instead of .avp/validators/]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':name -- Validator name (kebab-case, 1-64 chars):_default' \
@@ -121,6 +131,8 @@ _arguments "${_arguments_options[@]}" : \
 '--git[Treat package as a git URL (clone instead of registry lookup)]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':package -- Package name, name@version, ./local-path, owner/repo, or git URL:_default' \
@@ -132,6 +144,8 @@ _arguments "${_arguments_options[@]}" : \
 '--global[Remove from global locations]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':name -- Package name:_default' \
@@ -145,6 +159,8 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output as JSON]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -155,6 +171,8 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output as JSON]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':query -- Search query:_default' \
@@ -165,6 +183,8 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':name -- Package name:_default' \
@@ -175,6 +195,8 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -184,6 +206,8 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -193,6 +217,8 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -203,6 +229,8 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[Validate and show what would be published without uploading]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::source -- Path or git URL to the package directory to publish:_default' \
@@ -213,6 +241,8 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':name_version -- Package name@version (e.g. my-skill@1.0.0):_default' \
@@ -223,6 +253,8 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -233,6 +265,8 @@ _arguments "${_arguments_options[@]}" : \
 '--global[Update global packages]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- Specific package to update (all if omitted):_default' \
@@ -245,6 +279,8 @@ _arguments "${_arguments_options[@]}" : \
 '--verbose[Show detailed output including fix suggestions]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0

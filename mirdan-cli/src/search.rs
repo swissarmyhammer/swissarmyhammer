@@ -32,11 +32,7 @@ pub async fn run_search(query: &str, json: bool) -> Result<(), RegistryError> {
     table.set_header(vec!["Name", "Type", "Version", "Description", "Downloads"]);
 
     for pkg in &response.packages {
-        let description = if pkg.description.len() > 50 {
-            format!("{}...", &pkg.description[..47])
-        } else {
-            pkg.description.clone()
-        };
+        let description = truncate_str(&pkg.description, 50);
 
         let pkg_type = pkg
             .package_type
@@ -56,6 +52,17 @@ pub async fn run_search(query: &str, json: bool) -> Result<(), RegistryError> {
     println!("\nRun 'mirdan info <name>' for more details.");
 
     Ok(())
+}
+
+/// Truncate a string to `max` characters, appending "..." if truncated.
+/// Safe for multi-byte (UTF-8) strings.
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max - 3).collect();
+        format!("{}...", truncated)
+    }
 }
 
 /// Format download count for display (e.g. 1234 -> "1.2k").

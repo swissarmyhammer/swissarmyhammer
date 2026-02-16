@@ -59,6 +59,7 @@ Environment variables:
 ###### **Options:**
 
 * `-d`, `--debug` — Enable debug output to stderr
+* `-y`, `--yes` — Skip confirmation prompts (useful for CI/CD)
 * `--agent <AGENT_ID>` — Limit operations to a single agent (e.g. claude-code, cursor)
 
 
