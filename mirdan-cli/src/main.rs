@@ -32,7 +32,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use mirdan::registry::RegistryError;
-use mirdan::{agents, auth, doctor, info, install, list, new, outdated, publish, search};
+use mirdan::{agents, auth, banner, doctor, info, install, list, new, outdated, publish, search};
 use mirdan::{Cli, Commands, NewKind};
 
 /// Helper to run an async registry command and map errors to exit codes.
@@ -48,6 +48,19 @@ fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
 
 #[tokio::main]
 async fn main() {
+    // Show branded banner for top-level help (no subcommand or --help/-h).
+    {
+        let args: Vec<String> = std::env::args().collect();
+        let show = match args.len() {
+            1 => true,
+            2 => args[1] == "--help" || args[1] == "-h",
+            _ => false,
+        };
+        if show {
+            banner::print_banner();
+        }
+    }
+
     let cli = Cli::parse();
 
     // Initialize tracing with appropriate level

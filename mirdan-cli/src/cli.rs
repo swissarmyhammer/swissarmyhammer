@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(name = "mirdan")]
 #[command(version)]
+#[command(arg_required_else_help = true)]
 #[command(about = "Universal skill and validator package manager for AI coding agents")]
 #[command(
     long_about = "Mirdan manages skills (agentskills.io spec) and validators (AVP spec) across \

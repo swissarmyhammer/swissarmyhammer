@@ -457,11 +457,7 @@ mod tests {
         let config = load_agents_config().unwrap();
         let mut seen = std::collections::HashSet::new();
         for agent in &config.agents {
-            assert!(
-                seen.insert(&agent.id),
-                "Duplicate agent ID: {}",
-                agent.id
-            );
+            assert!(seen.insert(&agent.id), "Duplicate agent ID: {}", agent.id);
         }
     }
 

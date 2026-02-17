@@ -9,6 +9,7 @@
 
 pub mod agents;
 pub mod auth;
+pub mod banner;
 mod cli;
 pub use cli::{Cli, Commands, NewKind};
 pub mod doctor;

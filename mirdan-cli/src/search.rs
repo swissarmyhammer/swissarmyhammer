@@ -96,11 +96,7 @@ struct RawModeGuard;
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        let _ = execute!(
-            io::stdout(),
-            cursor::Show,
-            terminal::LeaveAlternateScreen
-        );
+        let _ = execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -213,8 +209,7 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
 
             let snapshot = query.clone();
             let (_cols, rows) = terminal::size().unwrap_or((80, 24));
-            let max_results =
-                (rows as usize).saturating_sub(OVERHEAD_LINES) / LINES_PER_RESULT;
+            let max_results = (rows as usize).saturating_sub(OVERHEAD_LINES) / LINES_PER_RESULT;
             let max_results = max_results.max(2).min(20);
             match handle.block_on(client.fuzzy_search(&snapshot, Some(max_results))) {
                 Ok(response) => {
@@ -285,10 +280,7 @@ fn render(
     // Body
     if let Some(err) = error_msg {
         execute!(stdout, SetForegroundColor(Color::Red))?;
-        raw_line(
-            stdout,
-            &format!("  {}", tui_truncate(err, content_w)),
-        )?;
+        raw_line(stdout, &format!("  {}", tui_truncate(err, content_w)))?;
         execute!(stdout, ResetColor)?;
     } else if query.len() < MIN_QUERY_LEN {
         execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
