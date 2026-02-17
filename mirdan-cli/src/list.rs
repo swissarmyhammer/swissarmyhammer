@@ -2,11 +2,10 @@
 
 use std::path::Path;
 
-use comfy_table::{presets::UTF8_FULL, Table};
-
 use crate::agents::{self, agent_project_skill_dir};
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
+use crate::table;
 
 /// An installed package found during scanning.
 pub struct InstalledPackage {
@@ -95,12 +94,11 @@ pub fn run_list(
 
     println!("Installed Packages:\n");
 
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    table.set_header(vec!["Name", "Type", "Version", "Targets"]);
+    let mut tbl = table::new_table();
+    tbl.set_header(vec!["Name", "Type", "Version", "Targets"]);
 
     for pkg in &packages {
-        table.add_row(vec![
+        tbl.add_row(vec![
             pkg.name.clone(),
             pkg.package_type.to_string(),
             pkg.version.clone(),
@@ -108,7 +106,7 @@ pub fn run_list(
         ]);
     }
 
-    println!("{table}");
+    println!("{tbl}");
     println!("\n{} package(s) installed.", packages.len());
 
     Ok(())

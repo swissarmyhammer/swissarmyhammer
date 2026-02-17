@@ -6,10 +6,10 @@
 
 use std::path::PathBuf;
 
-use comfy_table::{presets::UTF8_FULL, Table};
 use serde::{Deserialize, Serialize};
 
 use crate::registry::RegistryError;
+use crate::table;
 
 /// Embedded default agents config.
 const DEFAULT_AGENTS_YAML: &str = include_str!("agents_default.yaml");
@@ -227,9 +227,8 @@ pub fn run_agents(all: bool, json: bool) -> Result<(), RegistryError> {
 
     println!("Detected Agents:\n");
 
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    table.set_header(vec!["Agent", "Path / Command", "Status"]);
+    let mut tbl = table::new_table();
+    tbl.set_header(vec!["Agent", "Path / Command", "Status"]);
 
     for agent in &agents {
         if !all && !agent.detected {
@@ -240,14 +239,14 @@ pub fn run_agents(all: bool, json: bool) -> Result<(), RegistryError> {
         } else {
             "not found"
         };
-        table.add_row(vec![
+        tbl.add_row(vec![
             agent.def.name.clone(),
             agent.detection_detail.clone(),
             status.to_string(),
         ]);
     }
 
-    println!("{table}");
+    println!("{tbl}");
 
     if all {
         println!("\n{} of {} agents detected.", detected_count, total);

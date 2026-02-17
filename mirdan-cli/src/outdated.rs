@@ -3,11 +3,10 @@
 //! Scans installed packages on the filesystem and compares versions
 //! against the registry.
 
-use comfy_table::{presets::UTF8_FULL, Table};
-
 use crate::install;
 use crate::list;
 use crate::registry::{RegistryClient, RegistryError};
+use crate::table;
 
 /// Run the outdated command.
 ///
@@ -27,9 +26,8 @@ pub async fn run_outdated() -> Result<(), RegistryError> {
     );
 
     let client = RegistryClient::new();
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    table.set_header(vec!["Package", "Type", "Local", "Registry", "Status"]);
+    let mut tbl = table::new_table();
+    tbl.set_header(vec!["Package", "Type", "Local", "Registry", "Status"]);
 
     let mut updates_available = 0;
 
@@ -47,7 +45,7 @@ pub async fn run_outdated() -> Result<(), RegistryError> {
             Err(_) => ("-".to_string(), "check failed".to_string()),
         };
 
-        table.add_row(vec![
+        tbl.add_row(vec![
             pkg.name.clone(),
             pkg.package_type.to_string(),
             pkg.version.clone(),
@@ -56,7 +54,7 @@ pub async fn run_outdated() -> Result<(), RegistryError> {
         ]);
     }
 
-    println!("{table}");
+    println!("{tbl}");
 
     if updates_available > 0 {
         println!(

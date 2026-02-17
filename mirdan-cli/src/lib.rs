@@ -24,3 +24,4 @@ pub mod publish;
 pub mod registry;
 pub mod search;
 pub mod store;
+pub mod table;
