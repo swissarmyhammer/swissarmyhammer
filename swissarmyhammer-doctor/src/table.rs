@@ -13,9 +13,7 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 /// 120 columns when not connected to a TTY. All columns use dynamic
 /// content arrangement to wrap within the available width.
 pub fn new_table() -> Table {
-    let width = crossterm::terminal::size()
-        .map(|(w, _)| w)
-        .unwrap_or(120);
+    let width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(120);
 
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
