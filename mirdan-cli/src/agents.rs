@@ -310,7 +310,7 @@ mod tests {
     fn test_load_default_agents() {
         let config = load_agents_config().unwrap();
         assert!(!config.agents.is_empty());
-        assert!(config.agents.len() >= 37);
+        assert!(config.agents.len() >= 47);
     }
 
     #[test]
@@ -451,6 +451,48 @@ mod tests {
         let expanded = expand_tilde("~");
         // Bare "~" without trailing "/" should remain unchanged (no strip_prefix match)
         assert_eq!(expanded, PathBuf::from("~"));
+    }
+
+    #[test]
+    fn test_no_duplicate_agent_ids() {
+        let config = load_agents_config().unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for agent in &config.agents {
+            assert!(
+                seen.insert(&agent.id),
+                "Duplicate agent ID: {}",
+                agent.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_agents_have_detect_methods() {
+        let config = load_agents_config().unwrap();
+        for agent in &config.agents {
+            assert!(
+                !agent.detect.is_empty(),
+                "Agent '{}' has no detect methods",
+                agent.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_agents_have_paths() {
+        let config = load_agents_config().unwrap();
+        for agent in &config.agents {
+            assert!(
+                !agent.project_path.is_empty(),
+                "Agent '{}' has empty project_path",
+                agent.id
+            );
+            assert!(
+                !agent.global_path.is_empty(),
+                "Agent '{}' has empty global_path",
+                agent.id
+            );
+        }
     }
 
     #[test]

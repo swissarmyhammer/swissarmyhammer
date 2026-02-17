@@ -227,3 +227,73 @@ agents:
     global_path: "~/.privy/skills"
     detect:
       - dir: "~/.privy"
+  - id: codex
+    name: Codex
+    project_path: .codex/skills
+    global_path: "~/.codex/skills"
+    detect:
+      - dir: "~/.codex"
+      - command: codex
+  - id: gemini-cli
+    name: Gemini CLI
+    project_path: .gemini/skills
+    global_path: "~/.gemini/skills"
+    detect:
+      - dir: "~/.gemini"
+      - command: gemini
+  - id: kiro-cli
+    name: Kiro CLI
+    project_path: .kiro/skills
+    global_path: "~/.kiro/skills"
+    detect:
+      - dir: "~/.kiro"
+      - command: kiro-cli
+  - id: opencode
+    name: OpenCode
+    project_path: .opencode/skills
+    global_path: "~/.config/opencode/skills"
+    detect:
+      - dir: "~/.config/opencode"
+      - command: opencode
+  - id: antigravity
+    name: Antigravity
+    project_path: .agent/skills
+    global_path: "~/.gemini/antigravity/skills"
+    detect:
+      - dir: "~/.gemini/antigravity"
+      - command: agy
+  - id: qwen-code
+    name: Qwen Code
+    project_path: .qwen/skills
+    global_path: "~/.qwen/skills"
+    detect:
+      - dir: "~/.qwen"
+      - command: qwen
+  - id: goose
+    name: Goose
+    project_path: .goose/skills
+    global_path: "~/.config/goose/skills"
+    detect:
+      - dir: "~/.config/goose"
+      - command: goose
+  - id: junie
+    name: Junie
+    project_path: .junie/skills
+    global_path: "~/.junie/skills"
+    detect:
+      - dir: "~/.junie"
+      - command: junie
+  - id: augment
+    name: Augment
+    project_path: .augment/skills
+    global_path: "~/.augment/skills"
+    detect:
+      - dir: "~/.augment"
+      - command: auggie
+  - id: mistral-vibe
+    name: Mistral Vibe
+    project_path: .vibe/skills
+    global_path: "~/.vibe/skills"
+    detect:
+      - dir: "~/.vibe"
+      - command: vibe
