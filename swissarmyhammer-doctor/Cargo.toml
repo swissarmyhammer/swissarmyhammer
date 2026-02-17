@@ -8,6 +8,7 @@ description = "Shared diagnostic infrastructure for SwissArmyHammer tools"
 [dependencies]
 # Display
 comfy-table = { workspace = true }
+crossterm = { workspace = true }
 
 # Serialization
 serde = { workspace = true }

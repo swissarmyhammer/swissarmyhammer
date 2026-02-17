@@ -1,12 +1,51 @@
-//! Table rendering for doctor command output
+//! Table rendering utilities.
 //!
-//! Provides formatted table output using comfy-table with colored status symbols.
+//! Provides terminal-width-aware table creation and formatted output
+//! using comfy-table with colored status symbols.
 
 use crate::display::{CheckResult, VerboseCheckResult};
 use crate::types::{Check, CheckStatus};
-use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 
-/// Print checks as a formatted table
+/// Create a table pre-configured for terminal-width-aware output.
+///
+/// Uses crossterm to detect the actual terminal width, falling back to
+/// 120 columns when not connected to a TTY. All columns use dynamic
+/// content arrangement to wrap within the available width.
+pub fn new_table() -> Table {
+    let width = crossterm::terminal::size()
+        .map(|(w, _)| w)
+        .unwrap_or(120);
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table.set_width(width);
+    table
+}
+
+/// Truncate a string to `max` characters, appending "..." if truncated.
+///
+/// Safe for multi-byte (UTF-8) strings.
+pub fn truncate_str(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max.saturating_sub(3)).collect();
+        format!("{}...", truncated)
+    }
+}
+
+/// Shorten a package name for display.
+///
+/// Strips the `https://github.com/` prefix to save space in tables.
+pub fn short_name(name: &str) -> String {
+    name.strip_prefix("https://github.com/")
+        .unwrap_or(name)
+        .to_string()
+}
+
+/// Print checks as a formatted table.
 ///
 /// Uses comfy-table with UTF8_FULL preset for clean formatting.
 /// Status symbols are colored: green for Ok, yellow for Warning, red for Error.
@@ -33,8 +72,7 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
 /// print_checks_table(&checks, false);
 /// ```
 pub fn print_checks_table(checks: &[Check], verbose: bool) {
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    let mut table = new_table();
 
     if verbose {
         table.set_header(vec!["Status", "Check", "Result", "Fix", "Category"]);
@@ -65,12 +103,12 @@ pub fn print_checks_table(checks: &[Check], verbose: bool) {
     println!("{table}");
 }
 
-/// Create a colored cell for the status symbol
+/// Create a colored cell for the status symbol.
 fn create_status_cell(status: &CheckStatus) -> Cell {
     match status {
-        CheckStatus::Ok => Cell::new("\u{2713}").fg(Color::Green), // ✓
-        CheckStatus::Warning => Cell::new("\u{26A0}").fg(Color::Yellow), // ⚠
-        CheckStatus::Error => Cell::new("\u{2717}").fg(Color::Red), // ✗
+        CheckStatus::Ok => Cell::new("\u{2713}").fg(Color::Green), // check
+        CheckStatus::Warning => Cell::new("\u{26A0}").fg(Color::Yellow), // warning
+        CheckStatus::Error => Cell::new("\u{2717}").fg(Color::Red), // cross
     }
 }
 
@@ -79,10 +117,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_new_table() {
+        let table = new_table();
+        drop(table);
+    }
+
+    #[test]
+    fn test_truncate_str_short() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_exact() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_long() {
+        assert_eq!(truncate_str("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_str_unicode() {
+        let s = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}\u{4e16}\u{754c}\u{30c6}\u{30b9}\u{30c8}";
+        assert_eq!(truncate_str(s, 6), "\u{3053}\u{3093}\u{306b}...");
+    }
+
+    #[test]
+    fn test_short_name_github() {
+        assert_eq!(
+            short_name("https://github.com/owner/repo/skill"),
+            "owner/repo/skill"
+        );
+    }
+
+    #[test]
+    fn test_short_name_no_prefix() {
+        assert_eq!(short_name("my-local-skill"), "my-local-skill");
+    }
+
+    #[test]
     fn test_create_status_cell_ok() {
         let cell = create_status_cell(&CheckStatus::Ok);
-        // Cell is created successfully - we can't easily test the color
-        // but we can verify it doesn't panic
         let _ = format!("{:?}", cell);
     }
 
@@ -100,7 +176,6 @@ mod tests {
 
     #[test]
     fn test_print_checks_table_standard() {
-        // Just verify it doesn't panic
         let checks = vec![
             Check {
                 name: "Test Check".to_string(),
@@ -116,8 +191,6 @@ mod tests {
             },
         ];
 
-        // Note: This will print to stdout during tests
-        // In a real test environment, you might want to capture stdout
         print_checks_table(&checks, false);
     }
 

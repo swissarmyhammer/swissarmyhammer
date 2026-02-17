@@ -3920,7 +3920,6 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "comfy-table",
- "crossterm",
  "dialoguer",
  "dirs",
  "futures-util",
@@ -6545,6 +6544,7 @@ name = "swissarmyhammer-doctor"
 version = "0.6.1"
 dependencies = [
  "comfy-table",
+ "crossterm",
  "serde",
  "serde_json",
  "tempfile",

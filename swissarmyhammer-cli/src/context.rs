@@ -53,8 +53,6 @@ fn capitalize_first(s: &str) -> String {
 
 /// Build a table from an array of JSON objects
 fn build_table_from_items(array: &[serde_json::Value]) -> Result<comfy_table::Table> {
-    use comfy_table::{presets::UTF8_FULL, Table};
-
     let first =
         array
             .first()
@@ -69,8 +67,7 @@ fn build_table_from_items(array: &[serde_json::Value]) -> Result<comfy_table::Ta
                 message: "Expected object".to_string(),
             })?;
 
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    let mut table = swissarmyhammer_doctor::new_table();
 
     let keys = get_sorted_keys(obj);
     let headers = create_table_headers(&keys);
@@ -412,9 +409,7 @@ mod tests {
 
     /// Helper function to render a table with comfy-table
     fn render_table(test_rows: &[TestRow]) -> String {
-        use comfy_table::{presets::UTF8_FULL, Table};
-        let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
+        let mut table = swissarmyhammer_doctor::new_table();
         table.set_header(vec!["Status", "Name", "Message"]);
 
         for row in test_rows {

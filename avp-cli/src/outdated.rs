@@ -3,8 +3,6 @@
 //! Scans local validators (builtin, user, project) and compares their
 //! versions against the registry to find available updates.
 
-use comfy_table::{presets::UTF8_FULL, Table};
-
 use avp_common::builtin::load_builtins;
 use avp_common::validator::{ValidatorLoader, ValidatorSource};
 
@@ -65,8 +63,7 @@ pub async fn run_outdated() -> Result<(), RegistryError> {
     );
 
     let client = RegistryClient::new();
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    let mut table = swissarmyhammer_doctor::new_table();
     table.set_header(vec!["Validator", "Local", "Registry", "Status", "Source"]);
 
     let mut updates_available = 0;

@@ -35,7 +35,6 @@ clap = { workspace = true }
 
 # Table display
 comfy-table = { workspace = true }
-crossterm = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
