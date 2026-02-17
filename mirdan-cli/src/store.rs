@@ -49,13 +49,11 @@ pub fn skill_store_dir(global: bool) -> PathBuf {
 /// - `FullPath`: preserves the full sanitized path as-is
 pub fn symlink_name(sanitized_name: &str, policy: &SymlinkPolicy) -> String {
     match policy {
-        SymlinkPolicy::LastSegment => {
-            sanitized_name
-                .rsplit('/')
-                .next()
-                .unwrap_or(sanitized_name)
-                .to_string()
-        }
+        SymlinkPolicy::LastSegment => sanitized_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(sanitized_name)
+            .to_string(),
         SymlinkPolicy::FullPath => sanitized_name.to_string(),
     }
 }
@@ -71,9 +69,7 @@ pub fn create_skill_link(store_path: &Path, link_path: &Path) -> Result<(), Regi
     }
 
     // Compute relative path from link_path's parent to store_path
-    let link_parent = link_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let link_parent = link_path.parent().unwrap_or_else(|| Path::new("."));
 
     let relative = pathdiff::diff_paths(store_path, link_parent).unwrap_or_else(|| {
         // Fallback: use absolute path
@@ -145,10 +141,7 @@ pub fn remove_if_exists(path: &Path) -> Result<(), RegistryError> {
 /// Check whether any agent skill directory still has a symlink pointing to the
 /// given store path. Used to decide if the store entry can be removed during
 /// uninstall.
-pub fn store_entry_still_referenced(
-    store_path: &Path,
-    agent_skill_dirs: &[PathBuf],
-) -> bool {
+pub fn store_entry_still_referenced(store_path: &Path, agent_skill_dirs: &[PathBuf]) -> bool {
     let canonical_store = match std::fs::canonicalize(store_path) {
         Ok(p) => p,
         Err(_) => return false, // store path doesn't exist, so not referenced
@@ -193,10 +186,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_dir_name_http() {
-        assert_eq!(
-            sanitize_dir_name("http://example.com/foo/bar"),
-            "foo/bar"
-        );
+        assert_eq!(sanitize_dir_name("http://example.com/foo/bar"), "foo/bar");
     }
 
     #[test]
@@ -226,7 +216,10 @@ mod tests {
     #[test]
     fn test_symlink_name_last_segment() {
         assert_eq!(
-            symlink_name("anthropics/skills/algorithmic-art", &SymlinkPolicy::LastSegment),
+            symlink_name(
+                "anthropics/skills/algorithmic-art",
+                &SymlinkPolicy::LastSegment
+            ),
             "algorithmic-art"
         );
     }
@@ -242,7 +235,10 @@ mod tests {
     #[test]
     fn test_symlink_name_full_path() {
         assert_eq!(
-            symlink_name("anthropics/skills/algorithmic-art", &SymlinkPolicy::FullPath),
+            symlink_name(
+                "anthropics/skills/algorithmic-art",
+                &SymlinkPolicy::FullPath
+            ),
             "anthropics/skills/algorithmic-art"
         );
     }
@@ -339,11 +335,7 @@ mod tests {
         let agent_dir = dir.path().join(".claude/skills");
         std::fs::create_dir_all(&agent_dir).unwrap();
         let link = agent_dir.join("my-skill");
-        std::os::unix::fs::symlink(
-            std::fs::canonicalize(&store).unwrap(),
-            &link,
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(std::fs::canonicalize(&store).unwrap(), &link).unwrap();
 
         assert!(store_entry_still_referenced(&store, &[agent_dir.clone()]));
 

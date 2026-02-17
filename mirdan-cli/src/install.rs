@@ -40,9 +40,7 @@ pub async fn run_install(
     skill_select: Option<&str>,
 ) -> Result<(), RegistryError> {
     match git_source::classify_source(package_spec, git) {
-        InstallSource::LocalPath(path) => {
-            run_install_local(&path, agent_filter, global).await
-        }
+        InstallSource::LocalPath(path) => run_install_local(&path, agent_filter, global).await,
         InstallSource::GitRepo(source) => {
             run_install_git(&source, agent_filter, global, skill_select).await
         }
@@ -102,10 +100,7 @@ async fn run_install_local(
         PackageType::Validator => read_frontmatter(&dir.join("VALIDATOR.md"))?,
     };
 
-    println!(
-        "Installing {} from local path ({})...",
-        name, pkg_type
-    );
+    println!("Installing {} from local path ({})...", name, pkg_type);
 
     let targets = match pkg_type {
         PackageType::Skill => deploy_skill(&name, &dir, agent_filter, global).await?,
@@ -129,7 +124,10 @@ async fn run_install_local(
     lf.save(&project_root)?;
     println!("  Updated mirdan-lock.json");
 
-    println!("\nInstalled {}@{} ({}) from local path", name, version, pkg_type);
+    println!(
+        "\nInstalled {}@{} ({}) from local path",
+        name, version, pkg_type
+    );
     for target in &targets {
         println!("  -> {}", target);
     }
@@ -153,11 +151,8 @@ async fn run_install_git(
     // Merge select from GitSource and the --skill flag (--skill takes precedence)
     let select = skill_select.or(source.select.as_deref());
 
-    let packages = git_source::discover_packages(
-        temp_dir.path(),
-        source.subpath.as_deref(),
-        select,
-    )?;
+    let packages =
+        git_source::discover_packages(temp_dir.path(), source.subpath.as_deref(), select)?;
 
     println!(
         "  Found {} package(s) in {}",
@@ -175,9 +170,7 @@ async fn run_install_git(
         println!("\nInstalling {} ({})...", pkg.name, pkg.package_type);
 
         let targets = match pkg.package_type {
-            PackageType::Skill => {
-                deploy_skill(&pkg.name, &pkg.path, agent_filter, global).await?
-            }
+            PackageType::Skill => deploy_skill(&pkg.name, &pkg.path, agent_filter, global).await?,
             PackageType::Validator => deploy_validator(&pkg.name, &pkg.path, global)?,
         };
 
@@ -202,7 +195,10 @@ async fn run_install_git(
             },
         );
 
-        println!("Installed {}@{} ({}) from git", pkg.name, version, pkg.package_type);
+        println!(
+            "Installed {}@{} ({}) from git",
+            pkg.name, version, pkg.package_type
+        );
         for target in &targets {
             println!("  -> {}", target);
         }
@@ -308,9 +304,7 @@ async fn run_install_registry(
     })?;
 
     let targets = match pkg_type {
-        PackageType::Skill => {
-            deploy_skill(&name, temp_dir.path(), agent_filter, global).await?
-        }
+        PackageType::Skill => deploy_skill(&name, temp_dir.path(), agent_filter, global).await?,
         PackageType::Validator => deploy_validator(&name, temp_dir.path(), global)?,
     };
 
@@ -381,7 +375,12 @@ async fn deploy_skill(
         store::remove_if_exists(&link_path)?;
 
         store::create_skill_link(&store_path, &link_path)?;
-        println!("  Linked {} -> {} ({})", link_path.display(), store_path.display(), agent.def.name);
+        println!(
+            "  Linked {} -> {} ({})",
+            link_path.display(),
+            store_path.display(),
+            agent.def.name
+        );
         targets.push(agent.def.id.clone());
     }
 
@@ -455,11 +454,7 @@ pub async fn run_uninstall(
             }
             lf.save(&project_root)?;
             println!("  Updated mirdan-lock.json");
-            println!(
-                "\nUninstalled {} package(s) from {}",
-                matching.len(),
-                name
-            );
+            println!("\nUninstalled {} package(s) from {}", matching.len(), name);
             return Ok(());
         }
     }
@@ -512,7 +507,11 @@ fn uninstall_skill(
         // Check if the path exists (symlink or real dir)
         if std::fs::symlink_metadata(&link_path).is_ok() {
             store::remove_if_exists(&link_path)?;
-            println!("  Removed from {} ({})", link_path.display(), agent.def.name);
+            println!(
+                "  Removed from {} ({})",
+                link_path.display(),
+                agent.def.name
+            );
             removed += 1;
         }
     }
@@ -569,7 +568,10 @@ fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {
 /// Guess the package type based on what's installed.
 fn guess_installed_type(name: &str, global: bool) -> PackageType {
     // Check validator dir first
-    if validators_dir(global).join(sanitize_dir_name(name)).exists() {
+    if validators_dir(global)
+        .join(sanitize_dir_name(name))
+        .exists()
+    {
         return PackageType::Validator;
     }
     // Default to skill
@@ -718,10 +720,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_dir_name_http() {
-        assert_eq!(
-            sanitize_dir_name("http://example.com/foo/bar"),
-            "foo/bar"
-        );
+        assert_eq!(sanitize_dir_name("http://example.com/foo/bar"), "foo/bar");
     }
 
     #[test]
@@ -1159,8 +1158,7 @@ mod tests {
         let clone_dir = git_source::git_clone(&source).unwrap();
 
         // Discover packages
-        let packages =
-            git_source::discover_packages(clone_dir.path(), None, None).unwrap();
+        let packages = git_source::discover_packages(clone_dir.path(), None, None).unwrap();
         assert!(!packages.is_empty());
 
         // Pick first package, deploy it as if it were a validator (create a
@@ -1186,13 +1184,15 @@ mod tests {
         lf.save(work.path()).unwrap();
 
         // Verify deploy
-        let deployed = work.path().join(".avp/validators").join(sanitize_dir_name(&pkg.name));
+        let deployed = work
+            .path()
+            .join(".avp/validators")
+            .join(sanitize_dir_name(&pkg.name));
         assert!(deployed.exists());
 
         // find_packages_by_git_source matches via URL
         let lf = Lockfile::load(work.path()).unwrap();
-        let matched =
-            find_packages_by_git_source(&lf, "https://github.com/anthropics/skills");
+        let matched = find_packages_by_git_source(&lf, "https://github.com/anthropics/skills");
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0], pkg.name);
 

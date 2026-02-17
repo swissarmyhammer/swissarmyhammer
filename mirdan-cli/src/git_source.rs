@@ -55,7 +55,11 @@ pub struct DiscoveredPackage {
 /// 3. Everything else → `Registry` (caller handles fallback to git on NotFound)
 pub fn classify_source(spec: &str, git_flag: bool) -> InstallSource {
     // Local path check
-    if spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/') || Path::new(spec).is_dir() {
+    if spec.starts_with("./")
+        || spec.starts_with("../")
+        || spec.starts_with('/')
+        || Path::new(spec).is_dir()
+    {
         return InstallSource::LocalPath(spec.to_string());
     }
 
@@ -92,7 +96,10 @@ pub fn classify_source(spec: &str, git_flag: bool) -> InstallSource {
 /// - `https://github.com/owner/repo.git`
 /// - `git@github.com:owner/repo.git` (SSH)
 /// - Any URL with `#ref` fragment for branch/tag
-pub fn parse_git_source(spec: &str, skill_override: Option<&str>) -> Result<GitSource, RegistryError> {
+pub fn parse_git_source(
+    spec: &str,
+    skill_override: Option<&str>,
+) -> Result<GitSource, RegistryError> {
     let select = skill_override.map(|s| s.to_string());
 
     // SSH URL: git@host:owner/repo.git
@@ -164,8 +171,12 @@ pub fn parse_git_source(spec: &str, skill_override: Option<&str>) -> Result<GitS
         if parts.len() == 2
             && !parts[0].is_empty()
             && !parts[1].is_empty()
-            && parts[0].chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-            && parts[1].chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            && parts[0]
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            && parts[1]
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
         {
             return Ok(GitSource {
                 clone_url: format!("https://github.com/{}.git", base),
@@ -190,9 +201,8 @@ pub fn parse_git_source(spec: &str, skill_override: Option<&str>) -> Result<GitS
 pub fn git_clone(source: &GitSource) -> Result<tempfile::TempDir, RegistryError> {
     let temp_dir = tempfile::tempdir()?;
 
-    let repo = git2::Repository::clone(&source.clone_url, temp_dir.path()).map_err(|e| {
-        classify_git_error(e, &source.clone_url)
-    })?;
+    let repo = git2::Repository::clone(&source.clone_url, temp_dir.path())
+        .map_err(|e| classify_git_error(e, &source.clone_url))?;
 
     // Checkout specific ref if requested
     if let Some(ref git_ref) = source.git_ref {
@@ -244,10 +254,7 @@ fn checkout_ref(repo: &git2::Repository, refspec: &str) -> Result<(), RegistryEr
             })?;
             repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
                 .map_err(|e| {
-                    RegistryError::Validation(format!(
-                        "Checkout failed for '{}': {}",
-                        refspec, e
-                    ))
+                    RegistryError::Validation(format!("Checkout failed for '{}': {}", refspec, e))
                 })?;
             return Ok(());
         }
@@ -287,22 +294,14 @@ fn classify_git_error(err: git2::Error, url: &str) -> RegistryError {
         || msg.contains("name or service not known")
         || msg.contains("could not resolve")
     {
-        return RegistryError::Validation(format!(
-            "DNS resolution failed for '{}': {}",
-            url, err
-        ));
+        return RegistryError::Validation(format!("DNS resolution failed for '{}': {}", url, err));
     }
 
     RegistryError::Validation(format!("Git clone failed for '{}': {}", url, err))
 }
 
 /// Priority directories to search for packages within a cloned repo.
-const PRIORITY_DIRS: &[&str] = &[
-    "skills",
-    ".claude/skills",
-    "validators",
-    ".avp/validators",
-];
+const PRIORITY_DIRS: &[&str] = &["skills", ".claude/skills", "validators", ".avp/validators"];
 
 /// Maximum recursion depth when scanning for packages.
 const MAX_SCAN_DEPTH: usize = 5;
@@ -365,7 +364,8 @@ pub fn discover_packages(
 
     if packages.is_empty() {
         return Err(RegistryError::Validation(
-            "No packages found in repository (expected SKILL.md or VALIDATOR.md + rules/)".to_string(),
+            "No packages found in repository (expected SKILL.md or VALIDATOR.md + rules/)"
+                .to_string(),
         ));
     }
 
@@ -411,11 +411,7 @@ fn scan_recursive(
 
     // Skip hidden dirs (except .claude, .avp) and common noise
     let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if depth > 0
-        && dir_name.starts_with('.')
-        && dir_name != ".claude"
-        && dir_name != ".avp"
-    {
+    if depth > 0 && dir_name.starts_with('.') && dir_name != ".claude" && dir_name != ".avp" {
         return;
     }
     if matches!(dir_name, "node_modules" | "target" | ".git" | "vendor") {
@@ -444,7 +440,9 @@ fn extract_name_from_frontmatter(content: &str) -> Option<String> {
     let end = rest.find("---")?;
     let frontmatter = &rest[..end];
     let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
-    yaml.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
+    yaml.get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Filter packages by the `--skill` select option.
@@ -456,10 +454,7 @@ fn filter_by_select(
         return Ok(packages);
     };
 
-    let filtered: Vec<_> = packages
-        .into_iter()
-        .filter(|p| p.name == name)
-        .collect();
+    let filtered: Vec<_> = packages.into_iter().filter(|p| p.name == name).collect();
 
     if filtered.is_empty() {
         return Err(RegistryError::NotFound(format!(
@@ -721,19 +716,11 @@ mod tests {
 
         let s1 = skills.join("skill-one");
         std::fs::create_dir(&s1).unwrap();
-        std::fs::write(
-            s1.join("SKILL.md"),
-            "---\nname: skill-one\n---\n# One\n",
-        )
-        .unwrap();
+        std::fs::write(s1.join("SKILL.md"), "---\nname: skill-one\n---\n# One\n").unwrap();
 
         let s2 = skills.join("skill-two");
         std::fs::create_dir(&s2).unwrap();
-        std::fs::write(
-            s2.join("SKILL.md"),
-            "---\nname: skill-two\n---\n# Two\n",
-        )
-        .unwrap();
+        std::fs::write(s2.join("SKILL.md"), "---\nname: skill-two\n---\n# Two\n").unwrap();
 
         let pkgs = discover_packages(dir.path(), None, None).unwrap();
         assert_eq!(pkgs.len(), 2);
@@ -747,11 +734,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub").join("pkg");
         std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(
-            sub.join("SKILL.md"),
-            "---\nname: sub-skill\n---\n# Sub\n",
-        )
-        .unwrap();
+        std::fs::write(sub.join("SKILL.md"), "---\nname: sub-skill\n---\n# Sub\n").unwrap();
 
         let pkgs = discover_packages(dir.path(), Some("sub/pkg"), None).unwrap();
         assert_eq!(pkgs.len(), 1);
@@ -886,8 +869,7 @@ mod tests {
 
     #[test]
     fn test_clone_anthropics_skills_https_url() {
-        let source =
-            parse_git_source("https://github.com/anthropics/skills", None).unwrap();
+        let source = parse_git_source("https://github.com/anthropics/skills", None).unwrap();
         let temp_dir = git_clone(&source).unwrap();
 
         // Must be a non-trivial clone
@@ -913,10 +895,7 @@ mod tests {
     #[test]
     fn test_clone_anthropics_skills_shorthand() {
         let source = parse_git_source("anthropics/skills", None).unwrap();
-        assert_eq!(
-            source.clone_url,
-            "https://github.com/anthropics/skills.git"
-        );
+        assert_eq!(source.clone_url, "https://github.com/anthropics/skills.git");
         let temp_dir = git_clone(&source).unwrap();
         let packages = discover_packages(temp_dir.path(), None, None).unwrap();
         assert!(
@@ -935,8 +914,7 @@ mod tests {
         assert!(!all.is_empty());
         let target_name = &all[0].name;
 
-        let filtered =
-            discover_packages(temp_dir.path(), None, Some(target_name)).unwrap();
+        let filtered = discover_packages(temp_dir.path(), None, Some(target_name)).unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(&filtered[0].name, target_name);
     }
@@ -945,8 +923,7 @@ mod tests {
     fn test_clone_anthropics_skills_select_nonexistent() {
         let source = parse_git_source("anthropics/skills", None).unwrap();
         let temp_dir = git_clone(&source).unwrap();
-        let result =
-            discover_packages(temp_dir.path(), None, Some("zzz-does-not-exist"));
+        let result = discover_packages(temp_dir.path(), None, Some("zzz-does-not-exist"));
         assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
     }
 
@@ -957,8 +934,7 @@ mod tests {
         let temp_dir = git_clone(&source).unwrap();
         let packages = discover_packages(temp_dir.path(), None, None).unwrap();
         for pkg in &packages {
-            let content =
-                std::fs::read_to_string(pkg.path.join("SKILL.md")).unwrap();
+            let content = std::fs::read_to_string(pkg.path.join("SKILL.md")).unwrap();
             let name = extract_name_from_frontmatter(&content);
             assert_eq!(
                 name.as_deref(),

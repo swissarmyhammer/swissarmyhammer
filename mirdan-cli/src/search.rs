@@ -34,10 +34,7 @@ pub async fn run_search(query: &str, json: bool) -> Result<(), RegistryError> {
     for pkg in &response.packages {
         let description = truncate_str(&pkg.description, 50);
 
-        let pkg_type = pkg
-            .package_type
-            .as_deref()
-            .unwrap_or("unknown");
+        let pkg_type = pkg.package_type.as_deref().unwrap_or("unknown");
 
         table.add_row(vec![
             pkg.name.clone(),

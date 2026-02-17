@@ -113,7 +113,10 @@ pub async fn run_update(
     for pkg in &packages {
         match client.package_info(&pkg.name).await {
             Ok(detail) if detail.latest != pkg.version => {
-                println!("  Updating {}: {} -> {}", pkg.name, pkg.version, detail.latest);
+                println!(
+                    "  Updating {}: {} -> {}",
+                    pkg.name, pkg.version, detail.latest
+                );
                 install::install_package(&pkg.name, &detail.latest, agent_filter, global).await?;
                 updated += 1;
             }

@@ -96,10 +96,9 @@ async fn main() {
             install::run_install(&package, agent_filter, global, git, skill.as_deref()).await,
         ),
 
-        Commands::Uninstall {
-            name,
-            global,
-        } => handle_registry_result(install::run_uninstall(&name, agent_filter, global).await),
+        Commands::Uninstall { name, global } => {
+            handle_registry_result(install::run_uninstall(&name, agent_filter, global).await)
+        }
 
         Commands::List {
             skills,
@@ -111,7 +110,9 @@ async fn main() {
             handle_registry_result(search::run_search(&query, json).await)
         }
 
-        Commands::Info { name } => handle_registry_result(info::run_info(&name, agent_filter).await),
+        Commands::Info { name } => {
+            handle_registry_result(info::run_info(&name, agent_filter).await)
+        }
 
         Commands::Login => handle_registry_result(auth::login().await),
         Commands::Logout => handle_registry_result(auth::logout().await),
@@ -127,14 +128,9 @@ async fn main() {
 
         Commands::Outdated => handle_registry_result(outdated::run_outdated().await),
 
-        Commands::Update {
-            name,
-            global,
-        } => {
-            handle_registry_result(
-                outdated::run_update(name.as_deref(), agent_filter, global).await,
-            )
-        }
+        Commands::Update { name, global } => handle_registry_result(
+            outdated::run_update(name.as_deref(), agent_filter, global).await,
+        ),
 
         Commands::Doctor { verbose } => doctor::run_doctor(verbose).await,
     };
@@ -252,7 +248,12 @@ mod tests {
 
     #[test]
     fn test_cli_parsing_install_git_flag() {
-        let cli = Cli::parse_from(["mirdan", "install", "--git", "https://github.com/owner/repo"]);
+        let cli = Cli::parse_from([
+            "mirdan",
+            "install",
+            "--git",
+            "https://github.com/owner/repo",
+        ]);
         match cli.command {
             Commands::Install { package, git, .. } => {
                 assert_eq!(package, "https://github.com/owner/repo");
@@ -277,11 +278,19 @@ mod tests {
     #[test]
     fn test_cli_parsing_install_git_and_skill() {
         let cli = Cli::parse_from([
-            "mirdan", "install", "--git", "https://github.com/owner/repo", "--skill", "art",
+            "mirdan",
+            "install",
+            "--git",
+            "https://github.com/owner/repo",
+            "--skill",
+            "art",
         ]);
         match cli.command {
             Commands::Install {
-                package, git, skill, ..
+                package,
+                git,
+                skill,
+                ..
             } => {
                 assert_eq!(package, "https://github.com/owner/repo");
                 assert!(git);
@@ -295,10 +304,7 @@ mod tests {
     fn test_cli_parsing_uninstall() {
         let cli = Cli::parse_from(["mirdan", "uninstall", "no-secrets"]);
         match cli.command {
-            Commands::Uninstall {
-                name,
-                global,
-            } => {
+            Commands::Uninstall { name, global } => {
                 assert_eq!(name, "no-secrets");
                 assert!(!global);
             }
@@ -481,19 +487,13 @@ mod tests {
     #[test]
     fn test_cli_parsing_doctor() {
         let cli = Cli::parse_from(["mirdan", "doctor"]);
-        assert!(matches!(
-            cli.command,
-            Commands::Doctor { verbose: false }
-        ));
+        assert!(matches!(cli.command, Commands::Doctor { verbose: false }));
     }
 
     #[test]
     fn test_cli_parsing_doctor_verbose() {
         let cli = Cli::parse_from(["mirdan", "doctor", "--verbose"]);
-        assert!(matches!(
-            cli.command,
-            Commands::Doctor { verbose: true }
-        ));
+        assert!(matches!(cli.command, Commands::Doctor { verbose: true }));
     }
 
     #[test]

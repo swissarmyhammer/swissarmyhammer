@@ -235,9 +235,7 @@ impl MirdanDoctor {
                     name: "Credentials".to_string(),
                     status: CheckStatus::Warning,
                     message: "Not logged in".to_string(),
-                    fix: Some(
-                        "Run 'mirdan login' to authenticate with the registry".to_string(),
-                    ),
+                    fix: Some("Run 'mirdan login' to authenticate with the registry".to_string()),
                 });
             }
         }

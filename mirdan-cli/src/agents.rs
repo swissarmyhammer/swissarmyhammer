@@ -250,10 +250,7 @@ pub fn run_agents(all: bool, json: bool) -> Result<(), RegistryError> {
     println!("{table}");
 
     if all {
-        println!(
-            "\n{} of {} agents detected.",
-            detected_count, total
-        );
+        println!("\n{} of {} agents detected.", detected_count, total);
     } else {
         println!(
             "\n{} of {} agents detected. Use --all to show all.",
@@ -373,10 +370,7 @@ mod tests {
             detect: vec![],
             symlink_policy: SymlinkPolicy::default(),
         };
-        assert_eq!(
-            agent_project_skill_dir(&def),
-            PathBuf::from(".test/skills")
-        );
+        assert_eq!(agent_project_skill_dir(&def), PathBuf::from(".test/skills"));
     }
 
     fn mock_config() -> AgentsConfig {
@@ -418,7 +412,10 @@ mod tests {
         let config = mock_config();
         let err = validate_agent_id(&config, "nonexistent").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("nonexistent"), "error should contain the invalid name");
+        assert!(
+            msg.contains("nonexistent"),
+            "error should contain the invalid name"
+        );
         assert!(msg.contains("claude-code"), "error should list valid IDs");
         assert!(msg.contains("cursor"), "error should list valid IDs");
     }

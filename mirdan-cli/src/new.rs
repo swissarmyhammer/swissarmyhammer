@@ -10,7 +10,11 @@ use crate::registry::RegistryError;
 /// Run the `mirdan new skill` command.
 ///
 /// Creates a skill scaffold following the agentskills.io spec.
-pub fn run_new_skill(name: &str, global: bool, agent_filter: Option<&str>) -> Result<(), RegistryError> {
+pub fn run_new_skill(
+    name: &str,
+    global: bool,
+    agent_filter: Option<&str>,
+) -> Result<(), RegistryError> {
     if !is_valid_package_name(name) {
         return Err(RegistryError::Validation(format!(
             "Invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
@@ -113,9 +117,7 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
 
     let base_dir = if global {
         dirs::home_dir()
-            .ok_or_else(|| {
-                RegistryError::Validation("Could not find home directory".to_string())
-            })?
+            .ok_or_else(|| RegistryError::Validation("Could not find home directory".to_string()))?
             .join(".avp")
             .join("validators")
             .join(name)

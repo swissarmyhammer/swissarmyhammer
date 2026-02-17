@@ -76,8 +76,7 @@ fn show_local_info(name: &str, agent_filter: Option<&str>) -> bool {
 
     // Check skill dirs in target agents (using symlink_name for the lookup)
     if let Ok(config) = agents::load_agents_config() {
-        let agents = agents::resolve_target_agents(&config, agent_filter)
-            .unwrap_or_default();
+        let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
         for agent in &agents {
             let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
             let skill_dir = agent_project_skill_dir(&agent.def).join(&link_name);
@@ -114,12 +113,12 @@ async fn show_registry_info(name: &str) -> Result<(), RegistryError> {
     let client = RegistryClient::new();
     let detail = client.package_info(name).await?;
 
-    let pkg_type = detail
-        .package_type
-        .as_deref()
-        .unwrap_or("unknown");
+    let pkg_type = detail.package_type.as_deref().unwrap_or("unknown");
 
-    println!("{}@{} (registry, {})\n", detail.name, detail.latest, pkg_type);
+    println!(
+        "{}@{} (registry, {})\n",
+        detail.name, detail.latest, pkg_type
+    );
     println!("  Description: {}", detail.description);
     println!("  Author:      {}", detail.author);
 
@@ -174,15 +173,11 @@ fn read_frontmatter_field(path: &Path, field: &str) -> String {
 
     let frontmatter = &rest[..end];
     if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
-        if let Some(value) = yaml
-            .get(field)
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                yaml.get("metadata")
-                    .and_then(|m| m.get(field))
-                    .and_then(|v| v.as_str())
-            })
-        {
+        if let Some(value) = yaml.get(field).and_then(|v| v.as_str()).or_else(|| {
+            yaml.get("metadata")
+                .and_then(|m| m.get(field))
+                .and_then(|v| v.as_str())
+        }) {
             return value.to_string();
         }
     }
@@ -212,7 +207,10 @@ metadata:
         .unwrap();
 
         assert_eq!(read_frontmatter_field(&path, "version"), "3.0.0");
-        assert_eq!(read_frontmatter_field(&path, "description"), "from metadata");
+        assert_eq!(
+            read_frontmatter_field(&path, "description"),
+            "from metadata"
+        );
     }
 
     #[test]

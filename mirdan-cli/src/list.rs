@@ -30,8 +30,7 @@ pub fn discover_packages(
     // Scan skills from agent directories
     if !validators_only {
         if let Ok(config) = agents::load_agents_config() {
-            let agents = agents::resolve_target_agents(&config, agent_filter)
-                .unwrap_or_default();
+            let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
 
             for agent in &agents {
                 let skill_dir = agent_project_skill_dir(&agent.def);
@@ -179,15 +178,11 @@ fn read_frontmatter_version(path: &Path) -> String {
 
     let frontmatter = &rest[..end];
     if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
-        if let Some(version) = yaml
-            .get("version")
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                yaml.get("metadata")
-                    .and_then(|m| m.get("version"))
-                    .and_then(|v| v.as_str())
-            })
-        {
+        if let Some(version) = yaml.get("version").and_then(|v| v.as_str()).or_else(|| {
+            yaml.get("metadata")
+                .and_then(|m| m.get("version"))
+                .and_then(|v| v.as_str())
+        }) {
             return version.to_string();
         }
     }
