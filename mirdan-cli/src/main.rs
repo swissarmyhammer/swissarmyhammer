@@ -106,9 +106,10 @@ async fn main() {
             json,
         } => handle_registry_result(list::run_list(skills, validators, agent_filter, json)),
 
-        Commands::Search { query, json } => {
-            handle_registry_result(search::run_search(&query, json).await)
-        }
+        Commands::Search { query, json } => match query {
+            Some(q) => handle_registry_result(search::run_search(&q, json).await),
+            None => handle_registry_result(search::run_interactive_search().await),
+        },
 
         Commands::Info { name } => {
             handle_registry_result(info::run_info(&name, agent_filter).await)
@@ -357,7 +358,19 @@ mod tests {
         let cli = Cli::parse_from(["mirdan", "search", "security"]);
         match cli.command {
             Commands::Search { query, json } => {
-                assert_eq!(query, "security");
+                assert_eq!(query, Some("security".to_string()));
+                assert!(!json);
+            }
+            _ => panic!("Expected Search command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_search_interactive() {
+        let cli = Cli::parse_from(["mirdan", "search"]);
+        match cli.command {
+            Commands::Search { query, json } => {
+                assert_eq!(query, None);
                 assert!(!json);
             }
             _ => panic!("Expected Search command"),

@@ -103,9 +103,12 @@ pub enum Commands {
     },
 
     /// Search the registry for skills and validators
+    ///
+    /// With a query argument, performs a single search and prints results.
+    /// Without a query, enters interactive fuzzy search mode.
     Search {
-        /// Search query
-        query: String,
+        /// Search query (omit for interactive mode)
+        query: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,

@@ -3920,6 +3920,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "comfy-table",
+ "crossterm",
  "dialoguer",
  "dirs",
  "futures-util",

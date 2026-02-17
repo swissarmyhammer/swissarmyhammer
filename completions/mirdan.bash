@@ -703,7 +703,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__search)
-            opts="-d -y -h --json --debug --yes --agent --help <QUERY>"
+            opts="-d -y -h --json --debug --yes --agent --help [QUERY]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

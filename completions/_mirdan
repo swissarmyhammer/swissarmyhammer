@@ -173,9 +173,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-y[Skip confirmation prompts (useful for CI/CD)]' \
 '--yes[Skip confirmation prompts (useful for CI/CD)]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':query -- Search query:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::query -- Search query (omit for interactive mode):_default' \
 && ret=0
 ;;
 (info)

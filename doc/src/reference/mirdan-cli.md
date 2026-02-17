@@ -174,11 +174,13 @@ List installed skills and validators
 
 Search the registry for skills and validators
 
-**Usage:** `mirdan search [OPTIONS] <QUERY>`
+With a query argument, performs a single search and prints results. Without a query, enters interactive fuzzy search mode.
+
+**Usage:** `mirdan search [OPTIONS] [QUERY]`
 
 ###### **Arguments:**
 
-* `<QUERY>` — Search query
+* `<QUERY>` — Search query (omit for interactive mode)
 
 ###### **Options:**
 

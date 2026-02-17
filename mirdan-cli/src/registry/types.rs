@@ -2,6 +2,25 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A single result from the fuzzy search endpoint.
+#[derive(Debug, Deserialize)]
+pub struct FuzzySearchResult {
+    pub name: String,
+    pub description: String,
+    pub author: String,
+    #[serde(rename = "type")]
+    pub package_type: Option<String>,
+    pub downloads: u64,
+    pub score: f64,
+}
+
+/// Response from `GET /api/search` (fuzzy search).
+#[derive(Debug, Deserialize)]
+pub struct FuzzySearchResponse {
+    pub results: Vec<FuzzySearchResult>,
+    pub total: usize,
+}
+
 /// Response from `GET /api/packages` (search/list).
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SearchResponse {

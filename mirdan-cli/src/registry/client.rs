@@ -148,6 +148,27 @@ impl RegistryClient {
         Ok(result)
     }
 
+    /// Fuzzy search for packages (hits `/api/search`).
+    pub async fn fuzzy_search(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<FuzzySearchResponse, RegistryError> {
+        let mut url = format!(
+            "{}/api/search?q={}",
+            self.registry_url,
+            urlencoding::encode(query)
+        );
+        if let Some(limit) = limit {
+            url.push_str(&format!("&limit={}", limit));
+        }
+
+        let response = self.client.get(&url).send().await?;
+        let response = self.check_response(response).await?;
+        let result = response.json().await?;
+        Ok(result)
+    }
+
     /// Get detailed information about a package.
     pub async fn package_info(&self, name: &str) -> Result<PackageDetail, RegistryError> {
         let url = format!(
