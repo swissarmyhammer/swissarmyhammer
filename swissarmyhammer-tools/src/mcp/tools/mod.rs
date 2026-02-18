@@ -41,6 +41,7 @@ pub mod git;
 pub mod js;
 pub mod kanban;
 pub mod questions;
+pub mod skill;
 pub mod shell;
 pub mod treesitter;
 pub mod web;

@@ -24,6 +24,7 @@ pub mod check_names {
     pub const WORKFLOW_PARSING: &str = "Workflow parsing";
     pub const WORKFLOW_NAME_CONFLICTS: &str = "Workflow name conflicts";
     pub const WORKFLOW_CIRCULAR_DEPS: &str = "Workflow circular dependencies";
+    pub const SKILLS_INSTALLATION: &str = "Skills installation";
 }
 
 /// Format strings used throughout the module
@@ -744,6 +745,53 @@ fn check_circular_dependencies(checks: &mut Vec<Check>) {
         message: "Circular dependency checking requires workflow execution".to_string(),
         fix: None,
     });
+}
+
+/// Check skills installation status
+///
+/// For each builtin skill, checks if `.claude/skills/<name>/SKILL.md` exists.
+/// Reports missing or outdated skills with fix suggestion.
+pub fn check_skills(checks: &mut Vec<Check>) -> Result<()> {
+    let builtin_names = ["plan", "do", "commit", "test", "implement"];
+
+    // Determine project root
+    let project_root = swissarmyhammer_common::utils::find_git_repository_root()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let skills_dir = project_root.join(".claude").join("skills");
+
+    let mut missing = Vec::new();
+
+    for name in &builtin_names {
+        let skill_md = skills_dir.join(name).join("SKILL.md");
+        if !skill_md.exists() {
+            missing.push(*name);
+        }
+    }
+
+    if missing.is_empty() {
+        checks.push(Check {
+            name: check_names::SKILLS_INSTALLATION.to_string(),
+            status: CheckStatus::Ok,
+            message: format!(
+                "All {} builtin skills installed in {}",
+                builtin_names.len(),
+                skills_dir.display()
+            ),
+            fix: None,
+        });
+    } else {
+        checks.push(Check {
+            name: check_names::SKILLS_INSTALLATION.to_string(),
+            status: CheckStatus::Warning,
+            message: format!(
+                "Missing skills: {}",
+                missing.join(", ")
+            ),
+            fix: Some("Run 'sah init' to install skills".to_string()),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,0 +1,31 @@
+[package]
+name = "swissarmyhammer-skills"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Skill loading, validation, and resolution for SwissArmyHammer"
+
+[dependencies]
+# Workspace dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+async-trait = { workspace = true }
+once_cell = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+tokio = { workspace = true }
+
+# Local workspace dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-operations = { workspace = true }
+
+[build-dependencies]
+swissarmyhammer-build = { path = "../swissarmyhammer-build" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

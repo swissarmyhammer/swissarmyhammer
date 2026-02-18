@@ -90,6 +90,7 @@ impl Doctor {
         self.run_configuration_checks()?;
         self.run_prompt_checks()?;
         self.run_workflow_checks()?;
+        self.run_skill_checks()?;
 
         // Return exit code without printing results
         Ok(self.get_exit_code())
@@ -148,6 +149,12 @@ impl Doctor {
         checks::check_workflow_permissions(&mut self.checks)?;
         checks::check_workflow_parsing(&mut self.checks)?;
         checks::check_workflow_dependencies(&mut self.checks)?;
+        Ok(())
+    }
+
+    /// Run skill checks
+    fn run_skill_checks(&mut self) -> Result<()> {
+        checks::check_skills(&mut self.checks)?;
         Ok(())
     }
 

@@ -34,6 +34,9 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
                 .map_err(|e| format!("Failed to remove {}: {}", prompts_dir.display(), e))?;
             println!("Removed {}", prompts_dir.display());
         }
+
+        // Remove installed skills from .claude/skills/
+        remove_installed_skills(&cwd);
     }
 
     Ok(())
@@ -157,4 +160,33 @@ fn uninstall_local() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Remove installed skill files from .claude/skills/ for builtin skills
+fn remove_installed_skills(project_root: &std::path::Path) {
+    let skills_dir = project_root.join(".claude").join("skills");
+    if !skills_dir.exists() {
+        return;
+    }
+
+    // Only remove builtin skill directories (by checking known names)
+    let builtin_names = ["plan", "do", "commit", "test", "implement"];
+
+    for name in &builtin_names {
+        let skill_dir = skills_dir.join(name);
+        if skill_dir.exists() {
+            if let Err(e) = fs::remove_dir_all(&skill_dir) {
+                eprintln!("Warning: failed to remove {}: {}", skill_dir.display(), e);
+            } else {
+                println!("Removed skill: {}", skill_dir.display());
+            }
+        }
+    }
+
+    // Remove the .claude/skills/ directory if empty
+    if let Ok(entries) = fs::read_dir(&skills_dir) {
+        if entries.count() == 0 {
+            let _ = fs::remove_dir(&skills_dir);
+        }
+    }
 }

@@ -35,6 +35,7 @@ swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }
+swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }

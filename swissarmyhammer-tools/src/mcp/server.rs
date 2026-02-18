@@ -24,6 +24,8 @@ use super::tool_registry::{
     register_kanban_tools, register_questions_tools, register_shell_tools,
     register_treesitter_tools, register_web_tools, ToolContext, ToolRegistry,
 };
+use super::tools::skill::register_skill_tools;
+use swissarmyhammer_skills::SkillLibrary;
 
 /// Server instructions displayed to MCP clients
 const SERVER_INSTRUCTIONS: &str =
@@ -43,6 +45,9 @@ pub struct McpServer {
     file_watcher: Arc<Mutex<FileWatcher>>,
     tool_registry: Arc<RwLock<ToolRegistry>>,
     pub tool_context: Arc<ToolContext>,
+    /// Skill library - kept alive to back the SkillTool's shared reference
+    #[allow(dead_code)]
+    skill_library: Arc<RwLock<SkillLibrary>>,
 }
 
 /// Determine if a retry should be attempted based on the error and attempt count.
@@ -205,12 +210,22 @@ impl McpServer {
         let tool_handlers = ToolHandlers::new();
         let agent_config = Self::load_template_context()?;
         let use_case_agents = Self::initialize_use_case_agents(model_override)?;
+
+        // Initialize skill library
+        let skill_library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = skill_library.write().await;
+            lib.load_defaults();
+            tracing::debug!("Loaded {} skills", lib.len());
+        }
+
         let (tool_registry_arc, tool_context) = Self::create_tool_context_and_registry(
             tool_handlers,
             git_ops_arc,
             agent_config,
             use_case_agents,
             Some(work_dir),
+            skill_library.clone(),
         )
         .await;
 
@@ -219,6 +234,7 @@ impl McpServer {
             file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
             tool_registry: tool_registry_arc,
             tool_context,
+            skill_library,
         };
 
         Ok(server)
@@ -378,9 +394,10 @@ impl McpServer {
         agent_config: Arc<swissarmyhammer_config::model::ModelConfig>,
         use_case_agents: HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
         working_dir: Option<PathBuf>,
+        skill_library: Arc<RwLock<SkillLibrary>>,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
-        Self::register_all_tools(&mut tool_registry).await;
+        Self::register_all_tools(&mut tool_registry, skill_library).await;
 
         let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
         tool_context.use_case_agents = Arc::new(use_case_agents);
@@ -397,7 +414,10 @@ impl McpServer {
     /// # Arguments
     ///
     /// * `tool_registry` - Registry to register tools into
-    async fn register_all_tools(tool_registry: &mut ToolRegistry) {
+    async fn register_all_tools(
+        tool_registry: &mut ToolRegistry,
+        skill_library: Arc<RwLock<SkillLibrary>>,
+    ) {
         register_js_tools(tool_registry);
         register_file_tools(tool_registry).await;
         register_flow_tools(tool_registry);
@@ -407,6 +427,14 @@ impl McpServer {
         register_shell_tools(tool_registry);
         register_treesitter_tools(tool_registry);
         register_web_tools(tool_registry);
+
+        // Only register skill tool when running inside llama-agent
+        // Claude Code handles skills natively via filesystem
+        if std::env::var("SAH_AGENT_TYPE").ok().as_deref() == Some("llama") {
+            register_skill_tools(tool_registry, skill_library);
+            tracing::debug!("Registered skill tool (SAH_AGENT_TYPE=llama)");
+        }
+
         tracing::debug!("Registered all tool handlers");
     }
 

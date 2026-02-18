@@ -17,6 +17,9 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
         create_project_structure()?;
     }
 
+    // Install skills for Claude Code
+    install_skills(&target)?;
+
     Ok(())
 }
 
@@ -115,4 +118,103 @@ fn create_project_structure() -> Result<(), String> {
     );
 
     Ok(())
+}
+
+/// Install builtin skills to the appropriate `.claude/skills/` directory.
+///
+/// For project/local installs: `.claude/skills/` in the project root.
+/// For user installs: `~/.claude/skills/`.
+/// Idempotent: overwrites with latest version.
+fn install_skills(target: &InstallTarget) -> Result<(), String> {
+    use swissarmyhammer_skills::SkillResolver;
+
+    let resolver = SkillResolver::new();
+    let skills = resolver.resolve_all();
+
+    // Determine the target directory for skills
+    let skills_dir = match target {
+        InstallTarget::Project | InstallTarget::Local => {
+            // Use the project root's .claude/skills/
+            let cwd = std::env::current_dir()
+                .map_err(|e| format!("Failed to get current directory: {}", e))?;
+
+            // Try to find git root, fallback to cwd
+            let root = swissarmyhammer_common::utils::find_git_repository_root().unwrap_or(cwd);
+            root.join(".claude").join("skills")
+        }
+        InstallTarget::User => {
+            // Use ~/.claude/skills/
+            let home = dirs::home_dir()
+                .ok_or_else(|| "Could not determine home directory".to_string())?;
+            home.join(".claude").join("skills")
+        }
+    };
+
+    // Install each builtin skill
+    let mut installed_count = 0;
+    for (name, skill) in &skills {
+        // Only install builtin skills (don't copy local/user overrides back)
+        if skill.source != swissarmyhammer_skills::SkillSource::Builtin {
+            continue;
+        }
+
+        let skill_dir = skills_dir.join(name);
+        std::fs::create_dir_all(&skill_dir)
+            .map_err(|e| format!("Failed to create skill directory {}: {}", skill_dir.display(), e))?;
+
+        // Write the SKILL.md with full frontmatter + body
+        let skill_md_path = skill_dir.join("SKILL.md");
+        let content = format_skill_md(skill);
+        std::fs::write(&skill_md_path, &content)
+            .map_err(|e| format!("Failed to write {}: {}", skill_md_path.display(), e))?;
+
+        // Write any additional resource files
+        for (filename, file_content) in &skill.resources.files {
+            let file_path = skill_dir.join(filename);
+            std::fs::write(&file_path, file_content)
+                .map_err(|e| format!("Failed to write {}: {}", file_path.display(), e))?;
+        }
+
+        installed_count += 1;
+    }
+
+    if installed_count > 0 {
+        println!(
+            "Installed {} skills to {}",
+            installed_count,
+            skills_dir.display()
+        );
+    }
+
+    Ok(())
+}
+
+/// Format a Skill back into SKILL.md content (frontmatter + body)
+fn format_skill_md(skill: &swissarmyhammer_skills::Skill) -> String {
+    let mut content = String::from("---\n");
+    content.push_str(&format!("name: {}\n", skill.name));
+    content.push_str(&format!("description: {}\n", skill.description));
+
+    if !skill.allowed_tools.is_empty() {
+        content.push_str(&format!("allowed-tools: {}\n", skill.allowed_tools.join(" ")));
+    }
+
+    if let Some(ref license) = skill.license {
+        content.push_str(&format!("license: {}\n", license));
+    }
+
+    if !skill.metadata.is_empty() {
+        content.push_str("metadata:\n");
+        let mut keys: Vec<_> = skill.metadata.keys().collect();
+        keys.sort();
+        for key in keys {
+            content.push_str(&format!("  {}: \"{}\"\n", key, skill.metadata[key]));
+        }
+    }
+
+    content.push_str("---\n\n");
+    content.push_str(&skill.instructions);
+    content.push('\n');
+
+    content
 }

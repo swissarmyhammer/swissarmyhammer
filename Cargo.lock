@@ -6374,6 +6374,7 @@ dependencies = [
  "swissarmyhammer-js",
  "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
+ "swissarmyhammer-skills",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "swissarmyhammer-workflow",
@@ -6646,6 +6647,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-skills"
+version = "0.6.1"
+dependencies = [
+ "async-trait",
+ "dirs",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "swissarmyhammer-build",
+ "swissarmyhammer-common",
+ "swissarmyhammer-operations",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-templating"
 version = "0.6.1"
 dependencies = [
@@ -6719,6 +6739,7 @@ dependencies = [
  "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
  "swissarmyhammer-shell",
+ "swissarmyhammer-skills",
  "swissarmyhammer-treesitter",
  "swissarmyhammer-workflow",
  "tempfile",
