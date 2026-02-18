@@ -1,0 +1,97 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": { "readTextFile": false, "writeTextFile": false },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": { "streaming": true },
+          "loadSession": true,
+          "mcpCapabilities": { "http": true, "sse": false },
+          "promptCapabilities": {
+            "_meta": { "streaming": true },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "test-agent",
+          "title": "Test Agent (Playback)",
+          "version": "0.1.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/tmp/test-hooks",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "hook-test-session"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "Run a bash command",
+            "type": "text"
+          }
+        ],
+        "sessionId": "hook-test-session"
+      },
+      "response": {
+        "_meta": {
+          "processed": true,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "hook-test-session",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCall": {
+              "callId": "call-001",
+              "toolName": "Bash",
+              "status": "in_progress"
+            }
+          }
+        },
+        {
+          "sessionId": "hook-test-session",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "callId": "call-001",
+            "status": "completed"
+          }
+        },
+        {
+          "sessionId": "hook-test-session",
+          "update": {
+            "content": {
+              "text": "Done running the command.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}
