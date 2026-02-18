@@ -428,12 +428,11 @@ impl McpServer {
         register_treesitter_tools(tool_registry);
         register_web_tools(tool_registry);
 
-        // Only register skill tool when running inside llama-agent
-        // Claude Code handles skills natively via filesystem
-        if std::env::var("SAH_AGENT_TYPE").ok().as_deref() == Some("llama") {
-            register_skill_tools(tool_registry, skill_library);
-            tracing::debug!("Registered skill tool (SAH_AGENT_TYPE=llama)");
-        }
+        // Register skill tool for all agent types
+        // Claude Code ignores extra MCP tools; llama-agent uses the skill tool
+        // for progressive disclosure of skill instructions
+        register_skill_tools(tool_registry, skill_library);
+        tracing::debug!("Registered skill tool");
 
         tracing::debug!("Registered all tool handlers");
     }
