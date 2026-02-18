@@ -1878,8 +1878,7 @@ mod tests {
 
         let update = ToolCallUpdate::new(
             "call-1",
-            ToolCallUpdateFields::new()
-                .status(agent_client_protocol::ToolCallStatus::Completed),
+            ToolCallUpdateFields::new().status(agent_client_protocol::ToolCallStatus::Completed),
         );
         let _ = notify_tx.send(SessionNotification::new(
             SessionId::from("s1"),

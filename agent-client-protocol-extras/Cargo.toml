@@ -25,5 +25,9 @@ regex.workspace = true
 model-context-protocol-extras = { path = "../model-context-protocol-extras" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "net", "process", "time", "macros"] }
+
 [lints]
 workspace = true
