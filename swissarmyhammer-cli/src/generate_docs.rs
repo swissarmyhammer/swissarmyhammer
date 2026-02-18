@@ -16,10 +16,17 @@ use swissarmyhammer_cli::cli::Cli;
 mod doc_gen;
 
 fn main() -> std::io::Result<()> {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| std::io::Error::other("CARGO_MANIFEST_DIR has no parent"))?;
     let cmd = Cli::command();
 
-    doc_gen::generate_markdown(&cmd, &repo_root.join("doc/src/reference"), "sah")?;
+    doc_gen::generate_markdown_with_brew(
+        &cmd,
+        &repo_root.join("doc/src/reference"),
+        "sah",
+        Some("swissarmyhammer/tap/swissarmyhammer"),
+    )?;
     doc_gen::generate_manpage(&cmd, &repo_root.join("docs"), "sah")?;
     doc_gen::generate_completions(cmd, &repo_root.join("completions"), "sah")?;
 

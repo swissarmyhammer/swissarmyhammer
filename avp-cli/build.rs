@@ -21,7 +21,12 @@ fn main() -> std::io::Result<()> {
     let cmd = cli::Cli::command();
     let repo_root = Path::new("..");
 
-    doc_gen::generate_markdown(&cmd, &repo_root.join("doc/src/reference"), "avp")?;
+    doc_gen::generate_markdown_with_brew(
+        &cmd,
+        &repo_root.join("doc/src/reference"),
+        "avp",
+        Some("swissarmyhammer/tap/avp-cli"),
+    )?;
     doc_gen::generate_manpage(&cmd, &repo_root.join("docs"), "avp")?;
     doc_gen::generate_completions(cmd, &repo_root.join("completions"), "avp")?;
 

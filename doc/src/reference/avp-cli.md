@@ -2,6 +2,12 @@
 
 This document contains the help content for the `avp` command-line program.
 
+## Installation
+
+```bash
+brew install swissarmyhammer/tap/avp-cli
+```
+
 **Command Overview:**
 
 * [`avp`↴](#avp)

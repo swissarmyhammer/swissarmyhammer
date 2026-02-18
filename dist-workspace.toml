@@ -19,4 +19,4 @@ publish-jobs = ["homebrew"]
 # Skip checking whether the specified configuration files are up to date
 allow-dirty = ["ci", "msi"]
 # Include shell completions in release archives
-include = ["completions/*"]
+include = ["completions/"]

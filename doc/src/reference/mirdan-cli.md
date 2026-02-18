@@ -2,6 +2,12 @@
 
 This document contains the help content for the `mirdan` command-line program.
 
+## Installation
+
+```bash
+brew install swissarmyhammer/tap/mirdan-cli
+```
+
 **Command Overview:**
 
 * [`mirdan`↴](#mirdan)

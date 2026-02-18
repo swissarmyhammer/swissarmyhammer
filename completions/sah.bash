@@ -22,6 +22,9 @@ _sah() {
             sah,completion)
                 cmd="sah__completion"
                 ;;
+            sah,deinit)
+                cmd="sah__deinit"
+                ;;
             sah,doctor)
                 cmd="sah__doctor"
                 ;;
@@ -30,6 +33,9 @@ _sah() {
                 ;;
             sah,help)
                 cmd="sah__help"
+                ;;
+            sah,init)
+                cmd="sah__init"
                 ;;
             sah,model)
                 cmd="sah__model"
@@ -61,6 +67,9 @@ _sah() {
             sah__help,completion)
                 cmd="sah__help__completion"
                 ;;
+            sah__help,deinit)
+                cmd="sah__help__deinit"
+                ;;
             sah__help,doctor)
                 cmd="sah__help__doctor"
                 ;;
@@ -69,6 +78,9 @@ _sah() {
                 ;;
             sah__help,help)
                 cmd="sah__help__help"
+                ;;
+            sah__help,init)
+                cmd="sah__help__init"
                 ;;
             sah__help,model)
                 cmd="sah__help__model"
@@ -140,7 +152,7 @@ _sah() {
 
     case "${cmd}" in
         sah)
-            opts="-v -d -q -h -V --verbose --debug --quiet --format --model --help --version serve doctor prompt flow completion validate model agent help"
+            opts="-v -d -q -h -V --verbose --debug --quiet --format --model --help --version serve init deinit doctor prompt flow completion validate model agent help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -289,6 +301,24 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        sah__deinit)
+            opts="-h --remove-directory --model --help project local user"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --model)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         sah__doctor)
             opts="-h --model --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
@@ -326,7 +356,7 @@ _sah() {
             return 0
             ;;
         sah__help)
-            opts="serve doctor prompt flow completion validate model agent help"
+            opts="serve init deinit doctor prompt flow completion validate model agent help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -381,6 +411,20 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        sah__help__deinit)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         sah__help__doctor)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -410,6 +454,20 @@ _sah() {
             return 0
             ;;
         sah__help__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sah__help__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -528,6 +586,24 @@ _sah() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sah__init)
+            opts="-h --model --help project local user"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --model)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
