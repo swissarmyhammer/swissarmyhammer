@@ -31,6 +31,11 @@ use std::io::{self, IsTerminal, Read, Write};
 use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
 
+mod banner;
+
+/// Exit code returned when a hook blocks the action.
+const BLOCKING_ERROR_EXIT_CODE: i32 = 2;
+
 use avp::install;
 use avp::registry::RegistryError;
 use avp::{auth, doctor, edit, info, list, new, outdated, package, publish, search};
@@ -52,6 +57,19 @@ fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
 
 #[tokio::main]
 async fn main() {
+    // Show branded banner for top-level help (no subcommand or --help/-h).
+    {
+        let args: Vec<String> = std::env::args().collect();
+        let show = match args.len() {
+            1 => true,
+            2 => args[1] == "--help" || args[1] == "-h",
+            _ => false,
+        };
+        if show {
+            banner::print_banner();
+        }
+    }
+
     let cli = Cli::parse();
 
     // Initialize tracing with appropriate level
@@ -67,76 +85,87 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    let exit_code = match cli.command {
-        Some(Commands::Init { target }) => match install::install(target) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                1
-            }
-        },
-        Some(Commands::Deinit { target }) => match install::uninstall(target) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                1
-            }
-        },
-        Some(Commands::Doctor { verbose }) => doctor::run_doctor(verbose),
-        Some(Commands::List {
+    let exit_code = dispatch_command(cli).await;
+    std::process::exit(exit_code);
+}
+
+/// Dispatch a parsed CLI to the appropriate command handler.
+async fn dispatch_command(cli: Cli) -> i32 {
+    let debug = cli.debug;
+    match cli.command {
+        Some(cmd) => dispatch_subcommand(cmd, debug).await,
+        None => run_hook_or_error(&cli).await,
+    }
+}
+
+/// Handle an explicit subcommand.
+async fn dispatch_subcommand(cmd: Commands, debug: bool) -> i32 {
+    match cmd {
+        Commands::Init { target } => result_to_exit(install::install(target)),
+        Commands::Deinit { target } => result_to_exit(install::uninstall(target)),
+        Commands::Doctor { verbose } => doctor::run_doctor(verbose),
+        Commands::List {
             verbose,
             global,
             local,
             json,
-        }) => list::run_list(verbose, cli.debug, global, local, json),
-        Some(Commands::Login) => handle_registry_result(auth::login().await),
-        Some(Commands::Logout) => handle_registry_result(auth::logout().await),
-        Some(Commands::Whoami) => handle_registry_result(auth::whoami().await),
-        Some(Commands::Search { query, tag, json }) => {
+        } => list::run_list(verbose, debug, global, local, json),
+        Commands::Login => handle_registry_result(auth::login().await),
+        Commands::Logout => handle_registry_result(auth::logout().await),
+        Commands::Whoami => handle_registry_result(auth::whoami().await),
+        Commands::Search { query, tag, json } => {
             handle_registry_result(search::run_search(&query, tag.as_deref(), json).await)
         }
-        Some(Commands::Info { name }) => handle_registry_result(info::run_info(&name).await),
-        Some(Commands::Install {
+        Commands::Info { name } => handle_registry_result(info::run_info(&name).await),
+        Commands::Install {
             package, global, ..
-        }) => handle_registry_result(package::run_install(&package, global).await),
-        Some(Commands::Uninstall { name, global, .. }) => {
+        } => handle_registry_result(package::run_install(&package, global).await),
+        Commands::Uninstall { name, global, .. } => {
             handle_registry_result(package::run_uninstall(&name, global).await)
         }
-        Some(Commands::Edit { name, global, .. }) => {
+        Commands::Edit { name, global, .. } => {
             handle_registry_result(edit::run_edit(&name, global))
         }
-        Some(Commands::New { name, global, .. }) => {
-            handle_registry_result(new::run_new(&name, global))
-        }
-        Some(Commands::Publish { path, dry_run }) => {
+        Commands::New { name, global, .. } => handle_registry_result(new::run_new(&name, global)),
+        Commands::Publish { path, dry_run } => {
             handle_registry_result(publish::run_publish(&path, dry_run).await)
         }
-        Some(Commands::Unpublish { name_version }) => {
+        Commands::Unpublish { name_version } => {
             handle_registry_result(publish::run_unpublish(&name_version).await)
         }
-        Some(Commands::Outdated) => handle_registry_result(outdated::run_outdated().await),
-        Some(Commands::Update { name, global, .. }) => {
+        Commands::Outdated => handle_registry_result(outdated::run_outdated().await),
+        Commands::Update { name, global, .. } => {
             handle_registry_result(outdated::run_update(name.as_deref(), global).await)
         }
-        None => {
-            // Default behavior: process hook from stdin
-            match run_hook_processor(&cli).await {
-                Ok(code) => code,
-                Err(e) => {
-                    // Output error as JSON for consistency
-                    let error_output = serde_json::json!({
-                        "continue": false,
-                        "stopReason": e.to_string()
-                    });
-                    tracing::error!("{}", e);
-                    let _ = io::stdout().write_all(error_output.to_string().as_bytes());
-                    2 // Blocking error
-                }
-            }
-        }
-    };
+    }
+}
 
-    std::process::exit(exit_code);
+/// Convert a `Result<(), E: Display>` to an exit code.
+fn result_to_exit<E: std::fmt::Display>(result: Result<(), E>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            1
+        }
+    }
+}
+
+/// Run the hook processor or return an error code.
+async fn run_hook_or_error(cli: &Cli) -> i32 {
+    match run_hook_processor(cli).await {
+        Ok(code) => code,
+        Err(e) => {
+            let error_output = serde_json::json!({
+                "continue": false,
+                "stopReason": e.to_string()
+            });
+            tracing::error!("{}", e);
+            // Best-effort: write error JSON to stdout for the hook caller.
+            let _ = io::stdout().write_all(error_output.to_string().as_bytes());
+            BLOCKING_ERROR_EXIT_CODE
+        }
+    }
 }
 
 async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
@@ -708,5 +737,22 @@ mod tests {
             Some(Commands::Update { global, .. }) => assert!(global),
             _ => panic!("Expected Update command"),
         }
+    }
+
+    #[test]
+    fn test_blocking_error_exit_code_is_two() {
+        assert_eq!(BLOCKING_ERROR_EXIT_CODE, 2);
+    }
+
+    #[test]
+    fn test_result_to_exit_ok() {
+        let result: Result<(), String> = Ok(());
+        assert_eq!(result_to_exit(result), 0);
+    }
+
+    #[test]
+    fn test_result_to_exit_err() {
+        let result: Result<(), String> = Err("something failed".to_string());
+        assert_eq!(result_to_exit(result), 1);
     }
 }

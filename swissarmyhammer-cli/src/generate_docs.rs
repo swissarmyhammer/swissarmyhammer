@@ -10,6 +10,7 @@
 use std::path::Path;
 
 use clap::CommandFactory;
+
 use swissarmyhammer_cli::cli::Cli;
 
 #[path = "../../build-support/doc_gen.rs"]
