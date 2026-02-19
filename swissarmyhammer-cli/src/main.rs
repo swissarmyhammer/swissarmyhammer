@@ -1,5 +1,6 @@
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
+mod banner;
 mod cli;
 mod commands;
 mod context;
@@ -413,6 +414,11 @@ fn build_and_parse_cli(
 async fn main() {
     // Parse CLI early to check for --cwd and --model flags BEFORE doing anything else
     let args: Vec<String> = std::env::args().collect();
+
+    // Show branded banner for top-level help (no subcommand or --help/-h).
+    if banner::should_show_banner(&args) {
+        banner::print_banner();
+    }
 
     // Check for --cwd flag and change directory FIRST
     handle_cwd_flag(&args);
