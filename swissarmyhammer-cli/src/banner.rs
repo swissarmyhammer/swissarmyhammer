@@ -1,18 +1,30 @@
 //! Branded ASCII banner for SwissArmyHammer CLI.
 //!
-//! Displays a Swiss Army knife + hammer icon alongside colored "SAH" block
-//! text, with a red gradient matching the Swiss Army branding.
+//! Displays the SwissArmyHammer logo alongside colored "SAH" block text,
+//! with a red gradient matching the Swiss Army branding.
 
 use std::io::{self, IsTerminal, Write};
 
-/// ANSI 256-color codes for a red gradient (bright -> dark).
-const COLORS: [&str; 7] = [
+/// ANSI 256-color codes for a 19-step red gradient (bright -> dark).
+const COLORS: [&str; 19] = [
+    "\x1b[38;5;224m", // very light pink
+    "\x1b[38;5;224m", // very light pink
+    "\x1b[38;5;217m", // light pink
     "\x1b[38;5;210m", // light salmon
     "\x1b[38;5;203m", // salmon
     "\x1b[38;5;196m", // bright red
+    "\x1b[38;5;196m", // bright red
+    "\x1b[38;5;167m", // medium pink
     "\x1b[38;5;160m", // red
+    "\x1b[38;5;160m", // red
+    "\x1b[38;5;131m", // dark pink
     "\x1b[38;5;124m", // dark red
+    "\x1b[38;5;124m", // dark red
+    "\x1b[38;5;95m",  // very dark pink
     "\x1b[38;5;88m",  // deep red
+    "\x1b[38;5;88m",  // deep red
+    "\x1b[38;5;52m",  // darkest red
+    "\x1b[38;5;52m",  // darkest red
     "\x1b[38;5;52m",  // darkest red
 ];
 
@@ -22,18 +34,30 @@ const DIM: &str = "\x1b[2m";
 /// ANSI escape code to reset all text formatting.
 const RESET: &str = "\x1b[0m";
 
-/// Swiss Army hammer icon + ANSI Shadow "SAH".
+/// SwissArmyHammer logo + ANSI Shadow "SAH".
 ///
-/// Hammer head with Swiss cross on a knife handle, inspired by the
-/// SwissArmyHammer logo.
-const LOGO: [&str; 7] = [
-    r"       ╭──╮             ███████╗ █████╗ ██╗  ██╗",
-    r"   ╔═══╡▓▓╞═══╗        ██╔════╝██╔══██╗██║  ██║",
-    r"   ║▓▓▓╡▓▓╞▓▓▓║        ███████╗███████║███████║",
-    r"   ╚═══╡▓▓╞═══╝        ╚════██║██╔══██║██╔══██║",
-    r"       ├──┤  ╋         ███████║██║  ██║██║  ██║",
-    r"       │██│             ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝",
-    r"       ╰──╯                                      ",
+/// ASCII rendition of the SwissArmyHammer logo — hammer head at
+/// upper-left with a diagonal handle — alongside block-letter "SAH".
+const LOGO: [&str; 19] = [
+    r"",
+    r"",
+    r"           =#+=#-=",
+    r"         ====+=",
+    r"         . -==*",
+    r"      =#+:    :+",
+    r"       +.       =-              ███████╗ █████╗ ██╗  ██╗",
+    r"                 ==.            ██╔════╝██╔══██╗██║  ██║",
+    r"                   -#:          ███████╗███████║███████║",
+    r"                      *#        ╚════██║██╔══██║██╔══██║",
+    r"                      ###=      ███████║██║  ██║██║  ██║",
+    r"                        ###+    ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝",
+    r"                         ####+",
+    r"                           ####*",
+    r"                             ###+#",
+    r"                               ###*=",
+    r"                                #*#",
+    r"",
+    r"",
 ];
 
 /// Render the banner to the given writer.
@@ -41,8 +65,7 @@ const LOGO: [&str; 7] = [
 /// When `use_color` is true, each line gets a gradient color code.
 /// When false, plain text is emitted.
 fn render_banner(out: &mut dyn Write, use_color: bool) {
-    // Banner output is best-effort; nothing useful to do if stdout is unavailable.
-    let _ = writeln!(out);
+    // Best-effort: banner is cosmetic, so write failures are non-fatal.
     for (i, line) in LOGO.iter().enumerate() {
         if use_color {
             let _ = writeln!(out, "{}{}{}", COLORS[i], line, RESET);
@@ -50,7 +73,6 @@ fn render_banner(out: &mut dyn Write, use_color: bool) {
             let _ = writeln!(out, "{}", line);
         }
     }
-    let _ = writeln!(out);
     if use_color {
         let _ = writeln!(
             out,
@@ -79,7 +101,7 @@ pub(crate) fn should_show_banner(args: &[String]) -> bool {
 ///
 /// Respects `NO_COLOR` env var and non-TTY output by falling back to
 /// plain (uncolored) text.
-pub fn print_banner() {
+pub(crate) fn print_banner() {
     let use_color = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let mut out = io::stdout().lock();
     render_banner(&mut out, use_color);
@@ -143,15 +165,30 @@ mod tests {
     }
 
     #[test]
-    fn banner_has_hammer_icon_elements() {
+    fn print_banner_does_not_panic() {
+        // Smoke-test the entry point; NO_COLOR suppresses ANSI codes.
+        std::env::set_var("NO_COLOR", "1");
+        print_banner();
+        std::env::remove_var("NO_COLOR");
+    }
+
+    #[test]
+    fn banner_plain_matches_logo() {
         let mut buf = Vec::new();
         render_banner(&mut buf, false);
         let output = String::from_utf8(buf).expect("valid utf8");
-        // Hammer head elements
-        assert!(output.contains("╔═══"));
-        // Swiss cross
-        assert!(output.contains("╋"));
-        // Handle
-        assert!(output.contains("│██│"));
+        // Every LOGO line must appear verbatim in the rendered output.
+        for line in &LOGO {
+            assert!(
+                output.contains(line),
+                "missing logo line: {:?}",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn logo_and_colors_same_length() {
+        assert_eq!(LOGO.len(), COLORS.len());
     }
 }
