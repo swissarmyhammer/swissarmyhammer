@@ -18,6 +18,7 @@ fn io_context(msg: String, err: Error) -> Error {
 }
 
 /// Information about a generated file.
+#[allow(dead_code)]
 pub struct GeneratedFile {
     /// Path to the generated file.
     pub path: PathBuf,

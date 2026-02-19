@@ -81,7 +81,7 @@ pub async fn run_interactive_search() -> Result<(), RegistryError> {
 
     let selected = tokio::task::spawn_blocking(interactive_search_loop)
         .await
-        .map_err(|e| RegistryError::Io(io::Error::new(io::ErrorKind::Other, e)))??;
+        .map_err(|e| RegistryError::Io(io::Error::other(e)))??;
 
     if let Some(name) = selected {
         crate::install::run_install(&name, None, false, false, None).await?;
@@ -210,7 +210,7 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
             let snapshot = query.clone();
             let (_cols, rows) = terminal::size().unwrap_or((80, 24));
             let max_results = (rows as usize).saturating_sub(OVERHEAD_LINES) / LINES_PER_RESULT;
-            let max_results = max_results.max(2).min(20);
+            let max_results = max_results.clamp(2, 20);
             match handle.block_on(client.fuzzy_search(&snapshot, Some(max_results))) {
                 Ok(response) => {
                     if query == snapshot {
