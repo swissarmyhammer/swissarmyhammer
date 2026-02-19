@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-project-detection = { path = "../swissarmyhammer-project-detection" }
+swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
 figment = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

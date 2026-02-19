@@ -8,7 +8,7 @@
 //! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
 //! agent layer (claude-agent, llama-agent), not at the MCP tool layer.
 
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use encoding_rs::{Encoding, UTF_8};
 use filetime::{set_file_times, FileTime};
@@ -356,6 +356,9 @@ impl EditFileTool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(EditFileTool);
+
+#[async_trait]
+impl AgentTool for EditFileTool {}
 
 #[async_trait]
 impl McpTool for EditFileTool {

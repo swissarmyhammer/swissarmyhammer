@@ -10,7 +10,9 @@ use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
-use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+use swissarmyhammer_tools::mcp::unified_server::{
+    start_mcp_server_with_options, McpServerMode,
+};
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
     register_file_tools, register_flow_tools, register_git_tools, register_js_tools,
@@ -81,11 +83,15 @@ impl CliToolContext {
 
         std::env::set_var("SAH_CLI_MODE", "1");
 
-        let mcp_server_handle = start_mcp_server(
+        // Start MCP server in agent mode — the CliToolContext serves as the
+        // inline MCP server for llama-agent workflows, so it needs agent tools
+        // (file editing, shell, grep, skills) that provide base agent behavior.
+        let mcp_server_handle = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             model_override.map(|s| s.to_string()),
             working_dir,
+            true, // agent_mode: register agent tools for full agent capability
         )
         .await?;
 

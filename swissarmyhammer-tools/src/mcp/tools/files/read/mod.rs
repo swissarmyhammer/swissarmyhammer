@@ -51,7 +51,7 @@
 //! # }
 //! ```
 
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
@@ -119,6 +119,9 @@ impl ReadFileTool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(ReadFileTool);
+
+#[async_trait]
+impl AgentTool for ReadFileTool {}
 
 #[async_trait]
 impl McpTool for ReadFileTool {

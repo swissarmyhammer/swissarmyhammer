@@ -789,6 +789,38 @@ impl TemplateContext {
         }
     }
 
+    /// Detect and set available skills from the skill library.
+    ///
+    /// Loads builtin skills and populates the "available_skills" variable
+    /// with skill metadata for use in system prompt templates.
+    fn set_available_skills_variable(&mut self) {
+        use swissarmyhammer_skills::SkillLibrary;
+
+        // Skip if already set
+        if self.get("available_skills").is_some() {
+            debug!("available_skills already set, not overriding");
+            return;
+        }
+
+        let mut library = SkillLibrary::new();
+        library.load_defaults();
+
+        let skills_json: Vec<Value> = library
+            .list()
+            .iter()
+            .map(|skill| {
+                serde_json::json!({
+                    "name": skill.name.as_str(),
+                    "description": skill.description,
+                    "source": skill.source.to_string(),
+                })
+            })
+            .collect();
+
+        self.set("available_skills".to_string(), Value::Array(skills_json));
+        debug!("Set {} available skills", library.len());
+    }
+
     /// Set default variables if not already set.
     ///
     /// This method sets default template variables including:
@@ -798,6 +830,7 @@ impl TemplateContext {
     /// - `cwd`: Alias for the current working directory
     /// - `project_types`: Detected project types from the current directory
     /// - `unique_project_types`: Deduplicated list of project type names
+    /// - `available_skills`: Available agent skills from the skill library
     ///
     /// Model names are determined as follows:
     ///
@@ -809,6 +842,7 @@ impl TemplateContext {
         self.set_model_variable();
         self.set_working_directory_variables();
         self.set_project_types_variable();
+        self.set_available_skills_variable();
     }
 }
 

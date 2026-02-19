@@ -3,7 +3,7 @@
 //! This module provides the GlobFileTool for fast file pattern matching with advanced filtering.
 
 use crate::mcp::progress_notifications::generate_progress_token;
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use ignore::WalkBuilder;
@@ -26,6 +26,9 @@ impl GlobFileTool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(GlobFileTool);
+
+#[async_trait]
+impl AgentTool for GlobFileTool {}
 
 #[async_trait]
 impl McpTool for GlobFileTool {

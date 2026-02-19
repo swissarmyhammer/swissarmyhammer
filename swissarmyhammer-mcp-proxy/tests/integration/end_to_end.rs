@@ -8,7 +8,7 @@ async fn test_proxy_filters_tool_discovery() {
     // Create real SwissArmyHammer MCP server with all tools
     let library = PromptLibrary::default();
     let work_dir = tempfile::tempdir().unwrap();
-    let server = McpServer::new_with_work_dir(library, work_dir.path().to_path_buf(), None)
+    let server = McpServer::new_with_work_dir(library, work_dir.path().to_path_buf(), None, true)
         .await
         .unwrap();
     server.initialize().await.unwrap();

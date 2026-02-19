@@ -3,7 +3,7 @@
 //! This module provides the WriteFileTool for creating new files or overwriting existing files
 //! with atomic operations, comprehensive security validation, and proper error handling.
 
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -98,6 +98,9 @@ impl WriteFileTool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(WriteFileTool);
+
+#[async_trait]
+impl AgentTool for WriteFileTool {}
 
 #[async_trait]
 impl McpTool for WriteFileTool {

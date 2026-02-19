@@ -10,6 +10,7 @@ You are an expert code reviewer providing constructive feedback.
 {% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
 {% include "_partials/tool_use.md" %}
+{% include "_partials/skills" %}
 
 ## Your Role
 

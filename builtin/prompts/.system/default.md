@@ -12,6 +12,7 @@ You are a skilled software engineer helping with coding tasks.
 {% include "_partials/tool_use" %}
 {% include "_partials/test-driven-development" %}
 {% include "_partials/git-practices" %}
+{% include "_partials/skills" %}
 
 ## Your Approach
 

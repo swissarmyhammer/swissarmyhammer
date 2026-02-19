@@ -184,7 +184,7 @@ impl McpServer {
             // Fallback to a temporary directory if current directory is not accessible
             std::env::temp_dir()
         });
-        Self::new_with_work_dir(library, work_dir, None).await
+        Self::new_with_work_dir(library, work_dir, None, false).await
     }
 
     /// Create a new MCP server with the provided prompt library and working directory.
@@ -194,6 +194,7 @@ impl McpServer {
     /// * `library` - The prompt library to serve via MCP
     /// * `work_dir` - The working directory to use for issue storage and git operations
     /// * `model_override` - Optional model name to override all use case model assignments
+    /// * `agent_mode` - Whether to register agent tools (true when powering a full agent)
     ///
     /// # Returns
     ///
@@ -205,6 +206,7 @@ impl McpServer {
         library: PromptLibrary,
         work_dir: PathBuf,
         model_override: Option<String>,
+        agent_mode: bool,
     ) -> Result<Self> {
         let git_ops_arc = Self::initialize_git_operations(work_dir.clone());
         let tool_handlers = ToolHandlers::new();
@@ -226,6 +228,7 @@ impl McpServer {
             use_case_agents,
             Some(work_dir),
             skill_library.clone(),
+            agent_mode,
         )
         .await;
 
@@ -384,6 +387,8 @@ impl McpServer {
     /// * `agent_config` - Agent configuration
     /// * `use_case_agents` - Use case to agent configuration map
     /// * `working_dir` - Working directory for tool operations
+    /// * `skill_library` - Shared skill library
+    /// * `agent_mode` - Whether to register agent tools
     ///
     /// # Returns
     ///
@@ -395,9 +400,10 @@ impl McpServer {
         use_case_agents: HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
         working_dir: Option<PathBuf>,
         skill_library: Arc<RwLock<SkillLibrary>>,
+        agent_mode: bool,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
-        Self::register_all_tools(&mut tool_registry, skill_library).await;
+        Self::register_all_tools(&mut tool_registry, skill_library, agent_mode).await;
 
         let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
         tool_context.use_case_agents = Arc::new(use_case_agents);
@@ -411,28 +417,40 @@ impl McpServer {
 
     /// Register all available tools in the tool registry.
     ///
+    /// When `agent_mode` is true, all tools are registered including agent tools
+    /// (file editing, shell, grep, skills) that provide base agent behavior.
+    /// When false, agent tools are skipped — suitable for running alongside an
+    /// existing agent like Claude Code that already has these capabilities.
+    ///
     /// # Arguments
     ///
     /// * `tool_registry` - Registry to register tools into
+    /// * `skill_library` - Shared skill library for the skill tool
+    /// * `agent_mode` - Whether to include agent tools
     async fn register_all_tools(
         tool_registry: &mut ToolRegistry,
         skill_library: Arc<RwLock<SkillLibrary>>,
+        agent_mode: bool,
     ) {
-        register_js_tools(tool_registry);
-        register_file_tools(tool_registry).await;
+        // Always register domain-specific tools
         register_flow_tools(tool_registry);
         register_git_tools(tool_registry);
         register_kanban_tools(tool_registry);
         register_questions_tools(tool_registry);
-        register_shell_tools(tool_registry);
-        register_treesitter_tools(tool_registry);
         register_web_tools(tool_registry);
+        register_treesitter_tools(tool_registry);
+        register_js_tools(tool_registry);
 
-        // Register skill tool for all agent types
-        // Claude Code ignores extra MCP tools; llama-agent uses the skill tool
-        // for progressive disclosure of skill instructions
-        register_skill_tools(tool_registry, skill_library);
-        tracing::debug!("Registered skill tool");
+        // Agent tools: only register when powering a full agent
+        // Off-the-shelf agents like Claude Code already have these capabilities natively
+        if agent_mode {
+            register_file_tools(tool_registry).await;
+            register_shell_tools(tool_registry);
+            register_skill_tools(tool_registry, skill_library);
+            tracing::debug!("Registered agent tools (agent_mode=true)");
+        } else {
+            tracing::debug!("Skipped agent tools (agent_mode=false)");
+        }
 
         tracing::debug!("Registered all tool handlers");
     }

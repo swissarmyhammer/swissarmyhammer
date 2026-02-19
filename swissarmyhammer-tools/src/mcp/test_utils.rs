@@ -62,14 +62,16 @@ pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleCl
 #[cfg(test)]
 mod tests {
     use super::create_test_client;
-    use crate::mcp::unified_server::{start_mcp_server, McpServerMode};
+    use crate::mcp::unified_server::{start_mcp_server_with_options, McpServerMode};
     use rmcp::model::CallToolRequestParam;
 
     #[tokio::test]
     async fn test_client_list_tools() {
-        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
-            .await
-            .unwrap();
+        // Use agent_mode=true since this test checks for agent tools (files_read)
+        let mut server =
+            start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, true)
+                .await
+                .unwrap();
 
         let client = create_test_client(server.url()).await;
 
@@ -85,9 +87,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_list_prompts() {
-        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
-            .await
-            .unwrap();
+        let mut server =
+            start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, false)
+                .await
+                .unwrap();
 
         let client = create_test_client(server.url()).await;
 
@@ -99,9 +102,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_call_tool() {
-        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
-            .await
-            .unwrap();
+        // Use agent_mode=true since this test calls files_glob (an agent tool)
+        let mut server =
+            start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, true)
+                .await
+                .unwrap();
 
         let client = create_test_client(server.url()).await;
 

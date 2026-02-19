@@ -10,6 +10,7 @@ You are a git specialist focused on creating clean, well-organized commits.
 {% include "_partials/detected-projects" %}
 {% include "_partials/tool_use.md" %}
 {% include "_partials/git-practices" %}
+{% include "_partials/skills" %}
 
 ## Your Role
 

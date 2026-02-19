@@ -4,7 +4,7 @@
 //! The tool's description dynamically includes `<available_skills>` so the agent
 //! knows about skills without them being in the system prompt.
 
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext, ToolRegistry};
+use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -12,20 +12,22 @@ use rmcp::ErrorData as McpError;
 use serde_json::Value;
 use std::sync::Arc;
 use swissarmyhammer_skills::{
-    parse_input, ExecutionResult, GetSkill, ListSkills, Operation, SkillContext, SkillLibrary,
-    SkillOperation,
+    parse_input, ExecutionResult, ListSkills, Operation, SearchSkill, SkillContext, SkillLibrary,
+    SkillOperation, UseSkill,
 };
 use tokio::sync::RwLock;
 
 // Static operation instances for metadata access
 static LIST_SKILLS: Lazy<ListSkills> = Lazy::new(ListSkills::new);
-static GET_SKILL: Lazy<GetSkill> = Lazy::new(|| GetSkill::new(""));
+static USE_SKILL: Lazy<UseSkill> = Lazy::new(|| UseSkill::new(""));
+static SEARCH_SKILL: Lazy<SearchSkill> = Lazy::new(|| SearchSkill::new(""));
 
 /// All skill operations for schema generation
 static SKILL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
         &*LIST_SKILLS as &dyn Operation,
-        &*GET_SKILL as &dyn Operation,
+        &*USE_SKILL as &dyn Operation,
+        &*SEARCH_SKILL as &dyn Operation,
     ]
 });
 
@@ -83,6 +85,9 @@ fn build_description(library: &Arc<RwLock<SkillLibrary>>) -> String {
 crate::impl_empty_doctorable!(SkillTool);
 
 #[async_trait]
+impl AgentTool for SkillTool {}
+
+#[async_trait]
 impl McpTool for SkillTool {
     fn name(&self) -> &'static str {
         "skill"
@@ -131,7 +136,11 @@ impl McpTool for SkillTool {
                 use swissarmyhammer_skills::Execute;
                 op.execute(&ctx).await
             }
-            SkillOperation::Get(op) => {
+            SkillOperation::Use(op) => {
+                use swissarmyhammer_skills::Execute;
+                op.execute(&ctx).await
+            }
+            SkillOperation::Search(op) => {
                 use swissarmyhammer_skills::Execute;
                 op.execute(&ctx).await
             }
@@ -205,7 +214,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_skill_tool_get() {
+    async fn test_skill_tool_use() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+
+        let tool = SkillTool::new(library);
+        let ctx = crate::test_utils::create_test_context().await;
+
+        let args: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({"op": "use skill", "name": "plan"}))
+                .unwrap();
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_skill_tool_get_backward_compat() {
         let library = Arc::new(RwLock::new(SkillLibrary::new()));
         {
             let mut lib = library.write().await;
@@ -217,6 +244,24 @@ mod tests {
 
         let args: serde_json::Map<String, serde_json::Value> =
             serde_json::from_value(serde_json::json!({"op": "get skill", "name": "plan"}))
+                .unwrap();
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_skill_tool_search() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+
+        let tool = SkillTool::new(library);
+        let ctx = crate::test_utils::create_test_context().await;
+
+        let args: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({"op": "search skill", "query": "plan"}))
                 .unwrap();
         let result = tool.execute(args, &ctx).await;
         assert!(result.is_ok());

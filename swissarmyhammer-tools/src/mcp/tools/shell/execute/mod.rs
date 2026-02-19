@@ -4,7 +4,7 @@
 
 use crate::mcp::progress_notifications::{generate_progress_token, ProgressSender};
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -1554,6 +1554,9 @@ impl ShellExecuteTool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(ShellExecuteTool);
+
+#[async_trait]
+impl AgentTool for ShellExecuteTool {}
 
 #[async_trait]
 impl McpTool for ShellExecuteTool {

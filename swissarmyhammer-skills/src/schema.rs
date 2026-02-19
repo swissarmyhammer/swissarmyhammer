@@ -6,7 +6,7 @@ use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
 /// Generate MCP schema for skill operations
 pub fn generate_skill_mcp_schema(operations: &[&dyn Operation]) -> Value {
     let config = SchemaConfig::new(
-        "Skill management operations. Use 'list' to see available skills, 'get' to load a skill's full instructions.",
+        "Skill management operations. Use 'use' to activate a skill, 'search' to find skills by keyword, 'list' to see all available skills.",
     )
     .with_examples(generate_skill_examples())
     .with_verb_aliases(get_skill_verb_aliases());
@@ -22,12 +22,20 @@ fn generate_skill_examples() -> Vec<Value> {
             "value": {"op": "list skill"}
         }),
         json!({
-            "description": "Load a skill by name",
-            "value": {"op": "get skill", "name": "plan"}
+            "description": "Activate a skill by name",
+            "value": {"op": "use skill", "name": "plan"}
         }),
         json!({
-            "description": "Shorthand: get skill by name only",
+            "description": "Search for skills by keyword",
+            "value": {"op": "search skill", "query": "commit"}
+        }),
+        json!({
+            "description": "Shorthand: activate skill by name only",
             "value": {"name": "commit"}
+        }),
+        json!({
+            "description": "Shorthand: search by query only",
+            "value": {"query": "test"}
         }),
     ]
 }
@@ -35,20 +43,22 @@ fn generate_skill_examples() -> Vec<Value> {
 /// Get verb aliases for skill operations
 fn get_skill_verb_aliases() -> Map<String, Value> {
     let mut aliases = Map::new();
-    aliases.insert("get".to_string(), json!(["load", "activate", "invoke"]));
+    aliases.insert("use".to_string(), json!(["get", "load", "activate", "invoke"]));
     aliases.insert("list".to_string(), json!(["ls", "show", "available"]));
+    aliases.insert("search".to_string(), json!(["find", "lookup"]));
     aliases
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::{GetSkill, ListSkills};
+    use crate::operations::{ListSkills, SearchSkill, UseSkill};
 
     fn test_operations() -> Vec<&'static dyn Operation> {
         vec![
             Box::leak(Box::new(ListSkills::new())) as &dyn Operation,
-            Box::leak(Box::new(GetSkill::new(""))) as &dyn Operation,
+            Box::leak(Box::new(UseSkill::new(""))) as &dyn Operation,
+            Box::leak(Box::new(SearchSkill::new(""))) as &dyn Operation,
         ]
     }
 

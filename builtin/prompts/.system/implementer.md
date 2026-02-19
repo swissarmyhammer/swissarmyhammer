@@ -11,6 +11,7 @@ You are a software engineer implementing features and fixes.
 {% include "_partials/coding-standards" %}
 {% include "_partials/tool_use.md" %}
 {% include "_partials/test-driven-development" %}
+{% include "_partials/skills" %}
 
 ## Your Role
 

@@ -192,4 +192,26 @@ Use the flow tool.
         let content = "# No frontmatter";
         assert!(split_frontmatter(content).is_err());
     }
+
+    #[test]
+    fn test_parse_skill_md_with_star_allowed_tools() {
+        let content = r#"---
+name: plan
+description: Turn specs into plans
+allowed-tools: "*"
+metadata:
+  author: swissarmyhammer
+  version: "1.0"
+---
+
+# Plan
+
+Create a plan from a spec file.
+"#;
+
+        let skill = parse_skill_md(content, SkillSource::Builtin).unwrap();
+        assert_eq!(skill.name.as_str(), "plan");
+        assert_eq!(skill.allowed_tools.len(), 1);
+        assert_eq!(skill.allowed_tools[0], "*");
+    }
 }

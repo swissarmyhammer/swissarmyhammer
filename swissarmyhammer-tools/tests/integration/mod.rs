@@ -12,5 +12,6 @@ mod notification_latency_profile;
 mod notification_request_separation;
 mod notification_streaming;
 mod rmcp_stdio_working;
+mod skill_e2e;
 mod web_fetch_specification_compliance;
 mod web_search_integration;

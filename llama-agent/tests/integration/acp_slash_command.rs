@@ -2,8 +2,10 @@
 //!
 //! This test verifies that:
 //! 1. The ACP server advertises supports_slash_commands capability during initialization
-//! 2. Slash commands are derived from MCP prompts via CommandRegistry
+//! 2. Slash commands are derived from MCP prompts and Agent Skills via CommandRegistry
 //! 3. Commands include proper metadata for parameters when available
+//! 4. Skills appear as ACP commands with correct structure
+//! 5. Skills take precedence over duplicate MCP prompts
 
 mod acp_slash_command_tests {
     use async_trait::async_trait;
@@ -402,5 +404,148 @@ mod acp_slash_command_tests {
         );
 
         tracing::info!("✓ Core commands are always present even without MCP prompts");
+    }
+
+    /// Test that builtin skills appear as ACP slash commands
+    #[tokio::test]
+    async fn test_builtin_skills_appear_as_slash_commands() {
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::DEBUG)
+            .try_init();
+
+        use swissarmyhammer_skills::SkillLibrary;
+
+        let mcp_client = Arc::new(MockMCPClientWithPrompts::new(vec![]));
+        let mut library = SkillLibrary::new();
+        library.load_defaults();
+        let registry = CommandRegistry::with_skills(mcp_client, library);
+
+        let commands = registry.get_available_commands().await.unwrap();
+
+        // All builtin skills should be present as /commands
+        let expected_skills = ["commit", "do", "implement", "plan", "test"];
+        for skill_name in &expected_skills {
+            let cmd_name = format!("/{}", skill_name);
+            assert!(
+                commands.iter().any(|c| c.name == cmd_name),
+                "Skill '{}' should appear as {} command",
+                skill_name,
+                cmd_name
+            );
+        }
+
+        // Core /help should still be present
+        assert!(commands.iter().any(|c| c.name == "/help"));
+
+        tracing::info!(
+            "✓ All {} builtin skills appear as ACP slash commands",
+            expected_skills.len()
+        );
+    }
+
+    /// Test that skill commands have proper structure for ACP protocol
+    #[tokio::test]
+    async fn test_skill_commands_structure() {
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::DEBUG)
+            .try_init();
+
+        use swissarmyhammer_skills::SkillLibrary;
+
+        let mcp_client = Arc::new(MockMCPClientWithPrompts::new(vec![]));
+        let mut library = SkillLibrary::new();
+        library.load_defaults();
+        let registry = CommandRegistry::with_skills(mcp_client, library);
+
+        let commands = registry.get_available_commands().await.unwrap();
+
+        let plan_cmd = commands
+            .iter()
+            .find(|c| c.name == "/plan")
+            .expect("Should find /plan command");
+
+        // Description should be non-empty and match the skill description
+        assert!(
+            !plan_cmd.description.is_empty(),
+            "Skill command description should be non-empty"
+        );
+
+        // Should have input specification (all skills accept optional input)
+        assert!(
+            plan_cmd.input.is_some(),
+            "Skill commands should have input specification"
+        );
+
+        // Should have source=skill in meta
+        let meta = plan_cmd.meta.as_ref().expect("Should have meta");
+        assert_eq!(
+            meta.get("source").and_then(|v| v.as_str()),
+            Some("skill"),
+            "Skill commands should have source=skill in meta"
+        );
+
+        tracing::info!("✓ Skill commands have proper ACP structure");
+    }
+
+    /// Test that skills take precedence over MCP prompts with the same name
+    #[tokio::test]
+    async fn test_skills_override_mcp_prompts_with_same_name() {
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::DEBUG)
+            .try_init();
+
+        use swissarmyhammer_skills::SkillLibrary;
+
+        // Create MCP prompts that overlap with skill names
+        let prompts = vec![
+            Prompt {
+                name: "plan".to_string(),
+                title: None,
+                description: Some("MCP plan prompt (should be overridden)".to_string()),
+                arguments: None,
+                icons: None,
+                meta: None,
+            },
+            Prompt {
+                name: "deploy".to_string(),
+                title: None,
+                description: Some("Deploy to production (MCP-only)".to_string()),
+                arguments: None,
+                icons: None,
+                meta: None,
+            },
+        ];
+
+        let mcp_client = Arc::new(MockMCPClientWithPrompts::new(prompts));
+        let mut library = SkillLibrary::new();
+        library.load_defaults();
+        let registry = CommandRegistry::with_skills(mcp_client, library);
+
+        let commands = registry.get_available_commands().await.unwrap();
+
+        // /plan should exist exactly once (from skill, not MCP)
+        let plan_commands: Vec<_> = commands.iter().filter(|c| c.name == "/plan").collect();
+        assert_eq!(
+            plan_commands.len(),
+            1,
+            "Should have exactly one /plan command"
+        );
+        let meta = plan_commands[0].meta.as_ref().expect("Should have meta");
+        assert_eq!(
+            meta.get("source").and_then(|v| v.as_str()),
+            Some("skill"),
+            "Overlapping command should come from skill, not MCP"
+        );
+
+        // /deploy should still appear (MCP-only, no skill overlap)
+        assert!(
+            commands.iter().any(|c| c.name == "/deploy"),
+            "Non-overlapping MCP commands should still appear"
+        );
+
+        tracing::info!("✓ Skills correctly override duplicate MCP prompts");
     }
 }

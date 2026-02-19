@@ -2,7 +2,7 @@
 //! Content-based search tool using ripgrep library
 
 use crate::mcp::progress_notifications::generate_progress_token;
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use grep::regex::RegexMatcher;
@@ -113,6 +113,9 @@ struct GrepRequest {
 }
 
 crate::impl_empty_doctorable!(GrepFileTool);
+
+#[async_trait]
+impl AgentTool for GrepFileTool {}
 
 #[async_trait]
 impl McpTool for GrepFileTool {

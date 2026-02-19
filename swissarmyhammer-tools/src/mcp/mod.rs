@@ -121,5 +121,6 @@ pub use tool_registry::{
 };
 pub use types::{GetPromptRequest, ListPromptsRequest};
 pub use unified_server::{
-    start_mcp_server, McpServerHandle as UnifiedMcpServerHandle, McpServerInfo, McpServerMode,
+    start_mcp_server, start_mcp_server_with_options, McpServerHandle as UnifiedMcpServerHandle,
+    McpServerInfo, McpServerMode,
 };

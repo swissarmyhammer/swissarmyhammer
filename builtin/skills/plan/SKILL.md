@@ -1,7 +1,7 @@
 ---
 name: plan
 description: Turn specifications into detailed implementation plans with actionable tasks. Use when the user has a spec, feature request, or design document that needs implementation steps.
-allowed-tools: mcp__sah__flow mcp__sah__files_read mcp__sah__files_write mcp__sah__files_grep mcp__sah__treesitter_search mcp__sah__kanban
+allowed-tools: "*"
 metadata:
   author: swissarmyhammer
   version: "1.0"

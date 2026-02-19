@@ -6,7 +6,7 @@
 use rmcp::model::CallToolRequestParam;
 use swissarmyhammer_tools::mcp::{
     test_utils::create_test_client,
-    unified_server::{start_mcp_server, McpServerMode},
+    unified_server::{start_mcp_server_with_options, McpServerMode},
 };
 
 /// Test MCP server with RMCP client (Fast In-Process)
@@ -18,10 +18,11 @@ use swissarmyhammer_tools::mcp::{
 /// - Fast execution (<1s instead of 20-30s)
 #[tokio::test]
 async fn test_mcp_server_with_rmcp_client() {
-    // Start in-process HTTP MCP server
-    let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
-        .await
-        .expect("Failed to start in-process MCP server");
+    // Start in-process HTTP MCP server with agent_mode=true since we test agent tools
+    let mut server =
+        start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, true)
+            .await
+            .expect("Failed to start in-process MCP server");
 
     // Create RMCP client
     let client = create_test_client(server.url()).await;

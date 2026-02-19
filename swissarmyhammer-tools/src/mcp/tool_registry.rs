@@ -853,6 +853,26 @@ pub trait McpTool: Doctorable + Send + Sync {
     }
 }
 
+/// Marker trait for tools that provide base agent behavior.
+///
+/// Agent tools replicate capabilities that off-the-shelf agents (like Claude Code)
+/// already have natively — file editing, shell execution, grep, skills, etc.
+/// These tools are only registered when the MCP server runs in "agent mode"
+/// (i.e., powering a full agent like llama-agent), not when supplementing
+/// an existing agent that already has these capabilities.
+///
+/// Implement this trait on any `McpTool` that should only be available in
+/// agent mode. Domain-specific tools (kanban, flow, git, treesitter, etc.)
+/// should NOT implement this trait — they are always registered.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// impl AgentTool for ShellExecuteTool {}
+/// impl AgentTool for ReadFileTool {}
+/// ```
+pub trait AgentTool: McpTool {}
+
 /// Macro to implement Doctorable for tools that don't have health checks
 ///
 /// This provides a default implementation that returns no health checks.

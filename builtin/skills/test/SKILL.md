@@ -1,7 +1,7 @@
 ---
 name: test
 description: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality.
-allowed-tools: mcp__sah__shell_execute mcp__sah__files_read mcp__sah__files_grep mcp__sah__treesitter_search
+allowed-tools: "*"
 metadata:
   author: swissarmyhammer
   version: "1.0"

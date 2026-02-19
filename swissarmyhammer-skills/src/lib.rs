@@ -29,7 +29,7 @@ pub mod validation;
 // Re-export key types
 pub use context::SkillContext;
 pub use error::SkillError;
-pub use operations::{GetSkill, ListSkills};
+pub use operations::{ListSkills, SearchSkill, UseSkill};
 pub use parse::{parse_input, SkillOperation};
 pub use schema::generate_skill_mcp_schema;
 pub use skill::{Skill, SkillName, SkillResources, SkillSource};

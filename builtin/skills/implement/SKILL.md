@@ -1,7 +1,7 @@
 ---
 name: implement
 description: Implement a feature or fix directly from a description. Use when the user describes what they want built without a formal spec or plan.
-allowed-tools: mcp__sah__files_read mcp__sah__files_write mcp__sah__files_edit mcp__sah__files_grep mcp__sah__treesitter_search mcp__sah__shell_execute mcp__sah__kanban
+allowed-tools: "*"
 metadata:
   author: swissarmyhammer
   version: "1.0"

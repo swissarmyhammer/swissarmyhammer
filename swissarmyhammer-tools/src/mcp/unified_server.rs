@@ -415,6 +415,34 @@ pub async fn start_mcp_server(
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
+    start_mcp_server_with_options(mode, library, model_override, working_dir, false).await
+}
+
+/// Start unified MCP server with agent mode control
+///
+/// When `agent_mode` is true, the server registers agent tools (file editing,
+/// shell, grep, skills, etc.) that provide base agent behavior. When false,
+/// only domain-specific tools are registered — suitable for running alongside
+/// an existing agent like Claude Code that already has these capabilities.
+///
+/// # Arguments
+///
+/// * `mode` - The transport mode (stdio or HTTP)
+/// * `library` - Optional prompt library (creates new if None)
+/// * `model_override` - Optional model name to override all use case assignments
+/// * `working_dir` - Optional working directory (uses current_dir if None)
+/// * `agent_mode` - Whether to register agent tools (true for llama-agent, false for Claude Code)
+///
+/// # Returns
+///
+/// * `Result<McpServerHandle>` - Server handle with connection info
+pub async fn start_mcp_server_with_options(
+    mode: McpServerMode,
+    library: Option<PromptLibrary>,
+    model_override: Option<String>,
+    working_dir: Option<std::path::PathBuf>,
+    agent_mode: bool,
+) -> Result<McpServerHandle> {
     // Configure MCP logging to match sah serve behavior
     // NOTE: Skip logging configuration when called from CLI as main.rs already handles it
     // Only configure logging when used as library (e.g., in tests or embedded scenarios)
@@ -422,9 +450,11 @@ pub async fn start_mcp_server(
         configure_mcp_logging(None);
     }
     match mode {
-        McpServerMode::Stdio => start_stdio_server(library, model_override, working_dir).await,
+        McpServerMode::Stdio => {
+            start_stdio_server(library, model_override, working_dir, agent_mode).await
+        }
         McpServerMode::Http { port } => {
-            start_http_server(port, library, model_override, working_dir).await
+            start_http_server(port, library, model_override, working_dir, agent_mode).await
         }
     }
 }
@@ -466,6 +496,7 @@ async fn resolve_port(port: Option<u16>) -> Result<u16> {
 /// * `port` - Server port to set in tool context
 /// * `model_override` - Optional model name to override use case assignments
 /// * `working_dir` - Optional working directory (uses current_dir if None)
+/// * `agent_mode` - Whether to register agent tools
 ///
 /// # Returns
 /// * `Result<Arc<McpServer>>` - Initialized server with self-reference configured
@@ -474,11 +505,13 @@ async fn initialize_mcp_server(
     port: u16,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
+    agent_mode: bool,
 ) -> Result<Arc<McpServer>> {
     let library = library.unwrap_or_default();
     let work_dir = working_dir
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
-    let server = McpServer::new_with_work_dir(library, work_dir, model_override).await?;
+    let server =
+        McpServer::new_with_work_dir(library, work_dir, model_override, agent_mode).await?;
     server.initialize().await?;
     server.set_server_port(port).await;
 
@@ -637,6 +670,7 @@ async fn start_stdio_server(
     library: Option<PromptLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
+    agent_mode: bool,
 ) -> Result<McpServerHandle> {
     tracing::info!("Starting unified MCP server in stdio mode");
 
@@ -645,12 +679,14 @@ async fn start_stdio_server(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
     let temp_server =
-        McpServer::new_with_work_dir(library, work_dir, model_override.clone()).await?;
+        McpServer::new_with_work_dir(library, work_dir, model_override.clone(), agent_mode)
+            .await?;
     let temp_server_arc = Arc::new(temp_server);
 
     let (http_port, router, http_listener) = setup_http_server_for_stdio(temp_server_arc).await?;
 
-    let server_arc = initialize_mcp_server(None, http_port, model_override, working_dir).await?;
+    let server_arc =
+        initialize_mcp_server(None, http_port, model_override, working_dir, agent_mode).await?;
     tracing::debug!("Set MCP server self-reference in tool context (stdio)");
     tracing::info!(
         "Set MCP server port {} in tool context for workflows",
@@ -753,6 +789,7 @@ async fn start_http_server(
     library: Option<PromptLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
+    agent_mode: bool,
 ) -> Result<McpServerHandle> {
     tracing::debug!("start_http_server called with port: {}", Pretty(&port));
 
@@ -768,7 +805,8 @@ async fn start_http_server(
 
     tracing::debug!("Creating MCP server");
     let server_arc =
-        initialize_mcp_server(library, actual_port, model_override, working_dir).await?;
+        initialize_mcp_server(library, actual_port, model_override, working_dir, agent_mode)
+            .await?;
     tracing::debug!("MCP server initialized");
     tracing::debug!("Set MCP server port {} in tool context", actual_port);
     tracing::debug!("Set MCP server self-reference in tool context");
