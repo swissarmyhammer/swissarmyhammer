@@ -2,11 +2,19 @@
 
 This document contains the help content for the `swissarmyhammer` command-line program.
 
+## Installation
+
+```bash
+brew install swissarmyhammer/tap/swissarmyhammer
+```
+
 **Command Overview:**
 
 * [`swissarmyhammer`↴](#swissarmyhammer)
 * [`swissarmyhammer serve`↴](#swissarmyhammer-serve)
 * [`swissarmyhammer serve http`↴](#swissarmyhammer-serve-http)
+* [`swissarmyhammer init`↴](#swissarmyhammer-init)
+* [`swissarmyhammer deinit`↴](#swissarmyhammer-deinit)
 * [`swissarmyhammer doctor`↴](#swissarmyhammer-doctor)
 * [`swissarmyhammer prompt`↴](#swissarmyhammer-prompt)
 * [`swissarmyhammer flow`↴](#swissarmyhammer-flow)
@@ -58,6 +66,8 @@ Example usage:
 ###### **Subcommands:**
 
 * `serve` — Run as MCP server (default when invoked via stdio)
+* `init` — Initialize sah MCP server in Claude Code settings
+* `deinit` — Remove sah MCP server from Claude Code settings
 * `doctor` — Diagnose configuration and setup issues
 * `prompt` — Manage and test prompts
 * `flow` — Execute and manage workflows
@@ -130,6 +140,84 @@ Example:
 * `-H`, `--host <HOST>` — Host to bind to
 
   Default value: `127.0.0.1`
+
+
+
+## `swissarmyhammer init`
+
+
+Initialize SwissArmyHammer for use with Claude Code.
+
+This command:
+1. Registers sah as an MCP server in Claude Code settings
+2. Creates the .swissarmyhammer/ project directory (workflows/) and .prompts/
+
+The command is idempotent - safe to run multiple times.
+
+Targets:
+  project   Write to .mcp.json (default, shared with team via git)
+  local     Write to ~/.claude.json per-project config (personal, not committed)
+  user      Write to ~/.claude.json global config (all projects)
+
+Examples:
+  sah init              # Project-level setup (default)
+  sah init user         # Global setup for all projects
+  sah init local        # Personal setup, not committed to git
+
+
+**Usage:** `swissarmyhammer init [TARGET]`
+
+###### **Arguments:**
+
+* `<TARGET>` — Where to install the MCP server configuration
+
+  Default value: `project`
+
+  Possible values:
+  - `project`:
+    Project-level settings (.claude/settings.json)
+  - `local`:
+    Local project settings, not committed (.claude/settings.local.json)
+  - `user`:
+    User-level settings (~/.claude/settings.json)
+
+
+
+
+## `swissarmyhammer deinit`
+
+
+Remove SwissArmyHammer MCP server configuration from Claude Code settings.
+
+By default, only the MCP server entry is removed from the settings file.
+Use --remove-directory to also delete the .swissarmyhammer/ project directory.
+
+Examples:
+  sah deinit                     # Remove from project settings
+  sah deinit user                # Remove from user settings
+  sah deinit --remove-directory  # Also remove .swissarmyhammer/
+
+
+**Usage:** `swissarmyhammer deinit [OPTIONS] [TARGET]`
+
+###### **Arguments:**
+
+* `<TARGET>` — Where to remove the MCP server configuration from
+
+  Default value: `project`
+
+  Possible values:
+  - `project`:
+    Project-level settings (.claude/settings.json)
+  - `local`:
+    Local project settings, not committed (.claude/settings.local.json)
+  - `user`:
+    User-level settings (~/.claude/settings.json)
+
+
+###### **Options:**
+
+* `--remove-directory` — Also remove .swissarmyhammer/ project directory
 
 
 
@@ -476,8 +564,8 @@ sah validate || exit 1
 
 Prompts validated from:
 • Built-in prompts (embedded in binary)
-• User prompts (~/.swissarmyhammer/prompts/)
-• Project prompts (./.swissarmyhammer/prompts/)
+• User prompts (~/.prompts/)
+• Project prompts (./.prompts/)
 
 Workflows validated from:
 • Built-in workflows (embedded in binary)

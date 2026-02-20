@@ -52,9 +52,9 @@ pub type Result<T> = std::result::Result<T, SwissArmyHammerError>;
 pub enum PromptSource {
     /// Built-in prompts embedded in the binary
     Builtin,
-    /// User prompts from ~/.swissarmyhammer/prompts
+    /// User prompts from ~/.prompts
     User,
-    /// Local prompts from project .swissarmyhammer directories
+    /// Local prompts from project .prompts directory
     Local,
 }
 

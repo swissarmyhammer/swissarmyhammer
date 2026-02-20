@@ -6,7 +6,7 @@
 
 use avp_common::builtin::load_builtins;
 use avp_common::validator::{ValidatorLoader, ValidatorSource};
-use comfy_table::{presets::UTF8_FULL, Table};
+use swissarmyhammer_doctor::truncate_str;
 
 /// Maximum length for description in table display before truncation.
 const MAX_DESCRIPTION_LENGTH: usize = 50;
@@ -87,8 +87,7 @@ pub fn run_list(verbose: bool, debug: bool, global: bool, local: bool, json: boo
     }
 
     // Build and print the table - one row per RuleSet, rules as multiline cell
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    let mut table = swissarmyhammer_doctor::new_table();
 
     if verbose {
         table.set_header(vec![
@@ -161,13 +160,9 @@ fn source_label(source: &ValidatorSource) -> String {
     }
 }
 
-/// Truncate description to max length with ellipsis.
+/// Truncate description to max length with ellipsis (UTF-8 safe).
 fn truncate_description(desc: &str, max_len: usize) -> String {
-    if desc.len() <= max_len {
-        desc.to_string()
-    } else {
-        format!("{}...", &desc[..max_len - 3])
-    }
+    truncate_str(desc, max_len)
 }
 
 /// Print diagnostic information about validator loading.

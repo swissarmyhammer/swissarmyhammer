@@ -40,5 +40,5 @@ mod types;
 
 pub use display::{categorize_check, format_check_status, CheckResult, VerboseCheckResult};
 pub use runner::DoctorRunner;
-pub use table::print_checks_table;
+pub use table::{new_table, print_checks_table, short_name, truncate_str};
 pub use types::{Check, CheckStatus, ExitCode};

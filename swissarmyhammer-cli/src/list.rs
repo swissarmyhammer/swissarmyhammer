@@ -209,16 +209,8 @@ fn display_table_to_writer<W: Write>(
     if is_tty && !prompt_infos.is_empty() {
         writeln!(writer, "{}", "Legend:".bright_white())?;
         writeln!(writer, "  {} Built-in prompts", "●".green())?;
-        writeln!(
-            writer,
-            "  {} User prompts (~/.swissarmyhammer/prompts/)",
-            "●".blue()
-        )?;
-        writeln!(
-            writer,
-            "  {} Local prompts (./.swissarmyhammer/prompts/)",
-            "●".yellow()
-        )?;
+        writeln!(writer, "  {} User prompts (~/.prompts/)", "●".blue())?;
+        writeln!(writer, "  {} Local prompts (./.prompts/)", "●".yellow())?;
         writeln!(writer, "  {} Dynamic prompts", "●".magenta())?;
     }
 

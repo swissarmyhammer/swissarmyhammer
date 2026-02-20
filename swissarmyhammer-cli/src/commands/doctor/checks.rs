@@ -279,8 +279,8 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
 ///
 /// Verifies the existence and accessibility of:
 /// - Built-in prompts (embedded in binary)
-/// - User prompts directory (~/.swissarmyhammer/prompts)
-/// - Local prompts directory (./.swissarmyhammer/prompts)
+/// - User prompts directory (~/.prompts)
+/// - Local prompts directory (./.prompts)
 pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
     // Check builtin prompts (embedded in binary)
     checks.push(Check {
@@ -292,9 +292,7 @@ pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
 
     // Check user prompts directory
     if let Some(home) = dirs::home_dir() {
-        let user_prompts = home
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join("prompts");
+        let user_prompts = home.join(".prompts");
         if user_prompts.exists() {
             let count = count_markdown_files(&user_prompts);
             checks.push(Check {
@@ -317,7 +315,7 @@ pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
     }
 
     // Check local prompts directory
-    let local_prompts = PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("prompts");
+    let local_prompts = PathBuf::from(".prompts");
     if local_prompts.exists() {
         let count = count_markdown_files(&local_prompts);
         checks.push(Check {
@@ -348,16 +346,12 @@ pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
 pub fn check_yaml_parsing(checks: &mut Vec<Check>) -> Result<()> {
     let mut yaml_errors = Vec::new();
 
-    // Check all prompt directories
-    let mut dirs_to_check =
-        vec![PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("prompts")];
+    // Check all prompt directories (dot-directory paths)
+    let mut dirs_to_check = vec![PathBuf::from(".prompts")];
 
     // Add user directory if it exists
     if let Some(home) = dirs::home_dir() {
-        dirs_to_check.push(
-            home.join(SwissarmyhammerDirectory::dir_name())
-                .join("prompts"),
-        );
+        dirs_to_check.push(home.join(".prompts"));
     }
 
     for dir in dirs_to_check {

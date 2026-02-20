@@ -39,11 +39,10 @@ async fn run_validate_with_context(
             .await?;
 
     // Convert to display objects and output using comfy-table with colored status
-    use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+    use comfy_table::{Cell, Color};
     use swissarmyhammer::validation::ValidationLevel;
 
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    let mut table = swissarmyhammer_doctor::new_table();
 
     if cli_context.verbose {
         table.set_header(vec!["Status", "File", "Result", "Fix", "File Type"]);

@@ -13,20 +13,19 @@ fn test_home_directory_override_works() {
 
         let swissarmyhammer_dir = guard.swissarmyhammer_dir();
         assert!(swissarmyhammer_dir.exists());
-        assert!(swissarmyhammer_dir.join("prompts").exists());
+        assert!(guard.prompts_dir().exists());
         assert!(swissarmyhammer_dir.join("workflows").exists());
 
         // Create test files to verify the structure works
+        let prompts_dir = guard.prompts_dir();
         std::fs::write(
-            swissarmyhammer_dir.join("prompts").join("test-prompt.md"),
+            prompts_dir.join("test-prompt.md"),
             "# Test Prompt\nThis is a test prompt.",
         )
         .expect("Failed to create test prompt");
 
         std::fs::write(
-            swissarmyhammer_dir
-                .join("prompts")
-                .join("another-test.md.liquid"),
+            prompts_dir.join("another-test.md.liquid"),
             "# Another Test\nContent: {{ variable }}",
         )
         .expect("Failed to create another test prompt");
@@ -40,12 +39,10 @@ fn test_home_directory_override_works() {
         .expect("Failed to create test workflow");
 
         // Check that test files exist
-        let test_prompt = swissarmyhammer_dir.join("prompts").join("test-prompt.md");
+        let test_prompt = prompts_dir.join("test-prompt.md");
         assert!(test_prompt.exists());
 
-        let another_test = swissarmyhammer_dir
-            .join("prompts")
-            .join("another-test.md.liquid");
+        let another_test = prompts_dir.join("another-test.md.liquid");
         assert!(another_test.exists());
 
         let test_workflow = swissarmyhammer_dir
@@ -65,8 +62,8 @@ fn test_prompt_loading_with_test_home() {
 
     let guard = IsolatedTestEnvironment::new().expect("env");
 
-    // Create test prompt files
-    let prompts_dir = guard.swissarmyhammer_dir().join("prompts");
+    // Create test prompt files in .prompts/
+    let prompts_dir = guard.prompts_dir();
     std::fs::write(
         prompts_dir.join("test-prompt.md"),
         "# Test Prompt\nThis is a test prompt.",
@@ -98,8 +95,8 @@ fn test_prompt_resolver_with_test_home() {
 
     let guard = IsolatedTestEnvironment::new().expect("env");
 
-    // Create test prompt files
-    let prompts_dir = guard.swissarmyhammer_dir().join("prompts");
+    // Create test prompt files in .prompts/ (the new dot-directory path)
+    let prompts_dir = guard.prompts_dir();
     std::fs::write(
         prompts_dir.join("test-prompt.md"),
         "# Test Prompt\nThis is a test prompt.",
@@ -116,7 +113,7 @@ fn test_prompt_resolver_with_test_home() {
     let home = std::env::var("HOME").expect("HOME not set");
     println!("HOME is set to: {home}");
 
-    let test_prompts_dir = guard.swissarmyhammer_dir().join("prompts");
+    let test_prompts_dir = guard.prompts_dir();
     println!("Test prompts dir: {test_prompts_dir:?}");
     println!("Test prompts dir exists: {}", test_prompts_dir.exists());
 

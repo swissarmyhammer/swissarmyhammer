@@ -1,11 +1,11 @@
 //! Install and uninstall AVP hooks in Claude Code settings.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::{json, Map, Value};
 
-// Re-export InstallTarget from the self-contained cli module.
+/// Re-export InstallTarget from the self-contained cli module.
 pub use crate::cli::InstallTarget;
 
 /// Get the settings file path for the given target.
@@ -169,7 +169,7 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     fs::write(&path, content).map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
 
-    println!("AVP hooks installed to {}", path.display());
+    tracing::info!("AVP hooks installed to {}", path.display());
 
     // For project installs, also create the .avp directory structure
     if matches!(target, InstallTarget::Project | InstallTarget::Local) {
@@ -179,7 +179,7 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
     Ok(())
 }
 
-/// Create the .avp project directory with README and sample validators.
+/// Create the .avp project directory with README.
 fn create_avp_project_structure() -> Result<(), String> {
     let avp_dir = PathBuf::from(".avp");
     let validators_dir = avp_dir.join("validators");
@@ -193,32 +193,9 @@ fn create_avp_project_structure() -> Result<(), String> {
     if !readme_path.exists() {
         fs::write(&readme_path, AVP_README)
             .map_err(|e| format!("Failed to write .avp/README.md: {}", e))?;
-        println!("Created {}", readme_path.display());
+        tracing::info!("Created {}", readme_path.display());
     }
 
-    // Create sample validators
-    create_sample_validator(
-        &validators_dir,
-        "file-changes.md",
-        SAMPLE_FILE_CHANGES_VALIDATOR,
-    )?;
-    create_sample_validator(
-        &validators_dir,
-        "session-summary.md",
-        SAMPLE_SESSION_SUMMARY_VALIDATOR,
-    )?;
-
-    Ok(())
-}
-
-/// Create a sample validator file if it doesn't exist.
-fn create_sample_validator(dir: &Path, filename: &str, content: &str) -> Result<(), String> {
-    let path = dir.join(filename);
-    if !path.exists() {
-        fs::write(&path, content)
-            .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
-        println!("Created {}", path.display());
-    }
     Ok(())
 }
 
@@ -235,8 +212,6 @@ files with YAML frontmatter that define validation rules.
 ├── README.md           # This file
 ├── avp.log             # Hook event log (auto-generated, gitignored)
 └── validators/         # Your validator files
-    ├── file-changes.md
-    └── session-summary.md
 ```
 
 ## Validator Format
@@ -277,50 +252,7 @@ Describe what the validator should check and how it should respond.
 
 ## More Information
 
-See the sample validators in this directory for examples.
-"#;
-
-/// Sample validator for file changes (PostToolUse on Write/Edit).
-const SAMPLE_FILE_CHANGES_VALIDATOR: &str = r#"---
-name: file-changes
-description: Review file modifications for common issues
-severity: warn
-trigger: PostToolUse
-match:
-  tools: [Write, Edit]
----
-
-# File Changes Validator
-
-Review the file changes made by this tool call.
-
-Check for:
-1. Syntax errors or obvious bugs
-2. Removed code that might still be needed
-3. Debug statements or console.log left in
-4. TODO comments that should be addressed
-
-If you find issues, explain what you found. Otherwise, confirm the changes look good.
-"#;
-
-/// Sample validator for session summary (Stop hook).
-const SAMPLE_SESSION_SUMMARY_VALIDATOR: &str = r#"---
-name: session-summary
-description: Summarize what was accomplished in this response
-severity: info
-trigger: Stop
----
-
-# Session Summary Validator
-
-Briefly summarize what Claude accomplished in this response.
-
-Note:
-- What files were modified
-- What the main changes were
-- Any pending work mentioned
-
-This is informational only - it helps maintain context across sessions.
+See the AVP documentation for examples.
 "#;
 
 /// Uninstall AVP hooks from the specified target.
@@ -328,7 +260,7 @@ pub fn uninstall(target: InstallTarget) -> Result<(), String> {
     let path = settings_path(target);
 
     if !path.exists() {
-        println!(
+        tracing::info!(
             "No settings file at {}, nothing to uninstall",
             path.display()
         );
@@ -353,13 +285,13 @@ pub fn uninstall(target: InstallTarget) -> Result<(), String> {
         if settings.as_object().map(|o| o.is_empty()).unwrap_or(false) {
             fs::remove_file(&path)
                 .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
-            println!("AVP hooks uninstalled, removed empty {}", path.display());
+            tracing::info!("AVP hooks uninstalled, removed empty {}", path.display());
         } else {
             let content = serde_json::to_string_pretty(&settings)
                 .map_err(|e| format!("Failed to serialize settings: {}", e))?;
             fs::write(&path, content)
                 .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
-            println!("AVP hooks uninstalled from {}", path.display());
+            tracing::info!("AVP hooks uninstalled from {}", path.display());
         }
     }
 
@@ -371,7 +303,7 @@ pub fn uninstall(target: InstallTarget) -> Result<(), String> {
     if avp_dir.exists() {
         fs::remove_dir_all(&avp_dir)
             .map_err(|e| format!("Failed to remove {}: {}", avp_dir.display(), e))?;
-        println!("Removed {}", avp_dir.display());
+        tracing::info!("Removed {}", avp_dir.display());
     }
 
     Ok(())

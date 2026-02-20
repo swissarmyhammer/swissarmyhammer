@@ -257,9 +257,10 @@ fn create_isolated_test_home() -> (TempDir, PathBuf) {
     // Create mock SwissArmyHammer directory structure using centralized directory management
     let sah_dir = crate::directory::SwissarmyhammerDirectory::from_custom_root(home_path.clone())
         .expect("Failed to create .swissarmyhammer directory");
-    sah_dir
-        .ensure_subdir("prompts")
-        .expect("Failed to create prompts directory");
+    // Create .prompts/ directory (the dot-directory path used by PromptResolver)
+    let dot_prompts_dir = home_path.join(".prompts");
+    std::fs::create_dir_all(&dot_prompts_dir).expect("Failed to create .prompts directory");
+
     sah_dir
         .ensure_subdir("workflows")
         .expect("Failed to create workflows directory");
@@ -438,6 +439,11 @@ impl IsolatedTestEnvironment {
         self._temp_dir.path().to_path_buf()
     }
 
+    /// Get the path to the .prompts directory in the isolated home
+    pub fn prompts_dir(&self) -> PathBuf {
+        self._home_guard.home_path().join(".prompts")
+    }
+
     /// Get the path to the issues directory in the isolated home
     pub fn issues_dir(&self) -> PathBuf {
         self.swissarmyhammer_dir().join("issues")
@@ -501,8 +507,10 @@ mod tests {
         assert!(sah_dir.is_dir());
 
         // Verify expected subdirectories exist
-        assert!(sah_dir.join("prompts").exists());
         assert!(sah_dir.join("workflows").exists());
+
+        // Verify .prompts/ directory was created (sibling to .swissarmyhammer/)
+        assert!(isolated_home.join(".prompts").exists());
 
         // Verify HOME is set to our temporary directory
         let current_home = std::env::var("HOME").expect("HOME should be set");

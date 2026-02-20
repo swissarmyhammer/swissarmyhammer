@@ -2,6 +2,12 @@
 
 This document contains the help content for the `avp` command-line program.
 
+## Installation
+
+```bash
+brew install swissarmyhammer/tap/avp-cli
+```
+
 **Command Overview:**
 
 * [`avp`↴](#avp)
@@ -16,6 +22,7 @@ This document contains the help content for the `avp` command-line program.
 * [`avp info`↴](#avp-info)
 * [`avp install`↴](#avp-install)
 * [`avp uninstall`↴](#avp-uninstall)
+* [`avp edit`↴](#avp-edit)
 * [`avp new`↴](#avp-new)
 * [`avp publish`↴](#avp-publish)
 * [`avp unpublish`↴](#avp-unpublish)
@@ -43,6 +50,7 @@ Claude Code hook processor that validates tool calls, file changes, and more.
 * `info` — Show detailed information about a package
 * `install` — Install a package from the registry
 * `uninstall` — Remove an installed package
+* `edit` — Edit an existing RuleSet in $EDITOR
 * `new` — Create a new RuleSet from template
 * `publish` — Publish a package to the registry
 * `unpublish` — Remove a published package version from the registry
@@ -215,6 +223,23 @@ Remove an installed package
 
 
 
+## `avp edit`
+
+Edit an existing RuleSet in $EDITOR
+
+**Usage:** `avp edit [OPTIONS] <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — RuleSet name (kebab-case)
+
+###### **Options:**
+
+* `--local` [alias: `project`] — Edit in project (.avp/validators/) [default]
+* `--global` [alias: `user`] — Edit in user-level directory (~/.avp/validators/)
+
+
+
 ## `avp new`
 
 Create a new RuleSet from template
@@ -287,9 +312,3 @@ Update installed packages to latest versions
 
 
 
-<hr/>
-
-<small><i>
-    This document was generated automatically by
-    <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
-</i></small>

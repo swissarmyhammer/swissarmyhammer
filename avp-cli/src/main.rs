@@ -28,12 +28,17 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
+
+mod banner;
+
+/// Exit code returned when a hook blocks the action.
+const BLOCKING_ERROR_EXIT_CODE: i32 = 2;
 
 use avp::install;
 use avp::registry::RegistryError;
-use avp::{auth, doctor, info, list, new, outdated, package, publish, search};
+use avp::{auth, doctor, edit, info, list, new, outdated, package, publish, search};
 use avp::{Cli, Commands};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
@@ -52,6 +57,19 @@ fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
 
 #[tokio::main]
 async fn main() {
+    // Show branded banner for top-level help (no subcommand or --help/-h).
+    {
+        let args: Vec<String> = std::env::args().collect();
+        let show = match args.len() {
+            1 => true,
+            2 => args[1] == "--help" || args[1] == "-h",
+            _ => false,
+        };
+        if show {
+            banner::print_banner();
+        }
+    }
+
     let cli = Cli::parse();
 
     // Initialize tracing with appropriate level
@@ -67,117 +85,95 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    let exit_code = match cli.command {
-        Some(Commands::Init { target }) => match install::install(target) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                1
-            }
-        },
-        Some(Commands::Deinit { target }) => match install::uninstall(target) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                1
-            }
-        },
-        Some(Commands::Doctor { verbose }) => doctor::run_doctor(verbose),
-        Some(Commands::List {
+    let exit_code = dispatch_command(cli).await;
+    std::process::exit(exit_code);
+}
+
+/// Dispatch a parsed CLI to the appropriate command handler.
+async fn dispatch_command(cli: Cli) -> i32 {
+    let debug = cli.debug;
+    match cli.command {
+        Some(cmd) => dispatch_subcommand(cmd, debug).await,
+        None => run_hook_or_error(&cli).await,
+    }
+}
+
+/// Handle an explicit subcommand.
+async fn dispatch_subcommand(cmd: Commands, debug: bool) -> i32 {
+    match cmd {
+        Commands::Init { target } => result_to_exit(install::install(target)),
+        Commands::Deinit { target } => result_to_exit(install::uninstall(target)),
+        Commands::Doctor { verbose } => doctor::run_doctor(verbose),
+        Commands::List {
             verbose,
             global,
             local,
             json,
-        }) => list::run_list(verbose, cli.debug, global, local, json),
-        Some(Commands::Login) => handle_registry_result(auth::login().await),
-        Some(Commands::Logout) => handle_registry_result(auth::logout().await),
-        Some(Commands::Whoami) => handle_registry_result(auth::whoami().await),
-        Some(Commands::Search { query, tag, json }) => {
+        } => list::run_list(verbose, debug, global, local, json),
+        Commands::Login => handle_registry_result(auth::login().await),
+        Commands::Logout => handle_registry_result(auth::logout().await),
+        Commands::Whoami => handle_registry_result(auth::whoami().await),
+        Commands::Search { query, tag, json } => {
             handle_registry_result(search::run_search(&query, tag.as_deref(), json).await)
         }
-        Some(Commands::Info { name }) => handle_registry_result(info::run_info(&name).await),
-        Some(Commands::Install {
+        Commands::Info { name } => handle_registry_result(info::run_info(&name).await),
+        Commands::Install {
             package, global, ..
-        }) => handle_registry_result(package::run_install(&package, global).await),
-        Some(Commands::Uninstall { name, global, .. }) => {
+        } => handle_registry_result(package::run_install(&package, global).await),
+        Commands::Uninstall { name, global, .. } => {
             handle_registry_result(package::run_uninstall(&name, global).await)
         }
-        Some(Commands::New { name, global, .. }) => {
-            handle_registry_result(new::run_new(&name, global))
+        Commands::Edit { name, global, .. } => {
+            handle_registry_result(edit::run_edit(&name, global))
         }
-        Some(Commands::Publish { path, dry_run }) => {
+        Commands::New { name, global, .. } => handle_registry_result(new::run_new(&name, global)),
+        Commands::Publish { path, dry_run } => {
             handle_registry_result(publish::run_publish(&path, dry_run).await)
         }
-        Some(Commands::Unpublish { name_version }) => {
+        Commands::Unpublish { name_version } => {
             handle_registry_result(publish::run_unpublish(&name_version).await)
         }
-        Some(Commands::Outdated) => handle_registry_result(outdated::run_outdated().await),
-        Some(Commands::Update { name, global, .. }) => {
+        Commands::Outdated => handle_registry_result(outdated::run_outdated().await),
+        Commands::Update { name, global, .. } => {
             handle_registry_result(outdated::run_update(name.as_deref(), global).await)
         }
-        None => {
-            // Default behavior: process hook from stdin
-            match run_hook_processor(&cli).await {
-                Ok(code) => code,
-                Err(e) => {
-                    // Output error as JSON for consistency
-                    let error_output = serde_json::json!({
-                        "continue": false,
-                        "stopReason": e.to_string()
-                    });
-                    tracing::error!("{}", e);
-                    let _ = io::stdout().write_all(error_output.to_string().as_bytes());
-                    2 // Blocking error
-                }
-            }
-        }
-    };
+    }
+}
 
-    std::process::exit(exit_code);
+/// Convert a `Result<(), E: Display>` to an exit code.
+fn result_to_exit<E: std::fmt::Display>(result: Result<(), E>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            1
+        }
+    }
+}
+
+/// Run the hook processor or return an error code.
+async fn run_hook_or_error(cli: &Cli) -> i32 {
+    match run_hook_processor(cli).await {
+        Ok(code) => code,
+        Err(e) => {
+            let error_output = serde_json::json!({
+                "continue": false,
+                "stopReason": e.to_string()
+            });
+            tracing::error!("{}", e);
+            // Best-effort: write error JSON to stdout for the hook caller.
+            let _ = io::stdout().write_all(error_output.to_string().as_bytes());
+            BLOCKING_ERROR_EXIT_CODE
+        }
+    }
 }
 
 async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
     // Check if stdin is a terminal (no piped input)
     if io::stdin().is_terminal() {
-        // Show help when run interactively without subcommand
-        println!("AVP - Agent Validator Protocol");
+        // Show clap-generated help when run interactively without subcommand
+        Cli::command().print_help().ok();
         println!();
-        println!("Usage:");
-        println!("  avp                           Process hook from stdin (pipe JSON)");
-        println!("  avp init [project|local|user] Install hooks (default: project)");
-        println!("  avp deinit [project|local|user] Remove hooks and .avp dir (default: project)");
-        println!("  avp list [-v]                 List all available validators");
-        println!("  avp doctor [-v]               Diagnose AVP setup");
-        println!();
-        println!("Authentication:");
-        println!("  avp login                     Authenticate with AVP registry");
-        println!("  avp logout                    Log out from AVP registry");
-        println!("  avp whoami                    Show current authenticated user");
-        println!();
-        println!("Package Management:");
-        println!("  avp search <query>            Search the registry for packages");
-        println!("  avp info <name>               Show detailed package information");
-        println!("  avp install <name>[@version]  Install a package from the registry");
-        println!("  avp uninstall <name>          Remove an installed package");
-        println!("  avp new <name> [--global]     Create a new RuleSet from template");
-        println!("  avp publish [path] [--dry-run] Publish a package (default: current dir)");
-        println!("  avp unpublish <name>@<ver>    Remove a published version");
-        println!("  avp outdated                  Check for available updates");
-        println!("  avp update [name]             Update installed packages");
-        println!();
-        println!("Examples:");
-        println!("  avp init                      Install to .claude/settings.json");
-        println!("  avp init user                 Install to ~/.claude/settings.json");
-        println!("  avp list                      Show all validators");
-        println!("  avp list -v                   Show validators with descriptions");
-        println!("  avp list --json               Output validators as JSON");
-        println!("  avp login                     Log in to registry");
-        println!("  avp search security           Search for security validators");
-        println!("  avp install no-secrets        Install a package");
-        println!("  avp new my-validator          Create a new RuleSet");
-        println!("  echo '{{...}}' | avp           Process a hook event");
-        println!();
-        println!("Run 'avp --help' for more information.");
         return Ok(0);
     }
 
@@ -534,6 +530,65 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parsing_edit() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset"]);
+        match cli.command {
+            Some(Commands::Edit {
+                name,
+                global,
+                local,
+            }) => {
+                assert_eq!(name, "my-ruleset");
+                assert!(!global);
+                assert!(!local);
+            }
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit_local() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset", "--local"]);
+        match cli.command {
+            Some(Commands::Edit { local, global, .. }) => {
+                assert!(local);
+                assert!(!global);
+            }
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit_project_alias() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset", "--project"]);
+        match cli.command {
+            Some(Commands::Edit { local, .. }) => assert!(local),
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit_global() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset", "--global"]);
+        match cli.command {
+            Some(Commands::Edit { name, global, .. }) => {
+                assert_eq!(name, "my-ruleset");
+                assert!(global);
+            }
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_edit_user_alias() {
+        let cli = Cli::parse_from(["avp", "edit", "my-ruleset", "--user"]);
+        match cli.command {
+            Some(Commands::Edit { global, .. }) => assert!(global),
+            _ => panic!("Expected Edit command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parsing_new() {
         let cli = Cli::parse_from(["avp", "new", "my-validator"]);
         match cli.command {
@@ -682,5 +737,22 @@ mod tests {
             Some(Commands::Update { global, .. }) => assert!(global),
             _ => panic!("Expected Update command"),
         }
+    }
+
+    #[test]
+    fn test_blocking_error_exit_code_is_two() {
+        assert_eq!(BLOCKING_ERROR_EXIT_CODE, 2);
+    }
+
+    #[test]
+    fn test_result_to_exit_ok() {
+        let result: Result<(), String> = Ok(());
+        assert_eq!(result_to_exit(result), 0);
+    }
+
+    #[test]
+    fn test_result_to_exit_err() {
+        let result: Result<(), String> = Err("something failed".to_string());
+        assert_eq!(result_to_exit(result), 1);
     }
 }

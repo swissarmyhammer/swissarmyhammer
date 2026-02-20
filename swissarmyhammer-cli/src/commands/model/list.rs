@@ -3,7 +3,7 @@
 use crate::cli::OutputFormat;
 use crate::context::CliContext;
 use anyhow::Result;
-use comfy_table::{presets::UTF8_FULL, ContentArrangement, Table};
+use comfy_table::Table;
 use swissarmyhammer_config::model::{ModelConfigSource, ModelManager};
 
 /// Execute the model list command - shows all available models
@@ -161,10 +161,7 @@ fn create_table<'a, T, F>(items: &'a [T], headers: Vec<&str>, row_mapper: F) -> 
 where
     F: Fn(&'a T) -> Vec<&'a str>,
 {
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .set_content_arrangement(ContentArrangement::Dynamic);
+    let mut table = swissarmyhammer_doctor::new_table();
     table.set_header(headers);
 
     add_table_rows(&mut table, items, row_mapper);
@@ -302,10 +299,7 @@ fn build_dynamic_table(
     let array = extract_json_array(items)?;
     let first_obj = extract_first_object(array)?;
 
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .set_content_arrangement(ContentArrangement::Dynamic);
+    let mut table = swissarmyhammer_doctor::new_table();
 
     add_table_headers(&mut table, first_obj);
     add_json_rows(&mut table, array)?;

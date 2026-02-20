@@ -111,7 +111,7 @@ impl RegistryClient {
         offset: Option<usize>,
     ) -> Result<SearchResponse, RegistryError> {
         let mut url = format!(
-            "{}/api/packages?q={}",
+            "{}/api/packages?q={}&type=validator",
             self.registry_url,
             urlencoding::encode(query)
         );

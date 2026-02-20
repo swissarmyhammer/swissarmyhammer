@@ -149,6 +149,7 @@ fn render_rule_prompt(
     rule_description: &str,
     rule_severity: &str,
     rule_body: &str,
+    hook_context: Option<&serde_json::Value>,
 ) -> String {
     use swissarmyhammer_config::TemplateContext;
 
@@ -167,15 +168,33 @@ fn render_rule_prompt(
         );
         ctx.set("rule_body".to_string(), rule_body.to_string().into());
 
+        if let Some(hc) = hook_context {
+            ctx.set(
+                "hook_context".to_string(),
+                serde_json::to_string_pretty(hc)
+                    .unwrap_or_else(|_| hc.to_string())
+                    .into(),
+            );
+        }
+
         if let Ok(rendered) = prompt_library.render(RULE_PROMPT_NAME, &ctx) {
             return rendered;
         }
     }
 
     // Fallback if template is unavailable
+    let context_section = hook_context
+        .map(|hc| {
+            format!(
+                "\n\n## Hook Context\n\n```json\n{}\n```",
+                serde_json::to_string_pretty(hc).unwrap_or_else(|_| hc.to_string())
+            )
+        })
+        .unwrap_or_default();
+
     format!(
-        "# Rule: {}\n\n**Description**: {}\n**Severity**: {}\n\n{}",
-        rule_name, rule_description, rule_severity, rule_body
+        "# Rule: {}\n\n**Description**: {}\n**Severity**: {}\n\n{}{}",
+        rule_name, rule_description, rule_severity, rule_body, context_section
     )
 }
 
@@ -359,9 +378,12 @@ pub fn parse_validator_response(response: &str, stop_reason: &StopReason) -> Val
         return result;
     }
 
-    tracing::warn!("Failed to parse validator response as JSON: {:?}", response);
-    ValidatorResult::fail(format!(
-        "Validator returned invalid JSON response: {}",
+    tracing::warn!(
+        "Validator returned unparseable response, passing with warning: {:?}",
+        response
+    );
+    ValidatorResult::pass(format!(
+        "Validator returned unparseable response (fail-open): {}",
         response
     ))
 }
@@ -787,6 +809,11 @@ pub struct RulePromptContext<'a, P: PartialLoader + Clone + 'static = HashMapPar
     pub ruleset: &'a RuleSet,
     /// Optional partial loader for template includes.
     pub partials: Option<&'a P>,
+    /// Optional hook context to include in the rule prompt.
+    ///
+    /// When provided, this JSON value is rendered into the rule prompt so the
+    /// LLM can see what is being validated without relying on session history.
+    pub hook_context: Option<&'a serde_json::Value>,
 }
 
 impl<'a> RulePromptContext<'a, HashMapPartialLoader> {
@@ -796,6 +823,7 @@ impl<'a> RulePromptContext<'a, HashMapPartialLoader> {
             rule,
             ruleset,
             partials: None,
+            hook_context: None,
         }
     }
 }
@@ -807,6 +835,7 @@ impl<'a, P: PartialLoader + Clone + 'static> RulePromptContext<'a, P> {
             rule,
             ruleset,
             partials,
+            hook_context: None,
         }
     }
 
@@ -829,6 +858,7 @@ impl<'a, P: PartialLoader + Clone + 'static> RulePromptContext<'a, P> {
             &self.rule.description,
             &severity.to_string(),
             &rendered_body,
+            self.hook_context,
         )
     }
 }
@@ -958,11 +988,37 @@ Here's my analysis:
     }
 
     #[test]
-    fn test_parse_validator_response_invalid_json() {
+    fn test_parse_validator_response_unparseable_fails_open() {
+        // Unparseable responses should fail-open (pass with warning) to avoid
+        // blocking the user's workflow when the validator LLM is confused.
         let response = "This is not JSON at all";
         let result = parse_validator_response(response, &test_stop_reason());
-        assert!(!result.passed());
-        assert!(result.message().contains("invalid JSON"));
+        assert!(
+            result.passed(),
+            "Unparseable response should fail-open (pass)"
+        );
+        assert!(
+            result.message().contains("unparseable"),
+            "Message should indicate unparseable response: {}",
+            result.message()
+        );
+    }
+
+    #[test]
+    fn test_parse_validator_response_llm_confusion_fails_open() {
+        // When the LLM returns a conversational response instead of JSON,
+        // it should fail-open rather than blocking.
+        let response = "I understand the safe-commands rule. Let me check the command...";
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(
+            result.passed(),
+            "Confused LLM response should fail-open (pass)"
+        );
+        assert!(
+            result.message().contains("fail-open"),
+            "Message should indicate fail-open: {}",
+            result.message()
+        );
     }
 
     #[test]
@@ -1351,6 +1407,115 @@ Some text after
         assert!(!is_rate_limit_error("connection refused"));
         assert!(!is_rate_limit_error("authentication error"));
         assert!(!is_rate_limit_error(""));
+    }
+
+    // =========================================================================
+    // RulePromptContext hook_context Tests
+    // =========================================================================
+
+    #[test]
+    fn test_rule_prompt_contains_hook_context() {
+        use crate::validator::{RuleSetManifest, ValidatorSource};
+
+        let ruleset = RuleSet {
+            manifest: RuleSetManifest {
+                name: "test-ruleset".to_string(),
+                description: "Test RuleSet".to_string(),
+                version: "1.0.0".to_string(),
+                trigger: HookType::PreToolUse,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: 30,
+                once: false,
+            },
+            rules: vec![],
+            source: ValidatorSource::Builtin,
+            base_path: PathBuf::from("/test"),
+        };
+
+        let rule = crate::validator::Rule {
+            name: "test-rule".to_string(),
+            description: "A test rule".to_string(),
+            body: "Check for issues.".to_string(),
+            severity: None,
+            timeout: None,
+        };
+
+        let hook_context = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": "rm -rf /" }
+        });
+
+        let partials: Option<&HashMapPartialLoader> = None;
+        let ctx = RulePromptContext {
+            rule: &rule,
+            ruleset: &ruleset,
+            partials,
+            hook_context: Some(&hook_context),
+        };
+        let rendered = ctx.render();
+
+        assert!(
+            rendered.contains("tool_name"),
+            "Rendered rule prompt should contain hook context tool_name: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("rm -rf"),
+            "Rendered rule prompt should contain the command from hook context: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn test_rule_prompt_renders_hook_context_set_after_construction() {
+        // Rule prompts should include hook context in rendered output even
+        // when hook_context is set after initial construction with partials.
+        use crate::validator::{RuleSetManifest, ValidatorSource};
+
+        let ruleset = RuleSet {
+            manifest: RuleSetManifest {
+                name: "test-ruleset".to_string(),
+                description: "Test RuleSet".to_string(),
+                version: "1.0.0".to_string(),
+                trigger: HookType::PreToolUse,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: 30,
+                once: false,
+            },
+            rules: vec![],
+            source: ValidatorSource::Builtin,
+            base_path: PathBuf::from("/test"),
+        };
+
+        let rule = crate::validator::Rule {
+            name: "safe-commands".to_string(),
+            description: "Check command safety".to_string(),
+            body: "Validate the command is safe.".to_string(),
+            severity: None,
+            timeout: None,
+        };
+
+        let partials = HashMapPartialLoader::empty();
+        let hook_context = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": "cargo build" }
+        });
+
+        let mut ctx = RulePromptContext::with_partials(&rule, &ruleset, Some(&partials));
+        ctx.hook_context = Some(&hook_context);
+        let rendered = ctx.render();
+
+        assert!(
+            rendered.contains("cargo build"),
+            "Rendered prompt should contain the command from hook_context: {}",
+            rendered
+        );
     }
 
     // =========================================================================

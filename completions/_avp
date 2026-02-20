@@ -145,6 +145,19 @@ _arguments "${_arguments_options[@]}" : \
 ':name -- Package name:_default' \
 && ret=0
 ;;
+(edit)
+_arguments "${_arguments_options[@]}" : \
+'--local[Edit in project (.avp/validators/) \[default\]]' \
+'--project[Edit in project (.avp/validators/) \[default\]]' \
+'--global[Edit in user-level directory (~/.avp/validators/)]' \
+'--user[Edit in user-level directory (~/.avp/validators/)]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name -- RuleSet name (kebab-case):_default' \
+&& ret=0
+;;
 (new)
 _arguments "${_arguments_options[@]}" : \
 '--local[Create in project (.avp/validators/) \[default\]]' \
@@ -254,6 +267,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(edit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (new)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -301,6 +318,7 @@ _avp_commands() {
 'info:Show detailed information about a package' \
 'install:Install a package from the registry' \
 'uninstall:Remove an installed package' \
+'edit:Edit an existing RuleSet in \$EDITOR' \
 'new:Create a new RuleSet from template' \
 'publish:Publish a package to the registry' \
 'unpublish:Remove a published package version from the registry' \
@@ -320,6 +338,11 @@ _avp__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'avp doctor commands' commands "$@"
 }
+(( $+functions[_avp__edit_commands] )) ||
+_avp__edit_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp edit commands' commands "$@"
+}
 (( $+functions[_avp__help_commands] )) ||
 _avp__help_commands() {
     local commands; commands=(
@@ -334,6 +357,7 @@ _avp__help_commands() {
 'info:Show detailed information about a package' \
 'install:Install a package from the registry' \
 'uninstall:Remove an installed package' \
+'edit:Edit an existing RuleSet in \$EDITOR' \
 'new:Create a new RuleSet from template' \
 'publish:Publish a package to the registry' \
 'unpublish:Remove a published package version from the registry' \
@@ -352,6 +376,11 @@ _avp__help__deinit_commands() {
 _avp__help__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'avp help doctor commands' commands "$@"
+}
+(( $+functions[_avp__help__edit_commands] )) ||
+_avp__help__edit_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp help edit commands' commands "$@"
 }
 (( $+functions[_avp__help__help_commands] )) ||
 _avp__help__help_commands() {

@@ -139,9 +139,8 @@ fn test_workflow_with_var_variables() {
     let workflow_path = workflow_dir.join("test-template.md");
     fs::write(&workflow_path, create_test_workflow_with_templates()).unwrap();
 
-    // Create test prompt that the workflow uses
-    let prompt_dir = env.swissarmyhammer_dir().join("prompts");
-    fs::create_dir_all(&prompt_dir).unwrap();
+    // Create test prompt that the workflow uses (in .prompts/ dot-directory)
+    let prompt_dir = env.prompts_dir();
     let prompt_path = prompt_dir.join("test-prompt.md");
     fs::write(&prompt_path, create_test_prompt()).unwrap();
 
@@ -292,9 +291,8 @@ stateDiagram-v2
 fn test_prompt_test_with_empty_var_value() {
     let env = IsolatedTestEnvironment::new().unwrap();
 
-    // Create prompt directory
-    let prompt_dir = env.swissarmyhammer_dir().join("prompts");
-    fs::create_dir_all(&prompt_dir).unwrap();
+    // Create test prompt in .prompts/ dot-directory
+    let prompt_dir = env.prompts_dir();
 
     // Create test prompt
     let prompt_path = prompt_dir.join("empty-test.md");
@@ -337,9 +335,8 @@ Version: {{ version | default: "1.0" }}
 fn test_prompt_test_with_var_overriding_arg() {
     let env = IsolatedTestEnvironment::new().unwrap();
 
-    // Create prompt directory
-    let prompt_dir = env.swissarmyhammer_dir().join("prompts");
-    fs::create_dir_all(&prompt_dir).unwrap();
+    // Create test prompt in .prompts/ dot-directory
+    let prompt_dir = env.prompts_dir();
 
     // Create test prompt
     let prompt_path = prompt_dir.join("override-test.md");
@@ -504,8 +501,7 @@ async fn test_workflow_with_complex_liquid_templates() -> Result<()> {
     let workflow_dir = env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
-    let prompt_dir = env.swissarmyhammer_dir().join("prompts");
-    fs::create_dir_all(&prompt_dir)?;
+    let prompt_dir = env.prompts_dir();
 
     // Create a prompt that uses template variables
     let prompt_path = prompt_dir.join("template-prompt.md");

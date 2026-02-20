@@ -1110,10 +1110,10 @@ impl DefaultParameterResolver {
                             }
                         } else {
                             // Return appropriate error based on whether parameter has a condition
-                            if param.condition.is_some() {
+                            if let Some(cond) = &param.condition {
                                 return Err(ParameterError::ConditionalParameterMissing {
                                     parameter: param.name.clone(),
-                                    condition: param.condition.as_ref().unwrap().expression.clone(),
+                                    condition: cond.expression.clone(),
                                 });
                             } else {
                                 return Err(ParameterError::MissingRequired {
@@ -1140,10 +1140,10 @@ impl DefaultParameterResolver {
         for param in parameters {
             if self.is_parameter_required(param, &resolved)? && !resolved.contains_key(&param.name)
             {
-                if param.condition.is_some() {
+                if let Some(cond) = &param.condition {
                     return Err(ParameterError::ConditionalParameterMissing {
                         parameter: param.name.clone(),
-                        condition: param.condition.as_ref().unwrap().expression.clone(),
+                        condition: cond.expression.clone(),
                     });
                 } else {
                     return Err(ParameterError::MissingRequired {

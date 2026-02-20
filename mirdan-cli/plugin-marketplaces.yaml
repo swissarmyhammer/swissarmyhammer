@@ -1,0 +1,132 @@
+# Claude Code plugin marketplaces (repos with .claude-plugin/marketplace.json)
+# These are distinct from skills marketplaces (agentskills.io / skills.sh)
+# Collected: 2026-02-16
+# Sources: GitHub search, GitHub topics, awesome-lists, web search
+# Total: 54
+
+# --- Official (Anthropic) ---
+official:
+  - url: https://github.com/anthropics/claude-plugins-official
+    description: Official Anthropic-managed directory of high-quality Claude Code plugins
+  - url: https://github.com/anthropics/claude-code
+    description: Claude Code bundled plugins (marketplace.json in repo)
+  - url: https://github.com/anthropics/knowledge-work-plugins
+    description: Knowledge worker plugins for Claude Cowork (sales, legal, finance, etc.)
+
+# --- Community Plugin Marketplaces (repos serving as marketplace directories) ---
+community:
+  - url: https://github.com/kivilaid/plugin-marketplace
+    description: Comprehensive marketplace with 87 plugins from 10+ sources
+  - url: https://github.com/ananddtyagi/cc-marketplace
+    description: Community-driven marketplace for Claude Code commands and plugins
+  - url: https://github.com/feed-mob/claude-code-marketplace
+    description: FeedMob team Claude Code plugins for dev workflows
+  - url: https://github.com/ivan-magda/claude-code-marketplace
+    description: Curated collection for Swift development and code migration
+  - url: https://github.com/gmickel/gmickel-claude-marketplace
+    description: Flow-Next plan-first workflows, Ralph autonomous mode
+  - url: https://github.com/DustyWalker/claude-code-marketplace
+    description: 16 specialized AI agents for software development
+  - url: https://github.com/ClaudeTools/marketplace
+    description: ClaudeTools marketplace with bootstrap plugin and CI-generated directories
+  - url: https://github.com/dashed/claude-marketplace
+    description: Local marketplace for personal Claude Code plugins
+  - url: https://github.com/paddo/claude-tools
+    description: Claude tools marketplace (Gemini visual analysis, dns, headless, etc.)
+  - url: https://github.com/GiladShoham/awesome-claude-plugins
+    description: Curated marketplace following the Claude Plugin Marketplace spec
+  - url: https://github.com/ccplugins/awesome-claude-code-plugins
+    description: Curated list of slash commands, subagents, MCP servers, hooks
+  - url: https://github.com/sgaunet/claude-plugins
+    description: DevOps, infrastructure, and Go specialist plugin collections
+  - url: https://github.com/netresearch/claude-code-marketplace
+    description: Curated agent skills for TYPO3, PHP modernization, tech docs
+  - url: https://github.com/EveryInc/every-marketplace
+    description: Official Every-Env plugin marketplace for Claude Code extensions
+  - url: https://github.com/EveryInc/compound-engineering-plugin
+    description: Compound engineering plugin marketplace
+  - url: https://github.com/Sceleratis/claude-code-stuff
+    description: Personal plugins, agents, and tools for Claude Code
+  - url: https://github.com/ed3dai/ed3d-plugins
+    description: Research-plan-implement workflow plugins
+  # Excluded: jeremylongshore/claude-code-plugins-plus-skills (3725 skills, too macro)
+  - url: https://github.com/mrlm-xyz/demo-claude-marketplace
+    description: Demo/template of custom Claude Code plugin marketplace structure
+  - url: https://github.com/hyperskill/claude-code-marketplace
+    description: Curated collection by Hyperskill team
+  - url: https://github.com/obra/superpowers-marketplace
+    description: Curated Claude Code plugin marketplace
+  - url: https://github.com/claude-market/marketplace
+    description: Open source hand-curated marketplace for Claude Code tools
+  - url: https://github.com/buildatscale-tv/claude-code-plugins
+    description: BuildAtScale YouTube channel plugin marketplace
+  - url: https://github.com/deepakkamboj/claude-marketplace
+    description: Accessibility (WCAG 2.1), Playwright testing, developer tools
+  - url: https://github.com/lttr/claude-marketplace
+    description: Plugins extracted from personal development workflows
+  - url: https://github.com/hugoduncan/claude-marketplace
+    description: Hugo Duncan's Claude Code plugin marketplace
+  - url: https://github.com/nobodyiscertain/claude-marketplace
+    description: Claude Code plugins marketplace
+  - url: https://github.com/doodledood/claude-code-plugins
+    description: Architecture, knowledge management, and dev automation plugins
+  - url: https://github.com/TechNickAI/ai-coding-config
+    description: Plugin marketplace with 18 commands and 24 agents
+  - url: https://github.com/cskiro/claudex
+    description: Playground for Claude Code plugins and skills
+  - url: https://github.com/ivan-magda/claude-code-plugin-template
+    description: GitHub template for creating Claude Code plugin marketplaces
+  - url: https://github.com/affaan-m/everything-claude-code
+    description: Complete Claude Code config collection from Anthropic hackathon winner
+
+# --- Aggregators & Awesome Lists (meta-collections indexing other marketplaces) ---
+aggregators:
+  - url: https://github.com/Chat2AnyLLM/awesome-claude-plugins
+    description: Curated list of 43 marketplaces and 834 plugins
+  - url: https://github.com/quemsah/awesome-claude-plugins
+    description: Automated collection of 4961 repos with adoption metrics
+  - url: https://github.com/ComposioHQ/awesome-claude-plugins
+    description: Composio's curated awesome-claude-plugins list
+  - url: https://github.com/jmanhype/awesome-claude-code
+    description: Awesome list of plugins, MCP servers, editor integrations
+  - url: https://github.com/davepoon/buildwithclaude
+    description: Single hub for Claude skills, agents, commands, hooks, plugins
+  - url: https://github.com/claude-code-plugin-marketplaces/.github
+    description: Organization collecting high-quality Claude Code plugins
+
+# --- Notable Individual Plugins (from GitHub topics) ---
+notable_plugins:
+  - url: https://github.com/pinecone-io/pinecone-claude-code-plugin
+    description: Pinecone vector DB integration for Claude Code
+  - url: https://github.com/frmoretto/hardstop
+    description: Pre-execution safety validation for destructive commands
+  - url: https://github.com/bitwize-music-studio/claude-ai-music-skills
+    description: AI music skills for Claude Code
+  - url: https://github.com/k1lgor/virtual-company
+    description: Virtual company simulation plugin
+  - url: https://github.com/timescale/pg-aiguide
+    description: MCP server and Claude plugin for Postgres skills
+  - url: https://github.com/kenryu42/claude-code-safety-net
+    description: Safety net catching destructive git and filesystem commands
+  - url: https://github.com/wakatime/claude-code-wakatime
+    description: Time tracking for Claude Code usage
+  - url: https://github.com/davegoldblatt/total-recall
+    description: Persistent memory plugin with tiered memory and correction propagation
+  - url: https://github.com/PCIRCLE-AI/claude-code-buddy
+    description: Persistent memory plugin for Claude Code
+  - url: https://github.com/thedotmack/claude-mem
+    description: Session activity capture with AI compression for future context
+  - url: https://github.com/zilliztech/memsearch
+    description: Markdown-first memory system for any AI agent
+  - url: https://github.com/quant-sentiment-ai/claude-equity-research
+    description: Institutional-grade equity research plugin
+  - url: https://github.com/shinpr/claude-code-workflows
+    description: Production-ready development workflows with specialized agents
+  - url: https://github.com/rsmdt/the-startup
+    description: Collection of Claude Code commands, skills, and agents
+  - url: https://github.com/zscole/adversarial-spec
+    description: Multi-LLM debate for iterative spec refinement
+  - url: https://github.com/husniadil/cc-hooks
+    description: Audio feedback with TTS and sound effects
+  - url: https://github.com/jarrodwatts/claude-stt
+    description: Speech-to-text input with live streaming dictation

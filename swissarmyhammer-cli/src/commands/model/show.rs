@@ -2,7 +2,7 @@
 
 use crate::context::CliContext;
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
+use comfy_table::Cell;
 use swissarmyhammer_config::model::{AgentUseCase, ModelManager};
 
 /// Helper function to retrieve agent name and source for a given use case
@@ -24,10 +24,7 @@ pub async fn execute_show_command(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("{}", "Agent Use Case Assignments:".bold());
 
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .set_content_arrangement(ContentArrangement::Dynamic);
+    let mut table = swissarmyhammer_doctor::new_table();
 
     table.set_header(vec!["Use Case", "Agent", "Source"]);
 

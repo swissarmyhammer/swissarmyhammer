@@ -31,6 +31,26 @@ pub struct TestCommand {
     pub debug: bool,
 }
 
+/// New command for scaffolding a prompt from a template.
+#[derive(Debug)]
+pub struct NewCommand {
+    pub name: String,
+    pub user: bool,
+    pub r#static: bool,
+}
+
+/// Show command for displaying detailed prompt information.
+#[derive(Debug)]
+pub struct ShowCommand {
+    pub prompt_name: String,
+}
+
+/// Edit command for opening a prompt in the user's editor.
+#[derive(Debug)]
+pub struct EditCommand {
+    pub prompt_name: String,
+}
+
 /// Command enum representing all available prompt subcommands.
 ///
 /// This enum wraps all prompt-related commands and provides type-safe
@@ -40,6 +60,10 @@ pub struct TestCommand {
 pub enum PromptCommand {
     List(ListCommand),
     Test(TestCommand),
+    Render(TestCommand),
+    New(NewCommand),
+    Show(ShowCommand),
+    Edit(EditCommand),
 }
 
 /// Parse clap matches into strongly-typed command structs.
@@ -62,23 +86,54 @@ pub enum PromptCommand {
 ///     PromptCommand::Test(test_cmd) => println!("Testing prompt: {:?}", test_cmd.prompt_name),
 /// }
 /// ```
+fn parse_test_args(sub_matches: &ArgMatches) -> TestCommand {
+    TestCommand {
+        prompt_name: sub_matches.get_one::<String>("prompt_name").cloned(),
+        file: sub_matches.get_one::<String>("file").cloned(),
+        vars: sub_matches
+            .get_many::<String>("vars")
+            .map(|vals| vals.cloned().collect())
+            .unwrap_or_default(),
+        raw: sub_matches.get_flag("raw"),
+        copy: sub_matches.get_flag("copy"),
+        save: sub_matches.get_one::<String>("save").cloned(),
+        debug: sub_matches.get_flag("debug"),
+    }
+}
+
 pub fn parse_prompt_command(matches: &ArgMatches) -> PromptCommand {
     match matches.subcommand() {
         Some(("list", _sub_matches)) => PromptCommand::List(ListCommand {}),
-        Some(("test", sub_matches)) => {
-            let test_cmd = TestCommand {
-                prompt_name: sub_matches.get_one::<String>("prompt_name").cloned(),
-                file: sub_matches.get_one::<String>("file").cloned(),
-                vars: sub_matches
-                    .get_many::<String>("vars")
-                    .map(|vals| vals.cloned().collect())
+        Some(("test", sub_matches)) => PromptCommand::Test(parse_test_args(sub_matches)),
+        Some(("render", sub_matches)) => PromptCommand::Render(parse_test_args(sub_matches)),
+        Some(("new", sub_matches)) => {
+            let new_cmd = NewCommand {
+                name: sub_matches
+                    .get_one::<String>("name")
+                    .cloned()
                     .unwrap_or_default(),
-                raw: sub_matches.get_flag("raw"),
-                copy: sub_matches.get_flag("copy"),
-                save: sub_matches.get_one::<String>("save").cloned(),
-                debug: sub_matches.get_flag("debug"),
+                user: sub_matches.get_flag("user"),
+                r#static: sub_matches.get_flag("static"),
             };
-            PromptCommand::Test(test_cmd)
+            PromptCommand::New(new_cmd)
+        }
+        Some(("show", sub_matches)) => {
+            let show_cmd = ShowCommand {
+                prompt_name: sub_matches
+                    .get_one::<String>("prompt_name")
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            PromptCommand::Show(show_cmd)
+        }
+        Some(("edit", sub_matches)) => {
+            let edit_cmd = EditCommand {
+                prompt_name: sub_matches
+                    .get_one::<String>("prompt_name")
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            PromptCommand::Edit(edit_cmd)
         }
 
         _ => {
