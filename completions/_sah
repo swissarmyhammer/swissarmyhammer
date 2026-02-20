@@ -90,6 +90,27 @@ esac
     ;;
 esac
 ;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::target -- Where to install the MCP server configuration:((project\:"Project-level settings (.claude/settings.json)"
+local\:"Local project settings, not committed (.claude/settings.local.json)"
+user\:"User-level settings (~/.claude/settings.json)"))' \
+&& ret=0
+;;
+(deinit)
+_arguments "${_arguments_options[@]}" : \
+'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
+'--remove-directory[Also remove .swissarmyhammer/ project directory]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::target -- Where to remove the MCP server configuration from:((project\:"Project-level settings (.claude/settings.json)"
+local\:"Local project settings, not committed (.claude/settings.local.json)"
+user\:"User-level settings (~/.claude/settings.json)"))' \
+&& ret=0
+;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
@@ -299,6 +320,14 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(deinit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -384,6 +413,8 @@ esac
 _sah_commands() {
     local commands; commands=(
 'serve:Run as MCP server (default when invoked via stdio)' \
+'init:Initialize sah MCP server in Claude Code settings' \
+'deinit:Remove sah MCP server from Claude Code settings' \
 'doctor:Diagnose configuration and setup issues' \
 'prompt:Manage and test prompts' \
 'flow:Execute and manage workflows' \
@@ -431,6 +462,11 @@ _sah__completion_commands() {
     local commands; commands=()
     _describe -t commands 'sah completion commands' commands "$@"
 }
+(( $+functions[_sah__deinit_commands] )) ||
+_sah__deinit_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah deinit commands' commands "$@"
+}
 (( $+functions[_sah__doctor_commands] )) ||
 _sah__doctor_commands() {
     local commands; commands=()
@@ -445,6 +481,8 @@ _sah__flow_commands() {
 _sah__help_commands() {
     local commands; commands=(
 'serve:Run as MCP server (default when invoked via stdio)' \
+'init:Initialize sah MCP server in Claude Code settings' \
+'deinit:Remove sah MCP server from Claude Code settings' \
 'doctor:Diagnose configuration and setup issues' \
 'prompt:Manage and test prompts' \
 'flow:Execute and manage workflows' \
@@ -473,6 +511,11 @@ _sah__help__completion_commands() {
     local commands; commands=()
     _describe -t commands 'sah help completion commands' commands "$@"
 }
+(( $+functions[_sah__help__deinit_commands] )) ||
+_sah__help__deinit_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah help deinit commands' commands "$@"
+}
 (( $+functions[_sah__help__doctor_commands] )) ||
 _sah__help__doctor_commands() {
     local commands; commands=()
@@ -487,6 +530,11 @@ _sah__help__flow_commands() {
 _sah__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'sah help help commands' commands "$@"
+}
+(( $+functions[_sah__help__init_commands] )) ||
+_sah__help__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah help init commands' commands "$@"
 }
 (( $+functions[_sah__help__model_commands] )) ||
 _sah__help__model_commands() {
@@ -533,6 +581,11 @@ _sah__help__serve__http_commands() {
 _sah__help__validate_commands() {
     local commands; commands=()
     _describe -t commands 'sah help validate commands' commands "$@"
+}
+(( $+functions[_sah__init_commands] )) ||
+_sah__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah init commands' commands "$@"
 }
 (( $+functions[_sah__model_commands] )) ||
 _sah__model_commands() {

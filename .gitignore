@@ -187,6 +187,10 @@ docs/*.1
 !.avp/validators/
 !.avp/.gitignore
 
+# Lockfiles (generated during install, project-specific)
+avp-lock.json
+mirdan-lock.json
+
 # Kanban test artifacts
 .kanban/
 swissarmyhammer-config/.swissarmyhammer/

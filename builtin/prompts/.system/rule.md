@@ -21,12 +21,23 @@ parameters:
   - name: rule_body
     description: The full rule instructions (markdown body)
     required: true
+  - name: hook_context
+    description: The hook event context (JSON) being validated
+    required: false
 ---
 
 # Rule: {{ rule_name }}
 
 **Description**: {{ rule_description }}
 **Severity**: {{ rule_severity }}
+
+{% if hook_context %}
+## Hook Context
+
+```json
+{{ hook_context }}
+```
+{% endif %}
 
 {{ rule_body }}
 

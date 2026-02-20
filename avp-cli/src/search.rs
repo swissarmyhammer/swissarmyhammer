@@ -1,8 +1,7 @@
 //! AVP Search - Search the registry for validator packages.
 
-use comfy_table::{presets::UTF8_FULL, Table};
-
 use crate::registry::{RegistryClient, RegistryError};
+use swissarmyhammer_doctor::{new_table, truncate_str};
 
 /// Run the search command.
 ///
@@ -27,16 +26,11 @@ pub async fn run_search(query: &str, tag: Option<&str>, json: bool) -> Result<()
         response.total, query
     );
 
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    let mut table = new_table();
     table.set_header(vec!["Name", "Version", "Description", "Downloads"]);
 
     for pkg in &response.packages {
-        let description = if pkg.description.len() > 60 {
-            format!("{}...", &pkg.description[..57])
-        } else {
-            pkg.description.clone()
-        };
+        let description = truncate_str(&pkg.description, 60);
 
         table.add_row(vec![
             pkg.name.clone(),

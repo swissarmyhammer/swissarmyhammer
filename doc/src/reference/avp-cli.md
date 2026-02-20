@@ -2,6 +2,12 @@
 
 This document contains the help content for the `avp` command-line program.
 
+## Installation
+
+```bash
+brew install swissarmyhammer/tap/avp-cli
+```
+
 **Command Overview:**
 
 * [`avp`↴](#avp)
@@ -306,9 +312,3 @@ Update installed packages to latest versions
 
 
 
-<hr/>
-
-<small><i>
-    This document was generated automatically by
-    <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
-</i></small>

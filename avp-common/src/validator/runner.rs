@@ -935,7 +935,9 @@ impl ValidatorRunner {
 
         // Execute each rule sequentially in the same session
         for rule in &ruleset.rules {
-            let rule_ctx = RulePromptContext::with_partials(rule, ruleset, Some(&self.partials));
+            let mut rule_ctx =
+                RulePromptContext::with_partials(rule, ruleset, Some(&self.partials));
+            rule_ctx.hook_context = Some(context);
             let rule_prompt = rule_ctx.render();
 
             let rule_request = PromptRequest::new(

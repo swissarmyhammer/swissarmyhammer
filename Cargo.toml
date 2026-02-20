@@ -40,6 +40,7 @@ members = [
     "swissarmyhammer-operations",
     "swissarmyhammer-operations-macros",
     "swissarmyhammer-skills",
+    "mirdan-cli",
 ]
 resolver = "2"
 
@@ -50,7 +51,7 @@ tag-name = "v{{version}}"      # Single tag for workspace
 consolidate-commits = true     # One commit for all version bumps
 
 [workspace.package]
-version = "0.6.1"
+version = "0.7.1"
 edition = "2021"
 rust-version = "1.91.1"
 authors = ["SwissArmyHammer Team"]
@@ -154,6 +155,7 @@ agent-client-protocol = "0.9.2"
 dirs = "6.0"
 rust-embed = "8"
 comfy-table = "7"
+crossterm = "0.29"
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 arboard = "3.4"
 atty = "0.2"
@@ -168,6 +170,7 @@ indicatif = "0.17"
 sha2 = "0.10"
 futures-util = "0.3"
 tempfile = "3.0"
+pathdiff = "0.2"
 serial_test = "3.0"
 textwrap = "0.16"
 csv = "1.3"
