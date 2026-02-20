@@ -21,7 +21,7 @@ stateDiagram-v2
 
 ## Actions
 
-- start: shell "echo 'Initializing test workflow'"
+- start: shell "echo 'Making all tests pass...'"
 - test: execute prompt "test"
 - do_todos: run workflow "do"
 - loop: log "Checking test results"

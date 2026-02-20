@@ -11,18 +11,19 @@ metadata:
 
 Create a git commit with a well-crafted conventional commit message.
 
-## How to Execute
 
-Use the `flow` tool to run the commit workflow:
+## Guidelines
 
-    flow_name: "commit"
-    parameters:
-      message: "$ARGUMENTS"
+- You MUST NOT commit scratch files that you generated, only commit source that you want in the project permanently
+- You MUST NOT miss files on the commit
+  - You MUST commit all the source files modified on the current branch
+  - You MUST check for and create if needed a sensible project specific .gitignore
 
-## What Happens
+## Process
 
-1. Reviews staged and unstaged changes via `git_changes`
-2. Analyzes the diff to understand what changed and why
-3. Generates a conventional commit message (feat/fix/refactor/etc.)
-4. If $ARGUMENTS provided, uses it as the commit message basis
-5. Creates the commit with the formatted message
+- Evaluate the current `git status`, determine which files need to be added
+- Clean up your scratch and temporary files
+- Look for files that were modified and need to be part of the commit
+- Look for files that were added and not yet staged, these need to be part of the commit unless they are one of your scratch files
+- Commit your code with a [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/#summary)
+- Report your progress

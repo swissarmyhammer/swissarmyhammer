@@ -27,6 +27,7 @@ brew install swissarmyhammer/tap/mirdan-cli
 * [`mirdan unpublish`↴](#mirdan-unpublish)
 * [`mirdan outdated`↴](#mirdan-outdated)
 * [`mirdan update`↴](#mirdan-update)
+* [`mirdan sync`↴](#mirdan-sync)
 * [`mirdan doctor`↴](#mirdan-doctor)
 
 ## `mirdan`
@@ -48,7 +49,7 @@ Environment variables:
 
 * `agents` — Detect and list installed AI coding agents
 * `new` — Create a new skill or validator from template
-* `install` — Install a skill or validator package (type auto-detected from contents)
+* `install` — Install a skill, validator, or MCP server (type auto-detected from contents)
 * `uninstall` — Remove an installed skill or validator package
 * `list` — List installed skills and validators
 * `search` — Search the registry for skills and validators
@@ -60,6 +61,7 @@ Environment variables:
 * `unpublish` — Remove a published package version from the registry
 * `outdated` — Check for available package updates
 * `update` — Update installed packages to latest versions
+* `sync` — Reconcile .skills/ with agent directories and verify lockfile
 * `doctor` — Diagnose Mirdan setup and configuration
 
 ###### **Options:**
@@ -130,7 +132,7 @@ Scaffold a new validator (AVP spec)
 
 ## `mirdan install`
 
-Install a skill or validator package (type auto-detected from contents)
+Install a skill, validator, or MCP server (type auto-detected from contents)
 
 **Usage:** `mirdan install [OPTIONS] <PACKAGE>`
 
@@ -143,6 +145,9 @@ Install a skill or validator package (type auto-detected from contents)
 * `--global` — Install globally (~/.avp/validators/ for validators, agent global dirs for skills)
 * `--git` — Treat package as a git URL (clone instead of registry lookup)
 * `--skill <SKILL>` — Install a specific skill/validator by name from a multi-package repo
+* `--mcp` — Install as an MCP server instead of a skill/validator
+* `--command <COMMAND>` — MCP server command (binary to run). Required when --mcp is set
+* `--args <ARGS>` — MCP server arguments
 
 
 
@@ -285,6 +290,18 @@ Update installed packages to latest versions
 ###### **Options:**
 
 * `--global` — Update global packages
+
+
+
+## `mirdan sync`
+
+Reconcile .skills/ with agent directories and verify lockfile
+
+**Usage:** `mirdan sync [OPTIONS]`
+
+###### **Options:**
+
+* `--global` — Sync global locations
 
 
 

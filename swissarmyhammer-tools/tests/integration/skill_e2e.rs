@@ -2,6 +2,10 @@
 //!
 //! Tests the full pipeline: skill resolution → MCP tool registration → tool calls
 //! Uses in-process HTTP MCP server + RMCP client (same pattern as rmcp_integration.rs)
+//!
+//! Verifies the pipeline using real builtin skills (e.g. `plan`). Tests invoke skills
+//! by name and verify body-only content (not present in frontmatter) is returned,
+//! proving: skill resolution → embedding → MCP tool registration → invocation → instruction delivery.
 
 use rmcp::model::CallToolRequestParam;
 use swissarmyhammer_tools::mcp::{
@@ -214,6 +218,85 @@ async fn test_get_verb_backward_compat() {
     assert!(
         content_text.contains("instructions"),
         "get verb should return instructions (backward compat)"
+    );
+
+    teardown(server, client).await;
+}
+
+// =========================================================================
+// Full pipeline verification: invoke builtin skill, verify body content
+// =========================================================================
+
+/// A string that appears ONLY in the plan skill's instruction body (not frontmatter).
+/// Finding it in a `use skill` response proves the full pipeline delivered instructions.
+const PLAN_BODY_MARKER: &str = "kanban";
+
+#[tokio::test]
+async fn test_skill_invoke_by_name_returns_body_content() {
+    let (server, client) = setup(true).await;
+
+    // Invoke the plan skill by name
+    let result = client
+        .call_tool(CallToolRequestParam {
+            name: "skill".into(),
+            arguments: serde_json::json!({"op": "use skill", "name": "plan"})
+                .as_object()
+                .cloned(),
+        })
+        .await
+        .expect("use skill plan should succeed");
+
+    let content_text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .unwrap_or("");
+
+    // DRAFT_PLAN.md is ONLY in the skill body, not in frontmatter.
+    // Finding it here proves the full pipeline delivered instructions.
+    assert!(
+        content_text.contains(PLAN_BODY_MARKER),
+        "Invoking plan skill by name should return instructions containing body-only marker '{}', got: {}",
+        PLAN_BODY_MARKER,
+        content_text
+    );
+
+    // Also verify it contains the kanban board reference from the body
+    assert!(
+        content_text.contains("kanban board"),
+        "Instructions should reference kanban board"
+    );
+
+    teardown(server, client).await;
+}
+
+#[tokio::test]
+async fn test_skill_invoke_via_shorthand() {
+    let (server, client) = setup(true).await;
+
+    // Use the shorthand form (just name, no explicit verb)
+    let result = client
+        .call_tool(CallToolRequestParam {
+            name: "skill".into(),
+            arguments: serde_json::json!({"name": "plan"})
+                .as_object()
+                .cloned(),
+        })
+        .await
+        .expect("shorthand use skill should succeed");
+
+    let content_text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .unwrap_or("");
+
+    assert!(
+        content_text.contains(PLAN_BODY_MARKER),
+        "Shorthand skill invocation should also deliver body content, got: {}",
+        content_text
     );
 
     teardown(server, client).await;

@@ -1,5 +1,10 @@
 //! Claude Code settings file manipulation for MCP server configuration.
 //!
+//! **DEPRECATED**: This module is superseded by `mirdan::mcp_config` which provides
+//! generalized MCP config management for all agents. Kept for backward compatibility
+//! with Claude Code local-scope config and existing tests. Will be removed in a
+//! follow-up release.
+//!
 //! Claude Code stores MCP server config in different locations by scope:
 //! - **project**: `<project-root>/.mcp.json`
 //! - **user**: `~/.claude.json` (top-level `mcpServers`)

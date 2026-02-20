@@ -752,7 +752,7 @@ fn check_circular_dependencies(checks: &mut Vec<Check>) {
 /// For each builtin skill, checks if `.claude/skills/<name>/SKILL.md` exists.
 /// Reports missing or outdated skills with fix suggestion.
 pub fn check_skills(checks: &mut Vec<Check>) -> Result<()> {
-    let builtin_names = ["plan", "do", "commit", "test", "implement"];
+    let builtin_names = ["plan", "kanban", "commit", "test", "implement"];
 
     // Determine project root
     let project_root = swissarmyhammer_common::utils::find_git_repository_root()

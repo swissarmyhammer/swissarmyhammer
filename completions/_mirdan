@@ -126,9 +126,12 @@ esac
 (install)
 _arguments "${_arguments_options[@]}" : \
 '--skill=[Install a specific skill/validator by name from a multi-package repo]:SKILL:_default' \
+'--command=[MCP server command (binary to run). Required when --mcp is set]:COMMAND:_default' \
+'*--args=[MCP server arguments]:ARGS:_default' \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
 '--global[Install globally (~/.avp/validators/ for validators, agent global dirs for skills)]' \
 '--git[Treat package as a git URL (clone instead of registry lookup)]' \
+'--mcp[Install as an MCP server instead of a skill/validator]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
 '-y[Skip confirmation prompts (useful for CI/CD)]' \
@@ -272,6 +275,18 @@ _arguments "${_arguments_options[@]}" : \
 '::name -- Specific package to update (all if omitted):_default' \
 && ret=0
 ;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--global[Sync global locations]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
@@ -373,6 +388,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -395,7 +414,7 @@ _mirdan_commands() {
     local commands; commands=(
 'agents:Detect and list installed AI coding agents' \
 'new:Create a new skill or validator from template' \
-'install:Install a skill or validator package (type auto-detected from contents)' \
+'install:Install a skill, validator, or MCP server (type auto-detected from contents)' \
 'uninstall:Remove an installed skill or validator package' \
 'list:List installed skills and validators' \
 'search:Search the registry for skills and validators' \
@@ -407,6 +426,7 @@ _mirdan_commands() {
 'unpublish:Remove a published package version from the registry' \
 'outdated:Check for available package updates' \
 'update:Update installed packages to latest versions' \
+'sync:Reconcile .skills/ with agent directories and verify lockfile' \
 'doctor:Diagnose Mirdan setup and configuration' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -427,7 +447,7 @@ _mirdan__help_commands() {
     local commands; commands=(
 'agents:Detect and list installed AI coding agents' \
 'new:Create a new skill or validator from template' \
-'install:Install a skill or validator package (type auto-detected from contents)' \
+'install:Install a skill, validator, or MCP server (type auto-detected from contents)' \
 'uninstall:Remove an installed skill or validator package' \
 'list:List installed skills and validators' \
 'search:Search the registry for skills and validators' \
@@ -439,6 +459,7 @@ _mirdan__help_commands() {
 'unpublish:Remove a published package version from the registry' \
 'outdated:Check for available package updates' \
 'update:Update installed packages to latest versions' \
+'sync:Reconcile .skills/ with agent directories and verify lockfile' \
 'doctor:Diagnose Mirdan setup and configuration' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -516,6 +537,11 @@ _mirdan__help__publish_commands() {
 _mirdan__help__search_commands() {
     local commands; commands=()
     _describe -t commands 'mirdan help search commands' commands "$@"
+}
+(( $+functions[_mirdan__help__sync_commands] )) ||
+_mirdan__help__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help sync commands' commands "$@"
 }
 (( $+functions[_mirdan__help__uninstall_commands] )) ||
 _mirdan__help__uninstall_commands() {
@@ -619,6 +645,11 @@ _mirdan__publish_commands() {
 _mirdan__search_commands() {
     local commands; commands=()
     _describe -t commands 'mirdan search commands' commands "$@"
+}
+(( $+functions[_mirdan__sync_commands] )) ||
+_mirdan__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan sync commands' commands "$@"
 }
 (( $+functions[_mirdan__uninstall_commands] )) ||
 _mirdan__uninstall_commands() {

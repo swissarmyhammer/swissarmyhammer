@@ -37,6 +37,7 @@ swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }
 swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+mirdan-cli = { path = "../mirdan-cli" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 llama-agent = { workspace = true }

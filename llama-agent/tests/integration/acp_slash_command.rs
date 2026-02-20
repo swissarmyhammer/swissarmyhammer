@@ -424,7 +424,7 @@ mod acp_slash_command_tests {
         let commands = registry.get_available_commands().await.unwrap();
 
         // All builtin skills should be present as /commands
-        let expected_skills = ["commit", "do", "implement", "plan", "test"];
+        let expected_skills = ["commit", "implement", "kanban", "plan", "test"];
         for skill_name in &expected_skills {
             let cmd_name = format!("/{}", skill_name);
             assert!(
@@ -548,4 +548,5 @@ mod acp_slash_command_tests {
 
         tracing::info!("✓ Skills correctly override duplicate MCP prompts");
     }
+
 }

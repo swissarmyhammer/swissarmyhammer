@@ -6,18 +6,29 @@ agents:
     detect:
       - dir: "~/.claude"
       - command: claude
+    mcp_config:
+      project_file: ".mcp.json"
+      global_file: "~/.claude.json"
+      servers_key: mcpServers
   - id: cursor
     name: Cursor
     project_path: .cursor/skills
     global_path: "~/.cursor/skills"
     detect:
       - dir: "~/.cursor"
+    mcp_config:
+      project_file: ".cursor/mcp.json"
+      global_file: "~/.cursor/mcp.json"
+      servers_key: mcpServers
   - id: windsurf
     name: Windsurf
     project_path: .windsurf/skills
     global_path: "~/.windsurf/skills"
     detect:
       - dir: "~/.windsurf"
+    mcp_config:
+      global_file: "~/.codeium/windsurf/mcp_config.json"
+      servers_key: mcpServers
   - id: cline
     name: Cline
     project_path: .cline/skills

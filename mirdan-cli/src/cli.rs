@@ -66,7 +66,7 @@ pub enum Commands {
         kind: NewKind,
     },
 
-    /// Install a skill or validator package (type auto-detected from contents)
+    /// Install a skill, validator, or MCP server (type auto-detected from contents)
     Install {
         /// Package name, name@version, ./local-path, owner/repo, or git URL
         package: String,
@@ -79,6 +79,15 @@ pub enum Commands {
         /// Install a specific skill/validator by name from a multi-package repo
         #[arg(long)]
         skill: Option<String>,
+        /// Install as an MCP server instead of a skill/validator
+        #[arg(long)]
+        mcp: bool,
+        /// MCP server command (binary to run). Required when --mcp is set.
+        #[arg(long, required_if_eq("mcp", "true"))]
+        command: Option<String>,
+        /// MCP server arguments
+        #[arg(long, num_args = 1.., requires = "mcp")]
+        args: Vec<String>,
     },
 
     /// Remove an installed skill or validator package
@@ -161,6 +170,13 @@ pub enum Commands {
         /// Specific package to update (all if omitted)
         name: Option<String>,
         /// Update global packages
+        #[arg(long)]
+        global: bool,
+    },
+
+    /// Reconcile .skills/ with agent directories and verify lockfile
+    Sync {
+        /// Sync global locations
         #[arg(long)]
         global: bool,
     },

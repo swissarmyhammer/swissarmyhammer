@@ -1,32 +1,83 @@
-//! Install sah MCP server configuration into Claude Code settings.
+//! Set up sah for all detected AI coding agents (skills + MCP).
 
 use crate::cli::InstallTarget;
 
 use super::settings;
 
-/// Install sah MCP server to the specified target.
+/// Install sah for all detected AI coding agents.
+///
+/// 1. Registers sah as an MCP server in all detected agent configs
+/// 2. Creates the .swissarmyhammer/ project directory structure
+/// 3. Installs builtin skills to the central .skills/ store and symlinks to all agents
 pub fn install(target: InstallTarget) -> Result<(), String> {
-    match target {
-        InstallTarget::Project => install_project(),
-        InstallTarget::Local => install_local(),
-        InstallTarget::User => install_user(),
-    }?;
+    let global = matches!(target, InstallTarget::User);
 
-    // For project/local installs, also create the .swissarmyhammer directory structure
+    // Install MCP server config for all detected agents
+    install_mcp_all_agents(global)?;
+
+    // For project/local installs, handle Claude Code local-scope config specifically
+    if matches!(target, InstallTarget::Local) {
+        install_claude_local_scope()?;
+    }
+
+    // Create sah-specific project structure
     if matches!(target, InstallTarget::Project | InstallTarget::Local) {
         create_project_structure()?;
     }
 
-    // Install skills for Claude Code
-    install_skills(&target)?;
+    // Install builtin skills via mirdan store + sync
+    install_skills_via_mirdan(global)?;
 
     Ok(())
 }
 
-/// Install to project-level `.mcp.json`.
-fn install_project() -> Result<(), String> {
-    let path = settings::mcp_json_path();
+/// Install sah MCP server to all detected agents using mirdan's mcp_config.
+fn install_mcp_all_agents(global: bool) -> Result<(), String> {
+    let config = mirdan::agents::load_agents_config()
+        .map_err(|e| format!("Failed to load agents config: {}", e))?;
+    let agents = mirdan::agents::get_detected_agents(&config);
 
+    let entry = mirdan::mcp_config::McpServerEntry {
+        name: "sah".to_string(),
+        command: "sah".to_string(),
+        args: vec!["serve".to_string()],
+        env: None,
+    };
+
+    let mut installed_count = 0;
+    for agent in &agents {
+        match mirdan::mcp_config::install_mcp_for_agent(&agent.def, &entry, global) {
+            Ok(Some(path)) => {
+                println!(
+                    "sah MCP server installed for {} ({})",
+                    agent.def.name,
+                    path.display()
+                );
+                installed_count += 1;
+            }
+            Ok(None) => {
+                // Agent doesn't support MCP — skip silently
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to install MCP for {}: {}",
+                    agent.def.name, e
+                );
+            }
+        }
+    }
+
+    if installed_count == 0 {
+        // Fallback to legacy settings.rs for backward compat
+        install_project_legacy()?;
+    }
+
+    Ok(())
+}
+
+/// Legacy project-level install via .mcp.json (backward compat fallback).
+fn install_project_legacy() -> Result<(), String> {
+    let path = settings::mcp_json_path();
     let mut mcp_settings = settings::read_settings(&path)?;
     let changed = settings::merge_mcp_server(&mut mcp_settings);
     settings::write_settings(&path, &mcp_settings)?;
@@ -39,30 +90,9 @@ fn install_project() -> Result<(), String> {
     Ok(())
 }
 
-/// Install to user-level `~/.claude.json` top-level `mcpServers`.
-fn install_user() -> Result<(), String> {
-    let path = settings::claude_json_path();
-
-    let mut root = settings::read_settings(&path)?;
-    let changed = settings::merge_mcp_server(&mut root);
-    settings::write_settings(&path, &root)?;
-
-    if changed {
-        println!(
-            "sah MCP server installed to {} (user scope)",
-            path.display()
-        );
-    } else {
-        println!(
-            "sah MCP server already configured in {} (user scope)",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
 /// Install to local scope: `~/.claude.json` under `projects.<project-path>.mcpServers`.
-fn install_local() -> Result<(), String> {
+/// This is a Claude Code-specific feature that mirdan doesn't handle generically.
+fn install_claude_local_scope() -> Result<(), String> {
     let path = settings::claude_json_path();
     let key = settings::project_key()?;
 
@@ -120,57 +150,38 @@ fn create_project_structure() -> Result<(), String> {
     Ok(())
 }
 
-/// Install builtin skills to the appropriate `.claude/skills/` directory.
+/// Install builtin skills via mirdan's central store + sync.
 ///
-/// For project/local installs: `.claude/skills/` in the project root.
-/// For user installs: `~/.claude/skills/`.
-/// Idempotent: overwrites with latest version.
-fn install_skills(target: &InstallTarget) -> Result<(), String> {
+/// 1. Copy builtins to .skills/ store
+/// 2. Call mirdan::sync::sync() to create symlinks to all detected agents
+fn install_skills_via_mirdan(global: bool) -> Result<(), String> {
     use swissarmyhammer_skills::SkillResolver;
 
     let resolver = SkillResolver::new();
     let skills = resolver.resolve_all();
 
-    // Determine the target directory for skills
-    let skills_dir = match target {
-        InstallTarget::Project | InstallTarget::Local => {
-            // Use the project root's .claude/skills/
-            let cwd = std::env::current_dir()
-                .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let store_dir = mirdan::store::skill_store_dir(global);
 
-            // Try to find git root, fallback to cwd
-            let root = swissarmyhammer_common::utils::find_git_repository_root().unwrap_or(cwd);
-            root.join(".claude").join("skills")
-        }
-        InstallTarget::User => {
-            // Use ~/.claude/skills/
-            let home = dirs::home_dir()
-                .ok_or_else(|| "Could not determine home directory".to_string())?;
-            home.join(".claude").join("skills")
-        }
-    };
-
-    // Install each builtin skill
+    // Copy each builtin skill to the central store
     let mut installed_count = 0;
     for (name, skill) in &skills {
-        // Only install builtin skills (don't copy local/user overrides back)
         if skill.source != swissarmyhammer_skills::SkillSource::Builtin {
             continue;
         }
 
-        let skill_dir = skills_dir.join(name);
-        std::fs::create_dir_all(&skill_dir)
-            .map_err(|e| format!("Failed to create skill directory {}: {}", skill_dir.display(), e))?;
+        let skill_store_path = store_dir.join(name);
+        std::fs::create_dir_all(&skill_store_path)
+            .map_err(|e| format!("Failed to create skill store dir {}: {}", skill_store_path.display(), e))?;
 
-        // Write the SKILL.md with full frontmatter + body
-        let skill_md_path = skill_dir.join("SKILL.md");
+        // Write the SKILL.md
+        let skill_md_path = skill_store_path.join("SKILL.md");
         let content = format_skill_md(skill);
         std::fs::write(&skill_md_path, &content)
             .map_err(|e| format!("Failed to write {}: {}", skill_md_path.display(), e))?;
 
         // Write any additional resource files
         for (filename, file_content) in &skill.resources.files {
-            let file_path = skill_dir.join(filename);
+            let file_path = skill_store_path.join(filename);
             std::fs::write(&file_path, file_content)
                 .map_err(|e| format!("Failed to write {}: {}", file_path.display(), e))?;
         }
@@ -180,9 +191,23 @@ fn install_skills(target: &InstallTarget) -> Result<(), String> {
 
     if installed_count > 0 {
         println!(
-            "Installed {} skills to {}",
+            "Stored {} builtin skills in {}",
             installed_count,
-            skills_dir.display()
+            store_dir.display()
+        );
+    }
+
+    // Run sync to create symlinks from store to all detected agent directories
+    let project_root = std::env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let report = mirdan::sync::sync(&project_root, None, global)
+        .map_err(|e| format!("Failed to sync skills: {}", e))?;
+
+    if report.links_created > 0 {
+        println!(
+            "  Created {} symlinks across {} agent(s)",
+            report.links_created,
+            report.agents_synced.len()
         );
     }
 

@@ -32,7 +32,9 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use mirdan::registry::RegistryError;
-use mirdan::{agents, auth, banner, doctor, info, install, list, new, outdated, publish, search};
+use mirdan::{
+    agents, auth, banner, doctor, info, install, list, new, outdated, publish, search, sync,
+};
 use mirdan::{Cli, Commands, NewKind};
 
 /// Helper to run an async registry command and map errors to exit codes.
@@ -105,12 +107,39 @@ async fn main() {
             global,
             git,
             skill,
-        } => handle_registry_result(
-            install::run_install(&package, agent_filter, global, git, skill.as_deref()).await,
-        ),
+            mcp,
+            command,
+            args,
+        } => {
+            if mcp {
+                let cmd = command.expect("--command is required when --mcp is set");
+                handle_registry_result(
+                    install::run_install_mcp(&package, &cmd, args, agent_filter, global).await,
+                )
+            } else {
+                handle_registry_result(
+                    install::run_install(&package, agent_filter, global, git, skill.as_deref())
+                        .await,
+                )
+            }
+        }
 
         Commands::Uninstall { name, global } => {
-            handle_registry_result(install::run_uninstall(&name, agent_filter, global).await)
+            // Check lockfile to see if this is an MCP package
+            let is_mcp = {
+                let project_root = std::env::current_dir().unwrap_or_default();
+                let lf = mirdan::lockfile::Lockfile::load(&project_root).unwrap_or_default();
+                lf.get_package(&name)
+                    .map(|p| p.package_type == mirdan::package_type::PackageType::Mcp)
+                    .unwrap_or(false)
+            };
+            if is_mcp {
+                handle_registry_result(
+                    install::run_uninstall_mcp(&name, agent_filter, global).await,
+                )
+            } else {
+                handle_registry_result(install::run_uninstall(&name, agent_filter, global).await)
+            }
         }
 
         Commands::List {
@@ -145,6 +174,10 @@ async fn main() {
         Commands::Update { name, global } => handle_registry_result(
             outdated::run_update(name.as_deref(), agent_filter, global).await,
         ),
+
+        Commands::Sync { global } => {
+            handle_registry_result(sync::run_sync(agent_filter, global))
+        }
 
         Commands::Doctor { verbose } => doctor::run_doctor(verbose).await,
     };
@@ -230,11 +263,14 @@ mod tests {
                 global,
                 git,
                 skill,
+                mcp,
+                ..
             } => {
                 assert_eq!(package, "no-secrets");
                 assert!(!global);
                 assert!(!git);
                 assert_eq!(skill, None);
+                assert!(!mcp);
             }
             _ => panic!("Expected Install command"),
         }
@@ -564,5 +600,52 @@ mod tests {
     fn test_cli_parsing_no_yes_default() {
         let cli = Cli::parse_from(["mirdan", "list"]);
         assert!(!cli.yes);
+    }
+
+    #[test]
+    fn test_cli_parsing_install_mcp() {
+        let cli = Cli::parse_from([
+            "mirdan", "install", "sah", "--mcp", "--command", "sah", "--args", "serve",
+        ]);
+        match cli.command {
+            Commands::Install {
+                package,
+                mcp,
+                command,
+                args,
+                ..
+            } => {
+                assert_eq!(package, "sah");
+                assert!(mcp);
+                assert_eq!(command, Some("sah".to_string()));
+                assert_eq!(args, vec!["serve"]);
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_install_mcp_requires_command() {
+        // --mcp without --command should fail parsing
+        let result = Cli::try_parse_from(["mirdan", "install", "sah", "--mcp"]);
+        assert!(result.is_err(), "--mcp without --command should fail");
+    }
+
+    #[test]
+    fn test_cli_parsing_sync() {
+        let cli = Cli::parse_from(["mirdan", "sync"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Sync { global: false }
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_sync_global() {
+        let cli = Cli::parse_from(["mirdan", "sync", "--global"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Sync { global: true }
+        ));
     }
 }

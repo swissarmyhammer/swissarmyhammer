@@ -20,8 +20,8 @@ stateDiagram-v2
 
 ## Actions
 
-- start: log "Starting implementation workflow: do → test → commit"
-- do_todos: run workflow "do"
+- start: log "Starting implementation workflow"
+- do_todos: run workflow "do_todos"
 - test: run workflow "test"
 - commit_changes: execute prompt "commit"
 - done: log "Implementation complete: all todos done, tests run, and changes committed!"
@@ -31,7 +31,7 @@ stateDiagram-v2
 This workflow provides a complete implementation cycle by chaining together three key workflows:
 
 1. **Do Todos** - Works through all pending todo items autonomously
-2. **Test** - Runs tests to verify the implementation
+2. **Test** - Runs tests again to verify the overall implementation
 3. **Commit Changes** - Creates a conventional commit with all changes
 
 ### When to Use

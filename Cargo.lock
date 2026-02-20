@@ -6446,6 +6446,7 @@ dependencies = [
  "is-terminal",
  "libc",
  "llama-agent",
+ "mirdan-cli",
  "nix 0.29.0",
  "once_cell",
  "owo-colors",
@@ -6743,7 +6744,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-skills"
-version = "0.6.1"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "dirs",

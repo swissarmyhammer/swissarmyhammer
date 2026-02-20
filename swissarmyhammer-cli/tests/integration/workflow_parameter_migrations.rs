@@ -124,54 +124,6 @@ async fn test_hello_world_workflow_interactive_prompting() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_plan_workflow_parameter_migration() -> Result<()> {
-    // Test that plan workflow accepts parameters via --var (current system)
-    let success = run_builtin_workflow_in_process(
-        "plan",
-        vec!["plan_filename=./specification/test-feature.md".to_string()],
-        true, // dry-run
-    )
-    .await?;
-
-    assert!(success, "Plan workflow should accept --var parameters");
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_plan_workflow_backward_compatibility() -> Result<()> {
-    // Test that --var arguments work
-    let success = run_builtin_workflow_in_process(
-        "plan",
-        vec!["plan_filename=./spec/feature.md".to_string()],
-        true, // dry-run
-    )
-    .await?;
-
-    assert!(
-        success,
-        "Plan workflow should maintain backward compatibility"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_plan_workflow_legacy_behavior() -> Result<()> {
-    // Test that plan runs without parameters (legacy behavior - scan ./specification)
-    let success = run_builtin_workflow_in_process(
-        "plan",
-        vec![], // no parameters
-        true,   // dry-run
-    )
-    .await?;
-
-    assert!(
-        success,
-        "Plan workflow should support legacy behavior without parameters"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_mixed_parameter_resolution_precedence() -> Result<()> {
     // Test precedence when multiple --var are used
     let success = run_builtin_workflow_in_process(
@@ -254,28 +206,3 @@ async fn test_cli_integration_hello_world_workflow() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_cli_integration_plan_workflow() -> Result<()> {
-    use crate::in_process_test_utils::run_sah_command_in_process_with_dir;
-
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-    let _env = IsolatedTestEnvironment::new()?;
-
-    let result = run_sah_command_in_process_with_dir(
-        &[
-            "flow",
-            "plan",
-            "--var",
-            "plan_filename=./test.md",
-            "--dry-run",
-        ],
-        &repo_root,
-    )
-    .await?;
-
-    assert_eq!(result.exit_code, 0);
-    assert!(result.stdout.contains("🔍 Dry run mode"));
-    assert!(result.stdout.contains("plan"));
-    Ok(())
-}

@@ -382,6 +382,7 @@ fn scan_dir_for_package(
         let md_file = match pkg_type {
             PackageType::Skill => dir.join("SKILL.md"),
             PackageType::Validator => dir.join("VALIDATOR.md"),
+            PackageType::Mcp => return, // MCP is never auto-detected from files
         };
 
         if let Ok(content) = std::fs::read_to_string(&md_file) {

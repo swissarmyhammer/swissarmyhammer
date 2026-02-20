@@ -7,12 +7,13 @@
 use std::fmt;
 use std::path::Path;
 
-/// The two package types Mirdan manages.
+/// The package types Mirdan manages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageType {
     Skill,
     Validator,
+    Mcp,
 }
 
 impl fmt::Display for PackageType {
@@ -20,6 +21,7 @@ impl fmt::Display for PackageType {
         match self {
             PackageType::Skill => write!(f, "skill"),
             PackageType::Validator => write!(f, "validator"),
+            PackageType::Mcp => write!(f, "mcp"),
         }
     }
 }
@@ -89,6 +91,7 @@ mod tests {
     fn test_package_type_display() {
         assert_eq!(PackageType::Skill.to_string(), "skill");
         assert_eq!(PackageType::Validator.to_string(), "validator");
+        assert_eq!(PackageType::Mcp.to_string(), "mcp");
     }
 
     #[test]
@@ -155,5 +158,9 @@ mod tests {
         assert_eq!(json, "\"skill\"");
         let parsed: PackageType = serde_json::from_str("\"validator\"").unwrap();
         assert_eq!(parsed, PackageType::Validator);
+        let mcp_json = serde_json::to_string(&PackageType::Mcp).unwrap();
+        assert_eq!(mcp_json, "\"mcp\"");
+        let parsed_mcp: PackageType = serde_json::from_str("\"mcp\"").unwrap();
+        assert_eq!(parsed_mcp, PackageType::Mcp);
     }
 }

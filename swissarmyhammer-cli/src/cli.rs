@@ -159,20 +159,21 @@ Example:
         #[command(subcommand)]
         subcommand: Option<ServeSubcommand>,
     },
-    /// Initialize sah MCP server in Claude Code settings
+    /// Set up sah for all detected AI coding agents (skills + MCP)
     #[command(long_about = "
-Initialize SwissArmyHammer for use with Claude Code.
+Set up SwissArmyHammer for all detected AI coding agents.
 
 This command:
-1. Registers sah as an MCP server in Claude Code settings
+1. Registers sah as an MCP server for all detected agents (Claude Code, Cursor, Windsurf, etc.)
 2. Creates the .swissarmyhammer/ project directory (workflows/) and .prompts/
+3. Installs builtin skills to the central .skills/ store with symlinks to each agent
 
 The command is idempotent - safe to run multiple times.
 
 Targets:
-  project   Write to .mcp.json (default, shared with team via git)
+  project   Write to project-level config files (default, shared with team via git)
   local     Write to ~/.claude.json per-project config (personal, not committed)
-  user      Write to ~/.claude.json global config (all projects)
+  user      Write to global config files (all projects)
 
 Examples:
   sah init              # Project-level setup (default)
@@ -184,17 +185,17 @@ Examples:
         #[arg(value_enum, default_value_t = InstallTarget::Project)]
         target: InstallTarget,
     },
-    /// Remove sah MCP server from Claude Code settings
+    /// Remove sah from all detected AI coding agents (skills + MCP)
     #[command(long_about = "
-Remove SwissArmyHammer MCP server configuration from Claude Code settings.
+Remove SwissArmyHammer from all detected AI coding agents.
 
-By default, only the MCP server entry is removed from the settings file.
-Use --remove-directory to also delete the .swissarmyhammer/ project directory.
+By default, only the MCP server entries are removed from agent config files.
+Use --remove-directory to also delete .swissarmyhammer/, .prompts/, and installed skills.
 
 Examples:
   sah deinit                     # Remove from project settings
   sah deinit user                # Remove from user settings
-  sah deinit --remove-directory  # Also remove .swissarmyhammer/
+  sah deinit --remove-directory  # Also remove .swissarmyhammer/ and skills
 ")]
     Deinit {
         /// Where to remove the MCP server configuration from

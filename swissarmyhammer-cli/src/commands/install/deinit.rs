@@ -1,26 +1,32 @@
-//! Remove sah MCP server configuration from Claude Code settings.
+//! Remove sah from all detected AI coding agents (skills + MCP).
 
 use std::fs;
-
-use serde_json::json;
 
 use crate::cli::InstallTarget;
 
 use super::settings;
 
-/// Uninstall sah MCP server from the specified target.
+/// Builtin skill names that sah installs.
+const BUILTIN_SKILL_NAMES: &[&str] = &["plan", "kanban", "commit", "test", "implement"];
+
+/// Uninstall sah from all detected AI coding agents.
 pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {
-    match target {
-        InstallTarget::Project => uninstall_project(),
-        InstallTarget::Local => uninstall_local(),
-        InstallTarget::User => uninstall_user(),
-    }?;
+    let global = matches!(target, InstallTarget::User);
+
+    // Remove MCP server from all detected agents
+    uninstall_mcp_all_agents(global)?;
+
+    // Handle Claude Code local-scope config specifically
+    if matches!(target, InstallTarget::Local) {
+        uninstall_claude_local_scope()?;
+    }
 
     // Remove directories if requested
     if remove_directory {
         let cwd = std::env::current_dir()
             .map_err(|e| format!("Failed to get current directory: {}", e))?;
 
+        // Remove sah-specific directories
         let sah_dir = cwd.join(".swissarmyhammer");
         if sah_dir.exists() {
             fs::remove_dir_all(&sah_dir)
@@ -35,17 +41,51 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
             println!("Removed {}", prompts_dir.display());
         }
 
-        // Remove installed skills from .claude/skills/
-        remove_installed_skills(&cwd);
+        // Remove builtin skills from .skills/ store and agent dirs
+        uninstall_builtin_skills(global)?;
     }
 
     Ok(())
 }
 
-/// Uninstall from project-level `.mcp.json`.
-fn uninstall_project() -> Result<(), String> {
-    let path = settings::mcp_json_path();
+/// Remove sah MCP server from all detected agents using mirdan's mcp_config.
+fn uninstall_mcp_all_agents(global: bool) -> Result<(), String> {
+    let config = mirdan::agents::load_agents_config()
+        .map_err(|e| format!("Failed to load agents config: {}", e))?;
+    let agents = mirdan::agents::get_detected_agents(&config);
 
+    let mut removed_count = 0;
+    for agent in &agents {
+        match mirdan::mcp_config::uninstall_mcp_for_agent(&agent.def, "sah", global) {
+            Ok(Some(path)) => {
+                println!(
+                    "sah MCP server removed from {} ({})",
+                    agent.def.name,
+                    path.display()
+                );
+                removed_count += 1;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to remove MCP from {}: {}",
+                    agent.def.name, e
+                );
+            }
+        }
+    }
+
+    if removed_count == 0 {
+        // Fallback: try legacy project-level removal
+        uninstall_project_legacy()?;
+    }
+
+    Ok(())
+}
+
+/// Legacy project-level uninstall via .mcp.json (backward compat fallback).
+fn uninstall_project_legacy() -> Result<(), String> {
+    let path = settings::mcp_json_path();
     if !path.exists() {
         println!("No {} file found, nothing to uninstall", path.display());
         return Ok(());
@@ -54,15 +94,16 @@ fn uninstall_project() -> Result<(), String> {
     let mut mcp_settings = settings::read_settings(&path)?;
     let changed = settings::remove_mcp_server(&mut mcp_settings);
 
-    // If mcpServers is now empty, clean it up
     if let Some(mcp_servers) = mcp_settings.get("mcpServers").and_then(|m| m.as_object()) {
         if mcp_servers.is_empty() {
-            mcp_settings.as_object_mut().unwrap().remove("mcpServers");
+            mcp_settings
+                .as_object_mut()
+                .unwrap()
+                .remove("mcpServers");
         }
     }
 
-    // Delete file if empty, otherwise write back
-    if mcp_settings == json!({}) {
+    if mcp_settings == serde_json::json!({}) {
         fs::remove_file(&path)
             .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
         println!(
@@ -79,43 +120,8 @@ fn uninstall_project() -> Result<(), String> {
     Ok(())
 }
 
-/// Uninstall from user-level `~/.claude.json` top-level `mcpServers`.
-fn uninstall_user() -> Result<(), String> {
-    let path = settings::claude_json_path();
-
-    if !path.exists() {
-        println!("No {} file found, nothing to uninstall", path.display());
-        return Ok(());
-    }
-
-    let mut root = settings::read_settings(&path)?;
-    let changed = settings::remove_mcp_server(&mut root);
-
-    // Clean up empty mcpServers object
-    if let Some(mcp_servers) = root.get("mcpServers").and_then(|m| m.as_object()) {
-        if mcp_servers.is_empty() {
-            root.as_object_mut().unwrap().remove("mcpServers");
-        }
-    }
-
-    if changed {
-        settings::write_settings(&path, &root)?;
-        println!(
-            "sah MCP server uninstalled from {} (user scope)",
-            path.display()
-        );
-    } else {
-        println!(
-            "sah MCP server was not configured in {} (user scope)",
-            path.display()
-        );
-    }
-
-    Ok(())
-}
-
 /// Uninstall from local scope: `~/.claude.json` under `projects.<project-path>.mcpServers`.
-fn uninstall_local() -> Result<(), String> {
+fn uninstall_claude_local_scope() -> Result<(), String> {
     let path = settings::claude_json_path();
     let key = settings::project_key()?;
 
@@ -126,11 +132,9 @@ fn uninstall_local() -> Result<(), String> {
 
     let mut root = settings::read_settings(&path)?;
 
-    // Navigate to the project entry
     let changed = if let Some(projects) = root.get_mut("projects") {
         if let Some(entry) = projects.get_mut(&key) {
             let changed = settings::remove_mcp_server(entry);
-            // Clean up empty mcpServers in project entry
             if let Some(mcp_servers) = entry.get("mcpServers").and_then(|m| m.as_object()) {
                 if mcp_servers.is_empty() {
                     entry.as_object_mut().unwrap().remove("mcpServers");
@@ -162,31 +166,58 @@ fn uninstall_local() -> Result<(), String> {
     Ok(())
 }
 
-/// Remove installed skill files from .claude/skills/ for builtin skills
-fn remove_installed_skills(project_root: &std::path::Path) {
-    let skills_dir = project_root.join(".claude").join("skills");
-    if !skills_dir.exists() {
-        return;
-    }
+/// Remove builtin skills from the .skills/ store and agent directories.
+fn uninstall_builtin_skills(global: bool) -> Result<(), String> {
+    let store_dir = mirdan::store::skill_store_dir(global);
 
-    // Only remove builtin skill directories (by checking known names)
-    let builtin_names = ["plan", "do", "commit", "test", "implement"];
+    let config = mirdan::agents::load_agents_config()
+        .map_err(|e| format!("Failed to load agents config: {}", e))?;
+    let agents = mirdan::agents::get_detected_agents(&config);
 
-    for name in &builtin_names {
-        let skill_dir = skills_dir.join(name);
-        if skill_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&skill_dir) {
-                eprintln!("Warning: failed to remove {}: {}", skill_dir.display(), e);
+    for name in BUILTIN_SKILL_NAMES {
+        let store_path = store_dir.join(name);
+
+        // Remove symlinks from each agent's skill directory
+        for agent in &agents {
+            let link_name = mirdan::store::symlink_name(name, &agent.def.symlink_policy);
+            let agent_skill_dir = if global {
+                mirdan::agents::agent_global_skill_dir(&agent.def)
             } else {
-                println!("Removed skill: {}", skill_dir.display());
+                mirdan::agents::agent_project_skill_dir(&agent.def)
+            };
+            let link_path = agent_skill_dir.join(&link_name);
+
+            if std::fs::symlink_metadata(&link_path).is_ok() {
+                if let Err(e) = mirdan::store::remove_if_exists(&link_path) {
+                    eprintln!("Warning: failed to remove {}: {}", link_path.display(), e);
+                } else {
+                    println!("Removed skill link: {}", link_path.display());
+                }
+            }
+        }
+
+        // Remove from store
+        if store_path.exists() {
+            if let Err(e) = fs::remove_dir_all(&store_path) {
+                eprintln!(
+                    "Warning: failed to remove store entry {}: {}",
+                    store_path.display(),
+                    e
+                );
+            } else {
+                println!("Removed skill store: {}", store_path.display());
             }
         }
     }
 
-    // Remove the .claude/skills/ directory if empty
-    if let Ok(entries) = fs::read_dir(&skills_dir) {
-        if entries.count() == 0 {
-            let _ = fs::remove_dir(&skills_dir);
+    // Remove the .skills/ directory if empty
+    if store_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&store_dir) {
+            if entries.count() == 0 {
+                let _ = fs::remove_dir(&store_dir);
+            }
         }
     }
+
+    Ok(())
 }

@@ -376,8 +376,8 @@ mod tests {
             "Skill 'test' should appear as /test command"
         );
         assert!(
-            commands.iter().any(|c| c.name == "/do"),
-            "Skill 'do' should appear as /do command"
+            commands.iter().any(|c| c.name == "/kanban"),
+            "Skill 'kanban' should appear as /kanban command"
         );
         assert!(
             commands.iter().any(|c| c.name == "/implement"),

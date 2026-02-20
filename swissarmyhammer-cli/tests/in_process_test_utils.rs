@@ -169,7 +169,7 @@ fn is_known_workflow(name: &str) -> bool {
         "document",
         "test",
         "review",
-        "do",
+        "kanban",
     ];
     TEST_CREATED_WORKFLOWS.contains(&name) || BUILTIN_WORKFLOWS.contains(&name)
 }

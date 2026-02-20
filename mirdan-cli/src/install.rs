@@ -11,6 +11,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::agents::{self, agent_global_skill_dir, agent_project_skill_dir};
 use crate::git_source::{self, InstallSource};
 use crate::lockfile::{self, LockedPackage, Lockfile};
+use crate::mcp_config::{self, McpServerEntry};
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
 use crate::store;
@@ -98,6 +99,7 @@ async fn run_install_local(
     let (name, version) = match pkg_type {
         PackageType::Skill => read_frontmatter(&dir.join("SKILL.md"))?,
         PackageType::Validator => read_frontmatter(&dir.join("VALIDATOR.md"))?,
+        PackageType::Mcp => unreachable!("MCP type is never auto-detected from files"),
     };
 
     println!("Installing {} from local path ({})...", name, pkg_type);
@@ -105,6 +107,7 @@ async fn run_install_local(
     let targets = match pkg_type {
         PackageType::Skill => deploy_skill(&name, &dir, agent_filter, global).await?,
         PackageType::Validator => deploy_validator(&name, &dir, global)?,
+        PackageType::Mcp => unreachable!("MCP type is never auto-detected from files"),
     };
 
     // Update lockfile
@@ -172,12 +175,14 @@ async fn run_install_git(
         let targets = match pkg.package_type {
             PackageType::Skill => deploy_skill(&pkg.name, &pkg.path, agent_filter, global).await?,
             PackageType::Validator => deploy_validator(&pkg.name, &pkg.path, global)?,
+            PackageType::Mcp => unreachable!("MCP type is never auto-detected from files"),
         };
 
         // Read version from frontmatter
         let md_file = match pkg.package_type {
             PackageType::Skill => pkg.path.join("SKILL.md"),
             PackageType::Validator => pkg.path.join("VALIDATOR.md"),
+            PackageType::Mcp => unreachable!("MCP type is never auto-detected from files"),
         };
         let version = read_frontmatter(&md_file)
             .map(|(_, v)| v)
@@ -306,6 +311,7 @@ async fn run_install_registry(
     let targets = match pkg_type {
         PackageType::Skill => deploy_skill(&name, temp_dir.path(), agent_filter, global).await?,
         PackageType::Validator => deploy_validator(&name, temp_dir.path(), global)?,
+        PackageType::Mcp => unreachable!("MCP type is never auto-detected from files"),
     };
 
     // Update lockfile
@@ -448,6 +454,9 @@ pub async fn run_uninstall(
                 match pkg_type {
                     PackageType::Skill => uninstall_skill(pkg_name, agent_filter, global)?,
                     PackageType::Validator => uninstall_validator(pkg_name, global)?,
+                    PackageType::Mcp => {
+                        // MCP uninstall handled via run_uninstall_mcp, skip here
+                    }
                 }
                 lf.remove_package(pkg_name);
                 println!("  Uninstalled {}", pkg_name);
@@ -471,6 +480,10 @@ pub async fn run_uninstall(
     match pkg_type {
         PackageType::Skill => uninstall_skill(name, agent_filter, global)?,
         PackageType::Validator => uninstall_validator(name, global)?,
+        PackageType::Mcp => {
+            // MCP packages are handled by run_uninstall_mcp (routed from main.rs)
+            return run_uninstall_mcp(name, agent_filter, global).await;
+        }
     }
 
     // Update lockfile
@@ -562,6 +575,110 @@ fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {
 
     std::fs::remove_dir_all(&target_dir)?;
     println!("  Removed from {}", target_dir.display());
+    Ok(())
+}
+
+/// Install an MCP server to all detected (or filtered) agents.
+pub async fn run_install_mcp(
+    name: &str,
+    command: &str,
+    args: Vec<String>,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
+    let config = agents::load_agents_config()?;
+    let target_agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    let entry = McpServerEntry {
+        name: name.to_string(),
+        command: command.to_string(),
+        args,
+        env: None,
+    };
+
+    let mut installed = Vec::new();
+
+    for agent in &target_agents {
+        match mcp_config::install_mcp_for_agent(&agent.def, &entry, global)? {
+            Some(path) => {
+                println!(
+                    "  Installed MCP server '{}' for {} ({})",
+                    name,
+                    agent.def.name,
+                    path.display()
+                );
+                installed.push(agent.def.id.clone());
+            }
+            None => {
+                println!("  Skipped {} (no MCP support)", agent.def.name);
+            }
+        }
+    }
+
+    if installed.is_empty() {
+        println!("No agents with MCP support found.");
+        return Ok(());
+    }
+
+    // Update lockfile
+    let project_root = std::env::current_dir()?;
+    let mut lf = Lockfile::load(&project_root)?;
+    lf.add_package(
+        name.to_string(),
+        LockedPackage {
+            package_type: PackageType::Mcp,
+            version: "0.0.0".to_string(),
+            resolved: format!("mcp:{}", entry.command),
+            integrity: String::new(),
+            installed_at: chrono::Utc::now().to_rfc3339(),
+            targets: installed.clone(),
+        },
+    );
+    lf.save(&project_root)?;
+    println!("  Updated mirdan-lock.json");
+
+    println!(
+        "\nInstalled MCP server '{}' for {} agent(s)",
+        name,
+        installed.len()
+    );
+    Ok(())
+}
+
+/// Uninstall an MCP server from all detected (or filtered) agents.
+pub async fn run_uninstall_mcp(
+    name: &str,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
+    let config = agents::load_agents_config()?;
+    let target_agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    let mut removed = 0;
+
+    for agent in &target_agents {
+        if let Some(path) = mcp_config::uninstall_mcp_for_agent(&agent.def, name, global)? {
+            println!(
+                "  Removed MCP server '{}' from {} ({})",
+                name,
+                agent.def.name,
+                path.display()
+            );
+            removed += 1;
+        }
+    }
+
+    // Update lockfile
+    let project_root = std::env::current_dir()?;
+    let mut lf = Lockfile::load(&project_root)?;
+    lf.remove_package(name);
+    lf.save(&project_root)?;
+    println!("  Updated mirdan-lock.json");
+
+    println!(
+        "\nUninstalled MCP server '{}' from {} agent(s)",
+        name, removed
+    );
     Ok(())
 }
 

@@ -21,7 +21,7 @@ stateDiagram-v2
 ## Actions
 
 - start: log "Working through todos"
-- do_todo: execute prompt "do_todo"
+- do_todo: execute prompt "kanban/do_next"
 - done: log "All todos complete!"
 
 ## Description
