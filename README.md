@@ -4,328 +4,110 @@
 
 # SwissArmyHammer
 
-**The only coding assistant you'll ever need. Write specs, not code.**
-
-📚 **[Complete Documentation & Guides](https://swissarmyhammer.github.io/swissarmyhammer)** 📚
+**Skills and Tools for Any Agent**
 
 [![CI](https://github.com/swissarmyhammer/swissarmyhammer/workflows/CI/badge.svg)](https://github.com/swissarmyhammer/swissarmyhammer/actions)
 [![License](https://img.shields.io/badge/License-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.91+-orange.svg)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://github.com/anthropics/model-context-protocol)
-
-[📖 Documentation](https://swissarmyhammer.github.io/swissarmyhammer)
 
 </div>
 
 ---
 
-## 🎯 Why SwissArmyHammer?
+SwissArmyHammer is a suite of tools that make AI coding agents better. Install skills, validators, and tools into any MCP-compatible agent -- Claude Code, Cursor, Windsurf, or your own.
 
-**Tired of babysitting AI while it codes? Want to describe what you want and come back to finished software?**
+## The Suite
 
-SwissArmyHammer is the **full-featured coding assistant** that works while you sleep. Write a simple spec, kick off a workflow, and return to find your project implemented, tested, and ready to ship.
+| Tool | Binary | What it does |
+|------|--------|-------------|
+| [**sah**](swissarmyhammer-cli/) | `sah` | MCP server with skills and tools for any AI agent. Kanban boards, code search, workflows, git automation, and more. |
+| [**avp**](https://agentvalidatorprotocol.com) | `avp` | Agent Validator Protocol. Hooks into Claude Code to run validators on every file write and edit -- code quality, security, test integrity checks that catch problems before they land. |
+| [**mirdan**](https://mirdan.ai) | `mirdan` | Universal package manager for skills and validators. Install, publish, and share packages across agents from the registry. |
 
-### 🚀 **Set It and Forget It Coding**
-- Write a 4-sentence spec in markdown
-- Run `sah`
-- Go get coffee (or take a nap)
-- Return to a fully implemented, tested CLI application
-
-### 🛠️ **Complete MCP Tool Suite**
-SwissArmyHammer **IS** an MCP server with 25+ professional-grade tools:
-- **File Operations** - Read, write, edit, search across any codebase
-- **Git Integration** - Branch management, commit workflows, PR automation
-- **Rules & Todos** - Built-in quality checks and task management
-- **Web Integration** - Fetch docs, search APIs, gather requirements
-- **Shell Execution** - Safe, controlled system interaction
-- **Questions & Context** - Elicitation-based Q&A system for capturing decisions
-
-### 🧠 **Agentic Intelligence**
-- **Multi-hour autonomous execution** without human intervention
-- **Planning and replanning** as requirements evolve
-- **Error recovery** and self-correction
-- **Context preservation** across long-running tasks
-- **Tool orchestration** that rivals human developers
-
-### 📝 **Markdown-Driven Everything**
-- **Prompts** are markdown files with Liquid templating
-- **Workflows** are state machines defined in markdown
-- **Rules** define code quality standards as markdown files
-- **Specs** are simple markdown documents
-- **No databases, no cloud, no lock-in** - just files
-
-## 🏃‍♂️ Get Started in 5 Minutes
-
-**Build a weather CLI that fetches data from OpenWeatherMap - from idea to working code in minutes:**
-
-### 1. Installation
+## Quick Start
 
 ```bash
+# Install
 brew install swissarmyhammer/tap/swissarmyhammer-cli
+
+# Add sah as an MCP server and check setup
+sah init
 ```
 
-OR
+## sah -- Skills and Tools for Any Agent
+
+`sah` is an MCP server. Add it to any agent and it gets a set of tools and built-in skills.
+
+**Tools:**
+- **Files** -- read, write, edit, glob, grep with .gitignore support
+- **Git** -- branch, commit, diff, status, PR workflows
+- **Shell** -- safe command execution with security hardening
+- **Kanban** -- file-backed task boards with cards, subtasks, dependencies
+- **Code Search** -- tree-sitter powered semantic search across 25+ languages
+- **Web** -- fetch pages, search the web
+- **Workflows** -- state machine orchestration defined in markdown
+- **JavaScript** -- embedded JS expression evaluation
+- **Questions** -- elicitation-based Q&A for capturing decisions
+
+**Built-in Skills:**
+- **plan** -- turn specs into implementation plans on a kanban board
+- **kanban** -- pick up and execute the next task
+- **implement** -- work through all remaining tasks autonomously
+- **commit** -- create well-structured conventional commits
+- **test** -- run the test suite and analyze results
+- **tdd** -- strict test-driven development discipline
+
+See the [sah README](swissarmyhammer-cli/) for full details.
+
+## [avp](https://agentvalidatorprotocol.com) -- Agent Validator Protocol
+
+`avp` hooks into Claude Code as a pre/post tool-use validator. Every time the agent writes or edits a file, validators run automatically and can block bad changes.
+
+**Built-in validators:**
+- **code-quality** -- cognitive complexity, function length, naming, magic numbers, commented code
+- **security-rules** -- no secrets in code, input validation
+- **command-safety** -- safe shell command checks
+- **test-integrity** -- no test cheating
 
 ```bash
-# Install SwissArmyHammer
-cargo install --git https://github.com/swissarmyhammer/swissarmyhammer swissarmyhammer-cli
+# Install validators into your project
+avp init
 
-# Add to Claude Code as MCP server
-claude mcp add --scope user sah sah serve
+# List active validators
+avp list
 ```
 
-THEN
+## [mirdan](https://mirdan.ai) -- Package Manager
 
-```
-sah doctor
-```
-
-### 2. Create Your Project
-```bash
-# Set up a new project
-mkdir weather-cli && cd weather-cli
-git init
-```
-
-### 3. Write Your Spec (30 seconds)
-Create `spec.md`:
-```markdown
-# Weather CLI
-
-Build a command-line tool that fetches current weather for any city using the OpenWeatherMap API.
-The CLI should accept a city name as an argument and display temperature, humidity, and conditions in a clean format.
-Include error handling for invalid cities and network issues.
-Add configuration for API key via environment variable or config file.
-Include basic tests and a README with usage examples.
-```
-
-### 4. Let SwissArmyHammer Build It
-```bash
-# Plan the implementation from your spec
-sah plan spec.md
-
-# Let SwissArmyHammer work through all todos autonomously
-sah do
-```
-
-### 5. Watch the Magic ✨
-SwissArmyHammer will autonomously:
-- Break down your spec into rules and todos
-- Initialize a Rust CLI project with proper structure
-- Implement HTTP client for OpenWeatherMap API
-- Add command-line argument parsing with clap
-- Handle configuration and environment variables
-- Write comprehensive error handling
-- Create unit and integration tests
-- Generate documentation and usage examples
-- Work through each todo systematically until complete
-
-**No chatting. No hand-holding. No babysitting. Just working software.**
-
----
-
-**That's the power of SwissArmyHammer - from idea to implementation while you focus on what matters.**
-
-## 🎯 What Makes SwissArmyHammer Different
-
-### **Real Autonomy, Not Chat Theater**
-Other AI coding tools make you supervise every step. SwissArmyHammer works like a senior developer - give it requirements and check back when it's done.
-
-### **Production-Ready from Day One**
-- **File-based architecture** - No databases, no cloud dependencies
-- **Git-native workflows** - Branches, commits, and PRs handled automatically
-- **Industrial tooling** - Shell execution, file operations, web integration
-- **Type-safe everywhere** - Rust's safety guarantees throughout
-- **Consistent error handling** - Unified Severity trait (Warning/Error/Critical) enables appropriate error handling, logging, and user notification across all 20+ error types in the codebase. See [swissarmyhammer-common](swissarmyhammer-common/README.md) for details
-
-### **MCP Integration Leader**
-SwissArmyHammer pioneered comprehensive MCP server implementation:
-- **40+ professional tools** available to any MCP client
-- **Workflow orchestration** across tool boundaries
-- **Context preservation** spanning hours of work
-
-### **Markdown-Driven Development**
-Everything is a markdown file you can read, edit, and version control:
-- **Prompts** with Liquid templating and variables
-- **Workflows** as state machines with visual diagrams
-- **Rules** for code quality standards in your repository
-- **Specs** that become working software
-
-### **Built for Scale**
-- **Memory-efficient** operation on large codebases
-- **Incremental processing** - only analyze what changed
-- **Parallel execution** where safe
-- **Resource controls** prevent runaway processes
-
----
-
-## 🎮 Build Your First Workflow
-
-**Create a fun "Daily Crypto Report" workflow that fetches live data and generates a formatted report.**
-
-SwissArmyHammer workflows aren't just for coding - you can build multi-step agents for any task using nothing but markdown files.
-
-### 1. Create a Research Prompt
-```bash
-mkdir -p ~/.swissarmyhammer/prompts
-cat > ~/.swissarmyhammer/prompts/crypto-research.md << 'EOF'
----
-title: Crypto Research
-description: Research cryptocurrency information
-arguments:
-  - name: symbol
-    description: Crypto symbol (e.g. BTC, ETH)
-    required: true
----
-
-Research the cryptocurrency {{symbol}}:
-
-1. Use web_fetch to get current price and market data from CoinGecko API: `https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&include_market_cap=true` (Note: adjust coin ID based on symbol - bitcoin for BTC, ethereum for ETH, etc.)
-
-2. Use web_search to find recent news about {{symbol}} cryptocurrency
-
-3. Analyze the collected data and create a comprehensive research summary
-
-4. Use files_write to save your research to ".swissarmyhammer/{{symbol}}-research.md" so it can be used for the final report
-
-Include: current price, 24h change, market cap, recent news highlights, and key developments.
-EOF
-```
-
-### 2. Create a Report Formatter Prompt
-```bash
-cat > ~/.swissarmyhammer/prompts/format-report.md << 'EOF'
----
-title: Format Report
-description: Format crypto research into a beautiful report
-arguments:
-  - name: symbol
-    description: Crypto symbol for the report
-    required: true
----
-
-Create a beautiful daily crypto report for {{symbol}}:
-
-1. Use files_read to retrieve the research data from ".swissarmyhammer/{{symbol}}-research.md"
-
-2. Transform the research into a professional daily report with:
-   - 📊 Executive summary
-   - 💰 Key metrics table (price, change, market cap)
-   - 📈 Trend analysis
-   - ⚠️ Risk assessment
-   - 💡 Final recommendation
-
-3. Use professional formatting with emojis and clear sections
-
-4. Save the final report using files_write as "daily-{{symbol}}-report.md"
-EOF
-```
-
-### 3. Create the Workflow
-```bash
-mkdir -p ~/.swissarmyhammer/workflows
-cat > ~/.swissarmyhammer/workflows/crypto-report.md << 'EOF'
----
-name: crypto-report
-title: Daily Crypto Report
-description: Generate comprehensive cryptocurrency reports
-arguments:
-  - name: crypto
-    description: Cryptocurrency symbol to research
-    default: "BTC"
----
-
-# Daily Crypto Report Workflow
-
-```mermaid
-stateDiagram-v2
-    [*] --> Start
-    Start --> ResearchCrypto
-    ResearchCrypto --> FormatReport
-    FormatReport --> Complete
-    Complete --> [*]
-```
-
-## Actions
-
-- Start: Log "Starting crypto report for ${crypto}"
-- ResearchCrypto: Execute prompt "crypto-research" with symbol="${crypto}"
-- FormatReport: Execute prompt "format-report" with symbol="${crypto}"
-- Complete: Log "Crypto report completed and saved as daily-${crypto}-report.md"
-EOF
-```
-
-### 4. Run Your Workflow
-```bash
-# Generate report for Bitcoin
-sah crypto-report --param crypto=BTC
-
-# Or try different cryptos
-sah crypto-report --param crypto=ETH
-sah crypto-report --param crypto=SOL
-
-# Full form (also works)
-sah flow crypto-report --param crypto=BTC
-```
-
-**This workflow demonstrates SwissArmyHammer's power:**
-- **Web integration** - Fetches live API data and searches news
-- **Prompt orchestration** - Chains research and formatting prompts
-- **File operations** - Saves professional reports
-- **Memory management** - Passes data between workflow states
-- **Parameterization** - Customizable with different crypto symbols
-
-**The result:** A beautiful daily crypto report with live data, news analysis, and professional formatting - all from a simple markdown workflow file.
-
----
-
-**Ready to automate your world? Install SwissArmyHammer and start building workflows that work while you sleep.** 🚀
-
-## 🔄 Workflow Execution
-
-SwissArmyHammer provides a powerful dynamic workflow system for executing both built-in and custom workflows.
-
-### Quick Start
+`mirdan` is a universal package manager for skills and validators. It works across agents -- install a skill once and it's available everywhere.
 
 ```bash
-# List available workflows
-sah flow list
+# Search for packages
+mirdan search code-quality
 
-# Execute a workflow (shortcut form - recommended)
-sah plan ideas/feature.md
+# Install a package
+mirdan install code-quality
 
-# Execute a workflow (full form)
-sah flow plan ideas/feature.md
+# See what agents you have installed
+mirdan agents
 
-# Execute with options
-sah do --quiet
-sah plan spec.md --interactive --dry-run
+# Publish your own
+mirdan publish
 ```
 
-### Key Features
+## Architecture
 
-- **Dynamic Discovery**: List all available workflows with `sah flow list --verbose`
-- **Shortcuts**: Each workflow gets a convenient top-level command
-- **Progress Tracking**: MCP notifications for long-running workflows
-- **Parameter Support**: Required parameters are positional, optional use `--param`
-- **Common Options**: `--interactive`, `--dry-run`, `--quiet` work with all workflows
+Everything is markdown files. Skills, validators, workflows, prompts -- all markdown with YAML frontmatter and Liquid templating. No databases, no cloud lock-in, everything version-controllable.
 
-### Built-in Workflows
-
-**Do**: Autonomous todo execution
-```bash
-sah do --quiet
+```
+~/.swissarmyhammer/
+  prompts/          # Custom prompts (markdown + Liquid)
+  workflows/        # State machine workflows (markdown + Mermaid)
+  skills/           # Installed skills
+  validators/       # Installed validators
 ```
 
-**Plan**: Generate implementation plans from specs
-```bash
-sah plan ideas/feature.md --interactive
-```
+## License
 
-### Learn More
-
-- [CLI Flow Usage Guide](docs/CLI_FLOW_USAGE.md) - Complete command reference
-- [Flow Migration Guide](docs/FLOW_MIGRATION.md) - Migrating from old syntax
-- [MCP Flow Tool](swissarmyhammer-tools/src/mcp/tools/flow/tool/description.md) - MCP API reference
-
----
+MIT OR Apache-2.0

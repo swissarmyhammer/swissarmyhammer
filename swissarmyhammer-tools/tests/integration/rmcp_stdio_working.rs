@@ -2,7 +2,7 @@
 //!
 //! Tests RMCP client functionality using in-process HTTP server instead of subprocess.
 
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use swissarmyhammer_tools::mcp::{
     test_utils::create_test_client,
     unified_server::{start_mcp_server_with_options, McpServerMode},
@@ -57,13 +57,15 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
 
     // Test a tool call to verify full functionality
     let tool_result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "files_grep".into(),
             arguments: serde_json::json!({
                 "pattern": "test"
             })
             .as_object()
             .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("Tool call should work");

@@ -37,12 +37,14 @@ impl CapturingClientHandler {
 impl ClientHandler for CapturingClientHandler {
     fn get_info(&self) -> ClientInfo {
         ClientInfo {
+            meta: None,
             protocol_version: ProtocolVersion::default(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation {
                 name: "mcp-proxy-client".to_string(),
                 title: Some("MCP Proxy Client".to_string()),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                description: None,
                 website_url: None,
                 icons: None,
             },
@@ -129,7 +131,7 @@ impl McpProxyHandler {
 impl ServerHandler for McpProxyHandler {
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         tracing::debug!("McpProxy: initialize (upstream: {})", self.upstream_url);
@@ -150,6 +152,7 @@ impl ServerHandler for McpProxyHandler {
                 name: "mcp-notification-proxy".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 title: Some("MCP Notification Capturing Proxy".into()),
+                description: None,
                 website_url: None,
                 icons: None,
             },
@@ -158,7 +161,7 @@ impl ServerHandler for McpProxyHandler {
 
     async fn list_tools(
         &self,
-        request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let peer = self.get_peer().await?;
@@ -169,7 +172,7 @@ impl ServerHandler for McpProxyHandler {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         tracing::info!("McpProxy: call_tool '{}'", request.name);
@@ -181,7 +184,7 @@ impl ServerHandler for McpProxyHandler {
 
     async fn list_prompts(
         &self,
-        request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
         let peer = self.get_peer().await?;
@@ -192,7 +195,7 @@ impl ServerHandler for McpProxyHandler {
 
     async fn get_prompt(
         &self,
-        request: GetPromptRequestParam,
+        request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, McpError> {
         let peer = self.get_peer().await?;
@@ -217,6 +220,7 @@ impl ServerHandler for McpProxyHandler {
                 name: "mcp-notification-proxy".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 title: Some("MCP Notification Capturing Proxy".into()),
+                description: None,
                 website_url: None,
                 icons: None,
             },

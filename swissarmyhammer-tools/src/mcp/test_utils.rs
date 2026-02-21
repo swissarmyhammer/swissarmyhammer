@@ -48,9 +48,11 @@ pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleCl
             name: "test-client".to_string(),
             title: None,
             version: "1.0.0".to_string(),
+            description: None,
             website_url: None,
             icons: None,
         },
+        meta: None,
     };
 
     client_info
@@ -63,7 +65,7 @@ pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleCl
 mod tests {
     use super::create_test_client;
     use crate::mcp::unified_server::{start_mcp_server_with_options, McpServerMode};
-    use rmcp::model::CallToolRequestParam;
+    use rmcp::model::CallToolRequestParams;
 
     #[tokio::test]
     async fn test_client_list_tools() {
@@ -111,13 +113,15 @@ mod tests {
         let client = create_test_client(server.url()).await;
 
         let result = client
-            .call_tool(CallToolRequestParam {
+            .call_tool(CallToolRequestParams {
                 name: "files_glob".into(),
                 arguments: serde_json::json!({
                     "pattern": "*.md"
                 })
                 .as_object()
                 .cloned(),
+                meta: None,
+                task: None,
             })
             .await
             .unwrap();

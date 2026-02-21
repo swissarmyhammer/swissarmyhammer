@@ -135,6 +135,49 @@ impl ActionParser {
         }
     }
 
+    /// Parse an inline prompt action from description
+    /// Format: prompt "any text here" [with result="variable_name"]
+    pub fn parse_inline_prompt_action(
+        &self,
+        description: &str,
+    ) -> ActionResult<Option<PromptAction>> {
+        let parser = Self::case_insensitive("prompt")
+            .then_ignore(Self::whitespace())
+            .ignore_then(Self::quoted_string())
+            .then(
+                Self::whitespace()
+                    .ignore_then(Self::case_insensitive("with"))
+                    .ignore_then(Self::whitespace())
+                    .then(
+                        Self::argument_key()
+                            .then_ignore(just('='))
+                            .then(Self::quoted_string())
+                            .separated_by(Self::whitespace())
+                            .collect::<Vec<(String, String)>>(),
+                    )
+                    .map(|(_, args)| args)
+                    .or_not(),
+            );
+
+        match parser.parse(description.trim()).into_result() {
+            Ok((text, args)) => {
+                let mut action = PromptAction::new_inline(text);
+                if let Some(arguments) = args {
+                    for (key, value) in arguments {
+                        if key == "result" {
+                            action = action.with_result_variable(value);
+                        } else if key == "quiet" {
+                            action = action.with_quiet(value == "true");
+                        }
+                        // Silently ignore other args for inline prompts
+                    }
+                }
+                Ok(Some(action))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
     /// Parse a wait action from description
     /// Format: Wait for user confirmation OR Wait 30 seconds
     pub fn parse_wait_action(&self, description: &str) -> ActionResult<Option<WaitAction>> {
@@ -950,6 +993,62 @@ mod tests {
         // Test invalid format
         let result = parser.parse_abort_action("Abort test error");
         assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_parse_inline_prompt_action() {
+        let parser = ActionParser::new().unwrap();
+
+        // Test basic inline prompt
+        let action = parser
+            .parse_inline_prompt_action("prompt \"analyze this code for bugs\"")
+            .unwrap()
+            .unwrap();
+        assert!(action.inline_text.is_some());
+        assert_eq!(
+            action.inline_text.as_deref(),
+            Some("analyze this code for bugs")
+        );
+        assert!(action.result_variable.is_none());
+
+        // Test with result variable
+        let action = parser
+            .parse_inline_prompt_action(
+                "prompt \"summarize in 3 bullet points\" with result=\"summary\"",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            action.inline_text.as_deref(),
+            Some("summarize in 3 bullet points")
+        );
+        assert_eq!(action.result_variable, Some("summary".to_string()));
+
+        // Test case insensitive
+        let action = parser
+            .parse_inline_prompt_action("Prompt \"hello world\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.inline_text.as_deref(), Some("hello world"));
+
+        // Test with quiet option
+        let action = parser
+            .parse_inline_prompt_action("prompt \"silent work\" with quiet=\"true\"")
+            .unwrap()
+            .unwrap();
+        assert!(action.quiet);
+
+        // Test that "execute prompt" does NOT match as inline
+        let result = parser
+            .parse_inline_prompt_action("Execute prompt \"named-prompt\"")
+            .unwrap();
+        assert!(result.is_none());
+
+        // Test invalid format (no quotes)
+        let result = parser
+            .parse_inline_prompt_action("prompt analyze this")
+            .unwrap();
+        assert!(result.is_none());
     }
 
     #[test]

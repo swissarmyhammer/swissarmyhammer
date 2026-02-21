@@ -14,13 +14,21 @@ async-trait.workspace = true
 axum.workspace = true
 futures.workspace = true
 rmcp.workspace = true
-tokio = { workspace = true, features = ["sync", "rt", "net"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "net", "process", "time"] }
 tokio-stream.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
+regex.workspace = true
 model-context-protocol-extras = { path = "../model-context-protocol-extras" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+[dev-dependencies]
+avp-common = { path = "../avp-common" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "net", "process", "time", "macros"] }
 
 [lints]
 workspace = true

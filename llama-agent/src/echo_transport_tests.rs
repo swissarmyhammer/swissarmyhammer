@@ -38,7 +38,7 @@ mod tests {
     // Real client wrapper for testing
     #[derive(Debug)]
     pub struct RealTestClient {
-        client: rmcp::service::RunningService<RoleClient, rmcp::model::InitializeRequestParam>,
+        client: rmcp::service::RunningService<RoleClient, rmcp::model::InitializeRequestParams>,
     }
 
     #[derive(Clone, Debug)]
@@ -61,9 +61,11 @@ mod tests {
                     name: "test_client".to_string(),
                     title: None,
                     version: "0.0.1".to_string(),
+                    description: None,
                     website_url: None,
                     icons: None,
                 },
+                meta: None,
             };
 
             let service = client_info.serve(transport).await?;
@@ -76,7 +78,7 @@ mod tests {
         }
 
         pub async fn call_tool(&self, name: &str, args: serde_json::Value) -> Result<String> {
-            let params = CallToolRequestParam {
+            let params = CallToolRequestParams {
                 name: name.to_string().into(),
                 arguments: args.as_object().cloned(),
             };
@@ -99,7 +101,7 @@ mod tests {
         }
 
         pub async fn get_prompt(&self, name: &str, args: Option<std::collections::HashMap<String, serde_json::Value>>) -> Result<Vec<String>> {
-            let params = GetPromptRequestParam {
+            let params = GetPromptRequestParams {
                 name: name.to_string(),
                 arguments: args.map(|map| {
                     let mut json_map = serde_json::Map::new();

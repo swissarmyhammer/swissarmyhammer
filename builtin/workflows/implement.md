@@ -23,7 +23,7 @@ stateDiagram-v2
 - start: log "Starting implementation workflow"
 - do_todos: run workflow "do_todos"
 - test: run workflow "test"
-- commit_changes: execute prompt "commit"
+- commit_changes: prompt "commit"
 - done: log "Implementation complete: all todos done, tests run, and changes committed!"
 
 ## Description

@@ -53,13 +53,15 @@ impl FilteringMcpProxy {
         let transport = StreamableHttpClientTransport::from_uri(self.upstream_url.clone());
 
         // Create client info
-        let client_info = InitializeRequestParam {
+        let client_info = InitializeRequestParams {
+            meta: None,
             protocol_version: ProtocolVersion::default(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation {
                 name: "filtering-proxy".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 title: Some("Filtering Proxy".into()),
+                description: None,
                 website_url: None,
                 icons: None,
             },
@@ -87,6 +89,7 @@ impl FilteringMcpProxy {
             name: "swissarmyhammer-filtering-proxy".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             title: Some("SwissArmyHammer Filtering Proxy".into()),
+            description: None,
             website_url: None,
             icons: None,
         }
@@ -115,7 +118,7 @@ impl ServerHandler for FilteringMcpProxy {
     /// Forward initialize request to upstream server via HTTP.
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<InitializeResult, McpError> {
         tracing::debug!(
@@ -136,7 +139,7 @@ impl ServerHandler for FilteringMcpProxy {
     /// Forward list_prompts request to upstream server via rmcp peer.
     async fn list_prompts(
         &self,
-        request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListPromptsResult, McpError> {
         tracing::debug!(
@@ -153,7 +156,7 @@ impl ServerHandler for FilteringMcpProxy {
     /// Forward get_prompt request to upstream server via rmcp peer.
     async fn get_prompt(
         &self,
-        request: GetPromptRequestParam,
+        request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetPromptResult, McpError> {
         tracing::debug!(
@@ -174,7 +177,7 @@ impl ServerHandler for FilteringMcpProxy {
     /// based on the allow/deny regex patterns configured for this proxy.
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
         tracing::warn!(
@@ -227,7 +230,7 @@ impl ServerHandler for FilteringMcpProxy {
     /// attempt to call tools it cannot see in the list.
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
         tracing::info!(

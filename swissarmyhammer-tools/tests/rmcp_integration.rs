@@ -3,7 +3,7 @@
 //! These tests use the rmcp client library to connect to our servers
 //! and verify they implement the MCP protocol correctly.
 
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use swissarmyhammer_tools::mcp::{
     test_utils::create_test_client,
     unified_server::{start_mcp_server_with_options, McpServerMode},
@@ -53,13 +53,15 @@ async fn test_mcp_server_with_rmcp_client() {
 
     // Test a simple tool call - files_glob should work
     let tool_result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "files_glob".into(),
             arguments: serde_json::json!({
                 "pattern": "*.md"
             })
             .as_object()
             .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("Tool call should work");

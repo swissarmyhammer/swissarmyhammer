@@ -33,9 +33,11 @@ async fn test_http_mcp_server_rmcp_client_final() {
             name: "test http client".to_string(),
             title: None,
             version: "0.0.1".to_string(),
+            description: None,
             website_url: None,
             icons: None,
         },
+        meta: None,
     };
 
     let client = client_info.serve(transport).await.unwrap();

@@ -47,6 +47,7 @@ impl TestMcpServer {
                 icons: None,
                 title: Some("list-files".into()),
                 meta: None,
+                execution: None,
             },
             Tool {
                 name: "create-plan".into(),
@@ -66,6 +67,7 @@ impl TestMcpServer {
                 icons: None,
                 title: Some("create-plan".into()),
                 meta: None,
+                execution: None,
             },
         ]
     }
@@ -130,7 +132,7 @@ pub async fn start_test_mcp_server() -> Result<String, Box<dyn std::error::Error
 impl ServerHandler for TestMcpServer {
     async fn initialize(
         &self,
-        request: InitializeRequestParam,
+        request: InitializeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<InitializeResult, McpError> {
         tracing::info!(
@@ -150,6 +152,8 @@ impl ServerHandler for TestMcpServer {
                 logging: None,
                 completions: None,
                 experimental: None,
+                extensions: None,
+                tasks: None,
             },
             instructions: Some("Test MCP server for ACP conformance testing".into()),
             server_info: Implementation {
@@ -157,6 +161,7 @@ impl ServerHandler for TestMcpServer {
                 version: self.version.clone(),
                 icons: None,
                 title: None,
+                description: None,
                 website_url: None,
             },
         })
@@ -164,7 +169,7 @@ impl ServerHandler for TestMcpServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
         tracing::debug!("TestMcpServer: list_tools called");
@@ -177,7 +182,7 @@ impl ServerHandler for TestMcpServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
         tracing::info!("TestMcpServer: call_tool: {}", request.name);
@@ -314,12 +319,15 @@ impl ServerHandler for TestMcpServer {
                 logging: None,
                 completions: None,
                 experimental: None,
+                extensions: None,
+                tasks: None,
             },
             server_info: Implementation {
                 name: self.name.clone(),
                 version: self.version.clone(),
                 icons: None,
                 title: None,
+                description: None,
                 website_url: None,
             },
             instructions: Some("Test MCP server for ACP conformance testing".into()),

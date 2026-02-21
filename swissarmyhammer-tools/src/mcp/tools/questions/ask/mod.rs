@@ -2,7 +2,7 @@ use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::questions::persistence::save_question_answer;
 use async_trait::async_trait;
-use rmcp::model::{CallToolResult, CreateElicitationRequestParam, ElicitationSchema};
+use rmcp::model::{CallToolResult, CreateElicitationRequestParams, ElicitationSchema};
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -81,7 +81,8 @@ impl McpTool for QuestionAskTool {
 
         // Send elicitation request to client
         tracing::info!("Sending elicitation request: {}", request.question);
-        let elicitation_request = CreateElicitationRequestParam {
+        let elicitation_request = CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
             message: request.question.clone(),
             requested_schema: elicitation_schema,
         };

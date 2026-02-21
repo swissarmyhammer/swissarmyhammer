@@ -61,9 +61,11 @@ impl ClientHandler for NotifyingClientHandler {
                 name: "llama_agent_notifying_client".to_string(),
                 title: Some("Llama Agent Notifying MCP Client".to_string()),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                description: None,
                 website_url: None,
                 icons: None,
             },
+            meta: None,
         }
     }
 

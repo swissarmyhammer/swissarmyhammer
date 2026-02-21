@@ -66,7 +66,7 @@ A good test describes **what** the system does, not **how** it does it. If you r
 
 ### Coverage Requirements
 
-Every new function or method gets a test. Target 80%+ coverage overall. Require 100% for: financial calculations, authentication, security-critical code, core business logic.
+Every new function or method gets a test. Target 80%+ coverage overall.
 
 For each behavior, test the happy path AND: what happens with empty input, null/missing values, invalid types, boundary values, error conditions, and concurrent access where relevant. See [edge-cases.md](edge-cases.md) for the complete checklist.
 

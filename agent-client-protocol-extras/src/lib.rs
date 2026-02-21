@@ -22,11 +22,22 @@ use agent_client_protocol::Agent;
 use std::path::PathBuf;
 use swissarmyhammer_common::Pretty;
 
+pub mod hook_config;
+pub mod hookable_agent;
 pub mod playback;
 pub mod recording;
 pub mod test_mcp_server;
 pub mod tracing_agent;
 
+pub use hook_config::{
+    hookable_agent_from_config, HookConfig, HookConfigError, HookDecisionValue, HookEvaluator,
+    HookEventKindConfig, HookHandlerConfig, HookOutput, HookSpecificOutput, MatcherGroup,
+    PromptHookResponse, UnsupportedEventKind,
+};
+pub use hookable_agent::{
+    HookCommandContext, HookDecision, HookEvent, HookEventKind, HookHandler, HookRegistration,
+    HookableAgent, SessionSource,
+};
 pub use playback::PlaybackAgent;
 pub use recording::RecordingAgent;
 pub use test_mcp_server::{start_test_mcp_server, TestMcpServer};
