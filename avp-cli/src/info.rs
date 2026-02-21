@@ -46,7 +46,7 @@ fn show_local_info(name: &str) -> bool {
     println!(
         "{}@{} ({})\n",
         ruleset.name(),
-        ruleset.manifest.version,
+        ruleset.manifest.metadata.version,
         source_label(&ruleset.source)
     );
     println!("  Description: {}", ruleset.description());

@@ -239,13 +239,10 @@ fn read_frontmatter(path: &Path) -> Result<(String, String), RegistryError> {
         .to_string();
 
     let version = yaml
-        .get("version")
+        .get("metadata")
+        .and_then(|m| m.get("version"))
         .and_then(|v| v.as_str())
-        .or_else(|| {
-            yaml.get("metadata")
-                .and_then(|m| m.get("version"))
-                .and_then(|v| v.as_str())
-        })
+        .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
         .unwrap_or("0.0.0")
         .to_string();
 
@@ -739,7 +736,7 @@ mod tests {
         let md = dir.path().join("SKILL.md");
         std::fs::write(
             &md,
-            "---\nname: test-skill\nversion: \"1.2.3\"\n---\n# Test\n",
+            "---\nname: test-skill\nmetadata:\n  version: \"1.2.3\"\n---\n# Test\n",
         )
         .unwrap();
 
@@ -775,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_frontmatter_top_level_preferred() {
+    fn test_read_frontmatter_metadata_preferred() {
         let dir = tempfile::tempdir().unwrap();
         let md = dir.path().join("SKILL.md");
         std::fs::write(
@@ -786,14 +783,14 @@ mod tests {
 
         let (name, version) = read_frontmatter(&md).unwrap();
         assert_eq!(name, "test-skill");
-        assert_eq!(version, "1.0.0");
+        assert_eq!(version, "2.0.0");
     }
 
     #[test]
     fn test_read_frontmatter_missing_name_errors() {
         let dir = tempfile::tempdir().unwrap();
         let md = dir.path().join("SKILL.md");
-        std::fs::write(&md, "---\nversion: \"1.0.0\"\n---\n# Test\n").unwrap();
+        std::fs::write(&md, "---\nmetadata:\n  version: \"1.0.0\"\n---\n# Test\n").unwrap();
 
         assert!(read_frontmatter(&md).is_err());
     }
@@ -835,7 +832,7 @@ mod tests {
         std::fs::write(
             dir.join("SKILL.md"),
             format!(
-                "---\nname: {}\nversion: \"{}\"\n---\n# {}\nA test skill.\n",
+                "---\nname: {}\nmetadata:\n  version: \"{}\"\n---\n# {}\nA test skill.\n",
                 name, version, name
             ),
         )
@@ -848,7 +845,7 @@ mod tests {
         std::fs::write(
             dir.join("VALIDATOR.md"),
             format!(
-                "---\nname: {}\nversion: \"{}\"\n---\n# {}\nA test validator.\n",
+                "---\nname: {}\nmetadata:\n  version: \"{}\"\n---\n# {}\nA test validator.\n",
                 name, version, name
             ),
         )

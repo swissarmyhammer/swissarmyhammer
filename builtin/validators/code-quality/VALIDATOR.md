@@ -1,7 +1,8 @@
 ---
 name: code-quality
 description: Code quality and maintainability checks for best practices
-version: "{{version}}"
+metadata:
+  version: "{{version}}"
 trigger: PostToolUse
 match:
   tools:

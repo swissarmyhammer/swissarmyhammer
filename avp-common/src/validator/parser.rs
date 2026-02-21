@@ -868,7 +868,8 @@ version: "{{ version }}""#;
         let content = r#"---
 name: test-ruleset
 description: Test
-version: "{{ version }}"
+metadata:
+  version: "{{ version }}"
 trigger: PostToolUse
 ---
 
@@ -880,7 +881,7 @@ trigger: PostToolUse
             None,
         )
         .unwrap();
-        assert_eq!(manifest.version, crate::VERSION);
+        assert_eq!(manifest.metadata.version, crate::VERSION);
     }
 
     #[test]

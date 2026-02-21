@@ -1415,13 +1415,15 @@ Some text after
 
     #[test]
     fn test_rule_prompt_contains_hook_context() {
-        use crate::validator::{RuleSetManifest, ValidatorSource};
+        use crate::validator::{RuleSetManifest, RuleSetMetadata, ValidatorSource};
 
         let ruleset = RuleSet {
             manifest: RuleSetManifest {
                 name: "test-ruleset".to_string(),
                 description: "Test RuleSet".to_string(),
-                version: "1.0.0".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
                 trigger: HookType::PreToolUse,
                 match_criteria: None,
                 trigger_matcher: None,
@@ -1473,13 +1475,15 @@ Some text after
     fn test_rule_prompt_renders_hook_context_set_after_construction() {
         // Rule prompts should include hook context in rendered output even
         // when hook_context is set after initial construction with partials.
-        use crate::validator::{RuleSetManifest, ValidatorSource};
+        use crate::validator::{RuleSetManifest, RuleSetMetadata, ValidatorSource};
 
         let ruleset = RuleSet {
             manifest: RuleSetManifest {
                 name: "test-ruleset".to_string(),
                 description: "Test RuleSet".to_string(),
-                version: "1.0.0".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
                 trigger: HookType::PreToolUse,
                 match_criteria: None,
                 trigger_matcher: None,

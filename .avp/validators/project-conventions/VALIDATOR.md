@@ -1,7 +1,8 @@
 ---
 name: project-conventions
 description: Project-specific coding conventions for swissarmyhammer
-version: 1.0.0
+metadata:
+  version: "1.0.0"
 trigger: PostToolUse
 match:
   tools:

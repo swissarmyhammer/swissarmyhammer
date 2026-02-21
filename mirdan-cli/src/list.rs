@@ -176,11 +176,12 @@ fn read_frontmatter_version(path: &Path) -> String {
 
     let frontmatter = &rest[..end];
     if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
-        if let Some(version) = yaml.get("version").and_then(|v| v.as_str()).or_else(|| {
-            yaml.get("metadata")
-                .and_then(|m| m.get("version"))
-                .and_then(|v| v.as_str())
-        }) {
+        if let Some(version) = yaml
+            .get("metadata")
+            .and_then(|m| m.get("version"))
+            .and_then(|v| v.as_str())
+            .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
+        {
             return version.to_string();
         }
     }
@@ -220,7 +221,8 @@ mod tests {
             &path,
             r#"---
 name: test-skill
-version: "1.2.3"
+metadata:
+  version: "1.2.3"
 ---
 # Test
 "#,
@@ -298,7 +300,7 @@ metadata:
         std::fs::create_dir_all(&val_dir).unwrap();
         std::fs::write(
             val_dir.join("VALIDATOR.md"),
-            "---\nname: test-val\nversion: \"1.0.0\"\n---\n# Test\n",
+            "---\nname: test-val\nmetadata:\n  version: \"1.0.0\"\n---\n# Test\n",
         )
         .unwrap();
         std::fs::create_dir(val_dir.join("rules")).unwrap();
@@ -322,7 +324,7 @@ metadata:
         std::fs::create_dir_all(&val_dir).unwrap();
         std::fs::write(
             val_dir.join("VALIDATOR.md"),
-            "---\nname: test-val\nversion: \"1.0.0\"\n---\n# Test\n",
+            "---\nname: test-val\nmetadata:\n  version: \"1.0.0\"\n---\n# Test\n",
         )
         .unwrap();
         std::fs::create_dir(val_dir.join("rules")).unwrap();

@@ -682,7 +682,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("SKILL.md"),
-            "---\nname: root-skill\nversion: \"1.0.0\"\n---\n# Skill\n",
+            "---\nname: root-skill\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n",
         )
         .unwrap();
 
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn test_extract_name_valid() {
-        let content = "---\nname: my-skill\nversion: \"1.0.0\"\n---\n# Skill\n";
+        let content = "---\nname: my-skill\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n";
         assert_eq!(
             extract_name_from_frontmatter(content),
             Some("my-skill".to_string())
@@ -858,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_extract_name_no_name_field() {
-        let content = "---\nversion: \"1.0.0\"\n---\n# Skill\n";
+        let content = "---\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n";
         assert_eq!(extract_name_from_frontmatter(content), None);
     }
 

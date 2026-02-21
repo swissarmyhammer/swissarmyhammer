@@ -56,7 +56,8 @@ pub fn run_new_skill(
         r#"---
 name: {name}
 description: "TODO: Describe what this skill does"
-version: "0.1.0"
+metadata:
+  version: "0.1.0"
 ---
 
 # {name}
@@ -141,7 +142,8 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
         r#"---
 name: {name}
 description: "TODO: Describe what this RuleSet validates"
-version: "0.1.0"
+metadata:
+  version: "0.1.0"
 trigger: PostToolUse
 match:
   tools: [Write, Edit]
