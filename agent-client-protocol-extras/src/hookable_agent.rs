@@ -300,9 +300,7 @@ fn tool_event_json(
         "hook_event_name": event_name,
         "tool_name": tool_name,
     });
-    if let Some(input) = tool_input {
-        o["tool_input"] = input.clone();
-    }
+    o["tool_input"] = tool_input.clone().unwrap_or(serde_json::json!({}));
     if let Some(id) = tool_use_id {
         o["tool_use_id"] = serde_json::Value::String(id.clone());
     }
@@ -324,11 +322,9 @@ fn extract_prompt_text(prompt: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-/// Append AVP common fields to JSON if non-empty.
+/// Append AVP common fields to JSON.
 fn append_avp_context(obj: &mut serde_json::Value, ctx: &HookCommandContext) {
-    if !ctx.transcript_path.is_empty() {
-        obj["transcript_path"] = serde_json::Value::String(ctx.transcript_path.clone());
-    }
+    obj["transcript_path"] = serde_json::Value::String(ctx.transcript_path.clone());
     if !ctx.permission_mode.is_empty() {
         obj["permission_mode"] = serde_json::Value::String(ctx.permission_mode.clone());
     }

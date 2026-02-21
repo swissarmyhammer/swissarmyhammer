@@ -84,8 +84,8 @@ pub struct PostToolUseInput {
     /// Tool input parameters.
     pub tool_input: serde_json::Value,
 
-    /// Tool execution result (may be named tool_result or tool_output).
-    #[serde(default, alias = "tool_output")]
+    /// Tool execution result (may be named tool_result, tool_output, or tool_response).
+    #[serde(default, alias = "tool_output", alias = "tool_response")]
     pub tool_result: Option<serde_json::Value>,
 
     /// Unique identifier for this tool use.

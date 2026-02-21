@@ -298,6 +298,8 @@ pub struct PromptAction {
     ///
     /// The quiet mode can also be controlled via the `_quiet` context variable in workflows.
     pub quiet: bool,
+    /// When set, use this text directly instead of resolving prompt_name from the library.
+    pub inline_text: Option<String>,
 }
 
 impl PromptAction {
@@ -307,7 +309,19 @@ impl PromptAction {
             prompt_name,
             arguments: HashMap::new(),
             result_variable: None,
-            quiet: false, // Default to showing output
+            quiet: false,
+            inline_text: None,
+        }
+    }
+
+    /// Create a new inline prompt action with arbitrary text
+    pub fn new_inline(text: String) -> Self {
+        Self {
+            prompt_name: String::new(),
+            arguments: HashMap::new(),
+            result_variable: None,
+            quiet: false,
+            inline_text: Some(text),
         }
     }
 
@@ -344,10 +358,14 @@ impl Action for PromptAction {
     }
 
     fn description(&self) -> String {
-        format!(
-            "Execute prompt '{}' with arguments: {:?}",
-            self.prompt_name, self.arguments
-        )
+        if self.inline_text.is_some() {
+            "Execute inline prompt".to_string()
+        } else {
+            format!(
+                "Execute prompt '{}' with arguments: {:?}",
+                self.prompt_name, self.arguments
+            )
+        }
     }
 
     fn action_type(&self) -> &'static str {
@@ -363,6 +381,53 @@ impl PromptAction {
         &self,
         context: &WorkflowTemplateContext,
     ) -> ActionResult<(String, Option<String>)> {
+        // Handle inline text: render through Liquid for variable expansion
+        if let Some(ref text) = self.inline_text {
+            tracing::debug!("Rendering inline prompt text");
+
+            let rendered = liquid::ParserBuilder::with_stdlib()
+                .build()
+                .and_then(|parser| parser.parse(text))
+                .and_then(|tmpl| {
+                    let mut globals = liquid::Object::new();
+                    for (key, value) in context.iter() {
+                        if !key.starts_with('_') {
+                            globals.insert(
+                                key.clone().into(),
+                                liquid::model::to_value(value).unwrap_or(liquid::model::Value::Nil),
+                            );
+                        }
+                    }
+                    tmpl.render(&globals)
+                })
+                .unwrap_or_else(|_| text.clone());
+
+            // Still try to load system prompt for non-mode workflows
+            let system_prompt = if context.get_workflow_mode().is_some() {
+                None
+            } else {
+                let mut template_context = swissarmyhammer_config::TemplateContext::load()
+                    .map_err(|e| {
+                        ActionError::ClaudeError(format!("Failed to load template context: {e}"))
+                    })?;
+                for (key, value) in context.iter() {
+                    if !key.starts_with('_') {
+                        template_context
+                            .set_var(key.clone(), serde_json::Value::String(value.to_string()));
+                    }
+                }
+                let mut library = PromptLibrary::new();
+                let mut resolver = PromptResolver::new();
+                let _ = resolver.load_all_prompts(&mut library);
+                let library_arc = Arc::new(library);
+                library_arc
+                    .render(".system/default", &template_context)
+                    .ok()
+            };
+
+            return Ok((rendered, system_prompt));
+        }
+
         tracing::debug!(
             "Starting render_prompts_directly for prompt: {}",
             self.prompt_name
@@ -1999,6 +2064,11 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
         return Ok(Some(Box::new(prompt_action)));
     }
 
+    // Inline prompt (just `prompt "text"`, without `execute` prefix)
+    if let Some(inline_action) = parser.parse_inline_prompt_action(description)? {
+        return Ok(Some(Box::new(inline_action)));
+    }
+
     if let Some(wait_action) = parser.parse_wait_action(description)? {
         return Ok(Some(Box::new(wait_action)));
     }
@@ -2485,6 +2555,37 @@ mod tests {
         let action2 = PromptAction::new("test-prompt2".to_string()).with_quiet(true);
 
         assert!(action2.quiet);
+    }
+
+    #[test]
+    fn test_parse_inline_prompt_via_dispatch() {
+        // Basic inline prompt
+        let action = parse_action_from_description("prompt \"hello world\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.action_type(), "prompt");
+        assert_eq!(action.description(), "Execute inline prompt");
+
+        let prompt_action = action.as_any().downcast_ref::<PromptAction>().unwrap();
+        assert_eq!(prompt_action.inline_text.as_deref(), Some("hello world"));
+        assert!(prompt_action.prompt_name.is_empty());
+
+        // Inline prompt with result variable
+        let action =
+            parse_action_from_description("prompt \"analyze this\" with result=\"analysis\"")
+                .unwrap()
+                .unwrap();
+        let prompt_action = action.as_any().downcast_ref::<PromptAction>().unwrap();
+        assert_eq!(prompt_action.inline_text.as_deref(), Some("analyze this"));
+        assert_eq!(prompt_action.result_variable, Some("analysis".to_string()));
+
+        // Named prompt still works (execute prompt)
+        let action = parse_action_from_description("Execute prompt \"named-prompt\"")
+            .unwrap()
+            .unwrap();
+        let prompt_action = action.as_any().downcast_ref::<PromptAction>().unwrap();
+        assert!(prompt_action.inline_text.is_none());
+        assert_eq!(prompt_action.prompt_name, "named-prompt");
     }
 
     #[test]
@@ -3244,6 +3345,7 @@ mod tests {
             arguments: HashMap::new(),
             result_variable: Some("test_result".to_string()),
             quiet: true, // Suppress output during tests
+            inline_text: None,
         };
 
         // Set up context with Claude executor

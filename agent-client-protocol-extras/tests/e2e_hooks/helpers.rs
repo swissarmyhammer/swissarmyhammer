@@ -6,9 +6,11 @@ use agent_client_protocol::{
     ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol_extras::{
-    hookable_agent_from_config, HookConfig, HookEventKind, HookableAgent, PlaybackAgent,
+    hookable_agent_from_config, HookCommandContext, HookConfig, HookEvaluator, HookEventKind,
+    HookableAgent, PlaybackAgent,
 };
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -340,4 +342,116 @@ pub(crate) async fn send_named_tool_notification(
         SessionUpdate::ToolCall(tool_call),
     ));
     tokio::time::sleep(NOTIFY_DELAY).await;
+}
+
+// ---------------------------------------------------------------------------
+// AVP schema validation helpers
+// ---------------------------------------------------------------------------
+
+/// Build a HookCommandContext with typical test values for AVP validation.
+pub(crate) fn avp_test_context() -> HookCommandContext {
+    HookCommandContext {
+        transcript_path: "/tmp/test-transcript.jsonl".to_string(),
+        permission_mode: "default".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Script helpers (additional variants)
+// ---------------------------------------------------------------------------
+
+/// Write a shell script that captures stdin, prints non-JSON to stdout,
+/// and exits 0. Used to test malformed output fallback.
+pub(crate) fn write_malformed_output_script(dir: &Path, name: &str) -> PathBuf {
+    let script_path = dir.join(name);
+    let capture_path = dir.join(format!("{}.stdin_capture", name));
+    let content = format!(
+        "#!/bin/sh\ncat > '{}'\nprintf '%s' 'not valid json {{{{'\nexit 0\n",
+        capture_path.display(),
+    );
+    std::fs::write(&script_path, content).expect("Failed to write hook script");
+    make_executable(&script_path);
+    script_path
+}
+
+/// Write a shell script that captures stdin and exits with the given code
+/// (no stderr message). Used for testing unexpected exit codes.
+pub(crate) fn write_exit_code_script(dir: &Path, name: &str, exit_code: i32) -> PathBuf {
+    let script_path = dir.join(name);
+    let capture_path = dir.join(format!("{}.stdin_capture", name));
+    let content = format!(
+        "#!/bin/sh\ncat > '{}'\nexit {}\n",
+        capture_path.display(),
+        exit_code,
+    );
+    std::fs::write(&script_path, content).expect("Failed to write hook script");
+    make_executable(&script_path);
+    script_path
+}
+
+// ---------------------------------------------------------------------------
+// Mock evaluator for prompt/agent hooks
+// ---------------------------------------------------------------------------
+
+/// Test evaluator for prompt-based and agent-based hooks.
+pub(crate) struct MockEvaluator {
+    response: String,
+    is_agent_called: Arc<AtomicBool>,
+}
+
+impl MockEvaluator {
+    /// Returns an evaluator that always responds `{"ok": true}`.
+    pub(crate) fn allowing() -> Self {
+        Self {
+            response: r#"{"ok": true}"#.to_string(),
+            is_agent_called: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Returns an evaluator that responds `{"ok": false, "reason": "..."}`.
+    pub(crate) fn blocking(reason: &str) -> Self {
+        Self {
+            response: format!(r#"{{"ok": false, "reason": "{}"}}"#, reason),
+            is_agent_called: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Returns an evaluator (ok=true) plus a shared flag tracking whether
+    /// it was called with `is_agent=true`.
+    pub(crate) fn with_agent_tracking() -> (Self, Arc<AtomicBool>) {
+        let flag = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                response: r#"{"ok": true}"#.to_string(),
+                is_agent_called: flag.clone(),
+            },
+            flag,
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl HookEvaluator for MockEvaluator {
+    async fn evaluate(&self, _prompt: &str, is_agent: bool) -> Result<String, String> {
+        if is_agent {
+            self.is_agent_called.store(true, Ordering::SeqCst);
+        }
+        Ok(self.response.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent builder with evaluator
+// ---------------------------------------------------------------------------
+
+/// Like [`build_hookable_agent`] but passes an evaluator for prompt/agent hooks.
+pub(crate) fn build_hookable_agent_with_evaluator(
+    inner: Arc<dyn agent_client_protocol::Agent + Send + Sync>,
+    config_json: &str,
+    evaluator: Arc<dyn HookEvaluator>,
+) -> HookableAgent {
+    let config: HookConfig =
+        serde_json::from_str(config_json).expect("Failed to parse hook config JSON");
+    hookable_agent_from_config(inner, &config, Some(evaluator))
+        .expect("Failed to build HookableAgent")
 }

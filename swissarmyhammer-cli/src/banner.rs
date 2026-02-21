@@ -179,11 +179,7 @@ mod tests {
         let output = String::from_utf8(buf).expect("valid utf8");
         // Every LOGO line must appear verbatim in the rendered output.
         for line in &LOGO {
-            assert!(
-                output.contains(line),
-                "missing logo line: {:?}",
-                line
-            );
+            assert!(output.contains(line), "missing logo line: {:?}", line);
         }
     }
 

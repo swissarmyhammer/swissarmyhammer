@@ -1,0 +1,56 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": { "readTextFile": false, "writeTextFile": false },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": { "streaming": true },
+          "loadSession": true,
+          "mcpCapabilities": { "http": true, "sse": false },
+          "promptCapabilities": {
+            "_meta": { "streaming": true },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "test-agent",
+          "title": "Test Agent (Playback)",
+          "version": "0.1.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/tmp/test-hooks",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "hook-test-session"
+      },
+      "notifications": []
+    },
+    {
+      "method": "load_session",
+      "request": {
+        "sessionId": "hook-test-session",
+        "cwd": "/tmp/test-hooks"
+      },
+      "response": {},
+      "notifications": []
+    }
+  ]
+}

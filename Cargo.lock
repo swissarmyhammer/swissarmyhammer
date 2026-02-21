@@ -69,6 +69,7 @@ version = "0.7.1"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
+ "avp-common",
  "axum 0.7.9",
  "futures",
  "model-context-protocol-extras",
@@ -3973,7 +3974,7 @@ dependencies = [
 name = "mirdan-cli"
 version = "0.7.1"
 dependencies = [
- "axum",
+ "axum 0.7.9",
  "base64 0.22.1",
  "bytes",
  "chrono",

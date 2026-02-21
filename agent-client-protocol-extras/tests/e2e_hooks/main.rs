@@ -16,9 +16,11 @@
 //! [`helpers::all_event_kinds`] will cause a compile error. Add the new variant
 //! there and create corresponding test(s).
 
+mod avp_schema_tests;
 mod cross_cutting_tests;
 mod exit2_tests;
 mod helpers;
+mod hook_edge_case_tests;
 mod json_continue_tests;
 mod json_output_tests;
 mod json_specific_output_tests;
