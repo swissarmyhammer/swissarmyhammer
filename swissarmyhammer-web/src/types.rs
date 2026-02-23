@@ -1,10 +1,119 @@
-//! Core types for web search functionality
+//! Core types for web fetch and search functionality
 //!
-//! This module defines the data structures used for web search requests and responses,
-//! following the specification in /ideas/web_search.md
+//! This module defines the data structures used for web fetch requests,
+//! web search requests and responses.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// Web Fetch Types
+// ============================================================================
+
+/// Request to fetch web content
+///
+/// # Examples
+///
+/// Basic web fetch:
+/// ```ignore
+/// WebFetchRequest {
+///     url: "https://docs.rust-lang.org/book/ch04-01-what-is-ownership.html".to_string(),
+///     timeout: None,
+///     follow_redirects: None,
+///     max_content_length: None,
+///     user_agent: None,
+/// }
+/// ```
+///
+/// Advanced web fetch with custom settings:
+/// ```ignore
+/// WebFetchRequest {
+///     url: "https://api.github.com/docs/rest/repos".to_string(),
+///     timeout: Some(45),
+///     follow_redirects: Some(true),
+///     max_content_length: Some(2097152),
+///     user_agent: Some("SwissArmyHammer-DocProcessor/1.0".to_string()),
+/// }
+/// ```
+#[derive(Debug, JsonSchema)]
+pub struct WebFetchRequest {
+    /// The URL to fetch content from (must be a valid HTTP/HTTPS URL)
+    pub url: String,
+    /// Request timeout in seconds (optional, defaults to 30 seconds)
+    /// Minimum: 1, Maximum: 120
+    pub timeout: Option<u32>,
+    /// Whether to follow HTTP redirects (optional, defaults to true)
+    pub follow_redirects: Option<bool>,
+    /// Maximum content length in bytes (optional, defaults to 1MB)
+    /// Minimum: 1024, Maximum: 10485760 (10MB)
+    pub max_content_length: Option<u32>,
+    /// Custom User-Agent header (optional, defaults to "SwissArmyHammer-Bot/1.0")
+    pub user_agent: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for WebFetchRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        #[derive(Deserialize)]
+        struct WebFetchRequestHelper {
+            url: String,
+            timeout: Option<u32>,
+            follow_redirects: Option<bool>,
+            max_content_length: Option<u32>,
+            user_agent: Option<String>,
+        }
+
+        let helper = WebFetchRequestHelper::deserialize(deserializer)?;
+
+        // Validate timeout range
+        const MIN_TIMEOUT_SECONDS: u32 = 1;
+        const MAX_TIMEOUT_SECONDS: u32 = 120;
+
+        let timeout = helper
+            .timeout
+            .map(|timeout| {
+                if !(MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&timeout) {
+                    return Err(Error::custom(format!(
+                    "Timeout must be between {MIN_TIMEOUT_SECONDS} and {MAX_TIMEOUT_SECONDS} seconds"
+                )));
+                }
+                Ok(timeout)
+            })
+            .transpose()?;
+
+        // Validate and clamp max_content_length
+        const MIN_CONTENT_LENGTH_BYTES: u32 = 1024;
+        const MAX_CONTENT_LENGTH_BYTES: u32 = 10_485_760;
+
+        let max_content_length = helper
+            .max_content_length
+            .map(|length| {
+                if !(MIN_CONTENT_LENGTH_BYTES..=MAX_CONTENT_LENGTH_BYTES).contains(&length) {
+                    return Err(Error::custom(format!(
+                    "Maximum content length must be between {MIN_CONTENT_LENGTH_BYTES} and {MAX_CONTENT_LENGTH_BYTES} bytes"
+                )));
+                }
+                Ok(length)
+            })
+            .transpose()?;
+
+        Ok(WebFetchRequest {
+            url: helper.url,
+            timeout,
+            follow_redirects: helper.follow_redirects,
+            max_content_length,
+            user_agent: helper.user_agent,
+        })
+    }
+}
+
+// ============================================================================
+// Web Search Types
+// ============================================================================
 
 /// Search category for filtering results
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]

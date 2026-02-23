@@ -45,5 +45,3 @@ pub mod skill;
 pub mod shell;
 pub mod treesitter;
 pub mod web;
-pub mod web_fetch;
-pub mod web_search;

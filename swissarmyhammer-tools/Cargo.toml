@@ -24,6 +24,7 @@ swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-js = { path = "../swissarmyhammer-js" }
+swissarmyhammer-web = { path = "../swissarmyhammer-web" }
 swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }
 # ACP agents (direct usage, no executor wrapper)
 claude-agent = { path = "../claude-agent" }
@@ -77,28 +78,15 @@ async-watcher = { workspace = true }
 encoding_rs = { workspace = true }
 filetime = { workspace = true }
 
-# Web fetch functionality
+# Web fetch (markdowndown used directly in web/fetch.rs for URL conversion)
 markdowndown = { workspace = true }
-url = { workspace = true }
-futures-util = { workspace = true }
 libc = { workspace = true }
+rand = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
 
 # Operations pattern
 swissarmyhammer-operations = { workspace = true }
-
-# Web search dependencies
-chromiumoxide = { workspace = true }
-futures = { workspace = true }
-html2text = { workspace = true }
-html2md = { workspace = true }
-html-escape = { workspace = true }
-scraper = { workspace = true }
-rand = { workspace = true }
-dashmap = { workspace = true }
-reqwest = { workspace = true }
-urlencoding = { workspace = true }
-tempfile = { workspace = true }
-which = { workspace = true }
 
 # HTTP server dependencies
 axum = { workspace = true }
@@ -111,7 +99,7 @@ agent-client-protocol = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
-
+swissarmyhammer-web = { path = "../swissarmyhammer-web" }
 tempfile = { workspace = true }
 futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -1,0 +1,43 @@
+[package]
+name = "swissarmyhammer-web"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core web search and fetch functionality for SwissArmyHammer"
+
+[dependencies]
+# Local workspace dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+
+# Workspace dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+regex = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+dashmap = { workspace = true }
+
+# Web fetch
+markdowndown = { workspace = true }
+
+# Web search
+chromiumoxide = { workspace = true }
+futures = { workspace = true }
+html2md = { workspace = true }
+html-escape = { workspace = true }
+scraper = { workspace = true }
+urlencoding = { workspace = true }
+tempfile = { workspace = true }
+which = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

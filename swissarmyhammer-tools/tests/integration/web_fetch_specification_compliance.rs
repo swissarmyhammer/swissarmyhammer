@@ -178,10 +178,8 @@ fn test_response_format_specification_structure() {
 
 #[test]
 fn test_security_and_validation_features() {
-    use swissarmyhammer_tools::mcp::tools::web_fetch::fetch::WebFetchTool;
-
-    // The WebFetchTool pipeline still has security validation
-    let _tool = WebFetchTool::new();
+    // The WebFetcher pipeline still has security validation
+    let _fetcher = swissarmyhammer_web::WebFetcher::new();
 
     // Verify the security pipeline compiles and instantiates
     // (actual security validation is tested via web/fetch.rs dispatch)

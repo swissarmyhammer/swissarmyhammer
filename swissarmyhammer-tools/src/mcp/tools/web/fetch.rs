@@ -1,9 +1,8 @@
-//! FetchUrl operation — delegates to existing web_fetch pipeline
+//! FetchUrl operation — delegates to swissarmyhammer-web fetch pipeline
 
 use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
-use crate::mcp::tools::web_fetch::fetch::WebFetchTool;
-use crate::mcp::types::WebFetchRequest;
+use swissarmyhammer_web::{FetchError, WebFetcher, WebFetchRequest};
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
@@ -60,7 +59,7 @@ impl Operation for FetchUrl {
     }
 }
 
-/// Execute a fetch operation using the existing web_fetch pipeline
+/// Execute a fetch operation using swissarmyhammer-web fetch pipeline
 pub async fn execute_fetch(
     arguments: serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
@@ -69,13 +68,19 @@ pub async fn execute_fetch(
 
     tracing::debug!("Fetching web content from URL: {}", request.url);
 
-    let fetch_tool = WebFetchTool::new();
+    let fetcher = WebFetcher::new();
 
-    // Validate request parameters
-    let validated_url = fetch_tool.validate_request_parameters(&request).await?;
+    // Validate URL via swissarmyhammer-web security checks
+    let validated_url = fetcher.validate_url(&request).await.map_err(|e| match &e {
+        FetchError::InvalidUrl(msg) => McpError::invalid_params(msg.clone(), None),
+        FetchError::SecurityViolation(msg) => McpError::invalid_params(msg.clone(), None),
+        FetchError::FetchFailed { message, .. } => {
+            McpError::internal_error(message.clone(), None)
+        }
+    })?;
 
     // Create markdowndown configuration from request parameters
-    let config = fetch_tool.create_markdowndown_config(&request);
+    let config = fetcher.create_markdowndown_config(&request);
 
     // Generate progress token and send start notification
     let progress_token = generate_progress_token();
@@ -118,10 +123,22 @@ pub async fn execute_fetch(
                     .ok();
             }
 
-            fetch_tool.build_success_response(&request, markdown_content, response_time_ms)
+            Ok(CallToolResult {
+                content: vec![rmcp::model::Annotated::new(
+                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                        text: markdown_content,
+                        meta: None,
+                    }),
+                    None,
+                )],
+                structured_content: None,
+                meta: None,
+                is_error: Some(false),
+            })
         }
         Err(e) => {
             let response_time_ms = start_time.elapsed().as_millis() as u64;
+            let error_type = WebFetcher::categorize_error(&e);
 
             if let Some(sender) = &context.progress_sender {
                 sender
@@ -138,7 +155,45 @@ pub async fn execute_fetch(
                     .ok();
             }
 
-            fetch_tool.build_error_response(&e, response_time_ms, &request)
+            tracing::warn!(
+                "Failed to fetch content from {} after {}ms: {} (category: {})",
+                request.url,
+                response_time_ms,
+                e,
+                error_type
+            );
+
+            let metadata = json!({
+                "url": request.url,
+                "error_type": error_type,
+                "error_details": e.to_string(),
+                "status_code": null,
+                "response_time_ms": response_time_ms,
+                "performance_impact": if response_time_ms > 10000 { "high" } else { "low" },
+                "optimization_enabled": true
+            });
+
+            let response = json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Failed to fetch content: {e}")
+                }],
+                "is_error": true,
+                "metadata": metadata
+            });
+
+            Ok(CallToolResult {
+                content: vec![rmcp::model::Annotated::new(
+                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                        text: serde_json::to_string_pretty(&response).unwrap_or_default(),
+                        meta: None,
+                    }),
+                    None,
+                )],
+                meta: None,
+                structured_content: None,
+                is_error: Some(true),
+            })
         }
     }
 }

@@ -6792,21 +6792,15 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "byte-unit",
- "chromiumoxide",
  "chrono",
  "claude-agent",
- "dashmap",
  "dirs",
  "encoding_rs",
  "filetime",
- "futures",
  "futures-util",
  "git2",
  "glob",
  "grep",
- "html-escape",
- "html2md",
- "html2text",
  "hyper 1.8.1",
  "ignore",
  "libc",
@@ -6821,7 +6815,6 @@ dependencies = [
  "reqwest",
  "rmcp",
  "schemars 0.8.22",
- "scraper",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6837,6 +6830,7 @@ dependencies = [
  "swissarmyhammer-shell",
  "swissarmyhammer-skills",
  "swissarmyhammer-treesitter",
+ "swissarmyhammer-web",
  "swissarmyhammer-workflow",
  "tempfile",
  "test-log",
@@ -6848,10 +6842,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
- "url",
- "urlencoding",
  "walkdir",
- "which 8.0.0",
 ]
 
 [[package]]
@@ -6908,6 +6899,35 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "tree-sitter-zig",
+]
+
+[[package]]
+name = "swissarmyhammer-web"
+version = "0.7.1"
+dependencies = [
+ "async-trait",
+ "chromiumoxide",
+ "dashmap",
+ "futures",
+ "html-escape",
+ "html2md",
+ "markdowndown",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "schemars 0.8.22",
+ "scraper",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+ "which 8.0.0",
 ]
 
 [[package]]

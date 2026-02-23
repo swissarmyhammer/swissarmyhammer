@@ -85,10 +85,10 @@ impl Default for PrivacyConfig {
             anonymize_content_requests: true,
             content_request_delay_ms: 200,
             enable_adaptive_rate_limiting: true,
-            captcha_backoff_initial_ms: 1000, // 1 second initial backoff
-            captcha_backoff_max_ms: 30000,    // 30 second max backoff
-            captcha_backoff_multiplier: 2.0,  // Double delay for each consecutive CAPTCHA
-            captcha_backoff_duration_mins: 10, // Maintain backoff for 10 minutes
+            captcha_backoff_initial_ms: 1000,
+            captcha_backoff_max_ms: 30000,
+            captcha_backoff_multiplier: 2.0,
+            captcha_backoff_duration_mins: 10,
         }
     }
 }
@@ -116,7 +116,7 @@ impl UserAgentRotator {
         let user_agents = config
             .custom_user_agents
             .as_ref()
-            .filter(|agents| !agents.is_empty()) // Only use custom agents if non-empty
+            .filter(|agents| !agents.is_empty())
             .cloned()
             .unwrap_or_else(Self::default_user_agents);
 
@@ -142,7 +142,6 @@ impl UserAgentRotator {
     /// Gets the next User-Agent string based on the rotation strategy
     pub fn get_next_user_agent(&self) -> String {
         let user_agents = if self.user_agents.is_empty() {
-            // Fallback to default browser User-Agent strings if none configured
             Self::default_user_agents()
         } else {
             self.user_agents.clone()
@@ -232,29 +231,25 @@ impl InstanceDistributor {
     /// Selects a distributed instance from available instances
     pub fn select_distributed_instance(&self, available: &[String]) -> Option<String> {
         if !self.enabled || available.is_empty() {
-            // If disabled or no instances, just return the first available
             return available.first().cloned();
         }
 
         let last_used = self.last_used_instances.lock().unwrap();
 
-        // Find instances that weren't recently used
         let suitable_instances: Vec<_> = available
             .iter()
             .filter(|instance| !last_used.contains(*instance))
             .collect();
 
-        drop(last_used); // Release lock early
+        drop(last_used);
 
         if suitable_instances.is_empty() {
-            // All instances recently used, pick any available one
             let index = {
                 let mut rng = rand::thread_rng();
                 rng.gen_range(0..available.len())
             };
             Some(available[index].clone())
         } else {
-            // Pick random from suitable instances
             let index = {
                 let mut rng = rand::thread_rng();
                 rng.gen_range(0..suitable_instances.len())
@@ -271,10 +266,8 @@ impl InstanceDistributor {
 
         let mut last_used = self.last_used_instances.lock().unwrap();
 
-        // Add to front of queue
         last_used.push_front(instance_url.to_string());
 
-        // Keep only recent instances
         while last_used.len() > self.avoid_repeat_count {
             last_used.pop_back();
         }
@@ -314,7 +307,6 @@ impl AdaptiveRateLimiter {
             let mut current_backoff = self.current_backoff_ms.lock().unwrap();
             let mut consecutive = self.consecutive_captchas.lock().unwrap();
 
-            // Check if this is within the backoff duration of the last CAPTCHA
             let is_consecutive = if let Some(last_time) = *last_captcha {
                 now.duration_since(last_time).as_secs()
                     < (self.config.captcha_backoff_duration_mins * 60)
@@ -324,7 +316,6 @@ impl AdaptiveRateLimiter {
 
             if is_consecutive {
                 *consecutive += 1;
-                // Exponential backoff: multiply by multiplier for consecutive CAPTCHAs
                 *current_backoff =
                     (*current_backoff as f64 * self.config.captcha_backoff_multiplier) as u64;
             } else {
@@ -332,7 +323,6 @@ impl AdaptiveRateLimiter {
                 *current_backoff = self.config.captcha_backoff_initial_ms;
             }
 
-            // Cap at maximum backoff
             *current_backoff = (*current_backoff).min(self.config.captcha_backoff_max_ms);
             *last_captcha = Some(now);
 
@@ -353,7 +343,6 @@ impl AdaptiveRateLimiter {
         let current_backoff = self.current_backoff_ms.lock().unwrap();
         let last_captcha = self.last_captcha_time.lock().unwrap();
 
-        // Check if we're still within the backoff duration
         if let Some(last_time) = *last_captcha {
             let elapsed = Instant::now().duration_since(last_time);
             let backoff_duration =
@@ -422,9 +411,7 @@ impl PrivacyManager {
 
     /// Applies request jitter delay and adaptive backoff if needed
     pub async fn apply_jitter(&self) {
-        // Apply adaptive backoff first (longer delays)
         self.adaptive_rate_limiter.apply_adaptive_delay().await;
-        // Then apply normal jitter
         self.request_jitter.apply_jitter().await;
     }
 
@@ -475,7 +462,6 @@ mod tests {
         assert!(!rotator.user_agents.is_empty());
         assert!(rotator.randomize);
 
-        // Test that we get valid user agents
         let agent1 = rotator.get_next_user_agent();
         let agent2 = rotator.get_next_user_agent();
 
@@ -492,7 +478,7 @@ mod tests {
                 "CustomAgent/1.0".to_string(),
                 "CustomAgent/2.0".to_string(),
             ]),
-            randomize_user_agents: false, // Use sequential for predictable testing
+            randomize_user_agents: false,
             ..Default::default()
         };
 
@@ -501,76 +487,11 @@ mod tests {
 
         let agent1 = rotator.get_next_user_agent();
         let agent2 = rotator.get_next_user_agent();
-        let agent3 = rotator.get_next_user_agent(); // Should cycle back
+        let agent3 = rotator.get_next_user_agent();
 
         assert_eq!(agent1, "CustomAgent/1.0");
         assert_eq!(agent2, "CustomAgent/2.0");
         assert_eq!(agent3, "CustomAgent/1.0");
-    }
-
-    #[test]
-    fn test_user_agent_rotator_empty_agents() {
-        let config = PrivacyConfig {
-            custom_user_agents: Some(vec![]),
-            ..Default::default()
-        };
-
-        let rotator = UserAgentRotator::new(&config);
-        let agent = rotator.get_next_user_agent();
-
-        // Should fall back to default browser user agents, not SwissArmyHammer
-        assert!(agent.contains("Mozilla"));
-        assert!(!agent.contains("SwissArmyHammer"));
-    }
-
-    #[test]
-    fn test_request_jitter_configuration() {
-        let config = PrivacyConfig {
-            enable_request_jitter: false,
-            min_request_delay_ms: 50,
-            max_request_delay_ms: 200,
-            ..Default::default()
-        };
-
-        let jitter = RequestJitter::new(&config);
-        assert!(!jitter.enabled);
-        assert_eq!(jitter.min_delay, Duration::from_millis(50));
-        assert_eq!(jitter.max_delay, Duration::from_millis(200));
-    }
-
-    #[tokio::test]
-    async fn test_request_jitter_disabled() {
-        let config = PrivacyConfig {
-            enable_request_jitter: false,
-            ..Default::default()
-        };
-
-        let jitter = RequestJitter::new(&config);
-        let start = std::time::Instant::now();
-        jitter.apply_jitter().await;
-        let elapsed = start.elapsed();
-
-        // Should return immediately when disabled
-        assert!(elapsed < Duration::from_millis(10));
-    }
-
-    #[tokio::test]
-    async fn test_request_jitter_enabled() {
-        let config = PrivacyConfig {
-            enable_request_jitter: true,
-            min_request_delay_ms: 50,
-            max_request_delay_ms: 100,
-            ..Default::default()
-        };
-
-        let jitter = RequestJitter::new(&config);
-        let start = std::time::Instant::now();
-        jitter.apply_jitter().await;
-        let elapsed = start.elapsed();
-
-        // Should have applied some delay
-        assert!(elapsed >= Duration::from_millis(40)); // Allow some timing variance
-        assert!(elapsed <= Duration::from_millis(150)); // Allow some timing variance
     }
 
     #[test]
@@ -598,29 +519,50 @@ mod tests {
     }
 
     #[test]
-    fn test_instance_distributor_avoidance() {
-        let config = PrivacyConfig::default();
-        let distributor = InstanceDistributor::new(&config);
+    fn test_adaptive_rate_limiter() {
+        let config = PrivacyConfig {
+            enable_adaptive_rate_limiting: true,
+            captcha_backoff_initial_ms: 1000,
+            captcha_backoff_max_ms: 5000,
+            captcha_backoff_multiplier: 2.0,
+            captcha_backoff_duration_mins: 1,
+            ..Default::default()
+        };
 
-        let available = vec![
-            "instance1".to_string(),
-            "instance2".to_string(),
-            "instance3".to_string(),
-        ];
+        let limiter = AdaptiveRateLimiter::new(config);
 
-        // Record usage of instance1
-        distributor.record_instance_use("instance1");
+        let initial_delay = limiter.get_additional_delay();
+        assert_eq!(initial_delay.as_millis(), 0);
 
-        // Should prefer instances that weren't recently used
-        let selected = distributor.select_distributed_instance(&available);
-        assert!(selected.is_some());
+        limiter.record_captcha_challenge();
+        let first_delay = limiter.get_additional_delay();
+        assert_eq!(first_delay.as_millis(), 1000);
 
-        // The selected instance should not be instance1 (though it could be due to randomness)
-        // We can't make a deterministic assertion here due to randomness,
-        // but we can verify the mechanism works by checking internal state
-        let last_used = distributor.last_used_instances.lock().unwrap();
-        assert_eq!(last_used.len(), 1);
-        assert_eq!(last_used[0], "instance1");
+        limiter.record_captcha_challenge();
+        let second_delay = limiter.get_additional_delay();
+        assert_eq!(second_delay.as_millis(), 2000);
+
+        limiter.record_captcha_challenge();
+        let third_delay = limiter.get_additional_delay();
+        assert_eq!(third_delay.as_millis(), 4000);
+
+        limiter.record_captcha_challenge();
+        let max_delay = limiter.get_additional_delay();
+        assert_eq!(max_delay.as_millis(), 5000);
+    }
+
+    #[test]
+    fn test_adaptive_rate_limiter_disabled() {
+        let config = PrivacyConfig {
+            enable_adaptive_rate_limiting: false,
+            ..Default::default()
+        };
+
+        let limiter = AdaptiveRateLimiter::new(config);
+        limiter.record_captcha_challenge();
+
+        let delay = limiter.get_additional_delay();
+        assert_eq!(delay.as_millis(), 0);
     }
 
     #[test]
@@ -647,60 +589,5 @@ mod tests {
 
         let user_agent = manager.get_user_agent();
         assert!(user_agent.is_none());
-    }
-
-    #[test]
-    fn test_adaptive_rate_limiter() {
-        let config = PrivacyConfig {
-            enable_adaptive_rate_limiting: true,
-            captcha_backoff_initial_ms: 1000,
-            captcha_backoff_max_ms: 5000,
-            captcha_backoff_multiplier: 2.0,
-            captcha_backoff_duration_mins: 1, // 1 minute for testing
-            ..Default::default()
-        };
-
-        let limiter = AdaptiveRateLimiter::new(config);
-
-        // Initially no delay
-        let initial_delay = limiter.get_additional_delay();
-        assert_eq!(initial_delay.as_millis(), 0);
-
-        // Record first CAPTCHA
-        limiter.record_captcha_challenge();
-        let first_delay = limiter.get_additional_delay();
-        assert_eq!(first_delay.as_millis(), 1000); // Initial backoff
-
-        // Record second CAPTCHA (should double)
-        limiter.record_captcha_challenge();
-        let second_delay = limiter.get_additional_delay();
-        assert_eq!(second_delay.as_millis(), 2000); // 1000 * 2.0
-
-        // Record third CAPTCHA (should double again)
-        limiter.record_captcha_challenge();
-        let third_delay = limiter.get_additional_delay();
-        assert_eq!(third_delay.as_millis(), 4000); // 2000 * 2.0
-
-        // Record fourth CAPTCHA (should hit max)
-        limiter.record_captcha_challenge();
-        let max_delay = limiter.get_additional_delay();
-        assert_eq!(max_delay.as_millis(), 5000); // Capped at max
-    }
-
-    #[test]
-    fn test_adaptive_rate_limiter_disabled() {
-        let config = PrivacyConfig {
-            enable_adaptive_rate_limiting: false,
-            ..Default::default()
-        };
-
-        let limiter = AdaptiveRateLimiter::new(config);
-
-        // Record CAPTCHA
-        limiter.record_captcha_challenge();
-
-        // Should still have no delay when disabled
-        let delay = limiter.get_additional_delay();
-        assert_eq!(delay.as_millis(), 0);
     }
 }

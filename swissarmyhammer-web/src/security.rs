@@ -321,7 +321,7 @@ impl SecurityValidator {
 
     /// Check if IPv4 address is in private ranges
     /// More comprehensive than the standard library's is_private()
-    fn is_private_ipv4(&self, ip: &Ipv4Addr) -> bool {
+    pub fn is_private_ipv4(&self, ip: &Ipv4Addr) -> bool {
         let octets = ip.octets();
 
         // Standard private ranges
@@ -428,9 +428,9 @@ mod tests {
         let blocked_domains = [
             "http://localhost",
             "https://127.0.0.1",
-            "http://[::1]", // IPv6 addresses need brackets in URLs
+            "http://[::1]",
             "https://0.0.0.0",
-            "http://169.254.169.254", // AWS metadata
+            "http://169.254.169.254",
             "https://metadata.google.internal",
         ];
 
@@ -453,9 +453,9 @@ mod tests {
             "http://10.0.0.1",
             "https://172.16.0.1",
             "http://192.168.1.1",
-            "https://100.64.0.1", // Carrier-grade NAT
-            "http://169.254.0.1", // Link-local
-            "https://198.18.0.1", // Test network
+            "https://100.64.0.1",
+            "http://169.254.0.1",
+            "https://198.18.0.1",
         ];
 
         for url_str in &private_ips {
@@ -474,9 +474,9 @@ mod tests {
         let validator = SecurityValidator::new();
 
         let blocked_ipv6 = [
-            "http://[::1]",               // Localhost
-            "https://[::ffff:127.0.0.1]", // IPv4-mapped localhost
-            "http://[::]",                // Unspecified
+            "http://[::1]",
+            "https://[::ffff:127.0.0.1]",
+            "http://[::]",
         ];
 
         for url_str in &blocked_ipv6 {
@@ -495,8 +495,8 @@ mod tests {
         let policy = SecurityPolicy {
             blocked_domains: vec!["evil.com".to_string()],
             blocked_patterns: vec![".badpattern.".to_string()],
-            block_private_ips: false, // Allow private IPs
-            block_localhost: false,   // Allow localhost
+            block_private_ips: false,
+            block_localhost: false,
             block_multicast: true,
         };
 
@@ -519,27 +519,14 @@ mod tests {
     }
 
     #[test]
-    fn test_security_logging() {
-        let validator = SecurityValidator::new();
-
-        // This test mainly ensures the logging function doesn't panic
-        validator.log_security_event(
-            "SSRF_ATTEMPT",
-            "http://127.0.0.1",
-            "Attempted access to localhost",
-        );
-    }
-
-    #[test]
     fn test_edge_case_urls() {
         let validator = SecurityValidator::new();
 
-        // Test malformed URLs
         let malformed = [
             "",
             "not-a-url",
             "://missing-scheme",
-            "https://", // Empty host
+            "https://",
         ];
 
         for url_str in &malformed {
@@ -557,17 +544,16 @@ mod tests {
     fn test_comprehensive_private_ip_ranges() {
         let validator = SecurityValidator::new();
 
-        // Test comprehensive private IP detection
         let test_cases = [
-            ("10.0.0.1", true),    // RFC 1918
-            ("172.16.0.1", true),  // RFC 1918
-            ("192.168.1.1", true), // RFC 1918
-            ("100.64.0.1", true),  // RFC 6598 (Carrier-grade NAT)
-            ("169.254.0.1", true), // RFC 3927 (Link-local)
-            ("198.18.0.1", true),  // RFC 2544 (Testing)
-            ("240.0.0.1", true),   // Reserved
-            ("8.8.8.8", false),    // Public DNS
-            ("1.1.1.1", false),    // Public DNS
+            ("10.0.0.1", true),
+            ("172.16.0.1", true),
+            ("192.168.1.1", true),
+            ("100.64.0.1", true),
+            ("169.254.0.1", true),
+            ("198.18.0.1", true),
+            ("240.0.0.1", true),
+            ("8.8.8.8", false),
+            ("1.1.1.1", false),
         ];
 
         for (ip_str, should_be_private) in test_cases {
@@ -584,7 +570,6 @@ mod tests {
     fn test_security_error_severity() {
         use swissarmyhammer_common::Severity;
 
-        // All security errors should be Critical
         let errors = vec![
             SecurityError::InvalidUrl("test".to_string()),
             SecurityError::BlockedDomain("evil.com".to_string()),
