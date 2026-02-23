@@ -1,4 +1,4 @@
-//! Mirdan New - Scaffold a new skill or validator package.
+//! Mirdan New - Scaffold a new skill, validator, tool, or plugin package.
 
 use std::fs;
 use std::path::PathBuf;
@@ -226,6 +226,246 @@ mirdan publish
     Ok(())
 }
 
+/// Run the `mirdan new tool` command.
+///
+/// Creates a tool scaffold with TOOL.md (MCP server definition) and README.md.
+pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
+    if !is_valid_package_name(name) {
+        return Err(RegistryError::Validation(format!(
+            "Invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
+             no leading/trailing/consecutive hyphens.",
+            name
+        )));
+    }
+
+    let base_dir = if global {
+        dirs::home_dir()
+            .ok_or_else(|| RegistryError::Validation("Could not find home directory".to_string()))?
+            .join(".tools")
+            .join(name)
+    } else {
+        PathBuf::from(name)
+    };
+
+    if base_dir.exists() {
+        return Err(RegistryError::Validation(format!(
+            "Directory already exists: {}",
+            base_dir.display()
+        )));
+    }
+
+    fs::create_dir_all(&base_dir)?;
+
+    // Write TOOL.md
+    let tool_md = format!(
+        r#"---
+name: {name}
+description: "TODO: Describe what this tool does"
+metadata:
+  version: "0.1.0"
+mcp:
+  command: npx
+  args:
+    - "-y"
+    - "@your-scope/{name}"
+  transport: stdio
+  env: {{}}
+---
+
+# {name}
+
+TODO: Describe the purpose and usage of this MCP tool.
+
+## What This Tool Does
+
+Explain the capability this MCP server provides to AI coding agents.
+
+## Configuration
+
+Describe any environment variables or configuration needed.
+"#,
+        name = name
+    );
+    fs::write(base_dir.join("TOOL.md"), tool_md)?;
+
+    // Write README.md
+    let readme = format!(
+        r#"# {name}
+
+An MCP tool for AI coding agents.
+
+## Usage
+
+Install with Mirdan:
+
+```bash
+mirdan install {name}
+```
+
+## Development
+
+Edit `TOOL.md` to configure the MCP server definition.
+
+When ready to publish:
+
+```bash
+mirdan publish
+```
+"#,
+        name = name
+    );
+    fs::write(base_dir.join("README.md"), readme)?;
+
+    let scope = if global { "global" } else { "project" };
+    println!("Created {} tool '{}':\n", scope, name);
+    println!("  {}/", base_dir.display());
+    println!("  ├── TOOL.md");
+    println!("  └── README.md");
+    println!();
+    println!("Next steps:");
+    println!("  1. Edit TOOL.md to configure the MCP server command and args");
+    println!("  2. Set environment variables in the mcp.env section");
+    println!("  3. Run 'mirdan publish' when ready to share");
+
+    Ok(())
+}
+
+/// Run the `mirdan new plugin` command.
+///
+/// Creates a Claude Code plugin scaffold with .claude-plugin/plugin.json,
+/// commands/, skills/, and README.md.
+pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
+    if !is_valid_package_name(name) {
+        return Err(RegistryError::Validation(format!(
+            "Invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
+             no leading/trailing/consecutive hyphens.",
+            name
+        )));
+    }
+
+    let base_dir = if global {
+        let config = agents::load_agents_config()?;
+        let claude = config
+            .agents
+            .iter()
+            .find(|a| a.id == "claude-code")
+            .ok_or_else(|| {
+                RegistryError::Validation(
+                    "Claude Code agent not found in config for global plugin creation".to_string(),
+                )
+            })?;
+        agents::agent_global_plugin_dir(claude)
+            .ok_or_else(|| {
+                RegistryError::Validation(
+                    "Claude Code agent has no global plugin path configured".to_string(),
+                )
+            })?
+            .join(name)
+    } else {
+        PathBuf::from(name)
+    };
+
+    if base_dir.exists() {
+        return Err(RegistryError::Validation(format!(
+            "Directory already exists: {}",
+            base_dir.display()
+        )));
+    }
+
+    // Create directory structure
+    let plugin_meta_dir = base_dir.join(".claude-plugin");
+    let commands_dir = base_dir.join("commands");
+    let skills_dir = base_dir.join("skills");
+    fs::create_dir_all(&plugin_meta_dir)?;
+    fs::create_dir_all(&commands_dir)?;
+    fs::create_dir_all(&skills_dir)?;
+
+    // Write .claude-plugin/plugin.json
+    let plugin_json = serde_json::json!({
+        "name": name,
+        "description": "TODO: Describe what this plugin does",
+        "author": {
+            "name": "TODO: Your name"
+        }
+    });
+    fs::write(
+        plugin_meta_dir.join("plugin.json"),
+        serde_json::to_string_pretty(&plugin_json).unwrap() + "\n",
+    )?;
+
+    // Write example command
+    let example_cmd = format!(
+        r#"---
+description: "Example command for {name}"
+allowed-tools:
+  - Read
+  - Glob
+  - Grep
+---
+
+# Example Command
+
+This is an example slash command provided by the {name} plugin.
+Describe what this command does and how it should be used.
+"#,
+        name = name
+    );
+    fs::write(commands_dir.join("example.md"), example_cmd)?;
+
+    // Write README.md
+    let readme = format!(
+        r#"# {name}
+
+A Claude Code plugin.
+
+## Usage
+
+Install with Mirdan:
+
+```bash
+mirdan install {name}
+```
+
+## Structure
+
+- `.claude-plugin/plugin.json` - Plugin manifest
+- `commands/` - Slash commands
+- `skills/` - Skills bundled with this plugin
+
+## Development
+
+Edit `plugin.json` to update plugin metadata.
+Add commands to `commands/` and skills to `skills/`.
+
+When ready to publish:
+
+```bash
+mirdan publish
+```
+"#,
+        name = name
+    );
+    fs::write(base_dir.join("README.md"), readme)?;
+
+    let scope = if global { "global" } else { "project" };
+    println!("Created {} plugin '{}':\n", scope, name);
+    println!("  {}/", base_dir.display());
+    println!("  ├── .claude-plugin/");
+    println!("  │   └── plugin.json");
+    println!("  ├── commands/");
+    println!("  │   └── example.md");
+    println!("  ├── skills/");
+    println!("  └── README.md");
+    println!();
+    println!("Next steps:");
+    println!("  1. Edit .claude-plugin/plugin.json to set description and author");
+    println!("  2. Add slash commands to commands/");
+    println!("  3. Add skills to skills/");
+    println!("  4. Run 'mirdan publish' when ready to share");
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,5 +536,64 @@ mod tests {
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_new_tool_creates_structure() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "test-tool";
+        let tool_dir = dir.path().join(name);
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = run_new_tool(name, false);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        assert!(tool_dir.join("TOOL.md").exists());
+        assert!(tool_dir.join("README.md").exists());
+
+        // Verify TOOL.md has mcp section
+        let content = std::fs::read_to_string(tool_dir.join("TOOL.md")).unwrap();
+        assert!(content.contains("mcp:"));
+        assert!(content.contains("command:"));
+    }
+
+    #[test]
+    fn test_new_tool_invalid_name() {
+        assert!(run_new_tool("INVALID", false).is_err());
+        assert!(run_new_tool("", false).is_err());
+    }
+
+    #[test]
+    fn test_new_plugin_creates_structure() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "test-plugin";
+        let plugin_dir = dir.path().join(name);
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = run_new_plugin(name, false);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        assert!(plugin_dir.join(".claude-plugin/plugin.json").exists());
+        assert!(plugin_dir.join("commands/example.md").exists());
+        assert!(plugin_dir.join("skills").is_dir());
+        assert!(plugin_dir.join("README.md").exists());
+
+        // Verify plugin.json
+        let content =
+            std::fs::read_to_string(plugin_dir.join(".claude-plugin/plugin.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["name"].as_str().unwrap(), "test-plugin");
+    }
+
+    #[test]
+    fn test_new_plugin_invalid_name() {
+        assert!(run_new_plugin("INVALID", false).is_err());
+        assert!(run_new_plugin("", false).is_err());
     }
 }

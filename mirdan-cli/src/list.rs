@@ -1,10 +1,12 @@
-//! Mirdan List - List installed skills and validators.
+//! Mirdan List - List installed packages (skills, validators, tools, plugins).
 
 use std::path::Path;
 
 use crate::agents::{self, agent_project_skill_dir};
+use crate::mcp_config;
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
+use crate::store;
 use crate::table;
 
 /// An installed package found during scanning.
@@ -17,17 +19,26 @@ pub struct InstalledPackage {
 
 /// Discover installed packages by scanning the filesystem.
 ///
-/// Scans agent skill directories and .avp/validators/ for installed packages.
+/// Scans agent skill directories, .avp/validators/, .tools/, and agent plugin dirs.
 /// Returns a deduplicated, sorted list.
+///
+/// When a type-specific flag is set (e.g. skills_only), only that type is scanned.
+/// When no flags are set, all types are scanned.
 pub fn discover_packages(
     skills_only: bool,
     validators_only: bool,
+    tools_only: bool,
+    plugins_only: bool,
     agent_filter: Option<&str>,
 ) -> Vec<InstalledPackage> {
     let mut packages: Vec<InstalledPackage> = Vec::new();
 
+    // If any specific filter is set, only scan that type.
+    // If none are set, scan all types.
+    let scan_all = !skills_only && !validators_only && !tools_only && !plugins_only;
+
     // Scan skills from agent directories
-    if !validators_only {
+    if skills_only || scan_all {
         if let Ok(config) = agents::load_agents_config() {
             let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
 
@@ -42,7 +53,7 @@ pub fn discover_packages(
 
     // Scan validators from .avp/validators/
     // Skip when --agent is set: validators are not agent-scoped
-    if !skills_only && agent_filter.is_none() {
+    if (validators_only || scan_all) && agent_filter.is_none() {
         let local_validators = Path::new(".avp/validators");
         if local_validators.exists() {
             scan_validators(local_validators, ".avp/validators/", &mut packages);
@@ -56,19 +67,49 @@ pub fn discover_packages(
         }
     }
 
+    // Scan tools from .tools/ and ~/.tools/
+    if tools_only || scan_all {
+        scan_tools(&store::tool_store_dir(false), ".tools/", &mut packages);
+        scan_tools(&store::tool_store_dir(true), "~/.tools/", &mut packages);
+    }
+
+    // Scan plugins from agent plugin directories
+    if plugins_only || scan_all {
+        if let Ok(config) = agents::load_agents_config() {
+            let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
+
+            for agent in &agents {
+                // Project-level plugins
+                if let Some(plugin_dir) = agents::agent_project_plugin_dir(&agent.def) {
+                    if plugin_dir.exists() {
+                        scan_plugins(&plugin_dir, &agent.def.name, &mut packages);
+                    }
+                }
+                // Global plugins
+                if let Some(plugin_dir) = agents::agent_global_plugin_dir(&agent.def) {
+                    if plugin_dir.exists() {
+                        scan_plugins(&plugin_dir, &format!("{} (global)", agent.def.name), &mut packages);
+                    }
+                }
+            }
+        }
+    }
+
     merge_packages(packages)
 }
 
 /// Run the list command.
 ///
-/// Scans agent skill directories and .avp/validators/ for installed packages.
+/// Scans all package locations for installed packages.
 pub fn run_list(
     skills_only: bool,
     validators_only: bool,
+    tools_only: bool,
+    plugins_only: bool,
     agent_filter: Option<&str>,
     json: bool,
 ) -> Result<(), RegistryError> {
-    let packages = discover_packages(skills_only, validators_only, agent_filter);
+    let packages = discover_packages(skills_only, validators_only, tools_only, plugins_only, agent_filter);
 
     if json {
         let entries: Vec<serde_json::Value> = packages
@@ -156,7 +197,51 @@ fn scan_validators(dir: &Path, location: &str, packages: &mut Vec<InstalledPacka
     }
 }
 
-/// Read version from YAML frontmatter of SKILL.md or VALIDATOR.md.
+/// Scan a directory for tool packages (subdirs containing TOOL.md).
+fn scan_tools(dir: &Path, location: &str, packages: &mut Vec<InstalledPackage>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.join("TOOL.md").exists() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let version = read_frontmatter_version(&path.join("TOOL.md"));
+            packages.push(InstalledPackage {
+                name,
+                package_type: PackageType::Tool,
+                version,
+                targets: vec![location.to_string()],
+            });
+        }
+    }
+}
+
+/// Scan a directory for plugin packages (subdirs containing .claude-plugin/plugin.json).
+fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.join(".claude-plugin").join("plugin.json").exists() {
+            let name = mcp_config::read_plugin_json(&path.join(".claude-plugin/plugin.json"))
+                .unwrap_or_else(|_| entry.file_name().to_string_lossy().to_string());
+            packages.push(InstalledPackage {
+                name,
+                package_type: PackageType::Plugin,
+                version: "latest".to_string(),
+                targets: vec![agent_name.to_string()],
+            });
+        }
+    }
+}
+
+/// Read version from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
 fn read_frontmatter_version(path: &Path) -> String {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -285,7 +370,7 @@ metadata:
     #[test]
     fn test_run_list_empty() {
         // Should not panic even with no packages
-        let result = run_list(false, false, None, true);
+        let result = run_list(false, false, false, false, None, true);
         assert!(result.is_ok());
     }
 
@@ -307,7 +392,7 @@ metadata:
         std::fs::write(val_dir.join("rules/rule.md"), "# Rule").unwrap();
 
         // With agent filter, validators should be suppressed
-        let result = run_list(false, false, Some("claude-code"), true);
+        let result = run_list(false, false, false, false, Some("claude-code"), true);
         assert!(result.is_ok());
 
         std::env::set_current_dir(old_dir).unwrap();
@@ -331,7 +416,7 @@ metadata:
         std::fs::write(val_dir.join("rules/rule.md"), "# Rule").unwrap();
 
         // Without agent filter, validators should appear
-        let result = run_list(false, false, None, true);
+        let result = run_list(false, false, false, false, None, true);
         assert!(result.is_ok());
 
         std::env::set_current_dir(old_dir).unwrap();

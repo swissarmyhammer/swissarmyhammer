@@ -6,30 +6,48 @@ agents:
     detect:
       - dir: "~/.claude"
       - command: claude
+    mcp_config:
+      project_path: .mcp.json
+      global_path: "~/.claude.json"
+      servers_key: mcpServers
+    plugin_path: .claude/plugins
+    global_plugin_path: "~/.claude/plugins"
   - id: cursor
     name: Cursor
     project_path: .cursor/skills
     global_path: "~/.cursor/skills"
     detect:
       - dir: "~/.cursor"
+    mcp_config:
+      project_path: .cursor/mcp.json
+      servers_key: mcpServers
   - id: windsurf
     name: Windsurf
     project_path: .windsurf/skills
     global_path: "~/.windsurf/skills"
     detect:
       - dir: "~/.windsurf"
+    mcp_config:
+      project_path: .windsurf/mcp.json
+      servers_key: mcpServers
   - id: cline
     name: Cline
     project_path: .cline/skills
     global_path: "~/.cline/skills"
     detect:
       - dir: "~/.cline"
+    mcp_config:
+      project_path: .vscode/mcp.json
+      servers_key: mcpServers
   - id: roo-code
     name: Roo Code
     project_path: .roo/skills
     global_path: "~/.roo/skills"
     detect:
       - dir: "~/.roo"
+    mcp_config:
+      project_path: .vscode/mcp.json
+      servers_key: mcpServers
   - id: aider
     name: Aider
     project_path: .aider/skills
@@ -49,6 +67,9 @@ agents:
     global_path: "~/.continue/skills"
     detect:
       - dir: "~/.continue"
+    mcp_config:
+      project_path: .continue/config.json
+      servers_key: mcpServers
   - id: amp
     name: Amp
     project_path: .amp/skills

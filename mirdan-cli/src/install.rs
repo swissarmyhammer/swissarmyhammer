@@ -2,6 +2,8 @@
 //!
 //! Skills -> agent skill directories (one copy per detected agent)
 //! Validators -> .avp/validators/ (project) or ~/.avp/validators/ (global)
+//! Tools -> .tools/ store + agent MCP config files
+//! Plugins -> agent plugin directories (e.g. .claude/plugins/)
 
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -11,6 +13,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::agents::{self, agent_global_skill_dir, agent_project_skill_dir};
 use crate::git_source::{self, InstallSource};
 use crate::lockfile::{self, LockedPackage, Lockfile};
+use crate::mcp_config;
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
 use crate::store;
@@ -89,15 +92,21 @@ async fn run_install_local(
     // Detect package type
     let pkg_type = package_type::detect_package_type(&dir).ok_or_else(|| {
         RegistryError::Validation(format!(
-            "Cannot determine package type in '{}'. Expected SKILL.md or VALIDATOR.md + rules/",
+            "Cannot determine package type in '{}'. Expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json",
             local_path
         ))
     })?;
 
-    // Read name and version from frontmatter
+    // Read name and version from frontmatter (or plugin.json for plugins)
     let (name, version) = match pkg_type {
         PackageType::Skill => read_frontmatter(&dir.join("SKILL.md"))?,
         PackageType::Validator => read_frontmatter(&dir.join("VALIDATOR.md"))?,
+        PackageType::Tool => read_frontmatter(&dir.join("TOOL.md"))?,
+        PackageType::Plugin => {
+            let plugin_name =
+                mcp_config::read_plugin_json(&dir.join(".claude-plugin/plugin.json"))?;
+            (plugin_name, "0.0.0".to_string())
+        }
     };
 
     println!("Installing {} from local path ({})...", name, pkg_type);
@@ -105,6 +114,8 @@ async fn run_install_local(
     let targets = match pkg_type {
         PackageType::Skill => deploy_skill(&name, &dir, agent_filter, global).await?,
         PackageType::Validator => deploy_validator(&name, &dir, global)?,
+        PackageType::Tool => deploy_tool(&name, &dir, agent_filter, global)?,
+        PackageType::Plugin => deploy_plugin(&name, &dir, agent_filter, global)?,
     };
 
     // Update lockfile
@@ -172,16 +183,23 @@ async fn run_install_git(
         let targets = match pkg.package_type {
             PackageType::Skill => deploy_skill(&pkg.name, &pkg.path, agent_filter, global).await?,
             PackageType::Validator => deploy_validator(&pkg.name, &pkg.path, global)?,
+            PackageType::Tool => deploy_tool(&pkg.name, &pkg.path, agent_filter, global)?,
+            PackageType::Plugin => deploy_plugin(&pkg.name, &pkg.path, agent_filter, global)?,
         };
 
-        // Read version from frontmatter
-        let md_file = match pkg.package_type {
-            PackageType::Skill => pkg.path.join("SKILL.md"),
-            PackageType::Validator => pkg.path.join("VALIDATOR.md"),
+        // Read version from frontmatter (or plugin.json for plugins)
+        let version = match pkg.package_type {
+            PackageType::Skill => read_frontmatter(&pkg.path.join("SKILL.md"))
+                .map(|(_, v)| v)
+                .unwrap_or_else(|_| "0.0.0".to_string()),
+            PackageType::Validator => read_frontmatter(&pkg.path.join("VALIDATOR.md"))
+                .map(|(_, v)| v)
+                .unwrap_or_else(|_| "0.0.0".to_string()),
+            PackageType::Tool => read_frontmatter(&pkg.path.join("TOOL.md"))
+                .map(|(_, v)| v)
+                .unwrap_or_else(|_| "0.0.0".to_string()),
+            PackageType::Plugin => "0.0.0".to_string(),
         };
-        let version = read_frontmatter(&md_file)
-            .map(|(_, v)| v)
-            .unwrap_or_else(|_| "0.0.0".to_string());
 
         lf.add_package(
             pkg.name.clone(),
@@ -296,13 +314,15 @@ async fn run_install_registry(
 
     let pkg_type = package_type::detect_package_type(temp_dir.path()).ok_or_else(|| {
         RegistryError::Validation(
-            "Cannot determine package type. Expected SKILL.md or VALIDATOR.md + rules/".to_string(),
+            "Cannot determine package type. Expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json".to_string(),
         )
     })?;
 
     let targets = match pkg_type {
         PackageType::Skill => deploy_skill(&name, temp_dir.path(), agent_filter, global).await?,
         PackageType::Validator => deploy_validator(&name, temp_dir.path(), global)?,
+        PackageType::Tool => deploy_tool(&name, temp_dir.path(), agent_filter, global)?,
+        PackageType::Plugin => deploy_plugin(&name, temp_dir.path(), agent_filter, global)?,
     };
 
     // Update lockfile
@@ -445,6 +465,8 @@ pub async fn run_uninstall(
                 match pkg_type {
                     PackageType::Skill => uninstall_skill(pkg_name, agent_filter, global)?,
                     PackageType::Validator => uninstall_validator(pkg_name, global)?,
+                    PackageType::Tool => uninstall_tool(pkg_name, agent_filter, global)?,
+                    PackageType::Plugin => uninstall_plugin(pkg_name, agent_filter, global)?,
                 }
                 lf.remove_package(pkg_name);
                 println!("  Uninstalled {}", pkg_name);
@@ -468,6 +490,8 @@ pub async fn run_uninstall(
     match pkg_type {
         PackageType::Skill => uninstall_skill(name, agent_filter, global)?,
         PackageType::Validator => uninstall_validator(name, global)?,
+        PackageType::Tool => uninstall_tool(name, agent_filter, global)?,
+        PackageType::Plugin => uninstall_plugin(name, agent_filter, global)?,
     }
 
     // Update lockfile
@@ -571,8 +595,277 @@ fn guess_installed_type(name: &str, global: bool) -> PackageType {
     {
         return PackageType::Validator;
     }
+    // Check tool store
+    if store::tool_store_dir(global)
+        .join(sanitize_dir_name(name))
+        .exists()
+    {
+        return PackageType::Tool;
+    }
+    // Check plugin dirs
+    if let Ok(config) = agents::load_agents_config() {
+        for agent in &config.agents {
+            let plugin_dir = if global {
+                agents::agent_global_plugin_dir(agent)
+            } else {
+                agents::agent_project_plugin_dir(agent)
+            };
+            if let Some(dir) = plugin_dir {
+                if dir.join(sanitize_dir_name(name)).exists() {
+                    return PackageType::Plugin;
+                }
+            }
+        }
+    }
     // Default to skill
     PackageType::Skill
+}
+
+/// Deploy a tool to the central tool store and register in agent MCP configs.
+fn deploy_tool(
+    name: &str,
+    source_dir: &Path,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<Vec<String>, RegistryError> {
+    let config = agents::load_agents_config()?;
+    let agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    // 1. Parse MCP frontmatter from TOOL.md
+    let tool_md = source_dir.join("TOOL.md");
+    let yaml = mcp_config::parse_yaml_frontmatter(&tool_md)?;
+    let mcp_fm = mcp_config::parse_tool_frontmatter(&yaml)?;
+
+    // 2. Copy source into the central tool store
+    let sanitized = sanitize_dir_name(name);
+    let store_path = store::tool_store_dir(global).join(&sanitized);
+
+    store::remove_if_exists(&store_path)?;
+    copy_dir_recursive(source_dir, &store_path)?;
+    println!("  Stored in {}", store_path.display());
+
+    // 3. Register in each agent's MCP config
+    let entry = mcp_config::McpServerEntry {
+        command: mcp_fm.command,
+        args: mcp_fm.args,
+        env: mcp_fm.env,
+    };
+
+    let mut targets = Vec::new();
+
+    for agent in &agents {
+        if let Some(ref mcp_cfg) = agent.def.mcp_config {
+            let config_path = if global {
+                agents::agent_global_mcp_config(&agent.def)
+            } else {
+                agents::agent_project_mcp_config(&agent.def)
+            };
+
+            if let Some(config_path) = config_path {
+                mcp_config::register_mcp_server(
+                    &config_path,
+                    &mcp_cfg.servers_key,
+                    name,
+                    &entry,
+                )?;
+                println!(
+                    "  Registered in {} ({})",
+                    config_path.display(),
+                    agent.def.name
+                );
+                targets.push(agent.def.id.clone());
+            }
+        } else {
+            tracing::debug!("Agent {} has no MCP config, skipping", agent.def.id);
+        }
+    }
+
+    Ok(targets)
+}
+
+/// Deploy a plugin to agent plugin directories.
+fn deploy_plugin(
+    name: &str,
+    source_dir: &Path,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<Vec<String>, RegistryError> {
+    let config = agents::load_agents_config()?;
+    let agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    let sanitized = sanitize_dir_name(name);
+    let mut targets = Vec::new();
+
+    for agent in &agents {
+        let plugin_dir = if global {
+            agents::agent_global_plugin_dir(&agent.def)
+        } else {
+            agents::agent_project_plugin_dir(&agent.def)
+        };
+
+        if let Some(base_dir) = plugin_dir {
+            let target = base_dir.join(&sanitized);
+            store::remove_if_exists(&target)?;
+            copy_dir_recursive(source_dir, &target)?;
+            println!(
+                "  Deployed to {} ({})",
+                target.display(),
+                agent.def.name
+            );
+            targets.push(agent.def.id.clone());
+
+            // If plugin contains .mcp.json, also register those MCP servers
+            let plugin_mcp = target.join(".mcp.json");
+            if plugin_mcp.exists() {
+                if let Some(ref mcp_cfg) = agent.def.mcp_config {
+                    let config_path = if global {
+                        agents::agent_global_mcp_config(&agent.def)
+                    } else {
+                        agents::agent_project_mcp_config(&agent.def)
+                    };
+
+                    if let Some(config_path) = config_path {
+                        // Read and register MCP servers from plugin's .mcp.json
+                        if let Ok(content) = std::fs::read_to_string(&plugin_mcp) {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                                if let Some(servers) =
+                                    json.get(&mcp_cfg.servers_key).and_then(|s| s.as_object())
+                                {
+                                    for (server_name, server_def) in servers {
+                                        if let Ok(entry) =
+                                            serde_json::from_value::<mcp_config::McpServerEntry>(
+                                                server_def.clone(),
+                                            )
+                                        {
+                                            let _ = mcp_config::register_mcp_server(
+                                                &config_path,
+                                                &mcp_cfg.servers_key,
+                                                server_name,
+                                                &entry,
+                                            );
+                                            println!(
+                                                "  Registered MCP server '{}' from plugin",
+                                                server_name
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            tracing::debug!(
+                "Agent {} has no plugin path, skipping",
+                agent.def.id
+            );
+        }
+    }
+
+    if targets.is_empty() {
+        return Err(RegistryError::Validation(
+            "No agents with plugin support detected. Plugins are currently supported by Claude Code."
+                .to_string(),
+        ));
+    }
+
+    Ok(targets)
+}
+
+fn uninstall_tool(
+    name: &str,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
+    let config = agents::load_agents_config()?;
+    let agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    let sanitized = sanitize_dir_name(name);
+
+    // 1. Unregister from each agent's MCP config
+    let mut removed = 0;
+    for agent in &agents {
+        if let Some(ref mcp_cfg) = agent.def.mcp_config {
+            let config_path = if global {
+                agents::agent_global_mcp_config(&agent.def)
+            } else {
+                agents::agent_project_mcp_config(&agent.def)
+            };
+
+            if let Some(config_path) = config_path {
+                if mcp_config::unregister_mcp_server(&config_path, &mcp_cfg.servers_key, name)? {
+                    println!(
+                        "  Unregistered from {} ({})",
+                        config_path.display(),
+                        agent.def.name
+                    );
+                    removed += 1;
+                }
+            }
+        }
+    }
+
+    // 2. Remove from tool store
+    let store_path = store::tool_store_dir(global).join(&sanitized);
+    if store_path.exists() {
+        std::fs::remove_dir_all(&store_path)?;
+        println!("  Removed store entry {}", store_path.display());
+        removed += 1;
+    }
+
+    if removed == 0 {
+        let scope = if global { "global" } else { "project" };
+        return Err(RegistryError::NotFound(format!(
+            "Tool '{}' not found ({} scope)",
+            name, scope
+        )));
+    }
+
+    Ok(())
+}
+
+fn uninstall_plugin(
+    name: &str,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
+    let config = agents::load_agents_config()?;
+    let agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    let sanitized = sanitize_dir_name(name);
+    let mut removed = 0;
+
+    for agent in &agents {
+        let plugin_dir = if global {
+            agents::agent_global_plugin_dir(&agent.def)
+        } else {
+            agents::agent_project_plugin_dir(&agent.def)
+        };
+
+        if let Some(base_dir) = plugin_dir {
+            let target = base_dir.join(&sanitized);
+            if target.exists() {
+                std::fs::remove_dir_all(&target)?;
+                println!(
+                    "  Removed from {} ({})",
+                    target.display(),
+                    agent.def.name
+                );
+                removed += 1;
+            }
+        }
+    }
+
+    if removed == 0 {
+        let scope = if global { "global" } else { "project" };
+        return Err(RegistryError::NotFound(format!(
+            "Plugin '{}' not found ({} scope)",
+            name, scope
+        )));
+    }
+
+    Ok(())
 }
 
 /// Install a specific package version (used by update command).
@@ -855,6 +1148,586 @@ mod tests {
             "# No Secrets\nDon't commit secrets.\n",
         )
         .unwrap();
+    }
+
+    /// Helper: create a local tool directory with a realistic TOOL.md.
+    ///
+    /// Uses @modelcontextprotocol/server-filesystem as the MCP server —
+    /// a real, published npm package that implements the MCP protocol for
+    /// filesystem access.
+    fn make_local_tool(dir: &Path, name: &str, version: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("TOOL.md"),
+            format!(
+                r#"---
+name: {name}
+description: "MCP server for filesystem access"
+metadata:
+  version: "{version}"
+mcp:
+  command: npx
+  args:
+    - "-y"
+    - "@modelcontextprotocol/server-filesystem"
+    - "/tmp/safe-dir"
+  transport: stdio
+  env:
+    NODE_ENV: production
+---
+
+# {name}
+
+An MCP tool that provides filesystem access to AI coding agents
+via the Model Context Protocol.
+
+## What This Tool Does
+
+Exposes read/write filesystem operations through MCP so agents can
+work with files in a controlled directory.
+"#,
+                name = name,
+                version = version,
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("README.md"),
+            format!("# {}\n\nAn MCP filesystem tool.\n", name),
+        )
+        .unwrap();
+    }
+
+    /// Helper: create a local plugin directory with .claude-plugin/plugin.json.
+    ///
+    /// Creates a realistic Claude Code plugin with a command and an
+    /// optional bundled .mcp.json.
+    fn make_local_plugin(dir: &Path, name: &str, with_mcp: bool) {
+        let plugin_meta = dir.join(".claude-plugin");
+        let commands_dir = dir.join("commands");
+        std::fs::create_dir_all(&plugin_meta).unwrap();
+        std::fs::create_dir_all(&commands_dir).unwrap();
+
+        std::fs::write(
+            plugin_meta.join("plugin.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "name": name,
+                "description": "A test plugin for e2e testing",
+                "author": { "name": "test" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        std::fs::write(
+            commands_dir.join("greet.md"),
+            format!(
+                "---\ndescription: \"Say hello from {name}\"\nallowed-tools:\n  - Read\n---\n\n\
+                 # Greet\n\nSay hello to the user.\n",
+                name = name,
+            ),
+        )
+        .unwrap();
+
+        if with_mcp {
+            std::fs::write(
+                dir.join(".mcp.json"),
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "mcpServers": {
+                        format!("{}-server", name): {
+                            "command": "node",
+                            "args": ["./server.js"]
+                        }
+                    }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+
+        std::fs::write(
+            dir.join("README.md"),
+            format!("# {}\n\nA test plugin.\n", name),
+        )
+        .unwrap();
+    }
+
+    // --- tool: detection, frontmatter, deploy, uninstall ---
+
+    #[test]
+    fn test_local_tool_detection_and_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool_dir = dir.path().join("fs-tool");
+        make_local_tool(&tool_dir, "fs-tool", "1.0.0");
+
+        // detect_package_type recognises it as a Tool
+        let pkg_type = package_type::detect_package_type(&tool_dir);
+        assert_eq!(pkg_type, Some(PackageType::Tool));
+
+        // read_frontmatter extracts name + version
+        let (name, version) = read_frontmatter(&tool_dir.join("TOOL.md")).unwrap();
+        assert_eq!(name, "fs-tool");
+        assert_eq!(version, "1.0.0");
+
+        // MCP frontmatter parses correctly
+        let yaml = mcp_config::parse_yaml_frontmatter(&tool_dir.join("TOOL.md")).unwrap();
+        let mcp_fm = mcp_config::parse_tool_frontmatter(&yaml).unwrap();
+        assert_eq!(mcp_fm.command, "npx");
+        assert_eq!(
+            mcp_fm.args,
+            vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp/safe-dir"]
+        );
+        assert_eq!(mcp_fm.transport, Some("stdio".to_string()));
+        assert_eq!(mcp_fm.env.get("NODE_ENV").unwrap(), "production");
+    }
+
+    #[test]
+    fn test_deploy_tool_creates_store_and_mcp_json() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Create a source tool with a real MCP server reference
+        let src = work.path().join("src-tool");
+        make_local_tool(&src, "fs-tool", "1.0.0");
+
+        // Deploy it (non-global)
+        let targets = deploy_tool("fs-tool", &src, None, false).unwrap();
+        // claude-code has mcp_config, so it should be a target
+        assert!(
+            targets.contains(&"claude-code".to_string()),
+            "claude-code should be in targets: {:?}",
+            targets
+        );
+
+        // 1. Verify tool store: .tools/fs-tool/ has TOOL.md + README.md
+        let store = work.path().join(".tools/fs-tool");
+        assert!(store.join("TOOL.md").exists(), "TOOL.md should be in store");
+        assert!(
+            store.join("README.md").exists(),
+            "README.md should be in store"
+        );
+
+        // Verify the stored TOOL.md is byte-identical to the source
+        let src_content = std::fs::read_to_string(src.join("TOOL.md")).unwrap();
+        let store_content = std::fs::read_to_string(store.join("TOOL.md")).unwrap();
+        assert_eq!(src_content, store_content, "Store copy should match source");
+
+        // 2. Verify .mcp.json was created with the correct MCP server entry
+        let mcp_json_path = work.path().join(".mcp.json");
+        assert!(mcp_json_path.exists(), ".mcp.json should exist");
+        let mcp_content = std::fs::read_to_string(&mcp_json_path).unwrap();
+        let mcp_json: serde_json::Value = serde_json::from_str(&mcp_content).unwrap();
+
+        // The entry should be under mcpServers.fs-tool
+        let server = &mcp_json["mcpServers"]["fs-tool"];
+        assert_eq!(
+            server["command"].as_str().unwrap(),
+            "npx",
+            "command should be npx"
+        );
+        let args: Vec<&str> = server["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp/safe-dir"],
+            "args should match TOOL.md"
+        );
+        assert_eq!(
+            server["env"]["NODE_ENV"].as_str().unwrap(),
+            "production",
+            "env should be passed through"
+        );
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_deploy_and_uninstall_tool() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Deploy
+        let src = work.path().join("src-tool");
+        make_local_tool(&src, "fs-tool", "1.0.0");
+        deploy_tool("fs-tool", &src, None, false).unwrap();
+
+        let store = work.path().join(".tools/fs-tool");
+        let mcp_json_path = work.path().join(".mcp.json");
+        assert!(store.exists());
+        assert!(mcp_json_path.exists());
+
+        // Verify server is registered before uninstall
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&mcp_json_path).unwrap()).unwrap();
+        assert!(
+            mcp["mcpServers"]["fs-tool"].is_object(),
+            "Server should be registered"
+        );
+
+        // Uninstall
+        uninstall_tool("fs-tool", None, false).unwrap();
+
+        // Store entry should be gone
+        assert!(!store.exists(), "Tool store entry should be removed");
+
+        // MCP server entry should be gone, but mcpServers key remains
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&mcp_json_path).unwrap()).unwrap();
+        assert!(
+            mcp["mcpServers"]["fs-tool"].is_null(),
+            "Server entry should be removed from .mcp.json"
+        );
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_deploy_tool_preserves_existing_mcp_servers() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Pre-populate .mcp.json with an existing server
+        std::fs::write(
+            work.path().join(".mcp.json"),
+            r#"{
+  "mcpServers": {
+    "existing-server": {
+      "command": "node",
+      "args": ["./existing.js"]
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        // Deploy a new tool
+        let src = work.path().join("src-tool");
+        make_local_tool(&src, "fs-tool", "1.0.0");
+        deploy_tool("fs-tool", &src, None, false).unwrap();
+
+        // Both servers should be present
+        let mcp: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            mcp["mcpServers"]["existing-server"]["command"]
+                .as_str()
+                .unwrap(),
+            "node",
+            "Existing server should be preserved"
+        );
+        assert_eq!(
+            mcp["mcpServers"]["fs-tool"]["command"].as_str().unwrap(),
+            "npx",
+            "New tool should be added"
+        );
+
+        // Uninstall only the new tool
+        uninstall_tool("fs-tool", None, false).unwrap();
+
+        // Existing server should still be there
+        let mcp: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            mcp["mcpServers"]["existing-server"]["command"]
+                .as_str()
+                .unwrap(),
+            "node",
+            "Existing server should survive uninstall of other tool"
+        );
+        assert!(
+            mcp["mcpServers"]["fs-tool"].is_null(),
+            "Uninstalled tool should be gone"
+        );
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_uninstall_tool_not_found() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let result = uninstall_tool("nonexistent-tool", None, false);
+        assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    // --- plugin: detection, deploy, uninstall ---
+
+    #[test]
+    fn test_local_plugin_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("my-plugin");
+        make_local_plugin(&plugin_dir, "my-plugin", false);
+
+        let pkg_type = package_type::detect_package_type(&plugin_dir);
+        assert_eq!(pkg_type, Some(PackageType::Plugin));
+
+        // Read name from plugin.json
+        let name = mcp_config::read_plugin_json(
+            &plugin_dir.join(".claude-plugin/plugin.json"),
+        )
+        .unwrap();
+        assert_eq!(name, "my-plugin");
+    }
+
+    #[test]
+    fn test_deploy_plugin_creates_files() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let src = work.path().join("src-plugin");
+        make_local_plugin(&src, "test-plugin", false);
+
+        let targets = deploy_plugin("test-plugin", &src, None, false).unwrap();
+        assert!(
+            targets.contains(&"claude-code".to_string()),
+            "claude-code should be in targets: {:?}",
+            targets
+        );
+
+        // Verify the plugin was copied to .claude/plugins/test-plugin/
+        let deployed = work.path().join(".claude/plugins/test-plugin");
+        assert!(deployed.exists(), "Plugin dir should exist");
+        assert!(
+            deployed.join(".claude-plugin/plugin.json").exists(),
+            "plugin.json should be deployed"
+        );
+        assert!(
+            deployed.join("commands/greet.md").exists(),
+            "Commands should be deployed"
+        );
+        assert!(
+            deployed.join("README.md").exists(),
+            "README should be deployed"
+        );
+
+        // Verify plugin.json content is preserved
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(deployed.join(".claude-plugin/plugin.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["name"].as_str().unwrap(), "test-plugin");
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_deploy_and_uninstall_plugin() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let src = work.path().join("src-plugin");
+        make_local_plugin(&src, "test-plugin", false);
+        deploy_plugin("test-plugin", &src, None, false).unwrap();
+
+        let deployed = work.path().join(".claude/plugins/test-plugin");
+        assert!(deployed.exists());
+
+        uninstall_plugin("test-plugin", None, false).unwrap();
+        assert!(!deployed.exists(), "Plugin dir should be removed");
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_deploy_plugin_with_bundled_mcp() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Create a plugin that bundles an .mcp.json
+        let src = work.path().join("src-plugin");
+        make_local_plugin(&src, "mcp-plugin", true);
+
+        deploy_plugin("mcp-plugin", &src, None, false).unwrap();
+
+        // Plugin should be deployed
+        let deployed = work.path().join(".claude/plugins/mcp-plugin");
+        assert!(deployed.exists());
+
+        // The bundled .mcp.json servers should be registered in the
+        // project-level .mcp.json (claude-code's mcp_config.project_path)
+        let mcp_json_path = work.path().join(".mcp.json");
+        assert!(
+            mcp_json_path.exists(),
+            ".mcp.json should be created from bundled MCP servers"
+        );
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&mcp_json_path).unwrap()).unwrap();
+        assert!(
+            mcp["mcpServers"]["mcp-plugin-server"].is_object(),
+            "Bundled MCP server should be registered"
+        );
+        assert_eq!(
+            mcp["mcpServers"]["mcp-plugin-server"]["command"]
+                .as_str()
+                .unwrap(),
+            "node"
+        );
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_uninstall_plugin_not_found() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let result = uninstall_plugin("nonexistent-plugin", None, false);
+        assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    // --- e2e: tool install → lockfile → list → uninstall ---
+
+    #[test]
+    fn test_e2e_tool_install_list_uninstall() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // 1. Create and deploy a tool using @modelcontextprotocol/server-filesystem
+        let src = work.path().join("src-tool");
+        make_local_tool(&src, "fs-tool", "2.1.0");
+        let targets = deploy_tool("fs-tool", &src, None, false).unwrap();
+
+        // 2. Write lockfile (mimicking what run_install_local does)
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "fs-tool".to_string(),
+            LockedPackage {
+                package_type: PackageType::Tool,
+                version: "2.1.0".to_string(),
+                resolved: format!("file:{}", src.display()),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets: targets.clone(),
+            },
+        );
+        lf.save(work.path()).unwrap();
+
+        // 3. Verify lockfile round-trip
+        let loaded = Lockfile::load(work.path()).unwrap();
+        let pkg = loaded.get_package("fs-tool").unwrap();
+        assert_eq!(pkg.package_type, PackageType::Tool);
+        assert_eq!(pkg.version, "2.1.0");
+
+        // 4. Verify on-disk state
+        assert!(work.path().join(".tools/fs-tool/TOOL.md").exists());
+        let mcp: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mcp["mcpServers"]["fs-tool"]["command"], "npx");
+
+        // 5. Verify list discovers the tool
+        let packages = crate::list::discover_packages(false, false, true, false, None);
+        let tool_pkgs: Vec<_> = packages.iter().filter(|p| p.name == "fs-tool").collect();
+        assert_eq!(tool_pkgs.len(), 1, "list --tools should find fs-tool");
+        assert_eq!(tool_pkgs[0].package_type, PackageType::Tool);
+        assert_eq!(tool_pkgs[0].version, "2.1.0");
+
+        // 6. Uninstall and verify cleanup
+        uninstall_tool("fs-tool", None, false).unwrap();
+        assert!(!work.path().join(".tools/fs-tool").exists());
+        let mcp: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(mcp["mcpServers"]["fs-tool"].is_null());
+
+        // 7. Clean lockfile
+        let mut lf = Lockfile::load(work.path()).unwrap();
+        lf.remove_package("fs-tool");
+        lf.save(work.path()).unwrap();
+        let lf = Lockfile::load(work.path()).unwrap();
+        assert!(lf.packages.is_empty());
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_e2e_plugin_install_list_uninstall() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // 1. Create and deploy a plugin
+        let src = work.path().join("src-plugin");
+        make_local_plugin(&src, "test-plugin", false);
+        let targets = deploy_plugin("test-plugin", &src, None, false).unwrap();
+
+        // 2. Write lockfile
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "test-plugin".to_string(),
+            LockedPackage {
+                package_type: PackageType::Plugin,
+                version: "0.0.0".to_string(),
+                resolved: format!("file:{}", src.display()),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets: targets.clone(),
+            },
+        );
+        lf.save(work.path()).unwrap();
+
+        // 3. Verify lockfile round-trip
+        let loaded = Lockfile::load(work.path()).unwrap();
+        let pkg = loaded.get_package("test-plugin").unwrap();
+        assert_eq!(pkg.package_type, PackageType::Plugin);
+
+        // 4. Verify on-disk state
+        let deployed = work.path().join(".claude/plugins/test-plugin");
+        assert!(deployed.join(".claude-plugin/plugin.json").exists());
+        assert!(deployed.join("commands/greet.md").exists());
+
+        // 5. Verify list discovers the plugin
+        let packages = crate::list::discover_packages(false, false, false, true, None);
+        let plugin_pkgs: Vec<_> = packages
+            .iter()
+            .filter(|p| p.name == "test-plugin")
+            .collect();
+        assert_eq!(
+            plugin_pkgs.len(),
+            1,
+            "list --plugins should find test-plugin"
+        );
+        assert_eq!(plugin_pkgs[0].package_type, PackageType::Plugin);
+
+        // 6. Uninstall and verify cleanup
+        uninstall_plugin("test-plugin", None, false).unwrap();
+        assert!(
+            !deployed.exists(),
+            "Plugin dir should be removed after uninstall"
+        );
+
+        // 7. Clean lockfile
+        let mut lf = Lockfile::load(work.path()).unwrap();
+        lf.remove_package("test-plugin");
+        lf.save(work.path()).unwrap();
+        let lf = Lockfile::load(work.path()).unwrap();
+        assert!(lf.packages.is_empty());
+
+        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
@@ -1141,6 +2014,175 @@ mod tests {
 
         std::env::set_current_dir(old_dir).unwrap();
     }
+
+    // --- cross-type coexistence and duplicate install tests ---
+
+    #[tokio::test]
+    async fn test_e2e_all_four_types_coexist() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // 1. Install a skill
+        let skill_src = work.path().join("src-skill");
+        make_local_skill(&skill_src, "test-skill", "1.0.0");
+        let skill_targets = deploy_skill("test-skill", &skill_src, None, false).await.unwrap();
+        assert!(!skill_targets.is_empty());
+
+        // 2. Install a validator
+        let val_src = work.path().join("src-val");
+        make_local_validator(&val_src, "test-val", "1.0.0");
+        let val_targets = deploy_validator("test-val", &val_src, false).unwrap();
+        assert!(!val_targets.is_empty());
+
+        // 3. Install a tool
+        let tool_src = work.path().join("src-tool");
+        make_local_tool(&tool_src, "test-tool", "1.0.0");
+        let tool_targets = deploy_tool("test-tool", &tool_src, None, false).unwrap();
+        assert!(!tool_targets.is_empty());
+
+        // 4. Install a plugin
+        let plugin_src = work.path().join("src-plugin");
+        make_local_plugin(&plugin_src, "test-plugin", false);
+        let plugin_targets = deploy_plugin("test-plugin", &plugin_src, None, false).unwrap();
+        assert!(!plugin_targets.is_empty());
+
+        // 5. Verify all four are on disk in separate locations
+        assert!(work.path().join(".skills/test-skill/SKILL.md").exists());
+        assert!(work.path().join(".avp/validators/test-val/VALIDATOR.md").exists());
+        assert!(work.path().join(".tools/test-tool/TOOL.md").exists());
+        assert!(work.path().join(".claude/plugins/test-plugin/.claude-plugin/plugin.json").exists());
+
+        // 6. Verify list discovers all four
+        let all = crate::list::discover_packages(false, false, false, false, None);
+        let names: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"test-skill"), "Should find skill in list: {:?}", names);
+        assert!(names.contains(&"test-val"), "Should find validator in list: {:?}", names);
+        assert!(names.contains(&"test-tool"), "Should find tool in list: {:?}", names);
+        assert!(names.contains(&"test-plugin"), "Should find plugin in list: {:?}", names);
+
+        // 7. Verify type-specific filters work
+        let skills_only = crate::list::discover_packages(true, false, false, false, None);
+        assert!(skills_only.iter().all(|p| p.package_type == PackageType::Skill));
+        assert!(skills_only.iter().any(|p| p.name == "test-skill"));
+
+        let tools_only = crate::list::discover_packages(false, false, true, false, None);
+        assert!(tools_only.iter().all(|p| p.package_type == PackageType::Tool));
+        assert!(tools_only.iter().any(|p| p.name == "test-tool"));
+
+        let plugins_only = crate::list::discover_packages(false, false, false, true, None);
+        assert!(plugins_only.iter().all(|p| p.package_type == PackageType::Plugin));
+        assert!(plugins_only.iter().any(|p| p.name == "test-plugin"));
+
+        let vals_only = crate::list::discover_packages(false, true, false, false, None);
+        assert!(vals_only.iter().all(|p| p.package_type == PackageType::Validator));
+        assert!(vals_only.iter().any(|p| p.name == "test-val"));
+
+        // 8. Uninstall each type independently — others remain
+        uninstall_tool("test-tool", None, false).unwrap();
+        assert!(!work.path().join(".tools/test-tool").exists());
+        assert!(work.path().join(".skills/test-skill/SKILL.md").exists(), "Skill should survive tool uninstall");
+        assert!(work.path().join(".avp/validators/test-val").exists(), "Validator should survive tool uninstall");
+        assert!(work.path().join(".claude/plugins/test-plugin").exists(), "Plugin should survive tool uninstall");
+
+        uninstall_plugin("test-plugin", None, false).unwrap();
+        assert!(!work.path().join(".claude/plugins/test-plugin").exists());
+        assert!(work.path().join(".skills/test-skill/SKILL.md").exists(), "Skill should survive plugin uninstall");
+
+        uninstall_validator("test-val", false).unwrap();
+        assert!(!work.path().join(".avp/validators/test-val").exists());
+        assert!(work.path().join(".skills/test-skill/SKILL.md").exists(), "Skill should survive validator uninstall");
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_deploy_tool_twice_overwrites_cleanly() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Deploy v1
+        let src_v1 = work.path().join("src-v1");
+        make_local_tool(&src_v1, "fs-tool", "1.0.0");
+        deploy_tool("fs-tool", &src_v1, None, false).unwrap();
+
+        let store = work.path().join(".tools/fs-tool");
+        assert!(store.join("TOOL.md").exists());
+
+        // Verify v1 is registered
+        let mcp: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(mcp["mcpServers"]["fs-tool"].is_object());
+
+        // Deploy v2 on top (same name, different version)
+        let src_v2 = work.path().join("src-v2");
+        make_local_tool(&src_v2, "fs-tool", "2.0.0");
+        deploy_tool("fs-tool", &src_v2, None, false).unwrap();
+
+        // Store should have v2 content
+        let (_, version) = read_frontmatter(&store.join("TOOL.md")).unwrap();
+        assert_eq!(version, "2.0.0", "Version should be updated to 2.0.0");
+
+        // MCP config should still have exactly one entry for fs-tool (not duplicated)
+        let mcp: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
+        )
+        .unwrap();
+        let servers = mcp["mcpServers"].as_object().unwrap();
+        let fs_entries: Vec<_> = servers.keys().filter(|k| *k == "fs-tool").collect();
+        assert_eq!(fs_entries.len(), 1, "Should have exactly one fs-tool entry");
+
+        // Clean uninstall should still work
+        uninstall_tool("fs-tool", None, false).unwrap();
+        assert!(!store.exists());
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_deploy_plugin_twice_overwrites_cleanly() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        // Deploy v1
+        let src_v1 = work.path().join("src-v1");
+        make_local_plugin(&src_v1, "my-plugin", false);
+        deploy_plugin("my-plugin", &src_v1, None, false).unwrap();
+
+        let deployed = work.path().join(".claude/plugins/my-plugin");
+        assert!(deployed.join(".claude-plugin/plugin.json").exists());
+        assert!(deployed.join("commands/greet.md").exists());
+
+        // Modify v2 source to have a different command file
+        let src_v2 = work.path().join("src-v2");
+        make_local_plugin(&src_v2, "my-plugin", true); // now with bundled MCP
+        // Add an extra file to v2
+        std::fs::write(src_v2.join("CHANGELOG.md"), "# Changes\nv2").unwrap();
+
+        deploy_plugin("my-plugin", &src_v2, None, false).unwrap();
+
+        // The deployed dir should have the v2 content
+        assert!(
+            deployed.join("CHANGELOG.md").exists(),
+            "v2 files should be present after re-deploy"
+        );
+        assert!(
+            deployed.join(".mcp.json").exists(),
+            "v2 bundled .mcp.json should be present"
+        );
+
+        // Uninstall should still work cleanly
+        uninstall_plugin("my-plugin", None, false).unwrap();
+        assert!(!deployed.exists());
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    // --- end-to-end: clone real repo → deploy validator → lockfile → uninstall ---
 
     #[test]
     fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {

@@ -301,7 +301,15 @@ fn classify_git_error(err: git2::Error, url: &str) -> RegistryError {
 }
 
 /// Priority directories to search for packages within a cloned repo.
-const PRIORITY_DIRS: &[&str] = &["skills", ".claude/skills", "validators", ".avp/validators"];
+const PRIORITY_DIRS: &[&str] = &[
+    "skills",
+    ".claude/skills",
+    "validators",
+    ".avp/validators",
+    "tools",
+    ".tools",
+    "plugins",
+];
 
 /// Maximum recursion depth when scanning for packages.
 const MAX_SCAN_DEPTH: usize = 5;
@@ -364,7 +372,7 @@ pub fn discover_packages(
 
     if packages.is_empty() {
         return Err(RegistryError::Validation(
-            "No packages found in repository (expected SKILL.md or VALIDATOR.md + rules/)"
+            "No packages found in repository (expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json)"
                 .to_string(),
         ));
     }
@@ -379,23 +387,48 @@ fn scan_dir_for_package(
     seen: &mut std::collections::HashSet<String>,
 ) {
     if let Some(pkg_type) = package_type::detect_package_type(dir) {
-        let md_file = match pkg_type {
-            PackageType::Skill => dir.join("SKILL.md"),
-            PackageType::Validator => dir.join("VALIDATOR.md"),
+        let name = match pkg_type {
+            PackageType::Skill => {
+                let md_file = dir.join("SKILL.md");
+                std::fs::read_to_string(&md_file)
+                    .ok()
+                    .and_then(|c| extract_name_from_frontmatter(&c))
+            }
+            PackageType::Validator => {
+                let md_file = dir.join("VALIDATOR.md");
+                std::fs::read_to_string(&md_file)
+                    .ok()
+                    .and_then(|c| extract_name_from_frontmatter(&c))
+            }
+            PackageType::Tool => {
+                let md_file = dir.join("TOOL.md");
+                std::fs::read_to_string(&md_file)
+                    .ok()
+                    .and_then(|c| extract_name_from_frontmatter(&c))
+            }
+            PackageType::Plugin => extract_name_from_plugin_json(dir),
         };
 
-        if let Ok(content) = std::fs::read_to_string(&md_file) {
-            if let Some(name) = extract_name_from_frontmatter(&content) {
-                if seen.insert(name.clone()) {
-                    packages.push(DiscoveredPackage {
-                        name,
-                        package_type: pkg_type,
-                        path: dir.to_path_buf(),
-                    });
-                }
+        if let Some(name) = name {
+            if seen.insert(name.clone()) {
+                packages.push(DiscoveredPackage {
+                    name,
+                    package_type: pkg_type,
+                    path: dir.to_path_buf(),
+                });
             }
         }
     }
+}
+
+/// Extract name from .claude-plugin/plugin.json.
+fn extract_name_from_plugin_json(dir: &Path) -> Option<String> {
+    let path = dir.join(".claude-plugin").join("plugin.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    json.get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Recursively scan for packages up to MAX_SCAN_DEPTH.
@@ -981,5 +1014,321 @@ mod tests {
             !path.exists(),
             "Temp dir must be cleaned up when TempDir drops"
         );
+    }
+
+    // --- plugin discovery from real git repos ---
+
+    #[test]
+    fn test_clone_obra_superpowers_discovers_plugin() {
+        let source = parse_git_source("obra/superpowers", None).unwrap();
+        let temp_dir = git_clone(&source).unwrap();
+        let packages = discover_packages(temp_dir.path(), None, None).unwrap();
+
+        // obra/superpowers has .claude-plugin/plugin.json at root → Plugin
+        let plugins: Vec<_> = packages
+            .iter()
+            .filter(|p| p.package_type == PackageType::Plugin)
+            .collect();
+        assert!(
+            !plugins.is_empty(),
+            "obra/superpowers should contain at least one Plugin, found types: {:?}",
+            packages.iter().map(|p| &p.package_type).collect::<Vec<_>>()
+        );
+
+        // The root plugin should have name "superpowers"
+        let sp = plugins.iter().find(|p| p.name == "superpowers");
+        assert!(
+            sp.is_some(),
+            "Expected plugin named 'superpowers', found: {:?}",
+            plugins.iter().map(|p| &p.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_clone_obra_superpowers_discovers_mixed_types() {
+        // obra/superpowers has both .claude-plugin/plugin.json AND skills/ with SKILL.md files
+        let source = parse_git_source("obra/superpowers", None).unwrap();
+        let temp_dir = git_clone(&source).unwrap();
+        let packages = discover_packages(temp_dir.path(), None, None).unwrap();
+
+        let types: std::collections::HashSet<_> =
+            packages.iter().map(|p| format!("{}", p.package_type)).collect();
+
+        assert!(
+            types.contains("plugin"),
+            "Should discover Plugin type, found: {:?}",
+            types
+        );
+        assert!(
+            types.contains("skill"),
+            "Should discover Skill type, found: {:?}",
+            types
+        );
+        assert!(
+            packages.len() >= 2,
+            "Should have at least 2 packages (1 plugin + skills), found {}",
+            packages.len()
+        );
+
+        // Names should all be unique (deduplication works)
+        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(
+            names.len(),
+            unique.len(),
+            "Package names should be unique: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_clone_anthropics_plugins_discovers_multiple_plugins() {
+        // anthropics/claude-plugins-official is a marketplace repo.
+        // The plugins/ directory is a PRIORITY_DIR, so the scanner finds
+        // all plugins inside it. external_plugins/ is not a priority dir
+        // and the recursive scan is skipped once plugins/ yields results.
+        let source =
+            parse_git_source("anthropics/claude-plugins-official", None).unwrap();
+        let temp_dir = git_clone(&source).unwrap();
+        let packages = discover_packages(temp_dir.path(), None, None).unwrap();
+
+        let plugins: Vec<_> = packages
+            .iter()
+            .filter(|p| p.package_type == PackageType::Plugin)
+            .collect();
+
+        // plugins/ has 29+ entries; we should find many of them
+        assert!(
+            plugins.len() >= 10,
+            "Marketplace should contain many plugins, found {}",
+            plugins.len()
+        );
+
+        // Spot-check known plugins from plugins/ (not external_plugins/)
+        let names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            names.contains(&"example-plugin"),
+            "Should find example-plugin, found: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"code-review"),
+            "Should find code-review plugin, found: {:?}",
+            names
+        );
+
+        // Every discovered plugin should have a valid plugin.json
+        for pkg in &plugins {
+            let pj = pkg.path.join(".claude-plugin/plugin.json");
+            assert!(
+                pj.exists(),
+                "plugin.json missing for {} at {:?}",
+                pkg.name,
+                pkg.path
+            );
+            let content = std::fs::read_to_string(&pj).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+            assert!(
+                json.get("name").is_some(),
+                "plugin.json should have name field for {}",
+                pkg.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_clone_anthropics_plugins_select_one() {
+        let source =
+            parse_git_source("anthropics/claude-plugins-official", None).unwrap();
+        let temp_dir = git_clone(&source).unwrap();
+
+        // Select "example-plugin" (lives in plugins/, a PRIORITY_DIR)
+        let filtered =
+            discover_packages(temp_dir.path(), None, Some("example-plugin")).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "example-plugin");
+        assert_eq!(filtered[0].package_type, PackageType::Plugin);
+    }
+
+    #[test]
+    fn test_clone_anthropics_plugins_select_nonexistent() {
+        let source =
+            parse_git_source("anthropics/claude-plugins-official", None).unwrap();
+        let temp_dir = git_clone(&source).unwrap();
+
+        let result =
+            discover_packages(temp_dir.path(), None, Some("zzz-not-a-plugin"));
+        assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
+    }
+
+    // --- tool + plugin discovery from tempdir fixtures ---
+
+    #[test]
+    fn test_discover_tool_in_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("TOOL.md"),
+            "---\nname: root-tool\nmetadata:\n  version: \"1.0.0\"\nmcp:\n  command: echo\n  args: [\"hello\"]\n---\n# Tool\n",
+        )
+        .unwrap();
+
+        let pkgs = discover_packages(dir.path(), None, None).unwrap();
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "root-tool");
+        assert_eq!(pkgs[0].package_type, PackageType::Tool);
+    }
+
+    #[test]
+    fn test_discover_tool_in_tools_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = dir.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+
+        let t1 = tools.join("tool-one");
+        std::fs::create_dir(&t1).unwrap();
+        std::fs::write(
+            t1.join("TOOL.md"),
+            "---\nname: tool-one\nmcp:\n  command: echo\n---\n# One\n",
+        )
+        .unwrap();
+
+        let t2 = tools.join("tool-two");
+        std::fs::create_dir(&t2).unwrap();
+        std::fs::write(
+            t2.join("TOOL.md"),
+            "---\nname: tool-two\nmcp:\n  command: echo\n---\n# Two\n",
+        )
+        .unwrap();
+
+        let pkgs = discover_packages(dir.path(), None, None).unwrap();
+        assert_eq!(pkgs.len(), 2);
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"tool-one"));
+        assert!(names.contains(&"tool-two"));
+    }
+
+    #[test]
+    fn test_discover_plugin_in_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let pm = dir.path().join(".claude-plugin");
+        std::fs::create_dir(&pm).unwrap();
+        std::fs::write(
+            pm.join("plugin.json"),
+            r#"{"name": "root-plugin", "description": "test"}"#,
+        )
+        .unwrap();
+
+        let pkgs = discover_packages(dir.path(), None, None).unwrap();
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "root-plugin");
+        assert_eq!(pkgs[0].package_type, PackageType::Plugin);
+    }
+
+    #[test]
+    fn test_discover_plugin_in_plugins_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = dir.path().join("plugins");
+        std::fs::create_dir(&plugins).unwrap();
+
+        let p1 = plugins.join("plugin-a");
+        std::fs::create_dir_all(p1.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            p1.join(".claude-plugin/plugin.json"),
+            r#"{"name": "plugin-a", "description": "a"}"#,
+        )
+        .unwrap();
+
+        let p2 = plugins.join("plugin-b");
+        std::fs::create_dir_all(p2.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            p2.join(".claude-plugin/plugin.json"),
+            r#"{"name": "plugin-b", "description": "b"}"#,
+        )
+        .unwrap();
+
+        let pkgs = discover_packages(dir.path(), None, None).unwrap();
+        assert_eq!(pkgs.len(), 2);
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"plugin-a"));
+        assert!(names.contains(&"plugin-b"));
+    }
+
+    #[test]
+    fn test_discover_all_four_types_in_repo() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Root has a skill
+        std::fs::write(
+            dir.path().join("SKILL.md"),
+            "---\nname: my-skill\n---\n# Skill\n",
+        )
+        .unwrap();
+
+        // validators/ has a validator
+        let val_dir = dir.path().join("validators").join("my-val");
+        std::fs::create_dir_all(val_dir.join("rules")).unwrap();
+        std::fs::write(
+            val_dir.join("VALIDATOR.md"),
+            "---\nname: my-val\n---\n# Val\n",
+        )
+        .unwrap();
+
+        // tools/ has a tool
+        let tool_dir = dir.path().join("tools").join("my-tool");
+        std::fs::create_dir(&dir.path().join("tools")).unwrap();
+        std::fs::create_dir(&tool_dir).unwrap();
+        std::fs::write(
+            tool_dir.join("TOOL.md"),
+            "---\nname: my-tool\nmcp:\n  command: echo\n---\n# Tool\n",
+        )
+        .unwrap();
+
+        // plugins/ has a plugin
+        let plugin_dir = dir.path().join("plugins").join("my-plugin");
+        std::fs::create_dir(&dir.path().join("plugins")).unwrap();
+        std::fs::create_dir_all(plugin_dir.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            plugin_dir.join(".claude-plugin/plugin.json"),
+            r#"{"name": "my-plugin", "description": "test"}"#,
+        )
+        .unwrap();
+
+        let pkgs = discover_packages(dir.path(), None, None).unwrap();
+        assert_eq!(pkgs.len(), 4, "Should find all 4 types: {:?}", pkgs);
+
+        let types: std::collections::HashSet<String> =
+            pkgs.iter().map(|p| format!("{}", p.package_type)).collect();
+        assert!(types.contains("skill"));
+        assert!(types.contains("validator"));
+        assert!(types.contains("tool"));
+        assert!(types.contains("plugin"));
+    }
+
+    #[test]
+    fn test_discover_select_plugin_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = dir.path().join("plugins");
+        std::fs::create_dir(&plugins).unwrap();
+
+        let p1 = plugins.join("alpha");
+        std::fs::create_dir_all(p1.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            p1.join(".claude-plugin/plugin.json"),
+            r#"{"name": "alpha", "description": "a"}"#,
+        )
+        .unwrap();
+
+        let p2 = plugins.join("beta");
+        std::fs::create_dir_all(p2.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            p2.join(".claude-plugin/plugin.json"),
+            r#"{"name": "beta", "description": "b"}"#,
+        )
+        .unwrap();
+
+        let pkgs = discover_packages(dir.path(), None, Some("beta")).unwrap();
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "beta");
+        assert_eq!(pkgs[0].package_type, PackageType::Plugin);
     }
 }

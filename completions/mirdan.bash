@@ -112,8 +112,14 @@ _mirdan() {
             mirdan__help,whoami)
                 cmd="mirdan__help__whoami"
                 ;;
+            mirdan__help__new,plugin)
+                cmd="mirdan__help__new__plugin"
+                ;;
             mirdan__help__new,skill)
                 cmd="mirdan__help__new__skill"
+                ;;
+            mirdan__help__new,tool)
+                cmd="mirdan__help__new__tool"
                 ;;
             mirdan__help__new,validator)
                 cmd="mirdan__help__new__validator"
@@ -121,8 +127,14 @@ _mirdan() {
             mirdan__new,help)
                 cmd="mirdan__new__help"
                 ;;
+            mirdan__new,plugin)
+                cmd="mirdan__new__plugin"
+                ;;
             mirdan__new,skill)
                 cmd="mirdan__new__skill"
+                ;;
+            mirdan__new,tool)
+                cmd="mirdan__new__tool"
                 ;;
             mirdan__new,validator)
                 cmd="mirdan__new__validator"
@@ -130,8 +142,14 @@ _mirdan() {
             mirdan__new__help,help)
                 cmd="mirdan__new__help__help"
                 ;;
+            mirdan__new__help,plugin)
+                cmd="mirdan__new__help__plugin"
+                ;;
             mirdan__new__help,skill)
                 cmd="mirdan__new__help__skill"
+                ;;
+            mirdan__new__help,tool)
+                cmd="mirdan__new__help__tool"
                 ;;
             mirdan__new__help,validator)
                 cmd="mirdan__new__help__validator"
@@ -323,7 +341,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__help__new)
-            opts="skill validator"
+            opts="skill validator tool plugin"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -336,7 +354,35 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        mirdan__help__new__plugin)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         mirdan__help__new__skill)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        mirdan__help__new__tool)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -503,7 +549,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__list)
-            opts="-d -y -h --skills --validators --json --debug --yes --agent --help"
+            opts="-d -y -h --skills --validators --tools --plugins --json --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -557,7 +603,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__new)
-            opts="-d -y -h --debug --yes --agent --help skill validator help"
+            opts="-d -y -h --debug --yes --agent --help skill validator tool plugin help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -575,7 +621,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__new__help)
-            opts="skill validator help"
+            opts="skill validator tool plugin help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -589,6 +635,20 @@ _mirdan() {
             return 0
             ;;
         mirdan__new__help__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        mirdan__new__help__plugin)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -616,6 +676,20 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        mirdan__new__help__tool)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         mirdan__new__help__validator)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -630,7 +704,43 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        mirdan__new__plugin)
+            opts="-d -y -h --global --debug --yes --agent --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --agent)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         mirdan__new__skill)
+            opts="-d -y -h --global --debug --yes --agent --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --agent)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        mirdan__new__tool)
             opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

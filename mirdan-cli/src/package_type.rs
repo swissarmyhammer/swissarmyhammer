@@ -1,18 +1,22 @@
 //! Package type detection and shared name validation.
 //!
-//! Mirdan manages two package types:
+//! Mirdan manages four package types:
 //! - **Skill**: Contains SKILL.md (agentskills.io spec)
 //! - **Validator**: Contains VALIDATOR.md + rules/ directory (AVP spec)
+//! - **Tool**: Contains TOOL.md (MCP server definition)
+//! - **Plugin**: Contains .claude-plugin/plugin.json (Claude Code plugin)
 
 use std::fmt;
 use std::path::Path;
 
-/// The two package types Mirdan manages.
+/// The four package types Mirdan manages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageType {
     Skill,
     Validator,
+    Tool,
+    Plugin,
 }
 
 impl fmt::Display for PackageType {
@@ -20,20 +24,29 @@ impl fmt::Display for PackageType {
         match self {
             PackageType::Skill => write!(f, "skill"),
             PackageType::Validator => write!(f, "validator"),
+            PackageType::Tool => write!(f, "tool"),
+            PackageType::Plugin => write!(f, "plugin"),
         }
     }
 }
 
 /// Detect package type from a directory's contents.
 ///
-/// - SKILL.md present -> Skill
-/// - VALIDATOR.md present AND rules/ directory exists -> Validator
-/// - Otherwise -> None
+/// Detection order:
+/// 1. SKILL.md present -> Skill
+/// 2. VALIDATOR.md present AND rules/ directory exists -> Validator
+/// 3. TOOL.md present -> Tool
+/// 4. .claude-plugin/plugin.json present -> Plugin
+/// 5. Otherwise -> None
 pub fn detect_package_type(dir: &Path) -> Option<PackageType> {
     if dir.join("SKILL.md").exists() {
         Some(PackageType::Skill)
     } else if dir.join("VALIDATOR.md").exists() && dir.join("rules").is_dir() {
         Some(PackageType::Validator)
+    } else if dir.join("TOOL.md").exists() {
+        Some(PackageType::Tool)
+    } else if dir.join(".claude-plugin").join("plugin.json").exists() {
+        Some(PackageType::Plugin)
     } else {
         None
     }
@@ -89,6 +102,8 @@ mod tests {
     fn test_package_type_display() {
         assert_eq!(PackageType::Skill.to_string(), "skill");
         assert_eq!(PackageType::Validator.to_string(), "validator");
+        assert_eq!(PackageType::Tool.to_string(), "tool");
+        assert_eq!(PackageType::Plugin.to_string(), "plugin");
     }
 
     #[test]
@@ -115,6 +130,26 @@ mod tests {
         std::fs::write(dir.path().join("VALIDATOR.md"), "---\nname: test\n---").unwrap();
         // No rules/ directory -- should not detect as validator
         assert_eq!(detect_package_type(dir.path()), None);
+    }
+
+    #[test]
+    fn test_detect_package_type_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("TOOL.md"), "---\nname: test\n---").unwrap();
+        assert_eq!(detect_package_type(dir.path()), Some(PackageType::Tool));
+    }
+
+    #[test]
+    fn test_detect_package_type_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join(".claude-plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{"name": "test", "description": "test"}"#,
+        )
+        .unwrap();
+        assert_eq!(detect_package_type(dir.path()), Some(PackageType::Plugin));
     }
 
     #[test]
@@ -155,5 +190,9 @@ mod tests {
         assert_eq!(json, "\"skill\"");
         let parsed: PackageType = serde_json::from_str("\"validator\"").unwrap();
         assert_eq!(parsed, PackageType::Validator);
+        let json = serde_json::to_string(&PackageType::Tool).unwrap();
+        assert_eq!(json, "\"tool\"");
+        let parsed: PackageType = serde_json::from_str("\"plugin\"").unwrap();
+        assert_eq!(parsed, PackageType::Plugin);
     }
 }

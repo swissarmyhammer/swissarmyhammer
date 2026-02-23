@@ -15,6 +15,8 @@ brew install swissarmyhammer/tap/mirdan-cli
 * [`mirdan new`↴](#mirdan-new)
 * [`mirdan new skill`↴](#mirdan-new-skill)
 * [`mirdan new validator`↴](#mirdan-new-validator)
+* [`mirdan new tool`↴](#mirdan-new-tool)
+* [`mirdan new plugin`↴](#mirdan-new-plugin)
 * [`mirdan install`↴](#mirdan-install)
 * [`mirdan uninstall`↴](#mirdan-uninstall)
 * [`mirdan list`↴](#mirdan-list)
@@ -31,10 +33,12 @@ brew install swissarmyhammer/tap/mirdan-cli
 
 ## `mirdan`
 
-Mirdan manages skills (agentskills.io spec) and validators (AVP spec) across all detected AI coding agents.
+Mirdan manages skills, validators, tools, and plugins across all detected AI coding agents.
 
 Skills are deployed to each agent's skill directory (e.g. .claude/skills/, .cursor/skills/).
 Validators are deployed to .avp/validators/ (project) or ~/.avp/validators/ (global).
+Tools are deployed to .tools/ and registered in agent MCP configs.
+Plugins are deployed to agent plugin directories (e.g. .claude/plugins/).
 
 Environment variables:
   MIRDAN_REGISTRY_URL  Override the registry URL (useful for local testing)
@@ -47,16 +51,16 @@ Environment variables:
 ###### **Subcommands:**
 
 * `agents` — Detect and list installed AI coding agents
-* `new` — Create a new skill or validator from template
-* `install` — Install a skill or validator package (type auto-detected from contents)
-* `uninstall` — Remove an installed skill or validator package
-* `list` — List installed skills and validators
+* `new` — Create a new package from template
+* `install` — Install a package (type auto-detected from contents)
+* `uninstall` — Remove an installed package
+* `list` — List installed packages
 * `search` — Search the registry for skills and validators
 * `info` — Show detailed information about a package
 * `login` — Authenticate with the registry
 * `logout` — Log out from the registry and revoke token
 * `whoami` — Show current authenticated user
-* `publish` — Publish a skill or validator to the registry (type auto-detected)
+* `publish` — Publish a package to the registry (type auto-detected)
 * `unpublish` — Remove a published package version from the registry
 * `outdated` — Check for available package updates
 * `update` — Update installed packages to latest versions
@@ -85,7 +89,7 @@ Detect and list installed AI coding agents
 
 ## `mirdan new`
 
-Create a new skill or validator from template
+Create a new package from template
 
 **Usage:** `mirdan new <COMMAND>`
 
@@ -93,6 +97,8 @@ Create a new skill or validator from template
 
 * `skill` — Scaffold a new skill (agentskills.io spec)
 * `validator` — Scaffold a new validator (AVP spec)
+* `tool` — Scaffold a new tool (MCP server definition)
+* `plugin` — Scaffold a new plugin (Claude Code plugin)
 
 
 
@@ -128,9 +134,41 @@ Scaffold a new validator (AVP spec)
 
 
 
+## `mirdan new tool`
+
+Scaffold a new tool (MCP server definition)
+
+**Usage:** `mirdan new tool [OPTIONS] <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Tool name (kebab-case, 1-64 chars)
+
+###### **Options:**
+
+* `--global` — Create in ~/.tools/ instead of .tools/
+
+
+
+## `mirdan new plugin`
+
+Scaffold a new plugin (Claude Code plugin)
+
+**Usage:** `mirdan new plugin [OPTIONS] <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Plugin name (kebab-case, 1-64 chars)
+
+###### **Options:**
+
+* `--global` — Create in global plugin directory
+
+
+
 ## `mirdan install`
 
-Install a skill or validator package (type auto-detected from contents)
+Install a package (type auto-detected from contents)
 
 **Usage:** `mirdan install [OPTIONS] <PACKAGE>`
 
@@ -140,15 +178,15 @@ Install a skill or validator package (type auto-detected from contents)
 
 ###### **Options:**
 
-* `--global` — Install globally (~/.avp/validators/ for validators, agent global dirs for skills)
+* `--global` — Install globally
 * `--git` — Treat package as a git URL (clone instead of registry lookup)
-* `--skill <SKILL>` — Install a specific skill/validator by name from a multi-package repo
+* `--skill <SKILL>` — Install a specific package by name from a multi-package repo
 
 
 
 ## `mirdan uninstall`
 
-Remove an installed skill or validator package
+Remove an installed package
 
 **Usage:** `mirdan uninstall [OPTIONS] <NAME>`
 
@@ -164,7 +202,7 @@ Remove an installed skill or validator package
 
 ## `mirdan list`
 
-List installed skills and validators
+List installed packages
 
 **Usage:** `mirdan list [OPTIONS]`
 
@@ -172,6 +210,8 @@ List installed skills and validators
 
 * `--skills` — Show only skills
 * `--validators` — Show only validators
+* `--tools` — Show only tools
+* `--plugins` — Show only plugins
 * `--json` — Output as JSON
 
 
@@ -234,9 +274,9 @@ Show current authenticated user
 
 ## `mirdan publish`
 
-Publish a skill or validator to the registry (type auto-detected)
+Publish a package to the registry (type auto-detected)
 
-Auto-detects package type from directory contents: - SKILL.md present -> publishes as a skill - VALIDATOR.md + rules/ present -> publishes as a validator
+Auto-detects package type from directory contents: - SKILL.md present -> publishes as a skill - VALIDATOR.md + rules/ present -> publishes as a validator - TOOL.md present -> publishes as a tool - .claude-plugin/plugin.json present -> publishes as a plugin
 
 **Usage:** `mirdan publish [OPTIONS] [SOURCE]`
 

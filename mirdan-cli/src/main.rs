@@ -98,6 +98,12 @@ async fn main() {
             NewKind::Validator { name, global } => {
                 handle_registry_result(new::run_new_validator(&name, global))
             }
+            NewKind::Tool { name, global } => {
+                handle_registry_result(new::run_new_tool(&name, global))
+            }
+            NewKind::Plugin { name, global } => {
+                handle_registry_result(new::run_new_plugin(&name, global))
+            }
         },
 
         Commands::Install {
@@ -116,8 +122,17 @@ async fn main() {
         Commands::List {
             skills,
             validators,
+            tools,
+            plugins,
             json,
-        } => handle_registry_result(list::run_list(skills, validators, agent_filter, json)),
+        } => handle_registry_result(list::run_list(
+            skills,
+            validators,
+            tools,
+            plugins,
+            agent_filter,
+            json,
+        )),
 
         Commands::Search { query, json } => match query {
             Some(q) => handle_registry_result(search::run_search(&q, json).await),
@@ -218,6 +233,34 @@ mod tests {
                 assert!(!global);
             }
             _ => panic!("Expected New Validator command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_new_tool() {
+        let cli = Cli::parse_from(["mirdan", "new", "tool", "my-tool"]);
+        match cli.command {
+            Commands::New {
+                kind: NewKind::Tool { name, global },
+            } => {
+                assert_eq!(name, "my-tool");
+                assert!(!global);
+            }
+            _ => panic!("Expected New Tool command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_new_plugin() {
+        let cli = Cli::parse_from(["mirdan", "new", "plugin", "my-plugin"]);
+        match cli.command {
+            Commands::New {
+                kind: NewKind::Plugin { name, global },
+            } => {
+                assert_eq!(name, "my-plugin");
+                assert!(!global);
+            }
+            _ => panic!("Expected New Plugin command"),
         }
     }
 
@@ -329,14 +372,22 @@ mod tests {
     #[test]
     fn test_cli_parsing_list() {
         let cli = Cli::parse_from(["mirdan", "list"]);
-        assert!(matches!(
-            cli.command,
+        match cli.command {
             Commands::List {
-                skills: false,
-                validators: false,
-                json: false
+                skills,
+                validators,
+                tools,
+                plugins,
+                json,
+            } => {
+                assert!(!skills);
+                assert!(!validators);
+                assert!(!tools);
+                assert!(!plugins);
+                assert!(!json);
             }
-        ));
+            _ => panic!("Expected List command"),
+        }
     }
 
     #[test]
@@ -353,6 +404,24 @@ mod tests {
         let cli = Cli::parse_from(["mirdan", "list", "--validators"]);
         match cli.command {
             Commands::List { validators, .. } => assert!(validators),
+            _ => panic!("Expected List command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_list_tools() {
+        let cli = Cli::parse_from(["mirdan", "list", "--tools"]);
+        match cli.command {
+            Commands::List { tools, .. } => assert!(tools),
+            _ => panic!("Expected List command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_list_plugins() {
+        let cli = Cli::parse_from(["mirdan", "list", "--plugins"]);
+        match cli.command {
+            Commands::List { plugins, .. } => assert!(plugins),
             _ => panic!("Expected List command"),
         }
     }

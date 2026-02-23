@@ -6,11 +6,11 @@
 
 use clap::{Parser, Subcommand};
 
-/// Mirdan - Universal skill and validator package manager for AI coding agents.
+/// Mirdan - Universal package manager for AI coding agents.
 ///
-/// Manages skills (agentskills.io spec) and validators (AVP spec) across
-/// all detected AI coding agents. Skills are deployed to each agent's skill
-/// directory; validators are deployed to .avp/validators/.
+/// Manages skills, validators, tools, and plugins across all detected AI coding agents.
+/// Skills are deployed to each agent's skill directory; validators to .avp/validators/;
+/// tools to .tools/ + agent MCP configs; plugins to agent plugin dirs.
 ///
 /// Registry URL defaults to https://registry.agentvalidatorprotocol.com.
 /// Override with MIRDAN_REGISTRY_URL env var or ~/.mirdan/config.yaml for
@@ -19,12 +19,14 @@ use clap::{Parser, Subcommand};
 #[command(name = "mirdan")]
 #[command(version)]
 #[command(arg_required_else_help = true)]
-#[command(about = "Universal skill and validator package manager for AI coding agents")]
+#[command(about = "Universal package manager for AI coding agents")]
 #[command(
-    long_about = "Mirdan manages skills (agentskills.io spec) and validators (AVP spec) across \
+    long_about = "Mirdan manages skills, validators, tools, and plugins across \
     all detected AI coding agents.\n\n\
     Skills are deployed to each agent's skill directory (e.g. .claude/skills/, .cursor/skills/).\n\
-    Validators are deployed to .avp/validators/ (project) or ~/.avp/validators/ (global).\n\n\
+    Validators are deployed to .avp/validators/ (project) or ~/.avp/validators/ (global).\n\
+    Tools are deployed to .tools/ and registered in agent MCP configs.\n\
+    Plugins are deployed to agent plugin directories (e.g. .claude/plugins/).\n\n\
     Environment variables:\n  \
     MIRDAN_REGISTRY_URL  Override the registry URL (useful for local testing)\n  \
     MIRDAN_TOKEN         Provide an auth token without logging in\n  \
@@ -60,28 +62,28 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Create a new skill or validator from template
+    /// Create a new package from template
     New {
         #[command(subcommand)]
         kind: NewKind,
     },
 
-    /// Install a skill or validator package (type auto-detected from contents)
+    /// Install a package (type auto-detected from contents)
     Install {
         /// Package name, name@version, ./local-path, owner/repo, or git URL
         package: String,
-        /// Install globally (~/.avp/validators/ for validators, agent global dirs for skills)
+        /// Install globally
         #[arg(long)]
         global: bool,
         /// Treat package as a git URL (clone instead of registry lookup)
         #[arg(long)]
         git: bool,
-        /// Install a specific skill/validator by name from a multi-package repo
+        /// Install a specific package by name from a multi-package repo
         #[arg(long)]
         skill: Option<String>,
     },
 
-    /// Remove an installed skill or validator package
+    /// Remove an installed package
     Uninstall {
         /// Package name
         name: String,
@@ -90,7 +92,7 @@ pub enum Commands {
         global: bool,
     },
 
-    /// List installed skills and validators
+    /// List installed packages
     List {
         /// Show only skills
         #[arg(long)]
@@ -98,6 +100,12 @@ pub enum Commands {
         /// Show only validators
         #[arg(long)]
         validators: bool,
+        /// Show only tools
+        #[arg(long)]
+        tools: bool,
+        /// Show only plugins
+        #[arg(long)]
+        plugins: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -133,11 +141,13 @@ pub enum Commands {
     /// Show current authenticated user
     Whoami,
 
-    /// Publish a skill or validator to the registry (type auto-detected)
+    /// Publish a package to the registry (type auto-detected)
     ///
     /// Auto-detects package type from directory contents:
     ///   - SKILL.md present -> publishes as a skill
     ///   - VALIDATOR.md + rules/ present -> publishes as a validator
+    ///   - TOOL.md present -> publishes as a tool
+    ///   - .claude-plugin/plugin.json present -> publishes as a plugin
     Publish {
         /// Path or git URL to the package directory to publish
         #[arg(default_value = ".")]
@@ -188,6 +198,22 @@ pub enum NewKind {
         /// Validator name (kebab-case, 1-64 chars)
         name: String,
         /// Create in ~/.avp/validators/ instead of .avp/validators/
+        #[arg(long)]
+        global: bool,
+    },
+    /// Scaffold a new tool (MCP server definition)
+    Tool {
+        /// Tool name (kebab-case, 1-64 chars)
+        name: String,
+        /// Create in ~/.tools/ instead of .tools/
+        #[arg(long)]
+        global: bool,
+    },
+    /// Scaffold a new plugin (Claude Code plugin)
+    Plugin {
+        /// Plugin name (kebab-case, 1-64 chars)
+        name: String,
+        /// Create in global plugin directory
         #[arg(long)]
         global: bool,
     },
