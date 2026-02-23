@@ -11,6 +11,8 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::Value;
 use std::sync::Arc;
+use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_skills::{
     parse_input, ExecutionResult, ListSkills, Operation, SearchSkill, SkillContext, SkillLibrary,
     SkillOperation, UseSkill,
@@ -40,16 +42,22 @@ pub struct SkillTool {
     description: String,
     /// Shared skill library
     library: Arc<RwLock<SkillLibrary>>,
+    /// Prompt library for rendering skill templates with partials
+    prompt_library: Arc<RwLock<PromptLibrary>>,
 }
 
 impl SkillTool {
-    /// Create a new SkillTool with a pre-loaded skill library
-    pub fn new(library: Arc<RwLock<SkillLibrary>>) -> Self {
+    /// Create a new SkillTool with a pre-loaded skill library and prompt library for rendering
+    pub fn new(
+        library: Arc<RwLock<SkillLibrary>>,
+        prompt_library: Arc<RwLock<PromptLibrary>>,
+    ) -> Self {
         // Build the dynamic description with available skills
         let description = build_description(&library);
         Self {
             description,
             library,
+            prompt_library,
         }
     }
 }
@@ -130,6 +138,9 @@ impl McpTool for SkillTool {
             McpError::invalid_params(format!("Failed to parse skill operation: {}", e), None)
         })?;
 
+        // Track whether this is a Use operation (needs template rendering)
+        let is_use_op = matches!(&operation, SkillOperation::Use(_));
+
         // Execute the operation
         let result = match operation {
             SkillOperation::List(op) => {
@@ -148,10 +159,19 @@ impl McpTool for SkillTool {
 
         // Convert result to CallToolResult
         match result {
-            ExecutionResult::Unlogged { value } => Ok(BaseToolImpl::create_success_response(
-                serde_json::to_string_pretty(&value)
-                    .unwrap_or_else(|_| value.to_string()),
-            )),
+            ExecutionResult::Unlogged { value } => {
+                // For Use operations, render instructions through the prompt library's
+                // Liquid template engine so {% include %} partials are resolved
+                let value = if is_use_op {
+                    self.render_skill_instructions(value).await
+                } else {
+                    value
+                };
+                Ok(BaseToolImpl::create_success_response(
+                    serde_json::to_string_pretty(&value)
+                        .unwrap_or_else(|_| value.to_string()),
+                ))
+            }
             ExecutionResult::Logged { value, .. } => Ok(BaseToolImpl::create_success_response(
                 serde_json::to_string_pretty(&value)
                     .unwrap_or_else(|_| value.to_string()),
@@ -164,19 +184,51 @@ impl McpTool for SkillTool {
     }
 }
 
+impl SkillTool {
+    /// Render skill instructions through the prompt library's Liquid template engine.
+    ///
+    /// This enables skills to use `{% include %}` partials from the prompt library
+    /// (e.g., `{% include "_partials/detected-projects" %}`), rendering them as if
+    /// they were prompts — the only difference being the frontmatter format.
+    async fn render_skill_instructions(&self, mut value: Value) -> Value {
+        if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
+            let template_context = TemplateContext::new();
+            let prompt_lib = self.prompt_library.read().await;
+            match prompt_lib.render_text(instructions, &template_context) {
+                Ok(rendered) => {
+                    value["instructions"] = Value::String(rendered);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to render skill template: {e}");
+                    // Fall through with raw instructions on render failure
+                }
+            }
+        }
+        value
+    }
+}
+
 /// Register skill tools with the tool registry
-pub fn register_skill_tools(registry: &mut ToolRegistry, library: Arc<RwLock<SkillLibrary>>) {
-    registry.register(SkillTool::new(library));
+pub fn register_skill_tools(
+    registry: &mut ToolRegistry,
+    library: Arc<RwLock<SkillLibrary>>,
+    prompt_library: Arc<RwLock<PromptLibrary>>,
+) {
+    registry.register(SkillTool::new(library, prompt_library));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn default_prompt_library() -> Arc<RwLock<PromptLibrary>> {
+        Arc::new(RwLock::new(PromptLibrary::default()))
+    }
+
     #[tokio::test]
     async fn test_skill_tool_schema() {
         let library = Arc::new(RwLock::new(SkillLibrary::new()));
-        let tool = SkillTool::new(library);
+        let tool = SkillTool::new(library, default_prompt_library());
 
         let schema = tool.schema();
         assert_eq!(schema["type"], "object");
@@ -190,7 +242,7 @@ mod tests {
             lib.load_defaults();
         }
 
-        let tool = SkillTool::new(library);
+        let tool = SkillTool::new(library, default_prompt_library());
         let desc = tool.description();
         assert!(desc.contains("available_skills"));
         assert!(desc.contains("plan"));
@@ -204,7 +256,7 @@ mod tests {
             lib.load_defaults();
         }
 
-        let tool = SkillTool::new(library);
+        let tool = SkillTool::new(library, default_prompt_library());
         let ctx = crate::test_utils::create_test_context().await;
 
         let args: serde_json::Map<String, serde_json::Value> =
@@ -221,7 +273,7 @@ mod tests {
             lib.load_defaults();
         }
 
-        let tool = SkillTool::new(library);
+        let tool = SkillTool::new(library, default_prompt_library());
         let ctx = crate::test_utils::create_test_context().await;
 
         let args: serde_json::Map<String, serde_json::Value> =
@@ -239,7 +291,7 @@ mod tests {
             lib.load_defaults();
         }
 
-        let tool = SkillTool::new(library);
+        let tool = SkillTool::new(library, default_prompt_library());
         let ctx = crate::test_utils::create_test_context().await;
 
         let args: serde_json::Map<String, serde_json::Value> =
@@ -257,7 +309,7 @@ mod tests {
             lib.load_defaults();
         }
 
-        let tool = SkillTool::new(library);
+        let tool = SkillTool::new(library, default_prompt_library());
         let ctx = crate::test_utils::create_test_context().await;
 
         let args: serde_json::Map<String, serde_json::Value> =
@@ -265,5 +317,43 @@ mod tests {
                 .unwrap();
         let result = tool.execute(args, &ctx).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_skill_use_renders_partials() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+
+        // Use a default prompt library — render_text() loads all builtins including partials
+        let tool = SkillTool::new(library, default_prompt_library());
+        let ctx = crate::test_utils::create_test_context().await;
+
+        // The "test" skill includes {% include "_partials/test-driven-development" %}
+        let args: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({"op": "use skill", "name": "test"}))
+                .unwrap();
+        let result = tool.execute(args, &ctx).await.expect("use skill should succeed");
+
+        let content = result
+            .content
+            .first()
+            .and_then(|c| c.raw.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        // "TDD Cycle" only exists in the _partials/test-driven-development partial
+        assert!(
+            content.contains("TDD Cycle"),
+            "Rendered instructions should contain partial content 'TDD Cycle'"
+        );
+
+        // Raw {% include %} tags should be resolved, not passed through
+        assert!(
+            !content.contains("{% include"),
+            "Rendered output should not contain raw Liquid include tags"
+        );
     }
 }

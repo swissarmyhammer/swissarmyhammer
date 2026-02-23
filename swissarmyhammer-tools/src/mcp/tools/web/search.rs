@@ -1,15 +1,13 @@
 //! SearchUrl operation — delegates to existing web_search pipeline
 
-use crate::mcp::progress_notifications::generate_progress_token;
-use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::ContentFetcher;
 use crate::mcp::tools::web_search::duckduckgo_client::DuckDuckGoError;
 use crate::mcp::tools::web_search::search::WebSearchTool;
 use crate::mcp::tools::web_search::types::*;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
-use serde_json::json;
 use std::time::Instant;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
@@ -94,62 +92,38 @@ pub async fn execute_search(
     }
 
     let start_time = Instant::now();
-    let progress_token = generate_progress_token();
 
-    // Send start notification (0%)
-    if let Some(sender) = &context.progress_sender {
-        sender
-            .send_progress_with_metadata(
-                &progress_token,
-                Some(0),
-                format!("Web search: 0/3 - Searching for: {}", request.query),
-                json!({
-                    "query": request.query,
-                    "results_count": request.results_count,
-                    "fetch_content": request.fetch_content,
-                    "current": 0,
-                    "total": 3
-                }),
-            )
-            .ok();
-    }
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_search",
+        format!("Starting search: {}", request.query),
+    )
+    .await;
 
     // Create a fresh search tool instance for its DuckDuckGo client
     let mut search_tool = WebSearchTool::new();
 
-    // Send search progress notification (25%)
-    if let Some(sender) = &context.progress_sender {
-        sender
-            .send_progress_with_metadata(
-                &progress_token,
-                Some(25),
-                "Web search: 1/3 - Performing search...",
-                json!({
-                    "current": 1,
-                    "total": 3
-                }),
-            )
-            .ok();
-    }
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_search",
+        "Executing search...".into(),
+    )
+    .await;
 
     // Perform search using DuckDuckGo browser automation
     let duckduckgo_client = search_tool.get_duckduckgo_client();
     let mut results = match duckduckgo_client.search(&request).await {
         Ok(results) => results,
         Err(DuckDuckGoError::NoResults) => {
-            if let Some(sender) = &context.progress_sender {
-                sender
-                    .send_progress_with_metadata(
-                        &progress_token,
-                        None,
-                        "Web search: Failed - No results found",
-                        json!({
-                            "error": "no_results",
-                            "query": request.query
-                        }),
-                    )
-                    .ok();
-            }
+            send_mcp_log(
+                context,
+                LoggingLevel::Warning,
+                "web_search",
+                "No results found".into(),
+            )
+            .await;
 
             let error = WebSearchError {
                 error_type: "no_results".to_string(),
@@ -168,20 +142,13 @@ pub async fn execute_search(
             ));
         }
         Err(e) => {
-            if let Some(sender) = &context.progress_sender {
-                sender
-                    .send_progress_with_metadata(
-                        &progress_token,
-                        None,
-                        format!("Web search: Failed - {}", e),
-                        json!({
-                            "error": "search_failed",
-                            "details": e.to_string(),
-                            "query": request.query
-                        }),
-                    )
-                    .ok();
-            }
+            send_mcp_log(
+                context,
+                LoggingLevel::Error,
+                "web_search",
+                format!("Failed: {}", e),
+            )
+            .await;
 
             let error = WebSearchError {
                 error_type: "search_failed".to_string(),
@@ -200,26 +167,13 @@ pub async fn execute_search(
 
     let search_time = start_time.elapsed();
 
-    let progress_after_search = if request.fetch_content.unwrap_or(true) {
-        40
-    } else {
-        90
-    };
-
-    if let Some(sender) = &context.progress_sender {
-        sender
-            .send_progress_with_metadata(
-                &progress_token,
-                Some(progress_after_search),
-                format!("Web search: 2/3 - Retrieved {} results", results.len()),
-                json!({
-                    "results_count": results.len(),
-                    "current": 2,
-                    "total": 3
-                }),
-            )
-            .ok();
-    }
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_search",
+        "Processing results...".into(),
+    )
+    .await;
 
     // Optionally fetch content from each result
     let mut content_fetch_stats = None;
@@ -239,11 +193,6 @@ pub async fn execute_search(
             total_time_ms: stats.total_time_ms,
         });
     }
-
-    let with_content = content_fetch_stats
-        .as_ref()
-        .map(|s| s.successful)
-        .unwrap_or(0);
 
     let response = WebSearchResponse {
         results: results.clone(),
@@ -268,26 +217,13 @@ pub async fn execute_search(
         search_time
     );
 
-    // Send completion notification (100%)
-    if let Some(sender) = &context.progress_sender {
-        sender
-            .send_progress_with_metadata(
-                &progress_token,
-                Some(100),
-                format!(
-                    "Web search: 3/3 - Complete ({} results)",
-                    response.results.len()
-                ),
-                json!({
-                    "total_results": response.results.len(),
-                    "with_content": with_content,
-                    "search_time_ms": search_time.as_millis() as u64,
-                    "current": 3,
-                    "total": 3
-                }),
-            )
-            .ok();
-    }
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_search",
+        format!("Complete: {} results", response.results.len()),
+    )
+    .await;
 
     Ok(BaseToolImpl::create_success_response(
         serde_json::to_string_pretty(&response).map_err(|e| {

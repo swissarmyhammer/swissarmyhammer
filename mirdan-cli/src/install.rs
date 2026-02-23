@@ -340,7 +340,9 @@ async fn run_install_registry(
 }
 
 /// Deploy a skill to the central store, then symlink into each agent's skill directory.
-async fn deploy_skill(
+///
+/// This is the public, synchronous API. All filesystem operations are sync.
+pub fn deploy_skill_to_agents(
     name: &str,
     source_dir: &Path,
     agent_filter: Option<&str>,
@@ -391,6 +393,16 @@ async fn deploy_skill(
     }
 
     Ok(targets)
+}
+
+/// Async wrapper around [`deploy_skill_to_agents`] for use in async install paths.
+async fn deploy_skill(
+    name: &str,
+    source_dir: &Path,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<Vec<String>, RegistryError> {
+    deploy_skill_to_agents(name, source_dir, agent_filter, global)
 }
 
 /// Deploy a validator to .avp/validators/.

@@ -792,11 +792,23 @@ impl Action for LogAction {
         // Render message with liquid templating (supports {{variable}} syntax)
         let message = render_with_liquid_template(&self.message, &context.to_workflow_hashmap());
 
-        match self.level {
-            LogLevel::Info => tracing::info!("{}", message),
-            LogLevel::Warning => tracing::warn!("{}", message),
-            LogLevel::Error => tracing::error!("{}", message),
-        }
+        let level_str = match self.level {
+            LogLevel::Info => {
+                tracing::info!("{}", message);
+                "info"
+            }
+            LogLevel::Warning => {
+                tracing::warn!("{}", message);
+                "warning"
+            }
+            LogLevel::Error => {
+                tracing::error!("{}", message);
+                "error"
+            }
+        };
+
+        // Forward log message to any registered listener (e.g. MCP server)
+        context.send_log(level_str, &message);
 
         // Mark action as successful
         context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
@@ -930,11 +942,14 @@ impl Action for JsSetAction {
                 ))
             })?;
 
-        tracing::info!(
+        let log_message = format!(
             "Set global variable '{}' = '{}'",
-            self.variable_name,
-            substituted_value
+            self.variable_name, substituted_value
         );
+        tracing::info!("{}", log_message);
+
+        // Forward to MCP notification listener
+        context.send_log("info", &log_message);
 
         // Mark action as successful
         context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));

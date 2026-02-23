@@ -7,7 +7,7 @@
 //! by name and verify body-only content (not present in frontmatter) is returned,
 //! proving: skill resolution → embedding → MCP tool registration → invocation → instruction delivery.
 
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use swissarmyhammer_tools::mcp::{
     test_utils::create_test_client,
     unified_server::{start_mcp_server_with_options, McpServerMode},
@@ -42,11 +42,13 @@ async fn test_builtin_skills_discovered_via_list() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "skill".into(),
             arguments: serde_json::json!({"op": "list skill"})
                 .as_object()
                 .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("list skill should succeed");
@@ -74,11 +76,13 @@ async fn test_use_skill_returns_instructions() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "skill".into(),
             arguments: serde_json::json!({"op": "use skill", "name": "plan"})
                 .as_object()
                 .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("use skill should succeed");
@@ -108,11 +112,13 @@ async fn test_search_skill_finds_matches() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "skill".into(),
             arguments: serde_json::json!({"op": "search skill", "query": "commit"})
                 .as_object()
                 .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("search skill should succeed");
@@ -138,11 +144,13 @@ async fn test_search_skill_no_matches() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "skill".into(),
             arguments: serde_json::json!({"op": "search skill", "query": "zzz_nonexistent_zzz"})
                 .as_object()
                 .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("search skill with no matches should succeed");
@@ -199,11 +207,13 @@ async fn test_get_verb_backward_compat() {
 
     // "get skill" should still work (backward compat, routes to Use)
     let result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "skill".into(),
             arguments: serde_json::json!({"op": "get skill", "name": "plan"})
                 .as_object()
                 .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("get skill (backward compat) should succeed");
@@ -237,11 +247,13 @@ async fn test_skill_invoke_by_name_returns_body_content() {
 
     // Invoke the plan skill by name
     let result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "skill".into(),
             arguments: serde_json::json!({"op": "use skill", "name": "plan"})
                 .as_object()
                 .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("use skill plan should succeed");
@@ -271,17 +283,68 @@ async fn test_skill_invoke_by_name_returns_body_content() {
     teardown(server, client).await;
 }
 
+/// Verify that skill templates with {% include %} partials are rendered through
+/// the Liquid template engine. The test skill includes `_partials/test-driven-development`
+/// which contains "TDD Cycle" — content that only exists in the partial, not the skill body.
+#[tokio::test]
+async fn test_skill_partials_are_rendered() {
+    let (server, client) = setup(true).await;
+
+    let result = client
+        .call_tool(CallToolRequestParams {
+            name: "skill".into(),
+            arguments: serde_json::json!({"op": "use skill", "name": "test"})
+                .as_object()
+                .cloned(),
+            meta: None,
+            task: None,
+        })
+        .await
+        .expect("use skill test should succeed");
+
+    let content_text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .unwrap_or("");
+
+    // "TDD Cycle" only exists in the _partials/test-driven-development partial.
+    // Finding it here proves the Liquid {% include %} was resolved.
+    assert!(
+        content_text.contains("TDD Cycle"),
+        "Skill instructions should contain rendered partial content 'TDD Cycle', got: {}",
+        &content_text[..content_text.len().min(500)]
+    );
+
+    // Also verify the skill's own body content is present
+    assert!(
+        content_text.contains("cargo clippy"),
+        "Skill instructions should contain own body content"
+    );
+
+    // The raw {% include %} tag should NOT be present in rendered output
+    assert!(
+        !content_text.contains("{% include"),
+        "Rendered output should not contain raw Liquid include tags"
+    );
+
+    teardown(server, client).await;
+}
+
 #[tokio::test]
 async fn test_skill_invoke_via_shorthand() {
     let (server, client) = setup(true).await;
 
     // Use the shorthand form (just name, no explicit verb)
     let result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
             name: "skill".into(),
             arguments: serde_json::json!({"name": "plan"})
                 .as_object()
                 .cloned(),
+            meta: None,
+            task: None,
         })
         .await
         .expect("shorthand use skill should succeed");

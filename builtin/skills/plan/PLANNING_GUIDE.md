@@ -57,29 +57,31 @@ Based on your exploration, classify the work:
 
 Flag risks explicitly: breaking changes, data concerns, external API impacts, security implications.
 
-## Phase 4: Produce the Plan
+## Phase 4: Build the Plan on the Kanban Board
 
-Write a structured plan covering these sections:
+The plan IS the kanban board. As you work through the phases above, create kanban cards incrementally — don't wait until you have a complete picture.
 
-### Goal
-One sentence: what does this achieve?
+### Initialize the board first
 
-### Context
-What you learned during exploration — key files, patterns, constraints, and architecture relevant to the task.
+Use `kanban` with `op: "init board"`, `name: "<project or feature name>"`.
 
-### Scope Assessment
-Small, medium, or large — with justification based on your analysis.
+### Add cards as you discover work items
 
-### Tasks
-A numbered, ordered list. Each task should include:
+For each work item, create a card immediately: use `kanban` with `op: "add task"`, `title: "<imperative verb phrase>"`, `description: "<detailed context>"`.
 
-- **Title**: imperative verb phrase ("Add validation to user input handler")
-- **Description**: what specifically to do, with enough context for autonomous execution
-- **Files**: full paths of files to create or modify
-- **Dependencies**: which other tasks must complete first
-- **Verification**: how to confirm this task is done (test command, expected behavior)
+Each card's description should include:
+- What specifically to do, with enough context for autonomous execution
+- Full paths of files to create or modify
+- How to verify the task is done (test command, expected behavior)
+
+Then add subtasks for individual steps: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`.
+
+### Set dependencies between cards
+
+If tasks have ordering constraints, set them: use `kanban` with `op: "update task"`, `id: "<task-id>"`, `depends_on: ["<blocker-task-id>"]`.
 
 ### Task ordering
+
 Group tasks by phase:
 1. **Infrastructure** — data models, types, configuration, dependencies
 2. **Core implementation** — the main logic changes
@@ -88,13 +90,14 @@ Group tasks by phase:
 5. **Cleanup** — documentation, removing dead code, formatting
 
 ### Risks and Open Questions
-Anything uncertain that may need human input or could change the approach.
+
+If there are unresolved questions, add a kanban card for each one so they are tracked and visible.
 
 ## Phase 5: Present and Gate
 
-1. Present the plan to the user for review using `question_ask`.
-2. Accept edits, rejections, or approvals.
-3. Only proceed to capture on the kanban board after explicit approval.
+1. Present the plan to the user for review using `question_ask`. Summarize the kanban cards you created.
+2. Accept edits, rejections, or approvals. Update the board accordingly.
+3. The board is ready for execution — no separate "capture" step needed.
 
 ## What Makes a Good Plan
 

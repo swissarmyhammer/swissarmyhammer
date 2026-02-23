@@ -52,6 +52,13 @@ impl SkillResolver {
         skills
     }
 
+    /// Resolve only builtin skills (no local/user overrides)
+    pub fn resolve_builtins(&self) -> HashMap<String, Skill> {
+        let mut skills = HashMap::new();
+        self.load_builtins(&mut skills);
+        skills
+    }
+
     /// Load builtin skills embedded in the binary
     fn load_builtins(&self, skills: &mut HashMap<String, Skill>) {
         let builtin_files = get_builtin_skills();
@@ -192,7 +199,6 @@ mod tests {
         assert_eq!(plan.name.as_str(), "plan");
         assert!(!plan.description.is_empty());
         assert!(!plan.instructions.is_empty());
-        assert!(!plan.allowed_tools.is_empty());
         assert_eq!(plan.source, SkillSource::Builtin);
     }
 }

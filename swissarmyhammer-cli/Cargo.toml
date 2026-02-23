@@ -73,6 +73,9 @@ tracing-subscriber = { workspace = true }
 # MCP support
 rmcp = { workspace = true }
 
+# Timestamps
+chrono = { workspace = true }
+
 # File operations
 walkdir = { workspace = true }
 tempfile = { workspace = true }

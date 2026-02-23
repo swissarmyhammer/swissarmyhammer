@@ -224,6 +224,9 @@ impl McpServer {
             tracing::debug!("Loaded {} skills", lib.len());
         }
 
+        // Wrap prompt library in Arc<RwLock<>> for shared access by skill tool
+        let prompt_library = Arc::new(RwLock::new(library));
+
         let (tool_registry_arc, tool_context) = Self::create_tool_context_and_registry(
             tool_handlers,
             git_ops_arc,
@@ -231,12 +234,13 @@ impl McpServer {
             use_case_agents,
             Some(work_dir),
             skill_library.clone(),
+            prompt_library.clone(),
             agent_mode,
         )
         .await;
 
         let server = Self {
-            library: Arc::new(RwLock::new(library)),
+            library: prompt_library,
             file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
             tool_registry: tool_registry_arc,
             tool_context,
@@ -396,6 +400,7 @@ impl McpServer {
     /// # Returns
     ///
     /// * `(Arc<RwLock<ToolRegistry>>, Arc<ToolContext>)` - Registry and context
+    #[allow(clippy::too_many_arguments)]
     async fn create_tool_context_and_registry(
         tool_handlers: ToolHandlers,
         git_ops_arc: Arc<Mutex<Option<GitOperations>>>,
@@ -403,10 +408,12 @@ impl McpServer {
         use_case_agents: HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
         working_dir: Option<PathBuf>,
         skill_library: Arc<RwLock<SkillLibrary>>,
+        prompt_library: Arc<RwLock<PromptLibrary>>,
         agent_mode: bool,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
-        Self::register_all_tools(&mut tool_registry, skill_library, agent_mode).await;
+        Self::register_all_tools(&mut tool_registry, skill_library, prompt_library, agent_mode)
+            .await;
 
         let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
         tool_context.use_case_agents = Arc::new(use_case_agents);
@@ -433,6 +440,7 @@ impl McpServer {
     async fn register_all_tools(
         tool_registry: &mut ToolRegistry,
         skill_library: Arc<RwLock<SkillLibrary>>,
+        prompt_library: Arc<RwLock<PromptLibrary>>,
         agent_mode: bool,
     ) {
         // Always register domain-specific tools
@@ -449,7 +457,7 @@ impl McpServer {
         if agent_mode {
             register_file_tools(tool_registry).await;
             register_shell_tools(tool_registry);
-            register_skill_tools(tool_registry, skill_library);
+            register_skill_tools(tool_registry, skill_library, prompt_library);
             tracing::debug!("Registered agent tools (agent_mode=true)");
         } else {
             tracing::debug!("Skipped agent tools (agent_mode=false)");

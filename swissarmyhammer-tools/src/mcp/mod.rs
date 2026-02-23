@@ -11,7 +11,6 @@
 //! - **Server Implementation**: [`McpServer`] handles MCP protocol messages
 //! - **Tool Registry**: [`ToolRegistry`] manages available tools and their execution
 //! - **Tool Context**: [`ToolContext`] provides shared state and storage access
-//! - **Progress Notifications**: Real-time progress updates for long-running operations
 //! - **File Watching**: Automatic detection of changes to workflows and issues
 //!
 //! ## Architecture
@@ -57,33 +56,12 @@
 //! # }
 //! ```
 //!
-//! ### Sending Progress Notifications
-//!
-//! ```rust
-//! use swissarmyhammer_tools::mcp::{ProgressNotification, generate_progress_token};
-//! use swissarmyhammer_tools::mcp::progress_notifications::{start_notification, complete_notification};
-//!
-//! # async fn example(sender: swissarmyhammer_tools::mcp::ProgressSender) {
-//! // Generate a unique progress token
-//! let token = generate_progress_token();
-//!
-//! // Send start notification
-//! let _ = start_notification(&sender, &token, "Processing files").await;
-//!
-//! // Do work...
-//!
-//! // Send completion notification
-//! let _ = complete_notification(&sender, &token, "Completed processing").await;
-//! # }
-//! ```
-
 // Module declarations
 pub mod error_handling;
 pub mod file_watcher;
 pub mod notifications;
 pub mod notify_types;
 pub mod plan_notifications;
-pub mod progress_notifications;
 pub mod responses;
 pub mod server;
 pub mod shared_utils;
@@ -107,10 +85,6 @@ pub use notifications::{
 pub use plan_notifications::{
     PlanEntry, PlanEntryPriority, PlanEntryStatus, PlanNotification, PlanSender,
     SendError as PlanSendError,
-};
-pub use progress_notifications::{
-    complete_notification, generate_progress_token, start_notification, ProgressNotification,
-    ProgressSender, SendError as ProgressSendError,
 };
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;

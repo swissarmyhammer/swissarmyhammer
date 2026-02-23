@@ -1,41 +1,47 @@
 ---
 name: plan
 description: Turn specifications into detailed implementation plans with actionable tasks. Use when the user has a spec, feature request, or design document that needs implementation steps.
-allowed-tools: "*"
 metadata:
   author: swissarmyhammer
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Plan
 
 Create a comprehensive implementation plan from a specification, feature request, or design document.
 
+The plan IS the kanban board. As you research and design, build the plan directly as kanban cards with subtasks — don't write a plan document and then "translate" it. The kanban board is the plan artifact.
+
 ## How to Execute
 
-### When running inside Claude Code
+### Step 1: Initialize the board
 
-Use Claude Code's built-in planning mode:
+Before exploring anything, set up the board: use `kanban` with `op: "init board"`, `name: "<project or feature name>"`
 
+### Step 2: Research and build the plan incrementally
+
+As you explore the codebase and understand what needs to happen, add cards to the kanban board immediately. Don't wait until you have a complete picture — each discovery becomes a card.
+
+**When running inside Claude Code:**
 1. **Enter plan mode** to analyze the specification and explore the codebase
 2. **Research thoroughly** — read relevant files, understand the architecture, identify affected areas
-3. **Design the approach** — determine what needs to change and in what order
-4. **Exit plan mode** with your plan for user approval
+3. **As you identify work items, create kanban cards** — each card is a piece of the plan
+4. **Exit plan mode** with a summary for user approval — the cards are already on the board
 
-Once the plan is approved, capture the results on the kanban board (see below).
+**When running as an autonomous agent (llama-agent):**
+Follow the planning process described in the `PLANNING_GUIDE.md` resource file bundled with this skill. As you work through each phase, add kanban cards for the work items you discover.
 
-### When running as an autonomous agent (llama-agent)
+### Step 3: Structure each card
 
-Follow the planning process described in the `PLANNING_GUIDE.md` resource file bundled with this skill. That guide covers the full planning workflow: understanding the request, exploring the codebase, assessing scope, and producing a structured plan.
+For each major work item, create a task: use `kanban` with `op: "add task"`, `title: "<what to implement>"`, `description: "<detailed context, affected files, approach>"`
 
-## Capturing the Plan on the Kanban Board
+Then add subtasks for individual steps: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`
 
-After planning is complete, translate the plan into actionable kanban cards so it can be executed later with the `implement` or `do` skills:
+If tasks have ordering dependencies, set them: use `kanban` with `op: "update task"`, `id: "<task-id>"`, `depends_on: ["<blocker-task-id>"]`
 
-1. Initialize the board if needed: use `kanban` with `op: "init board"`, `name: "<project or feature name>"`
-2. For each major work item, create a task: use `kanban` with `op: "add task"`, `title: "<what to implement>"`, `description: "<detailed context, affected files, approach>"`
-3. For each task, add subtasks for the individual steps: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`
-4. If tasks have ordering dependencies, set them: use `kanban` with `op: "update task"`, `id: "<task-id>"`, `depends_on: ["<blocker-task-id>"]`
+## Important: Kanban Is the Single Source of Truth
+
+Do NOT use any built-in task or todo tools (like TodoWrite or TaskCreate) to record the plan. The kanban board is how work is tracked across both Claude Code and llama-agent sessions. Every planned task belongs there as a card with subtasks.
 
 ## Guidelines
 
@@ -44,3 +50,4 @@ After planning is complete, translate the plan into actionable kanban cards so i
 - Include enough context in task descriptions that someone (or the `do` skill) can execute without re-reading the spec
 - Order tasks so foundational changes come first (data models, types) and dependent work follows
 - Each task's subtasks should include running tests as the final step
+- It's fine to rearrange, split, or merge cards as the plan evolves — the board is a living document

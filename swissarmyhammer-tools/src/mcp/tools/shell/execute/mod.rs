@@ -2,16 +2,17 @@
 //!
 //! This module provides the ShellExecuteTool for executing shell commands through the MCP protocol.
 
-use crate::mcp::progress_notifications::{generate_progress_token, ProgressSender};
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
-use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, AgentTool, BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
-use rmcp::model::CallToolResult;
-use rmcp::ErrorData as McpError;
+use rmcp::model::{
+    CallToolResult, LoggingLevel, LoggingMessageNotification, LoggingMessageNotificationParam,
+};
+use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
 // Replaced sah_config with local defaults for shell configuration
@@ -811,8 +812,7 @@ struct OutputLineContext<'a> {
     line_count: &'a mut u32,
     output_buffer: &'a mut OutputBuffer,
     binary_notified: &'a mut bool,
-    progress_sender: Option<&'a ProgressSender>,
-    progress_token: &'a str,
+    peer: Option<&'a Arc<Peer<RoleServer>>>,
     batch_size: u32,
 }
 
@@ -838,16 +838,21 @@ fn process_output_line(
 ) -> usize {
     *ctx.line_count += 1;
 
-    // Send batched progress notifications every batch_size lines
+    // Send batched progress notifications every batch_size lines via tokio::spawn (sync context)
     if (*ctx.line_count).is_multiple_of(ctx.batch_size) {
-        if let Some(sender) = ctx.progress_sender {
-            sender
-                .send_progress(
-                    ctx.progress_token,
-                    Some(*ctx.line_count),
-                    format!("Shell output: {} lines processed", ctx.line_count),
-                )
-                .ok();
+        if let Some(peer) = ctx.peer {
+            let peer = Arc::clone(peer);
+            let msg = format!("Shell output: {} lines processed", ctx.line_count);
+            tokio::spawn(async move {
+                let param = LoggingMessageNotificationParam {
+                    level: LoggingLevel::Info,
+                    logger: Some("shell".to_string()),
+                    data: serde_json::json!(msg),
+                };
+                let _ = peer
+                    .send_notification(LoggingMessageNotification::new(param).into())
+                    .await;
+            });
         }
     }
 
@@ -863,14 +868,18 @@ fn process_output_line(
     // Check for binary detection and notify once
     if ctx.output_buffer.has_binary_content() && !*ctx.binary_notified {
         *ctx.binary_notified = true;
-        if let Some(sender) = ctx.progress_sender {
-            sender
-                .send_progress(
-                    ctx.progress_token,
-                    Some(*ctx.line_count),
-                    "Shell output: Binary content detected",
-                )
-                .ok();
+        if let Some(peer) = ctx.peer {
+            let peer = Arc::clone(peer);
+            tokio::spawn(async move {
+                let param = LoggingMessageNotificationParam {
+                    level: LoggingLevel::Info,
+                    logger: Some("shell".to_string()),
+                    data: serde_json::json!("Shell output: Binary content detected"),
+                };
+                let _ = peer
+                    .send_notification(LoggingMessageNotification::new(param).into())
+                    .await;
+            });
         }
     }
 
@@ -944,8 +953,7 @@ async fn read_remaining_with_context<R>(
     line_count: &mut u32,
     output_buffer: &mut OutputBuffer,
     binary_notified: &mut bool,
-    progress_sender: Option<&ProgressSender>,
-    progress_token: &str,
+    peer: Option<&Arc<Peer<RoleServer>>>,
     append_fn: impl Fn(&mut OutputBuffer, &[u8]) -> usize,
 ) where
     R: tokio::io::AsyncRead + Unpin,
@@ -955,8 +963,7 @@ async fn read_remaining_with_context<R>(
         line_count,
         output_buffer,
         binary_notified,
-        progress_sender,
-        progress_token,
+        peer,
         batch_size: BATCH_SIZE,
     };
     read_remaining_stream_output(reader, &mut ctx, append_fn).await;
@@ -1009,8 +1016,7 @@ async fn collect_remaining_output(
     line_count: &mut u32,
     output_buffer: &mut OutputBuffer,
     binary_notified: &mut bool,
-    progress_sender: Option<&ProgressSender>,
-    progress_token: &str,
+    peer: Option<&Arc<Peer<RoleServer>>>,
 ) {
     const REMAINING_OUTPUT_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -1019,8 +1025,7 @@ async fn collect_remaining_output(
         line_count,
         output_buffer,
         binary_notified,
-        progress_sender,
-        progress_token,
+        peer,
         |buf, data| buf.append_stdout(data),
     );
     let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stdout_future).await;
@@ -1030,15 +1035,13 @@ async fn collect_remaining_output(
         line_count,
         output_buffer,
         binary_notified,
-        progress_sender,
-        progress_token,
+        peer,
         |buf, data| buf.append_stderr(data),
     );
     let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stderr_future).await;
 }
 
 /// Stream output until process completes or buffer limit reached
-#[allow(clippy::too_many_arguments)]
 async fn stream_output_until_complete(
     stdout_reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     stderr_reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
@@ -1046,8 +1049,7 @@ async fn stream_output_until_complete(
     line_count: &mut u32,
     output_buffer: &mut OutputBuffer,
     binary_notified: &mut bool,
-    progress_sender: Option<&ProgressSender>,
-    progress_token: &str,
+    peer: Option<&Arc<Peer<RoleServer>>>,
 ) -> Result<std::process::ExitStatus, ShellError> {
     const BATCH_SIZE: u32 = 10;
 
@@ -1056,7 +1058,7 @@ async fn stream_output_until_complete(
             stdout_line = stdout_reader.next_line() => {
                 let mut ctx = OutputLineContext {
                     line_count, output_buffer, binary_notified,
-                    progress_sender, progress_token, batch_size: BATCH_SIZE,
+                    peer, batch_size: BATCH_SIZE,
                 };
                 if !process_stream_line_result(
                     stdout_line, &mut ctx,
@@ -1067,7 +1069,7 @@ async fn stream_output_until_complete(
             stderr_line = stderr_reader.next_line() => {
                 let mut ctx = OutputLineContext {
                     line_count, output_buffer, binary_notified,
-                    progress_sender, progress_token, batch_size: BATCH_SIZE,
+                    peer, batch_size: BATCH_SIZE,
                 };
                 if !process_stream_line_result(
                     stderr_line, &mut ctx,
@@ -1098,8 +1100,7 @@ async fn stream_output_until_complete(
 async fn process_child_output_with_limits(
     mut child: Child,
     output_limits: &OutputLimits,
-    progress_sender: Option<&ProgressSender>,
-    progress_token: &str,
+    peer: Option<&Arc<Peer<RoleServer>>>,
 ) -> Result<(std::process::ExitStatus, OutputBuffer, u32), ShellError> {
     let mut setup = setup_output_capture(&mut child, output_limits)?;
     let mut line_count: u32 = 0;
@@ -1112,8 +1113,7 @@ async fn process_child_output_with_limits(
         &mut line_count,
         &mut setup.output_buffer,
         &mut binary_notified,
-        progress_sender,
-        progress_token,
+        peer,
     )
     .await?;
 
@@ -1134,8 +1134,7 @@ async fn process_child_output_with_limits(
         &mut line_count,
         &mut setup.output_buffer,
         &mut binary_notified,
-        progress_sender,
-        progress_token,
+        peer,
     )
     .await;
 
@@ -1296,32 +1295,22 @@ fn spawn_command_process(
 }
 
 /// Send completion progress notification
-fn send_completion_notification(
-    progress_sender: Option<&ProgressSender>,
-    progress_token: &str,
+async fn send_completion_notification(
+    context: &ToolContext,
     line_count: u32,
     exit_code: i32,
     execution_time_ms: u64,
-    output_truncated: bool,
 ) {
-    if let Some(sender) = progress_sender {
-        sender
-            .send_progress_with_metadata(
-                progress_token,
-                Some(line_count),
-                format!(
-                    "Command completed: {} lines, exit code {}",
-                    line_count, exit_code
-                ),
-                json!({
-                    "exit_code": exit_code,
-                    "duration_ms": execution_time_ms,
-                    "line_count": line_count,
-                    "output_truncated": output_truncated
-                }),
-            )
-            .ok();
-    }
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "shell",
+        format!(
+            "Command completed: {} lines, exit code {}, {}ms",
+            line_count, exit_code, execution_time_ms
+        ),
+    )
+    .await;
 }
 
 /// Format execution result from output buffer
@@ -1374,8 +1363,7 @@ async fn execute_shell_command(
     command: String,
     working_directory: Option<PathBuf>,
     environment: Option<std::collections::HashMap<String, String>>,
-    progress_sender: Option<&ProgressSender>,
-    progress_token: &str,
+    context: &ToolContext,
 ) -> Result<ShellExecutionResult, ShellError> {
     let start_time = Instant::now();
     let work_dir = prepare_working_directory(working_directory)?;
@@ -1394,20 +1382,12 @@ async fn execute_shell_command(
         })?;
 
     let (exit_status, output_buffer, line_count) =
-        process_child_output_with_limits(child, &output_limits, progress_sender, progress_token)
-            .await?;
+        process_child_output_with_limits(child, &output_limits, context.peer.as_ref()).await?;
 
     let execution_time_ms = start_time.elapsed().as_millis() as u64;
     let exit_code = exit_status.code().unwrap_or(-1);
 
-    send_completion_notification(
-        progress_sender,
-        progress_token,
-        line_count,
-        exit_code,
-        execution_time_ms,
-        output_buffer.is_truncated(),
-    );
+    send_completion_notification(context, line_count, exit_code, execution_time_ms).await;
 
     Ok(format_execution_result(
         command,
@@ -1477,20 +1457,14 @@ fn parse_environment_variables(
 }
 
 /// Send start notification for command execution
-fn send_start_notification(
-    progress_sender: &Option<ProgressSender>,
-    progress_token: &str,
-    command: &str,
-) {
-    if let Some(sender) = progress_sender {
-        sender
-            .send_progress(
-                progress_token,
-                Some(0),
-                format!("Shell: Executing: {}", command),
-            )
-            .ok();
-    }
+async fn send_start_notification(context: &ToolContext, command: &str) {
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "shell",
+        format!("Shell: Executing: {}", command),
+    )
+    .await;
 }
 
 /// Format successful execution result
@@ -1604,34 +1578,25 @@ impl McpTool for ShellExecuteTool {
         let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
         let working_directory = request.working_directory.map(PathBuf::from);
 
-        let progress_token = generate_progress_token();
-        send_start_notification(&_context.progress_sender, &progress_token, &request.command);
+        send_start_notification(_context, &request.command).await;
 
         match execute_shell_command(
             request.command.clone(),
             working_directory,
             parsed_environment,
-            _context.progress_sender.as_ref(),
-            &progress_token,
+            _context,
         )
         .await
         {
             Ok(result) => format_success_result(result),
             Err(shell_error) => {
-                // Send error notification before returning error result
-                if let Some(sender) = &_context.progress_sender {
-                    sender
-                        .send_progress_with_metadata(
-                            &progress_token,
-                            None,
-                            format!("Shell: Failed - {}", shell_error),
-                            json!({
-                                "error": shell_error.to_string(),
-                                "command": request.command
-                            }),
-                        )
-                        .ok();
-                }
+                send_mcp_log(
+                    _context,
+                    LoggingLevel::Error,
+                    "shell",
+                    format!("Shell: Failed - {}", shell_error),
+                )
+                .await;
                 format_error_result(shell_error)
             }
         }
@@ -1642,6 +1607,7 @@ impl McpTool for ShellExecuteTool {
 mod tests {
     use super::*;
     use crate::test_utils::create_test_context;
+    use serde_json::json;
 
     /// Generic helper function to assert that items are blocked by security validation
     ///
@@ -3587,162 +3553,6 @@ mod tests {
         assert_eq!(DefaultShellConfig::max_line_length(), 2000);
     }
 
-    // Progress notification tests
-
-    /// Helper function to execute command with progress capture
-    ///
-    /// This eliminates duplication in progress notification test setup and teardown.
-    /// Returns the execution result and collected notifications.
-    async fn execute_with_progress_capture(
-        command: &str,
-    ) -> (
-        Result<CallToolResult, McpError>,
-        Vec<crate::mcp::progress_notifications::ProgressNotification>,
-    ) {
-        use crate::mcp::progress_notifications::ProgressSender;
-        use tokio::sync::mpsc;
-
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let progress_sender = ProgressSender::new(tx);
-
-        let mut context = create_test_context().await;
-        context.progress_sender = Some(progress_sender);
-
-        let result = TestCommandBuilder::new(command)
-            .with_context(context)
-            .execute()
-            .await;
-
-        // Collect all notifications
-        let mut notifications = Vec::new();
-        while let Ok(notif) = rx.try_recv() {
-            notifications.push(notif);
-        }
-
-        (result, notifications)
-    }
-
-    #[tokio::test]
-    async fn test_shell_execute_sends_progress_notifications() {
-        let (result, notifications) =
-            execute_with_progress_capture("echo 'line1'; echo 'line2'").await;
-        assert!(result.is_ok());
-
-        // Should have at least: start notification and completion notification
-        assert!(
-            notifications.len() >= 2,
-            "Expected at least 2 notifications (start, completion), got {}",
-            notifications.len()
-        );
-
-        // First notification should be the start notification with 0 progress
-        assert_eq!(
-            notifications[0].progress,
-            Some(0),
-            "First notification should be start with 0 progress"
-        );
-        assert!(
-            notifications[0].message.contains("Executing"),
-            "Start notification should mention executing"
-        );
-
-        // Last notification should be completion with line count progress
-        let last = notifications.last().unwrap();
-        assert!(
-            last.progress.is_some() && last.progress.unwrap() > 0,
-            "Last notification should have non-zero progress (line count)"
-        );
-        assert!(
-            last.message.contains("completed"),
-            "Completion notification should mention completed"
-        );
-
-        // Middle notifications should be output lines (indeterminate progress)
-        for notif in &notifications[1..notifications.len() - 1] {
-            assert_eq!(
-                notif.progress, None,
-                "Output notifications should have indeterminate progress"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn test_shell_execute_continues_when_notification_fails() {
-        use crate::mcp::progress_notifications::ProgressSender;
-        use tokio::sync::mpsc;
-
-        let (tx, rx) = mpsc::unbounded_channel();
-        drop(rx); // Close channel to cause send errors
-
-        let progress_sender = ProgressSender::new(tx);
-        let mut context = create_test_context().await;
-        context.progress_sender = Some(progress_sender);
-
-        // Should still succeed even though notifications fail
-        let result = TestCommandBuilder::new("echo 'test'")
-            .with_context(context)
-            .execute()
-            .await;
-        assert!(
-            result.is_ok(),
-            "Command should succeed even when notification channel is closed"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_shell_execute_without_progress_sender() {
-        let context = create_test_context().await;
-        assert!(
-            context.progress_sender.is_none(),
-            "Default test context should not have progress sender"
-        );
-
-        // Should work fine without progress sender
-        let result = TestCommandBuilder::new("echo 'test'")
-            .with_context(context)
-            .execute()
-            .await;
-        assert!(
-            result.is_ok(),
-            "Command should succeed without progress sender"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_shell_execute_completion_metadata() {
-        let (result, notifications) = execute_with_progress_capture("echo 'test'").await;
-        assert!(result.is_ok());
-
-        // Find the completion notification
-        let completion = notifications.last().unwrap();
-        assert!(
-            completion.progress.is_some() && completion.progress.unwrap() > 0,
-            "Completion should have non-zero progress (line count)"
-        );
-
-        // Check that metadata contains exit code, duration, and line count
-        if let Some(metadata) = &completion.metadata {
-            assert!(
-                metadata.get("exit_code").is_some(),
-                "Completion metadata should include exit_code"
-            );
-            assert!(
-                metadata.get("duration_ms").is_some(),
-                "Completion metadata should include duration_ms"
-            );
-            assert!(
-                metadata.get("line_count").is_some(),
-                "Completion metadata should include line_count"
-            );
-            assert!(
-                metadata.get("output_truncated").is_some(),
-                "Completion metadata should include output_truncated"
-            );
-        } else {
-            panic!("Completion notification should have metadata");
-        }
-    }
-
     /// Helper function to assert error severity
     ///
     /// This eliminates duplication in error severity test assertions.
@@ -3827,128 +3637,6 @@ mod tests {
             // This will fail to compile if Severity is not implemented
             let _severity = error.severity();
         }
-    }
-
-    #[tokio::test]
-    async fn test_batched_progress_notifications() {
-        // Generate 25 lines of output to test batching (should get notifications at 0, 10, 20, and final)
-        let (result, notifications) =
-            execute_with_progress_capture("for i in $(seq 1 25); do echo line $i; done").await;
-        assert!(result.is_ok(), "Command should execute successfully");
-
-        let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
-
-        // Should have at least: start (0), batched notifications, and completion
-        assert!(
-            notifications.len() >= 3,
-            "Expected at least 3 notifications (start, batched, completion), got {}",
-            notifications.len()
-        );
-
-        // First notification should be start with progress = 0
-        assert_eq!(
-            notifications[0].progress,
-            Some(0),
-            "First notification should be start with 0 progress"
-        );
-        assert!(
-            notifications[0].message.contains("Executing"),
-            "Start notification should mention executing"
-        );
-
-        // Last notification should be completion with final line count
-        let last = notifications.last().unwrap();
-        assert!(
-            last.progress.is_some() && last.progress.unwrap() > 0,
-            "Last notification should have non-zero progress (line count)"
-        );
-        assert!(
-            last.message.contains("completed"),
-            "Completion notification should mention completed"
-        );
-
-        // Verify progress values are monotonically increasing
-        let progresses: Vec<u32> = notifications.iter().filter_map(|n| n.progress).collect();
-        for window in progresses.windows(2) {
-            assert!(
-                window[0] <= window[1],
-                "Progress should increase monotonically: {} > {}",
-                window[0],
-                window[1]
-            );
-        }
-
-        // Check that we have batched notifications (at multiples of 10)
-        let batch_notifications: Vec<_> = notifications
-            .iter()
-            .filter(|n| {
-                n.progress.is_some()
-                    && n.progress.unwrap() % 10 == 0
-                    && n.progress.unwrap() > 0
-                    && n.message.contains("Shell output")
-            })
-            .collect();
-
-        assert!(
-            batch_notifications.len() >= 2,
-            "Should have at least 2 batched progress notifications (at lines 10, 20)"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_binary_detection_notification() {
-        // Use printf to output binary data (null bytes)
-        let (result, notifications) = execute_with_progress_capture(
-            "printf '\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\n'",
-        )
-        .await;
-        assert!(result.is_ok(), "Command should execute successfully");
-
-        // Should have at least start and completion notifications
-        assert!(
-            notifications.len() >= 2,
-            "Expected at least 2 notifications"
-        );
-
-        // Check if any notification mentions binary detection
-        let binary_notification = notifications
-            .iter()
-            .find(|n| n.message.contains("Binary content detected"));
-
-        assert!(
-            binary_notification.is_some(),
-            "Should have a notification about binary output detection"
-        );
-
-        // Verify binary notification only appears once
-        let binary_count = notifications
-            .iter()
-            .filter(|n| n.message.contains("Binary content detected"))
-            .count();
-
-        assert_eq!(
-            binary_count, 1,
-            "Binary detection notification should appear exactly once"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_progress_without_sender() {
-        let mut context = create_test_context().await;
-        context.progress_sender = None;
-
-        let result = TestCommandBuilder::new("echo test")
-            .with_context(context)
-            .execute()
-            .await;
-        assert!(
-            result.is_ok(),
-            "Command should execute successfully even without progress sender"
-        );
-
-        let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
     }
 
     #[tokio::test]

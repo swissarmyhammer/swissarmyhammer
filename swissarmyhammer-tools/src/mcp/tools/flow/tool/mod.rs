@@ -5,10 +5,10 @@
 //! This module provides the FlowTool for executing workflows or listing available workflows
 //! through the MCP protocol.
 
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::flow::types::*;
 use async_trait::async_trait;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::{generate_monotonic_ulid_string, Pretty};
 use swissarmyhammer_config::AgentUseCase;
@@ -294,59 +294,68 @@ impl FlowTool {
         Ok((executor, run))
     }
 
-    /// Send flow start notification
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - Tool context with optional notification sender
-    /// * `run_id` - Unique run identifier
-    /// * `flow_name` - Name of the workflow
-    /// * `parameters` - Workflow parameters
-    /// * `initial_state` - Initial state identifier
-    fn send_flow_start_notification(
+    /// Send an MCP LoggingMessageNotification via the shared helper
+    async fn send_flow_log(
+        context: &ToolContext,
+        level: LoggingLevel,
+        flow_name: &str,
+        message: String,
+    ) {
+        tracing::info!("📨 MCP log [{}]: {}", flow_name, message);
+        send_mcp_log(
+            context,
+            level,
+            &format!("flow:{}", flow_name),
+            message,
+        )
+        .await;
+    }
+
+    /// Send flow start notification via MCP peer and internal channel
+    async fn send_flow_start_notification(
         context: &ToolContext,
         run_id: &str,
         flow_name: &str,
         parameters: serde_json::Value,
         initial_state: &str,
     ) {
+        Self::send_flow_log(
+            context,
+            LoggingLevel::Info,
+            flow_name,
+            format!("Starting flow at state '{}'", initial_state),
+        )
+        .await;
         if let Some(sender) = &context.notification_sender {
             let _ = sender.send_flow_start(run_id, flow_name, parameters, initial_state);
         }
     }
 
-    /// Send flow complete notification
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - Tool context with optional notification sender
-    /// * `run_id` - Unique run identifier
-    /// * `flow_name` - Name of the workflow
-    /// * `status` - Final workflow status
-    /// * `final_state` - Final state identifier
-    fn send_flow_complete_notification(
+    /// Send flow complete notification via MCP peer and internal channel
+    async fn send_flow_complete_notification(
         context: &ToolContext,
         run_id: &str,
         flow_name: &str,
         status: &str,
         final_state: &str,
     ) {
+        Self::send_flow_log(
+            context,
+            LoggingLevel::Info,
+            flow_name,
+            format!(
+                "Completed with status '{}' at state '{}'",
+                status, final_state
+            ),
+        )
+        .await;
         if let Some(sender) = &context.notification_sender {
             let _ = sender.send_flow_complete(run_id, flow_name, status, final_state);
         }
     }
 
-    /// Send flow error notification
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - Tool context with optional notification sender
-    /// * `run_id` - Unique run identifier
-    /// * `flow_name` - Name of the workflow
-    /// * `status` - Final workflow status
-    /// * `error_state` - State where error occurred
-    /// * `error_message` - Error message
-    fn send_flow_error_notification(
+    /// Send flow error notification via MCP peer and internal channel
+    async fn send_flow_error_notification(
         context: &ToolContext,
         run_id: &str,
         flow_name: &str,
@@ -354,6 +363,13 @@ impl FlowTool {
         error_state: &str,
         error_message: &str,
     ) {
+        Self::send_flow_log(
+            context,
+            LoggingLevel::Error,
+            flow_name,
+            format!("Error at state '{}': {}", error_state, error_message),
+        )
+        .await;
         if let Some(sender) = &context.notification_sender {
             let _ = sender.send_flow_error(run_id, flow_name, status, error_state, error_message);
         }
@@ -379,9 +395,10 @@ impl FlowTool {
         run_id: &str,
         flow_name: &str,
         context: &ToolContext,
+        log_rx: tokio::sync::mpsc::UnboundedReceiver<swissarmyhammer_workflow::LogMessage>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = self
-            .execute_with_notifications(&mut executor, &mut run, run_id, flow_name, context)
+            .execute_with_notifications(&mut executor, &mut run, run_id, flow_name, context, log_rx)
             .await;
 
         match result {
@@ -392,7 +409,8 @@ impl FlowTool {
                     flow_name,
                     &format!("{:?}", run.status),
                     run.current_state.as_str(),
-                );
+                )
+                .await;
 
                 let output = serde_json::json!({
                     "status": "completed",
@@ -412,7 +430,8 @@ impl FlowTool {
                     &format!("{:?}", run.status),
                     run.current_state.as_str(),
                     &e.to_string(),
-                );
+                )
+                .await;
 
                 Err(McpError::internal_error(
                     format!("Workflow '{}' execution failed: {}", flow_name, e),
@@ -446,13 +465,18 @@ impl FlowTool {
             &request.flow_name,
             serde_json::to_value(&request.parameters).unwrap_or(serde_json::json!({})),
             workflow.initial_state.as_str(),
-        );
+        )
+        .await;
 
-        let (executor, run) = self
+        let (executor, mut run) = self
             .setup_workflow_run(workflow, context, request, &run_id)
             .await?;
 
-        self.run_and_handle_result(executor, run, &run_id, &request.flow_name, context)
+        // Set up log channel so LogAction messages get forwarded as MCP notifications
+        let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel();
+        run.context.set_log_sender(log_tx);
+
+        self.run_and_handle_result(executor, run, &run_id, &request.flow_name, context, log_rx)
             .await
     }
 
@@ -479,17 +503,8 @@ impl FlowTool {
         }
     }
 
-    /// Send state start notification
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - Tool context with optional notification sender
-    /// * `run` - Current workflow run
-    /// * `run_id` - Unique run identifier
-    /// * `flow_name` - Name of the workflow
-    /// * `current_state` - State identifier that is starting
-    /// * `progress` - Current progress percentage
-    fn send_state_start_notification(
+    /// Send state start notification via MCP peer and internal channel
+    async fn send_state_start_notification(
         context: &ToolContext,
         run: &swissarmyhammer_workflow::WorkflowRun,
         run_id: &str,
@@ -497,6 +512,13 @@ impl FlowTool {
         current_state: &swissarmyhammer_workflow::StateId,
         progress: u32,
     ) {
+        Self::send_flow_log(
+            context,
+            LoggingLevel::Info,
+            flow_name,
+            format!("[{}/100] Entering state '{}'", progress, current_state),
+        )
+        .await;
         if let Some(sender) = &context.notification_sender {
             if let Some(state) = run.workflow.states.get(current_state) {
                 let _ = sender.send_state_start(
@@ -510,17 +532,8 @@ impl FlowTool {
         }
     }
 
-    /// Send state complete notification
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - Tool context with optional notification sender
-    /// * `run_id` - Unique run identifier
-    /// * `flow_name` - Name of the workflow
-    /// * `current_state` - State identifier that completed
-    /// * `next_state` - Next state identifier if transition occurred
-    /// * `progress` - Current progress percentage
-    fn send_state_complete_notification(
+    /// Send state complete notification via MCP peer and internal channel
+    async fn send_state_complete_notification(
         context: &ToolContext,
         run_id: &str,
         flow_name: &str,
@@ -528,6 +541,17 @@ impl FlowTool {
         next_state: Option<&str>,
         progress: u32,
     ) {
+        let message = match next_state {
+            Some(next) => format!(
+                "[{}/100] Completed state '{}', transitioning to '{}'",
+                progress, current_state, next
+            ),
+            None => format!(
+                "[{}/100] Completed state '{}' (no transition)",
+                progress, current_state
+            ),
+        };
+        Self::send_flow_log(context, LoggingLevel::Info, flow_name, message).await;
         if let Some(sender) = &context.notification_sender {
             let _ = sender.send_state_complete(
                 run_id,
@@ -563,6 +587,7 @@ impl FlowTool {
         run_id: &str,
         flow_name: &str,
         context: &ToolContext,
+        mut log_rx: tokio::sync::mpsc::UnboundedReceiver<swissarmyhammer_workflow::LogMessage>,
     ) -> Result<(), swissarmyhammer_workflow::ExecutorError> {
         let total_states = run.workflow.states.len();
         let mut executed_states = 0;
@@ -578,10 +603,14 @@ impl FlowTool {
                 flow_name,
                 &current_state,
                 progress,
-            );
+            )
+            .await;
 
             let transition_performed = executor.execute_single_cycle(run).await?;
             executed_states += 1;
+
+            // Drain log messages emitted during this cycle and forward as MCP logging notifications
+            Self::drain_log_messages(context, &mut log_rx, flow_name).await;
 
             let next_state = if transition_performed {
                 Some(run.current_state.as_str())
@@ -597,14 +626,34 @@ impl FlowTool {
                 &current_state,
                 next_state,
                 progress,
-            );
+            )
+            .await;
 
             if !transition_performed || executor.is_workflow_finished(run) {
                 break;
             }
         }
 
+        // Drain any remaining log messages
+        Self::drain_log_messages(context, &mut log_rx, flow_name).await;
+
         Ok(())
+    }
+
+    /// Drain pending log messages from the workflow and send them as MCP logging notifications
+    async fn drain_log_messages(
+        context: &ToolContext,
+        log_rx: &mut tokio::sync::mpsc::UnboundedReceiver<swissarmyhammer_workflow::LogMessage>,
+        flow_name: &str,
+    ) {
+        while let Ok(log_msg) = log_rx.try_recv() {
+            let level = match log_msg.level.as_str() {
+                "error" => LoggingLevel::Error,
+                "warning" => LoggingLevel::Warning,
+                _ => LoggingLevel::Info,
+            };
+            Self::send_flow_log(context, level, flow_name, log_msg.message).await;
+        }
     }
 
     /// Get available workflow names

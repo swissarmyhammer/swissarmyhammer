@@ -1,7 +1,6 @@
 ---
 name: commit
 description: Create a well-structured git commit with a conventional commit message. Use when the user wants to commit their current changes.
-allowed-tools: "*"
 metadata:
   author: swissarmyhammer
   version: "1.0"

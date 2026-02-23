@@ -1,6 +1,8 @@
 //! Set up sah for all detected AI coding agents (skills + MCP).
 
 use crate::cli::InstallTarget;
+use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_prompts::PromptLibrary;
 
 use super::settings;
 
@@ -150,68 +152,121 @@ fn create_project_structure() -> Result<(), String> {
     Ok(())
 }
 
-/// Install builtin skills via mirdan's central store + sync.
+/// Install builtin skills via mirdan's deploy + lockfile.
 ///
-/// 1. Copy builtins to .skills/ store
-/// 2. Call mirdan::sync::sync() to create symlinks to all detected agents
+/// 1. Write each builtin to a temp dir (they're embedded in the binary)
+/// 2. Call `deploy_skill_to_agents()` for each — handles store copy + symlinks
+/// 3. Write lockfile entries via `Lockfile`
+///
+/// Skill instructions are rendered through the prompt library's Liquid template
+/// engine before writing to disk, so `{% include %}` partials are expanded.
 fn install_skills_via_mirdan(global: bool) -> Result<(), String> {
     use swissarmyhammer_skills::SkillResolver;
 
     let resolver = SkillResolver::new();
     let skills = resolver.resolve_all();
 
-    let store_dir = mirdan::store::skill_store_dir(global);
+    // Build prompt library for rendering skill templates with partials
+    let prompt_library = PromptLibrary::default();
+    let template_context = TemplateContext::new();
 
-    // Copy each builtin skill to the central store
+    let project_root = std::env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
+        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+
     let mut installed_count = 0;
     for (name, skill) in &skills {
         if skill.source != swissarmyhammer_skills::SkillSource::Builtin {
             continue;
         }
 
-        let skill_store_path = store_dir.join(name);
-        std::fs::create_dir_all(&skill_store_path)
-            .map_err(|e| format!("Failed to create skill store dir {}: {}", skill_store_path.display(), e))?;
+        // Write builtin to a temp dir so deploy_skill_to_agents can copy it
+        let temp_dir = tempfile::tempdir()
+            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+        let skill_dir = temp_dir.path().join(name);
+        std::fs::create_dir_all(&skill_dir)
+            .map_err(|e| format!("Failed to create temp skill dir: {}", e))?;
 
-        // Write the SKILL.md
-        let skill_md_path = skill_store_path.join("SKILL.md");
-        let content = format_skill_md(skill);
+        // Render instructions through the prompt library's Liquid engine
+        // so {% include %} partials are expanded before writing to disk
+        let rendered_skill = render_skill_instructions(skill, &prompt_library, &template_context);
+
+        // Write the SKILL.md from the rendered content
+        let skill_md_path = skill_dir.join("SKILL.md");
+        let content = format_skill_md(&rendered_skill);
         std::fs::write(&skill_md_path, &content)
             .map_err(|e| format!("Failed to write {}: {}", skill_md_path.display(), e))?;
 
         // Write any additional resource files
         for (filename, file_content) in &skill.resources.files {
-            let file_path = skill_store_path.join(filename);
+            let file_path = skill_dir.join(filename);
             std::fs::write(&file_path, file_content)
                 .map_err(|e| format!("Failed to write {}: {}", file_path.display(), e))?;
         }
+
+        // Deploy via mirdan: store copy + agent symlinks
+        let targets = mirdan::install::deploy_skill_to_agents(name, &skill_dir, None, global)
+            .map_err(|e| format!("Failed to deploy skill '{}': {}", name, e))?;
+
+        // Record in lockfile
+        let version = skill
+            .metadata
+            .get("version")
+            .cloned()
+            .unwrap_or_else(|| "0.0.0".to_string());
+        lockfile.add_package(
+            name.clone(),
+            mirdan::lockfile::LockedPackage {
+                package_type: mirdan::package_type::PackageType::Skill,
+                version,
+                resolved: "builtin".to_string(),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets,
+            },
+        );
 
         installed_count += 1;
     }
 
     if installed_count > 0 {
+        lockfile
+            .save(&project_root)
+            .map_err(|e| format!("Failed to save lockfile: {}", e))?;
         println!(
-            "Stored {} builtin skills in {}",
-            installed_count,
-            store_dir.display()
-        );
-    }
-
-    // Run sync to create symlinks from store to all detected agent directories
-    let project_root = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
-    let report = mirdan::sync::sync(&project_root, None, global)
-        .map_err(|e| format!("Failed to sync skills: {}", e))?;
-
-    if report.links_created > 0 {
-        println!(
-            "  Created {} symlinks across {} agent(s)",
-            report.links_created,
-            report.agents_synced.len()
+            "Installed {} builtin skills (lockfile updated)",
+            installed_count
         );
     }
 
     Ok(())
+}
+
+/// Render skill instructions through the prompt library's Liquid template engine.
+///
+/// This expands `{% include %}` partials so the installed SKILL.md contains
+/// the full rendered content rather than raw Liquid tags.
+fn render_skill_instructions(
+    skill: &swissarmyhammer_skills::Skill,
+    prompt_library: &PromptLibrary,
+    template_context: &TemplateContext,
+) -> swissarmyhammer_skills::Skill {
+    let rendered_instructions =
+        match prompt_library.render_text(&skill.instructions, template_context) {
+            Ok(rendered) => rendered,
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to render partials for skill '{}': {}",
+                    skill.name, e
+                );
+                skill.instructions.clone()
+            }
+        };
+
+    let mut rendered = skill.clone();
+    rendered.instructions = rendered_instructions;
+    rendered
 }
 
 /// Format a Skill back into SKILL.md content (frontmatter + body)
@@ -221,7 +276,8 @@ fn format_skill_md(skill: &swissarmyhammer_skills::Skill) -> String {
     content.push_str(&format!("description: {}\n", skill.description));
 
     if !skill.allowed_tools.is_empty() {
-        content.push_str(&format!("allowed-tools: {}\n", skill.allowed_tools.join(" ")));
+        let tools = skill.allowed_tools.join(" ");
+        content.push_str(&format!("allowed-tools: \"{}\"\n", tools));
     }
 
     if let Some(ref license) = skill.license {

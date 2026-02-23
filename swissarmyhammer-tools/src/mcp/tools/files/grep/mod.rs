@@ -1,14 +1,13 @@
 // sah rule ignore acp/capability-enforcement
 //! Content-based search tool using ripgrep library
 
-use crate::mcp::progress_notifications::generate_progress_token;
-use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, AgentTool, BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use grep::regex::RegexMatcher;
 use grep::searcher::sinks::UTF8;
 use grep::searcher::{BinaryDetection, Searcher, SearcherBuilder};
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -189,18 +188,13 @@ impl McpTool for GrepFileTool {
             })?,
         };
 
-        let token = generate_progress_token();
-
-        if let Some(sender) = &context.progress_sender {
-            sender
-                .send_progress_with_metadata(
-                    &token,
-                    Some(0),
-                    format!("Searching for: {}", request.pattern),
-                    json!({ "pattern": request.pattern }),
-                )
-                .ok();
-        }
+        send_mcp_log(
+            context,
+            LoggingLevel::Info,
+            "grep",
+            format!("Searching: {}", request.pattern),
+        )
+        .await;
 
         let start_time = Instant::now();
 
@@ -332,20 +326,17 @@ impl McpTool for GrepFileTool {
             }
         };
 
-        if let Some(sender) = &context.progress_sender {
-            sender
-                .send_progress_with_metadata(
-                    &token,
-                    Some(100),
-                    format!("Complete: {} matches", results.matches.len()),
-                    json!({
-                        "total_matches": results.matches.len(),
-                        "files_with_matches": results.files_searched,
-                        "duration_ms": results.search_time_ms
-                    }),
-                )
-                .ok();
-        }
+        send_mcp_log(
+            context,
+            LoggingLevel::Info,
+            "grep",
+            format!(
+                "Complete: {} matches in {}ms",
+                results.matches.len(),
+                results.search_time_ms
+            ),
+        )
+        .await;
 
         Ok(BaseToolImpl::create_success_response(response))
     }

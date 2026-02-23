@@ -11,17 +11,38 @@ use swissarmyhammer_config::{
     ConfigurationResult, TemplateContext,
 };
 
+/// A log message emitted by a workflow action (e.g. LogAction)
+#[derive(Debug, Clone)]
+pub struct LogMessage {
+    /// Log level as a string ("info", "warning", "error")
+    pub level: String,
+    /// The rendered log message
+    pub message: String,
+}
+
 /// Workflow-specific template context that bridges between TemplateContext and HashMap
 ///
 /// This type manages the integration between the new TemplateContext configuration
 /// system and workflow variables. It ensures proper precedence rules where workflow
 /// variables override template configuration values.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowTemplateContext {
     /// The underlying template context with configuration values
     template_context: TemplateContext,
     /// Workflow variables that override template configuration values
     workflow_vars: HashMap<String, Value>,
+    /// Optional sender for log messages emitted during workflow execution.
+    /// When present, LogAction sends messages through this channel so callers
+    /// (e.g. MCP server) can forward them as notifications.
+    #[serde(skip)]
+    log_sender: Option<tokio::sync::mpsc::UnboundedSender<LogMessage>>,
+}
+
+impl PartialEq for WorkflowTemplateContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.template_context == other.template_context
+            && self.workflow_vars == other.workflow_vars
+    }
 }
 
 impl WorkflowTemplateContext {
@@ -30,6 +51,7 @@ impl WorkflowTemplateContext {
         Self {
             template_context,
             workflow_vars: HashMap::new(),
+            log_sender: None,
         }
     }
 
@@ -64,6 +86,7 @@ impl WorkflowTemplateContext {
         Self {
             template_context,
             workflow_vars: HashMap::new(),
+            log_sender: None,
         }
     }
 
@@ -506,6 +529,21 @@ impl WorkflowTemplateContext {
         self.get("_workflow_mode")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
+    }
+
+    /// Set the log sender for forwarding log action messages
+    pub fn set_log_sender(&mut self, sender: tokio::sync::mpsc::UnboundedSender<LogMessage>) {
+        self.log_sender = Some(sender);
+    }
+
+    /// Send a log message through the channel if a sender is configured
+    pub fn send_log(&self, level: &str, message: &str) {
+        if let Some(sender) = &self.log_sender {
+            let _ = sender.send(LogMessage {
+                level: level.to_string(),
+                message: message.to_string(),
+            });
+        }
     }
 }
 

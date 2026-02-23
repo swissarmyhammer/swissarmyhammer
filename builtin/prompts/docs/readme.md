@@ -1,5 +1,5 @@
 ---
-name: docs-readme
+name: docs_readme
 title: Generate README Documentation
 description: Create comprehensive README documentation for a project
 ---

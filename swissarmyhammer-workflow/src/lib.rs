@@ -70,7 +70,7 @@ pub use storage::{
     MemoryWorkflowStorage, WorkflowPartialAdapter, WorkflowResolver, WorkflowStorage,
     WorkflowStorageBackend,
 };
-pub use template_context::WorkflowTemplateContext;
+pub use template_context::{LogMessage, WorkflowTemplateContext};
 pub use transition::{ConditionType, Transition, TransitionCondition};
 pub use transition_key::TransitionKey;
 

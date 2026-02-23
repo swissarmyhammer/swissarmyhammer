@@ -220,10 +220,12 @@
 
 use super::notifications::NotificationSender;
 use super::plan_notifications::PlanSender;
-use super::progress_notifications::ProgressSender;
 use super::tool_handlers::ToolHandlers;
 use owo_colors::OwoColorize;
-use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
+use rmcp::model::{
+    Annotated, CallToolResult, LoggingLevel, LoggingMessageNotification,
+    LoggingMessageNotificationParam, RawContent, RawTextContent, Tool,
+};
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -295,21 +297,6 @@ pub struct ToolContext {
     /// }
     /// ```
     pub notification_sender: Option<NotificationSender>,
-
-    /// Optional progress sender for tool operations
-    ///
-    /// When present, tools can send progress notifications during execution.
-    /// This is for generic progress updates during long-running tool operations.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if let Some(sender) = &context.progress_sender {
-    ///     let token = generate_progress_token();
-    ///     sender.send_progress(&token, Some(50), "Halfway done")?;
-    /// }
-    /// ```
-    pub progress_sender: Option<ProgressSender>,
 
     /// Optional plan sender for task management operations
     ///
@@ -409,7 +396,6 @@ impl ToolContext {
             agent_config,
             use_case_agents: Arc::new(HashMap::new()),
             notification_sender: None,
-            progress_sender: None,
             plan_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
@@ -460,23 +446,6 @@ impl ToolContext {
         let mut context = Self::new(tool_handlers, git_ops, agent_config);
         context.notification_sender = Some(notification_sender);
         context
-    }
-
-    /// Set the progress sender for this context
-    ///
-    /// Creates a new context with the progress sender added. This allows
-    /// tools to send progress notifications during execution.
-    ///
-    /// # Arguments
-    ///
-    /// * `sender` - The progress sender to use
-    ///
-    /// # Returns
-    ///
-    /// A new `ToolContext` with the progress sender set
-    pub fn with_progress_sender(mut self, sender: ProgressSender) -> Self {
-        self.progress_sender = Some(sender);
-        self
     }
 
     /// Set the plan sender for plan notifications
@@ -1761,6 +1730,23 @@ register_tool_category!(
     js,
     "Register all JavaScript expression tools with the registry"
 );
+
+/// Send an MCP LoggingMessageNotification via the peer (fire-and-forget).
+///
+/// Shared helper for all tools that need to send log notifications to the MCP client.
+/// If `context.peer` is `None`, this is a no-op.
+pub async fn send_mcp_log(context: &ToolContext, level: LoggingLevel, logger: &str, message: String) {
+    if let Some(peer) = &context.peer {
+        let param = LoggingMessageNotificationParam {
+            level,
+            logger: Some(logger.to_string()),
+            data: serde_json::json!(message),
+        };
+        let _ = peer
+            .send_notification(LoggingMessageNotification::new(param).into())
+            .await;
+    }
+}
 
 /// Register all file-related tools with the registry
 pub async fn register_file_tools(registry: &mut ToolRegistry) {

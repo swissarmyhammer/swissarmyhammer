@@ -831,38 +831,15 @@ impl PromptLibrary {
     /// - Template rendering fails during execution
     /// - Referenced partials cannot be found
     pub fn render(&self, name: &str, template_context: &TemplateContext) -> Result<String> {
-        // Load all prompts fresh to ensure partials are available
-        let mut resolver = crate::PromptResolver::new();
-        let mut full_library = PromptLibrary::new();
-        resolver.load_all_prompts(&mut full_library)?;
-        // load in prompts from self as overrides of the base library
-        // this is used in testing in particular
-        for prompt in self.list()? {
-            full_library.add(prompt)?;
-        }
-
+        let full_library = self.build_full_library()?;
         let prompt = full_library.get(name)?;
 
-        // Create a new template context with prompt parameter defaults
-        let mut enhanced_context = template_context.clone();
-
-        // Set default model variable if not already set
-        enhanced_context.set_default_variables();
-
-        // Use environment if not already defined in the context
-        // This allows args to be preserved -- and we're loading env vars as late as possible
-        for (key, value) in std::env::vars() {
-            if enhanced_context.get(&key).is_some() {
-                // no op
-            } else {
-                enhanced_context.set(key.clone(), value.into());
-            }
-        }
+        // Start with enhanced context (defaults + env vars)
+        let mut enhanced_context = Self::enhance_context(template_context);
 
         // Apply prompt parameter defaults for any missing variables
         for param in &prompt.parameters {
             if let Some(default_value) = &param.default {
-                // Only set default if the parameter isn't already provided
                 if enhanced_context.get(&param.name).is_none() {
                     enhanced_context.set_var(param.name.clone(), default_value.clone());
                     tracing::debug!(
@@ -874,23 +851,78 @@ impl PromptLibrary {
             }
         }
 
-        // Use liquid context directly for proper template rendering WITH partials support
-        let liquid_vars = enhanced_context.to_liquid_context();
+        Self::render_with_library(&prompt.template, &enhanced_context, full_library)
+    }
+
+    /// Renders arbitrary template text using this library's prompt partials.
+    ///
+    /// This is the same rendering pipeline used by [`render()`](Self::render), but accepts
+    /// raw template text instead of looking up a prompt by name. This enables skills
+    /// (and other template sources) to use `{% include %}` partials from the prompt library
+    /// without duplicating the rendering logic.
+    ///
+    /// # Arguments
+    ///
+    /// * `template` - The Liquid template text to render
+    /// * `template_context` - Variables available during rendering
+    ///
+    /// # Returns
+    ///
+    /// The rendered template string with partials resolved.
+    pub fn render_text(&self, template: &str, template_context: &TemplateContext) -> Result<String> {
+        let full_library = self.build_full_library()?;
+        let enhanced_context = Self::enhance_context(template_context);
+        Self::render_with_library(template, &enhanced_context, full_library)
+    }
+
+    /// Build a full library with all prompts loaded (builtin + user + local + self overrides).
+    fn build_full_library(&self) -> Result<PromptLibrary> {
+        let mut resolver = crate::PromptResolver::new();
+        let mut full_library = PromptLibrary::new();
+        resolver.load_all_prompts(&mut full_library)?;
+        // load in prompts from self as overrides of the base library
+        // this is used in testing in particular
+        for prompt in self.list()? {
+            full_library.add(prompt)?;
+        }
+        Ok(full_library)
+    }
+
+    /// Enhance a template context with default variables and environment variables.
+    fn enhance_context(template_context: &TemplateContext) -> TemplateContext {
+        let mut enhanced = template_context.clone();
+        enhanced.set_default_variables();
+        // Use environment if not already defined in the context
+        // This allows args to be preserved -- and we're loading env vars as late as possible
+        for (key, value) in std::env::vars() {
+            if enhanced.get(&key).is_none() {
+                enhanced.set(key.clone(), value.into());
+            }
+        }
+        enhanced
+    }
+
+    /// Render template text using a pre-built library for partial resolution.
+    fn render_with_library(
+        template: &str,
+        context: &TemplateContext,
+        library: PromptLibrary,
+    ) -> Result<String> {
+        let liquid_vars = context.to_liquid_context();
         tracing::debug!("Liquid Context: {}", Pretty(&liquid_vars));
 
         let partial_adapter =
-            crate::prompt_partial_adapter::PromptPartialAdapter::new(Arc::new(full_library));
+            crate::prompt_partial_adapter::PromptPartialAdapter::new(Arc::new(library));
         let template_with_partials =
-            swissarmyhammer_templating::Template::with_partials(&prompt.template, partial_adapter)
+            swissarmyhammer_templating::Template::with_partials(template, partial_adapter)
                 .map_err(|e| SwissArmyHammerError::Other {
                     message: format!("Failed to create template with partials: {e}"),
                 })?;
 
-        // Render with template context
         template_with_partials
-            .render_with_context(&enhanced_context)
+            .render_with_context(context)
             .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to render template '{}': {e}", name),
+                message: format!("Failed to render template: {e}"),
             })
     }
 

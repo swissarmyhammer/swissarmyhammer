@@ -1,13 +1,11 @@
 //! FetchUrl operation — delegates to existing web_fetch pipeline
 
-use crate::mcp::progress_notifications::generate_progress_token;
-use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
 use crate::mcp::tools::web_fetch::fetch::WebFetchTool;
 use crate::mcp::types::WebFetchRequest;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
-use serde_json::json;
 use std::time::Instant;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
@@ -77,21 +75,13 @@ pub async fn execute_fetch(
     // Create markdowndown configuration from request parameters
     let config = fetch_tool.create_markdowndown_config(&request);
 
-    // Generate progress token and send start notification
-    let progress_token = generate_progress_token();
-    if let Some(sender) = &context.progress_sender {
-        sender
-            .send_progress_with_metadata(
-                &progress_token,
-                Some(0),
-                format!("Web fetch: Fetching: {}", request.url),
-                json!({
-                    "url": request.url,
-                    "timeout": config.http.timeout.as_secs()
-                }),
-            )
-            .ok();
-    }
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_fetch",
+        format!("Fetching: {}", request.url),
+    )
+    .await;
 
     let start_time = Instant::now();
 
@@ -100,43 +90,26 @@ pub async fn execute_fetch(
             let response_time_ms = start_time.elapsed().as_millis() as u64;
             let markdown_content = markdown.to_string();
 
-            if let Some(sender) = &context.progress_sender {
-                sender
-                    .send_progress_with_metadata(
-                        &progress_token,
-                        Some(100),
-                        format!(
-                            "Web fetch: Complete - {} chars in {:.1}s",
-                            markdown_content.len(),
-                            response_time_ms as f64 / 1000.0
-                        ),
-                        json!({
-                            "markdown_length": markdown_content.len(),
-                            "duration_ms": response_time_ms
-                        }),
-                    )
-                    .ok();
-            }
+            send_mcp_log(
+                context,
+                LoggingLevel::Info,
+                "web_fetch",
+                format!("Complete: {} chars", markdown_content.len()),
+            )
+            .await;
 
             fetch_tool.build_success_response(&request, markdown_content, response_time_ms)
         }
         Err(e) => {
             let response_time_ms = start_time.elapsed().as_millis() as u64;
 
-            if let Some(sender) = &context.progress_sender {
-                sender
-                    .send_progress_with_metadata(
-                        &progress_token,
-                        None,
-                        format!("Web fetch: Failed - {}", e),
-                        json!({
-                            "error": e.to_string(),
-                            "url": request.url,
-                            "duration_ms": response_time_ms
-                        }),
-                    )
-                    .ok();
-            }
+            send_mcp_log(
+                context,
+                LoggingLevel::Error,
+                "web_fetch",
+                format!("Failed: {}", e),
+            )
+            .await;
 
             fetch_tool.build_error_response(&e, response_time_ms, &request)
         }

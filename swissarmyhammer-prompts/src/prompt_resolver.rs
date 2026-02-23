@@ -66,9 +66,16 @@ impl PromptResolver {
                 let base_name = file.name.strip_suffix(".liquid").unwrap_or(&file.name);
                 let base_name = base_name.strip_suffix(".md").unwrap_or(base_name);
 
+                // Strip frontmatter from partial content so it doesn't bleed into rendered output
+                let template_content =
+                    match crate::frontmatter::parse_frontmatter(&file.content) {
+                        Ok(fm) => fm.content,
+                        Err(_) => file.content.clone(),
+                    };
+
                 // Add the partial with the base name (e.g., "workflow_guards")
                 let mut partial_prompt =
-                    crate::prompts::Prompt::new(base_name, file.content.clone());
+                    crate::prompts::Prompt::new(base_name, template_content.clone());
                 partial_prompt
                     .metadata
                     .insert("partial".to_string(), serde_json::Value::Bool(true));
@@ -79,7 +86,7 @@ impl PromptResolver {
                 // Also add with .md extension (e.g., "workflow_guards.md")
                 let name_with_md = format!("{}.md", base_name);
                 let mut partial_with_md =
-                    crate::prompts::Prompt::new(&name_with_md, file.content.clone());
+                    crate::prompts::Prompt::new(&name_with_md, template_content.clone());
                 partial_with_md
                     .metadata
                     .insert("partial".to_string(), serde_json::Value::Bool(true));
@@ -90,7 +97,7 @@ impl PromptResolver {
                 // Also add with .liquid extension (e.g., "workflow_guards.liquid")
                 let name_with_liquid = format!("{}.liquid", base_name);
                 let mut partial_with_liquid =
-                    crate::prompts::Prompt::new(&name_with_liquid, file.content.clone());
+                    crate::prompts::Prompt::new(&name_with_liquid, template_content.clone());
                 partial_with_liquid
                     .metadata
                     .insert("partial".to_string(), serde_json::Value::Bool(true));

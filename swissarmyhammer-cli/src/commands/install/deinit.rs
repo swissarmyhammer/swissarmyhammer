@@ -6,9 +6,6 @@ use crate::cli::InstallTarget;
 
 use super::settings;
 
-/// Builtin skill names that sah installs.
-const BUILTIN_SKILL_NAMES: &[&str] = &["plan", "kanban", "commit", "test", "implement"];
-
 /// Uninstall sah from all detected AI coding agents.
 pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {
     let global = matches!(target, InstallTarget::User);
@@ -20,6 +17,10 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
     if matches!(target, InstallTarget::Local) {
         uninstall_claude_local_scope()?;
     }
+
+    // Always remove builtin skills from .skills/ store and agent dirs
+    // (init always installs them, so deinit should always remove them)
+    uninstall_builtin_skills(global)?;
 
     // Remove directories if requested
     if remove_directory {
@@ -40,9 +41,6 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
                 .map_err(|e| format!("Failed to remove {}: {}", prompts_dir.display(), e))?;
             println!("Removed {}", prompts_dir.display());
         }
-
-        // Remove builtin skills from .skills/ store and agent dirs
-        uninstall_builtin_skills(global)?;
     }
 
     Ok(())
@@ -168,13 +166,19 @@ fn uninstall_claude_local_scope() -> Result<(), String> {
 
 /// Remove builtin skills from the .skills/ store and agent directories.
 fn uninstall_builtin_skills(global: bool) -> Result<(), String> {
+    use swissarmyhammer_skills::SkillResolver;
+
     let store_dir = mirdan::store::skill_store_dir(global);
 
     let config = mirdan::agents::load_agents_config()
         .map_err(|e| format!("Failed to load agents config: {}", e))?;
     let agents = mirdan::agents::get_detected_agents(&config);
 
-    for name in BUILTIN_SKILL_NAMES {
+    let resolver = SkillResolver::new();
+    let builtins = resolver.resolve_builtins();
+    let builtin_names: Vec<String> = builtins.keys().cloned().collect();
+
+    for name in &builtin_names {
         let store_path = store_dir.join(name);
 
         // Remove symlinks from each agent's skill directory
