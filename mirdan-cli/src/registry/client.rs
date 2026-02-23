@@ -9,7 +9,7 @@ use super::error::RegistryError;
 use super::types::*;
 
 /// Default registry URL.
-pub const DEFAULT_REGISTRY_URL: &str = "https://registry.agentvalidatorprotocol.com";
+pub const DEFAULT_REGISTRY_URL: &str = "https://registry.mirdan.ai";
 
 /// Extract a human-readable message from a JSON error body.
 ///

@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 /// Skills are deployed to each agent's skill directory; validators to .avp/validators/;
 /// tools to .tools/ + agent MCP configs; plugins to agent plugin dirs.
 ///
-/// Registry URL defaults to https://registry.agentvalidatorprotocol.com.
+/// Registry URL defaults to https://registry.mirdan.ai.
 /// Override with MIRDAN_REGISTRY_URL env var or ~/.mirdan/config.yaml for
 /// local testing.
 #[derive(Parser, Debug)]
