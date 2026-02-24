@@ -12,7 +12,7 @@ use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::web::WebTool;
-use swissarmyhammer_tools::mcp::tools::web_search::chrome_detection;
+use swissarmyhammer_web::chrome;
 
 /// Helper function to create a test context for integration tests
 async fn create_test_context() -> ToolContext {
@@ -27,7 +27,7 @@ async fn create_test_context() -> ToolContext {
 /// Test that Chrome is detected on this system
 #[test]
 fn test_chrome_detection_on_system() {
-    let result = chrome_detection::detect_chrome();
+    let result = chrome::detect_chrome();
 
     if !result.found {
         println!("WARNING: Chrome not found on this system");
@@ -57,7 +57,7 @@ fn test_chrome_detection_on_system() {
 #[ignore]
 async fn test_web_search_real_chrome() {
     // First check if Chrome is available
-    let chrome_result = chrome_detection::detect_chrome();
+    let chrome_result = chrome::detect_chrome();
     if !chrome_result.found {
         println!("SKIPPED: Chrome not found on this system");
         println!("{}", chrome_result.installation_instructions());
@@ -125,7 +125,7 @@ async fn test_web_search_real_chrome() {
 #[ignore]
 async fn test_web_search_with_content() {
     // First check if Chrome is available
-    let chrome_result = chrome_detection::detect_chrome();
+    let chrome_result = chrome::detect_chrome();
     if !chrome_result.found {
         println!("SKIPPED: Chrome not found on this system");
         return;
@@ -179,7 +179,7 @@ async fn test_web_search_with_content() {
 #[tokio::test]
 #[ignore]
 async fn test_web_search_error_handling() {
-    let chrome_result = chrome_detection::detect_chrome();
+    let chrome_result = chrome::detect_chrome();
     if !chrome_result.found {
         println!("SKIPPED: Chrome not found");
         return;

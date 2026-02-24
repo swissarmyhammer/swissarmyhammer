@@ -10,8 +10,8 @@
 //! - CAPTCHA avoidance through realistic browsing patterns
 //! - Configurable scoring for search result ranking
 
-use crate::mcp::tools::web_search::chrome_detection;
-use crate::mcp::tools::web_search::types::{DuckDuckGoConfig, ScoringConfig, *};
+use crate::chrome;
+use crate::types::{DuckDuckGoConfig, ScoringConfig, WebSearchRequest, SearchResult};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::error::CdpError;
 use futures::StreamExt;
@@ -191,7 +191,7 @@ impl DuckDuckGoClient {
         );
 
         // Detect Chrome before attempting to launch
-        let chrome_result = chrome_detection::detect_chrome();
+        let chrome_result = chrome::detect_chrome();
         if !chrome_result.found {
             let error_message = format!(
                 "{}\n\n{}",

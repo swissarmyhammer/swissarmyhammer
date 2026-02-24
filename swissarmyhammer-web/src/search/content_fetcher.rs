@@ -4,7 +4,7 @@
 //! HTML to markdown conversion, with comprehensive rate limiting, content quality assessment,
 //! and concurrent processing support.
 
-use crate::mcp::tools::web_search::types::{
+use crate::types::{
     CodeBlock, ContentMetadata, ContentType, SearchResult, SearchResultContent,
 };
 use dashmap::DashMap;

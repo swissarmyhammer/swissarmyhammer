@@ -54,9 +54,6 @@ impl ChromeDetectionResult {
     }
 
     /// Get installation instructions for the current platform
-    ///
-    /// Returns installation instructions even if Chrome is found,
-    /// as this can be useful for troubleshooting or alternative installations.
     pub fn installation_instructions(&self) -> String {
         #[cfg(target_os = "macos")]
         return "Install Chrome via:\n  - Download from https://www.google.com/chrome/\n  - Or use Homebrew: brew install --cask google-chrome\n  - Or use Chromium: brew install --cask chromium".to_string();
@@ -219,22 +216,15 @@ mod tests {
     fn test_detect_chrome() {
         let result = detect_chrome();
 
-        // We can't assert it's found since it depends on the system
-        // But we can verify the result structure is correct
         assert!(!result.message.is_empty());
         assert!(!result.paths_checked.is_empty());
 
         if result.found {
             assert!(result.path.is_some());
             assert!(result.detection_method.is_some());
-            println!("Chrome found at: {:?}", result.path);
         } else {
             assert!(result.path.is_none());
             assert!(result.detection_method.is_none());
-            println!(
-                "Chrome not found. Checked {} paths",
-                result.paths_checked.len()
-            );
         }
     }
 
@@ -242,7 +232,6 @@ mod tests {
     fn test_standard_paths_not_empty_on_major_platforms() {
         let paths = get_standard_chrome_paths();
 
-        // On major platforms, we should have some standard paths to check
         #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         assert!(
             !paths.is_empty(),
@@ -255,18 +244,14 @@ mod tests {
         let result = ChromeDetectionResult::failure(vec![]);
         let instructions = result.installation_instructions();
 
-        // Should have some installation instructions
         assert!(!instructions.is_empty());
         assert!(instructions.contains("Install") || instructions.contains("Download"));
     }
 
     #[test]
     fn test_is_chrome_available() {
-        let available = is_chrome_available();
-        println!("Chrome available: {}", available);
-
-        // This test just verifies the function runs without panicking
-        // The actual result depends on the system
+        let _available = is_chrome_available();
+        // Just verify no panic
     }
 
     #[test]
@@ -274,10 +259,7 @@ mod tests {
         let path = get_chrome_path();
 
         if let Some(p) = path {
-            println!("Chrome path: {}", p.display());
             assert!(p.exists(), "Chrome path should exist if returned");
-        } else {
-            println!("No Chrome path found");
         }
     }
 }

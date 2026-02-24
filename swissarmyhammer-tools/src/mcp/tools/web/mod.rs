@@ -11,7 +11,6 @@ pub mod schema;
 pub mod search;
 
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
-use crate::mcp::tools::web_search::chrome_detection;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -111,7 +110,7 @@ impl Doctorable for WebTool {
     fn run_health_checks(&self) -> Vec<HealthCheck> {
         let mut checks = Vec::new();
 
-        let chrome_result = chrome_detection::detect_chrome();
+        let chrome_result = swissarmyhammer_web::detect_chrome();
 
         if chrome_result.found {
             let path = chrome_result.path.as_ref().unwrap();

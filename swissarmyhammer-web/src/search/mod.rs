@@ -1,25 +1,24 @@
-//! Web search pipeline — internal implementation for DuckDuckGo search
+//! Web search pipeline — DuckDuckGo search with content fetching
 //!
-//! This module provides the `WebSearchTool` struct with reusable search pipeline methods.
-//! Registration is handled by the unified `web` tool module (`tools::web`).
+//! This module provides the `WebSearcher` struct with reusable search pipeline methods.
 
-use crate::mcp::tools::web_search::content_fetcher::ContentFetchConfig;
-use crate::mcp::tools::web_search::duckduckgo_client::DuckDuckGoClient;
-use crate::mcp::tools::web_search::types::ScoringConfig;
-use crate::mcp::tools::web_search::types::*;
+pub mod content_fetcher;
+pub mod duckduckgo;
+
+use crate::search::content_fetcher::ContentFetchConfig;
+use crate::search::duckduckgo::DuckDuckGoClient;
+use crate::types::ScoringConfig;
+use crate::types::*;
 use std::time::Duration;
 
 /// Reusable web search pipeline providing DuckDuckGo search, content fetching, and validation.
-///
-/// This struct is used internally by the unified `web` tool and is not registered as
-/// a standalone MCP tool.
 #[derive(Default)]
-pub struct WebSearchTool {
+pub struct WebSearcher {
     duckduckgo_client: Option<DuckDuckGoClient>,
 }
 
-impl WebSearchTool {
-    /// Creates a new instance of the WebSearchTool
+impl WebSearcher {
+    /// Creates a new instance of the WebSearcher
     pub fn new() -> Self {
         Self {
             duckduckgo_client: None,
@@ -51,7 +50,6 @@ impl WebSearchTool {
         Self::load_config_with_callback(
             ContentFetchConfig::default(),
             |config, template_context| {
-                // Concurrent processing settings
                 if let Some(serde_json::Value::Number(max_concurrent)) =
                     template_context.get("web_search.content_fetching.max_concurrent_fetches")
                 {
@@ -62,7 +60,6 @@ impl WebSearchTool {
                     }
                 }
 
-                // Timeout settings
                 if let Some(serde_json::Value::Number(timeout)) =
                     template_context.get("web_search.content_fetching.content_fetch_timeout")
                 {
@@ -73,7 +70,6 @@ impl WebSearchTool {
                     }
                 }
 
-                // Content size limit
                 if let Some(serde_json::Value::String(size_str)) =
                     template_context.get("web_search.content_fetching.max_content_size")
                 {
@@ -82,7 +78,6 @@ impl WebSearchTool {
                     }
                 }
 
-                // Rate limiting settings
                 if let Some(serde_json::Value::Number(delay)) =
                     template_context.get("web_search.content_fetching.default_domain_delay")
                 {
@@ -93,7 +88,6 @@ impl WebSearchTool {
                     }
                 }
 
-                // Content quality settings
                 if let Some(serde_json::Value::Number(min_length)) =
                     template_context.get("web_search.content_fetching.min_content_length")
                 {
@@ -114,7 +108,6 @@ impl WebSearchTool {
                     }
                 }
 
-                // Processing settings
                 if let Some(serde_json::Value::Number(max_summary)) =
                     template_context.get("web_search.content_fetching.max_summary_length")
                 {
@@ -149,7 +142,6 @@ impl WebSearchTool {
     /// Loads configuration for DuckDuckGo scoring algorithm
     fn load_scoring_config() -> ScoringConfig {
         Self::load_config_with_callback(ScoringConfig::default(), |config, template_context| {
-            // Scoring algorithm configuration
             if let Some(serde_json::Value::Number(base_score)) =
                 template_context.get("web_search.scoring.base_score")
             {
@@ -247,30 +239,10 @@ impl WebSearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::tool_registry::BaseToolImpl;
 
     #[test]
-    fn test_web_search_tool_new() {
-        let _tool = WebSearchTool::new();
-    }
-
-    #[test]
-    fn test_web_search_request_parsing() {
-        let mut arguments = serde_json::Map::new();
-        arguments.insert(
-            "query".to_string(),
-            serde_json::Value::String("test query".to_string()),
-        );
-        arguments.insert(
-            "results_count".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(5)),
-        );
-        arguments.insert("fetch_content".to_string(), serde_json::Value::Bool(false));
-
-        let request: WebSearchRequest = BaseToolImpl::parse_arguments(arguments).unwrap();
-        assert_eq!(request.query, "test query");
-        assert_eq!(request.results_count, Some(5));
-        assert_eq!(request.fetch_content, Some(false));
+    fn test_web_searcher_new() {
+        let _tool = WebSearcher::new();
     }
 
     #[test]
@@ -284,7 +256,7 @@ mod tests {
             safe_search: Some(SafeSearchLevel::Moderate),
             time_range: Some(TimeRange::Month),
         };
-        assert!(WebSearchTool::validate_request(&request).is_ok());
+        assert!(WebSearcher::validate_request(&request).is_ok());
     }
 
     #[test]
@@ -298,7 +270,7 @@ mod tests {
             safe_search: None,
             time_range: None,
         };
-        let result = WebSearchTool::validate_request(&request);
+        let result = WebSearcher::validate_request(&request);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
     }
@@ -315,7 +287,7 @@ mod tests {
             safe_search: None,
             time_range: None,
         };
-        let result = WebSearchTool::validate_request(&request);
+        let result = WebSearcher::validate_request(&request);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("501 characters"));
     }
@@ -331,7 +303,7 @@ mod tests {
             safe_search: None,
             time_range: None,
         };
-        let result = WebSearchTool::validate_request(&request);
+        let result = WebSearcher::validate_request(&request);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -350,7 +322,7 @@ mod tests {
             safe_search: None,
             time_range: None,
         };
-        let result = WebSearchTool::validate_request(&request);
+        let result = WebSearcher::validate_request(&request);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -366,7 +338,7 @@ mod tests {
             safe_search: None,
             time_range: None,
         };
-        let result_high = WebSearchTool::validate_request(&request_high);
+        let result_high = WebSearcher::validate_request(&request_high);
         assert!(result_high.is_err());
         assert!(result_high
             .unwrap_err()

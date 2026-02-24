@@ -1,13 +1,12 @@
-//! FetchUrl operation — delegates to existing web_fetch pipeline
+//! FetchUrl operation — delegates to swissarmyhammer-web fetch pipeline
 
 use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
-use crate::mcp::tools::web_fetch::fetch::WebFetchTool;
-use crate::mcp::types::WebFetchRequest;
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
-use std::time::Instant;
+use serde_json::json;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+use swissarmyhammer_web::{FetchError, WebFetcher, WebFetchRequest};
 
 /// Fetch web content and convert HTML to markdown
 #[derive(Debug, Default, Deserialize)]
@@ -58,7 +57,7 @@ impl Operation for FetchUrl {
     }
 }
 
-/// Execute a fetch operation using the existing web_fetch pipeline
+/// Execute a fetch operation using swissarmyhammer-web fetch pipeline
 pub async fn execute_fetch(
     arguments: serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
@@ -66,14 +65,6 @@ pub async fn execute_fetch(
     let request: WebFetchRequest = BaseToolImpl::parse_arguments(arguments)?;
 
     tracing::debug!("Fetching web content from URL: {}", request.url);
-
-    let fetch_tool = WebFetchTool::new();
-
-    // Validate request parameters
-    let validated_url = fetch_tool.validate_request_parameters(&request).await?;
-
-    // Create markdowndown configuration from request parameters
-    let config = fetch_tool.create_markdowndown_config(&request);
 
     send_mcp_log(
         context,
@@ -83,25 +74,41 @@ pub async fn execute_fetch(
     )
     .await;
 
-    let start_time = Instant::now();
+    let fetcher = WebFetcher::new();
 
-    match markdowndown::convert_url_with_config(&validated_url, config).await {
-        Ok(markdown) => {
-            let response_time_ms = start_time.elapsed().as_millis() as u64;
-            let markdown_content = markdown.to_string();
-
+    match fetcher.fetch_url(&request).await {
+        Ok(result) => {
             send_mcp_log(
                 context,
                 LoggingLevel::Info,
                 "web_fetch",
-                format!("Complete: {} chars", markdown_content.len()),
+                format!("Complete: {} chars", result.markdown.len()),
             )
             .await;
 
-            fetch_tool.build_success_response(&request, markdown_content, response_time_ms)
+            Ok(CallToolResult {
+                content: vec![rmcp::model::Annotated::new(
+                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                        text: result.markdown,
+                        meta: None,
+                    }),
+                    None,
+                )],
+                structured_content: None,
+                meta: None,
+                is_error: Some(false),
+            })
         }
         Err(e) => {
-            let response_time_ms = start_time.elapsed().as_millis() as u64;
+            let (error_type, response_time_ms) = match &e {
+                FetchError::InvalidUrl(_) => return Err(McpError::invalid_params(e.to_string(), None)),
+                FetchError::SecurityViolation(_) => return Err(McpError::invalid_params(e.to_string(), None)),
+                FetchError::FetchFailed {
+                    error_type,
+                    response_time_ms,
+                    ..
+                } => (error_type.clone(), *response_time_ms),
+            };
 
             send_mcp_log(
                 context,
@@ -111,7 +118,35 @@ pub async fn execute_fetch(
             )
             .await;
 
-            fetch_tool.build_error_response(&e, response_time_ms, &request)
+            let metadata = json!({
+                "url": request.url,
+                "error_type": error_type,
+                "error_details": e.to_string(),
+                "response_time_ms": response_time_ms,
+                "performance_impact": if response_time_ms > 10000 { "high" } else { "low" },
+            });
+
+            let response = json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Failed to fetch content: {e}")
+                }],
+                "is_error": true,
+                "metadata": metadata
+            });
+
+            Ok(CallToolResult {
+                content: vec![rmcp::model::Annotated::new(
+                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                        text: serde_json::to_string_pretty(&response).unwrap_or_default(),
+                        meta: None,
+                    }),
+                    None,
+                )],
+                meta: None,
+                structured_content: None,
+                is_error: Some(true),
+            })
         }
     }
 }

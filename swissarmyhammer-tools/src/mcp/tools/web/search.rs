@@ -1,10 +1,10 @@
-//! SearchUrl operation — delegates to existing web_search pipeline
+//! SearchUrl operation — delegates to swissarmyhammer-web search pipeline
 
 use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
-use crate::mcp::tools::web_search::content_fetcher::ContentFetcher;
-use crate::mcp::tools::web_search::duckduckgo_client::DuckDuckGoError;
-use crate::mcp::tools::web_search::search::WebSearchTool;
-use crate::mcp::tools::web_search::types::*;
+use swissarmyhammer_web::search::content_fetcher::ContentFetcher;
+use swissarmyhammer_web::search::duckduckgo::DuckDuckGoError;
+use swissarmyhammer_web::types::*;
+use swissarmyhammer_web::WebSearcher;
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
@@ -87,7 +87,7 @@ pub async fn execute_search(
     );
 
     // Comprehensive parameter validation
-    if let Err(validation_error) = WebSearchTool::validate_request(&request) {
+    if let Err(validation_error) = WebSearcher::validate_request(&request) {
         return Err(McpError::invalid_request(validation_error, None));
     }
 
@@ -102,7 +102,7 @@ pub async fn execute_search(
     .await;
 
     // Create a fresh search tool instance for its DuckDuckGo client
-    let mut search_tool = WebSearchTool::new();
+    let mut search_tool = WebSearcher::new();
 
     send_mcp_log(
         context,
@@ -179,7 +179,7 @@ pub async fn execute_search(
     let mut content_fetch_stats = None;
 
     if request.fetch_content.unwrap_or(true) {
-        let content_config = WebSearchTool::load_content_fetch_config();
+        let content_config = WebSearcher::load_content_fetch_config();
         let content_fetcher = ContentFetcher::new(content_config);
 
         let (processed_results, stats) = content_fetcher.fetch_search_results(results).await;

@@ -705,8 +705,195 @@ fn format_table(response: &WorkflowListResponse) -> String {
     output
 }
 
-// No health checks needed
-crate::impl_empty_doctorable!(FlowTool);
+impl swissarmyhammer_common::health::Doctorable for FlowTool {
+    fn name(&self) -> &str {
+        "Flow"
+    }
+
+    fn category(&self) -> &str {
+        "tools"
+    }
+
+    fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+        use swissarmyhammer_common::health::HealthCheck;
+        use std::collections::HashMap;
+
+        let mut checks = Vec::new();
+        let resolver = WorkflowResolver::new();
+        let cat = self.category();
+
+        // Check workflow directories
+        match resolver.get_workflow_directories() {
+            Ok(dirs) => {
+                for dir in &dirs {
+                    if dir.exists() {
+                        let count = walkdir::WalkDir::new(dir)
+                            .into_iter()
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.file_type().is_file())
+                            .filter(|e| {
+                                e.path().extension().and_then(|s| s.to_str()) == Some("mermaid")
+                            })
+                            .count();
+                        checks.push(HealthCheck::ok(
+                            format!("Workflow directory: {}", dir.display()),
+                            format!("{} workflows found", count),
+                            cat,
+                        ));
+                    } else {
+                        checks.push(HealthCheck::ok(
+                            format!("Workflow directory: {}", dir.display()),
+                            "Not found (optional, will be created when needed)",
+                            cat,
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                checks.push(HealthCheck::warning(
+                    "Workflow directories",
+                    format!("Could not resolve workflow directories: {}", e),
+                    None,
+                    cat,
+                ));
+            }
+        }
+
+        // Check workflow run storage directory
+        if let Some(home) = dirs::home_dir() {
+            let run_storage = home
+                .join(swissarmyhammer_common::SwissarmyhammerDirectory::dir_name())
+                .join("runs");
+            if run_storage.exists() {
+                checks.push(HealthCheck::ok(
+                    "Workflow run storage",
+                    format!("Run storage directory exists: {}", run_storage.display()),
+                    cat,
+                ));
+            } else {
+                checks.push(HealthCheck::warning(
+                    "Workflow run storage",
+                    format!("Run storage directory not found: {}", run_storage.display()),
+                    Some(format!("Create directory: mkdir -p {:?}", run_storage)),
+                    cat,
+                ));
+            }
+        }
+
+        // Check workflow file permissions and parsing
+        if let Ok(dirs) = resolver.get_workflow_directories() {
+            let mut workflow_names: HashMap<String, Vec<std::path::PathBuf>> = HashMap::new();
+            let mut parse_errors = Vec::new();
+
+            for dir in &dirs {
+                if !dir.exists() {
+                    continue;
+                }
+
+                // Check directory permissions
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(metadata) = std::fs::metadata(dir) {
+                        let mode = metadata.permissions().mode();
+                        if (mode & 0o700) != 0o700 {
+                            checks.push(HealthCheck::warning(
+                                format!("Workflow dir permissions: {}", dir.display()),
+                                format!("Permissions may be insufficient: {:o}", mode & 0o777),
+                                Some(format!("Run: chmod 755 {:?}", dir)),
+                                cat,
+                            ));
+                        }
+                    }
+                }
+
+                for entry in walkdir::WalkDir::new(dir)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .filter(|e| {
+                        e.path().extension().and_then(|s| s.to_str()) == Some("mermaid")
+                    })
+                {
+                    // Track names for conflict detection
+                    if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
+                        workflow_names
+                            .entry(stem.to_string())
+                            .or_default()
+                            .push(entry.path().to_path_buf());
+                    }
+
+                    // Check readability
+                    match std::fs::read_to_string(entry.path()) {
+                        Ok(content) => {
+                            if content.trim().is_empty() {
+                                parse_errors.push(format!(
+                                    "{}: file is empty",
+                                    entry.path().display()
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            parse_errors.push(format!(
+                                "{}: {}",
+                                entry.path().display(),
+                                e
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Report parsing results
+            if parse_errors.is_empty() {
+                checks.push(HealthCheck::ok(
+                    "Workflow parsing",
+                    "All workflow files are readable",
+                    cat,
+                ));
+            } else {
+                for error in parse_errors {
+                    checks.push(HealthCheck::error(
+                        "Workflow parsing",
+                        error.clone(),
+                        Some(format!("Fix or remove the workflow file: {}", error)),
+                        cat,
+                    ));
+                }
+            }
+
+            // Report name conflicts
+            let conflicts: Vec<_> = workflow_names
+                .iter()
+                .filter(|(_, paths)| paths.len() > 1)
+                .collect();
+
+            if conflicts.is_empty() {
+                checks.push(HealthCheck::ok(
+                    "Workflow name conflicts",
+                    "No workflow name conflicts detected",
+                    cat,
+                ));
+            } else {
+                for (name, paths) in conflicts {
+                    let locations = paths
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    checks.push(HealthCheck::warning(
+                        format!("Workflow name conflict: {}", name),
+                        format!("Exists in multiple locations: {}", locations),
+                        Some("Rename or remove duplicate workflows".to_string()),
+                        cat,
+                    ));
+                }
+            }
+        }
+
+        checks
+    }
+}
 
 #[async_trait]
 impl McpTool for FlowTool {

@@ -40,6 +40,7 @@ members = [
     "swissarmyhammer-operations",
     "swissarmyhammer-operations-macros",
     "swissarmyhammer-skills",
+    "swissarmyhammer-web",
     "mirdan-cli",
 ]
 resolver = "2"

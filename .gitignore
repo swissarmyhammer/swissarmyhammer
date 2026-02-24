@@ -148,6 +148,12 @@ doc/book
 .claude/
 CLAUDE.md
 
+# Zed editor
+.zed/
+
+# Local MCP server configuration
+.mcp.json
+
 # ACP transcript recordings
 .acp/
 
