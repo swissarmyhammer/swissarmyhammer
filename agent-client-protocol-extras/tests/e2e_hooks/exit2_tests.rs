@@ -16,7 +16,7 @@ use crate::helpers;
 use std::sync::Arc;
 
 /// Maximum time to wait for an async channel message in notification tests.
-const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// UserPromptSubmit is blockable — exit 2 should Block and reject the prompt.
 #[tokio::test]
@@ -64,7 +64,7 @@ async fn pre_tool_use_exit2_runs_hook() {
     // PreToolUse exit-2 → Block, but Block is silently ignored in
     // the notification pipeline (tool call already initiated via ACP).
     // Verify the hook script was invoked.
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "PreToolUse hook should have been invoked"
@@ -104,7 +104,7 @@ async fn post_tool_use_exit2_feeds_context() {
     );
 
     // Verify hook ran
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "PostToolUse hook should have been invoked"
@@ -209,7 +209,7 @@ async fn notification_exit2_allows_silently() {
 
     // Notification exit-2 → Allow (silent warning) → no cancel, no context
     // Verify hook ran
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "Notification hook should have been invoked"

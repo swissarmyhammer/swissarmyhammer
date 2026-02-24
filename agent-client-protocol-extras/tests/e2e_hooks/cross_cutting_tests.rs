@@ -8,7 +8,7 @@ use crate::helpers;
 use std::sync::Arc;
 
 /// Maximum time to wait for an async channel message in notification tests.
-const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A hook exiting with code 1 (or any code other than 0 or 2) should
 /// be treated as Allow — the prompt proceeds normally.
@@ -65,9 +65,8 @@ async fn matcher_filters_by_tool_name() {
 
     // Send Bash tool call — hook should fire
     helpers::send_named_tool_notification(&tx, "test-session", "Bash", "call-1").await;
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "Hook should fire for matching tool name 'Bash'"
@@ -109,9 +108,8 @@ async fn notification_matcher_filters_by_update_type() {
 
     // Send agent message — hook should fire
     helpers::send_agent_message_notification(&tx, "test-session").await;
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "Hook should fire for matching notification type 'agent_message'"
@@ -244,9 +242,8 @@ async fn stdin_json_shape_pre_tool_use() {
     let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
 
     helpers::send_named_tool_notification(&tx, "test-session", "Bash", "call-1").await;
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(captured.is_some(), "PreToolUse hook should run");
     let json: serde_json::Value = serde_json::from_str(&captured.unwrap()).unwrap();
     assert_eq!(json["hook_event_name"], "PreToolUse");

@@ -19,7 +19,7 @@ use crate::helpers;
 use std::sync::Arc;
 
 /// Maximum time to wait for an async channel message in notification tests.
-const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// UserPromptSubmit with continue:false should cancel the prompt.
 #[tokio::test]

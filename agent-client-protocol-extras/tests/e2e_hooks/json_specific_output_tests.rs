@@ -13,7 +13,7 @@ use crate::helpers;
 use std::sync::Arc;
 
 /// Maximum time to wait for an async channel message in notification tests.
-const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// PreToolUse hookSpecificOutput.additionalContext → AllowWithContext via context channel.
 #[tokio::test]
@@ -237,7 +237,7 @@ async fn pre_tool_use_permission_decision_deny() {
 
     // Block is silently ignored in notification pipeline (tool already initiated).
     // Verify hook ran.
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "PreToolUse hook should have been invoked"
@@ -268,7 +268,7 @@ async fn pre_tool_use_updated_input() {
 
     // AllowWithUpdatedInput is logged and treated as Allow in notification pipeline.
     // Verify hook ran.
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "PreToolUse hook should have been invoked"

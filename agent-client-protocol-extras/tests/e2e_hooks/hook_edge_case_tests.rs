@@ -15,9 +15,6 @@ use tokio::sync::broadcast;
 
 use crate::helpers;
 
-/// Maximum time to wait for an async channel message in notification tests.
-const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-
 // ---------------------------------------------------------------------------
 // Prompt / agent evaluator hooks
 // ---------------------------------------------------------------------------
@@ -299,20 +296,22 @@ async fn unexpected_exit_code_treated_as_allow_on_pre_tool_use() {
     let (_forwarded_rx, mut cancel_rx, mut context_rx) = agent.intercept_notifications(rx);
 
     helpers::send_named_tool_notification(&tx, "test-session", "Bash", "call-1").await;
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Hook should have fired
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(captured.is_some(), "PreToolUse hook should fire");
 
-    // But unexpected exit code → Allow → no cancel, no context
-    let cancel = tokio::time::timeout(CHANNEL_TIMEOUT, cancel_rx.recv()).await;
+    // Hook already finished (wait_for_stdin_capture confirmed it), so any
+    // channel sends would have already occurred.  Use a short timeout for
+    // negative assertions.
+    let short = std::time::Duration::from_millis(200);
+    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
     assert!(
         cancel.is_err(),
         "Unexpected exit code should not produce cancel"
     );
 
-    let ctx = tokio::time::timeout(CHANNEL_TIMEOUT, context_rx.recv()).await;
+    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
     assert!(
         ctx.is_err(),
         "Unexpected exit code should not produce context"

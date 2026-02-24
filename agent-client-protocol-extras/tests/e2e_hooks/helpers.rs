@@ -117,6 +117,23 @@ pub(crate) fn read_stdin_capture(dir: &Path, script_name: &str) -> Option<String
     std::fs::read_to_string(capture_path).ok()
 }
 
+/// Poll for the stdin capture file to appear, retrying with backoff.
+///
+/// Notification-pipeline hooks run in a spawned tokio task that may not be
+/// scheduled immediately, especially under CI load.  This helper replaces
+/// bare `read_stdin_capture` calls in notification-pipeline tests to avoid
+/// flaky race conditions.
+pub(crate) async fn wait_for_stdin_capture(dir: &Path, script_name: &str) -> Option<String> {
+    let capture_path = dir.join(format!("{}.stdin_capture", script_name));
+    for _ in 0..40 {
+        if let Ok(contents) = std::fs::read_to_string(&capture_path) {
+            return Some(contents);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    None
+}
+
 /// Remove the stdin capture file so a subsequent non-firing hook can be verified.
 ///
 /// Validates that `script_name` is a plain filename (no path separators).

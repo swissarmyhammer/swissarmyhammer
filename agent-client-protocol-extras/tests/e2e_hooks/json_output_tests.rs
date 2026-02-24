@@ -64,7 +64,7 @@ async fn pre_tool_use_json_block_runs_hook() {
 
     // Block is silently ignored in the notification pipeline.
     // Verify hook ran and received correct JSON.
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "PreToolUse hook should have been invoked"
@@ -94,7 +94,7 @@ async fn post_tool_use_json_block_becomes_context() {
     helpers::send_tool_completed_notifications(&tx, "test-session").await;
 
     // PostToolUse not blockable — prompt would still succeed
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "PostToolUse hook should have been invoked"
@@ -122,7 +122,7 @@ async fn post_tool_use_failure_json_block_becomes_context() {
     helpers::send_tool_failed_notifications(&tx, "test-session").await;
 
     // PostToolUseFailure not blockable — verify hook ran
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "PostToolUseFailure hook should have been invoked"
@@ -197,7 +197,7 @@ async fn notification_json_block_allows_silently() {
     helpers::send_agent_message_notification(&tx, "test-session").await;
 
     // Notification not blockable — verify hook ran
-    let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "Notification hook should have been invoked"

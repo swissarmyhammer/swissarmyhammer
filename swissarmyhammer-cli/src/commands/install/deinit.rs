@@ -299,10 +299,7 @@ mod tests {
         assert!(link_path.exists(), "Symlink should exist before removal");
         let removed = remove_if_symlink(&link_path);
         assert!(removed, "Should return true when removing a symlink");
-        assert!(
-            !link_path.exists(),
-            "Symlink should be gone after removal"
-        );
+        assert!(!link_path.exists(), "Symlink should be gone after removal");
     }
 
     #[test]
