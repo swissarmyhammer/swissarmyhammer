@@ -40,6 +40,10 @@ For each subtask:
 
 After completing the card, go back to step 1. Use `op: "next task"` again — if it returns a card, keep going. If there are no more actionable cards, stop and tell the user.
 
+Use the `js` tool to record the overall result
+- If NO kanban tasks remain: `js` with `op: "set expression"`, `name: "kanban_empty"`, `expression: "true"`
+- If ANY kanban tasks remain: `js` with `op: "set expression"`, `name: "kanban_empty"`, `expression: "false"`
+
 ## Guidelines
 
 - Do not skip subtasks or mark them complete without doing the work
