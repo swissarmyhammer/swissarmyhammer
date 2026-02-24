@@ -24,7 +24,7 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 4. Work through each subtask:
    - Implement what the subtask describes
    - Mark it complete: use `kanban` with `op: "complete subtask"`, `task_id: "<task-id>"`, `id: "<subtask-id>"`
-5. When ALL subtasks are done, complete the card: use `kanban` with `op: "complete task"`, `id: "<task-id>"`
+5. **Complete the card**: when ALL subtasks are done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
 
 ## Tagging
 

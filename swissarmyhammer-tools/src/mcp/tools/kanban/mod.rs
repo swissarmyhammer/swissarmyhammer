@@ -297,6 +297,10 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
             | (Verb::Complete, Noun::Task)
             | (Verb::Assign, Noun::Task)
             | (Verb::Unassign, Noun::Task)
+            | (Verb::Add, Noun::Subtask)
+            | (Verb::Update, Noun::Subtask)
+            | (Verb::Complete, Noun::Subtask)
+            | (Verb::Delete, Noun::Subtask)
     )
 }
 
@@ -815,6 +819,55 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 cmd = cmd.with_limit(limit as usize);
             }
             processor.process(&cmd, ctx).await
+        }
+
+        // Subtask operations
+        (Verb::Add, Noun::Subtask) => {
+            let task_id = op
+                .get_string("task_id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            let title = op
+                .get_string("title")
+                .ok_or_else(|| McpError::invalid_params("missing required field: title", None))?;
+            processor.process(&AddSubtask::new(task_id, title), ctx).await
+        }
+        (Verb::Complete, Noun::Subtask) => {
+            let task_id = op
+                .get_string("task_id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            processor
+                .process(&CompleteSubtask::new(task_id, id), ctx)
+                .await
+        }
+        (Verb::Update, Noun::Subtask) => {
+            let task_id = op
+                .get_string("task_id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            let mut cmd = UpdateSubtask::new(task_id, id);
+            if let Some(title) = op.get_string("title") {
+                cmd = cmd.with_title(title);
+            }
+            if let Some(completed) = op.get_param("completed").and_then(|v| v.as_bool()) {
+                cmd = cmd.with_completed(completed);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Subtask) => {
+            let task_id = op
+                .get_string("task_id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
+            let id = op
+                .get_string("id")
+                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            processor
+                .process(&DeleteSubtask::new(task_id, id), ctx)
+                .await
         }
 
         // Unsupported operations

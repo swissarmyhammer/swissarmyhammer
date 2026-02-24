@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Create a well-structured git commit with a conventional commit message. Use when the user wants to commit their current changes.
+description: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly.
 metadata:
   author: swissarmyhammer
   version: "1.0"

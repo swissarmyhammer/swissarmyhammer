@@ -61,9 +61,9 @@ Flag risks explicitly: breaking changes, data concerns, external API impacts, se
 
 The plan IS the kanban board. As you work through the phases above, create kanban cards incrementally — don't wait until you have a complete picture.
 
-### Initialize the board first
+### Ensure the board exists
 
-Use `kanban` with `op: "init board"`, `name: "<project or feature name>"`.
+Use `kanban` with `op: "init board"`, `name: "<workspace name>"` — name it generically for the overall workspace or repository. If the board already exists, this is a no-op; just move on.
 
 ### Add cards as you discover work items
 
