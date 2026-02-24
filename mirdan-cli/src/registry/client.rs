@@ -215,21 +215,30 @@ impl RegistryClient {
 
     // -- Authenticated endpoints --
 
-    /// Download a package version as bytes.
+    /// Download a package version as bytes using the constructed URL.
+    ///
+    /// Sends an auth header if credentials are available, otherwise
+    /// attempts an unauthenticated download (for public packages).
     pub async fn download(&self, name: &str, version: &str) -> Result<Bytes, RegistryError> {
-        let auth = self.auth_header().ok_or(RegistryError::AuthRequired)?;
         let url = format!(
             "{}/api/packages/{}/{}/download",
             self.registry_url,
             urlencoding::encode(name),
             urlencoding::encode(version),
         );
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", &auth)
-            .send()
-            .await?;
+        self.download_from_url(&url).await
+    }
+
+    /// Download a package using an explicit URL (e.g. from VersionDetail.download_url).
+    ///
+    /// Sends an auth header if credentials are available, otherwise
+    /// attempts an unauthenticated download (for public packages).
+    pub async fn download_from_url(&self, url: &str) -> Result<Bytes, RegistryError> {
+        let mut request = self.client.get(url);
+        if let Some(auth) = self.auth_header() {
+            request = request.header("Authorization", &auth);
+        }
+        let response = request.send().await?;
         let response = self.check_response(response).await?;
         let bytes = response.bytes().await?;
         Ok(bytes)

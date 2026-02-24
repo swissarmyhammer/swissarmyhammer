@@ -52,6 +52,19 @@ pub fn detect_package_type(dir: &Path) -> Option<PackageType> {
     }
 }
 
+/// Parse a package type from a string (e.g. from API response).
+///
+/// Accepts lowercase type names: "skill", "validator", "tool", "plugin".
+pub fn parse_package_type(s: &str) -> Option<PackageType> {
+    match s {
+        "skill" => Some(PackageType::Skill),
+        "validator" => Some(PackageType::Validator),
+        "tool" => Some(PackageType::Tool),
+        "plugin" => Some(PackageType::Plugin),
+        _ => None,
+    }
+}
+
 /// Validate that a package name is valid.
 ///
 /// Rules (shared by agentskills.io and AVP):

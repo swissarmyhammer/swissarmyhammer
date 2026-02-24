@@ -275,7 +275,14 @@ async fn run_install_registry(
 ) -> Result<(), RegistryError> {
     let (name, version) = parse_package_spec(package_spec);
 
-    let client = RegistryClient::authenticated()?;
+    // Try authenticated client first, fall back to unauthenticated for public packages
+    let client = match RegistryClient::authenticated() {
+        Ok(c) => c,
+        Err(_) => {
+            tracing::debug!("No credentials found, using unauthenticated client");
+            RegistryClient::new()
+        }
+    };
 
     // Resolve version
     let version_detail = if let Some(ref ver) = version {
@@ -289,64 +296,253 @@ async fn run_install_registry(
     let resolved_version = &version_detail.version;
     println!("Installing {}@{}...", name, resolved_version);
 
-    // Download with progress
-    let pb = ProgressBar::new(version_detail.size);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{msg} [{bar:40}] {bytes}/{total_bytes}")
-            .unwrap()
-            .progress_chars("=> "),
-    );
+    // Try downloading the package artifact
+    let download_result = download_package(&client, &version_detail).await;
+
+    match download_result {
+        Ok(data) => {
+            // Standard path: extract ZIP and deploy
+            install_from_archive(&name, &version_detail, &data, agent_filter, global).await
+        }
+        Err(RegistryError::NotFound(_)) => {
+            // No downloadable artifact — try metadata-only install for tools
+            install_tool_from_metadata(&name, &version_detail, agent_filter, global).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Download and verify a package artifact from the registry.
+async fn download_package(
+    client: &RegistryClient,
+    version_detail: &crate::registry::types::VersionDetail,
+) -> Result<bytes::Bytes, RegistryError> {
+    let pb = if let Some(size) = version_detail.size.filter(|&s| s > 0) {
+        let pb = ProgressBar::new(size);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{msg} [{bar:40}] {bytes}/{total_bytes}")
+                .unwrap()
+                .progress_chars("=> "),
+        );
+        pb
+    } else {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{msg} {spinner}")
+                .unwrap(),
+        );
+        pb
+    };
     pb.set_message("Downloading");
 
-    let data = client.download(&name, resolved_version).await?;
+    let data = client
+        .download_from_url(&version_detail.download_url)
+        .await?;
     pb.set_position(data.len() as u64);
     pb.finish_with_message("Downloaded");
 
-    // Verify integrity
-    lockfile::verify_integrity(&data, &version_detail.integrity)
-        .map_err(RegistryError::Integrity)?;
-    println!("  Integrity verified");
+    // Verify integrity (skip if not provided by registry)
+    let integrity_hash = version_detail.integrity.as_deref().unwrap_or("");
+    if !integrity_hash.is_empty() {
+        lockfile::verify_integrity(&data, integrity_hash)
+            .map_err(RegistryError::Integrity)?;
+        println!("  Integrity verified");
+    }
 
-    // Extract to temp dir to detect type
+    Ok(data)
+}
+
+/// Standard install path: extract a downloaded ZIP and deploy based on detected type.
+async fn install_from_archive(
+    name: &str,
+    version_detail: &crate::registry::types::VersionDetail,
+    data: &[u8],
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
     let temp_dir = tempfile::tempdir()?;
-    extract_zip(&data, temp_dir.path())?;
+    extract_zip(data, temp_dir.path())?;
 
-    let pkg_type = package_type::detect_package_type(temp_dir.path()).ok_or_else(|| {
-        RegistryError::Validation(
-            "Cannot determine package type. Expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json".to_string(),
-        )
-    })?;
+    // Detect package type from contents, with API type hint as fallback
+    let pkg_type = package_type::detect_package_type(temp_dir.path())
+        .or_else(|| {
+            version_detail
+                .package_type
+                .as_deref()
+                .and_then(package_type::parse_package_type)
+        })
+        .ok_or_else(|| {
+            RegistryError::Validation(
+                "Cannot determine package type. Expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json".to_string(),
+            )
+        })?;
 
     let targets = match pkg_type {
-        PackageType::Skill => deploy_skill(&name, temp_dir.path(), agent_filter, global).await?,
-        PackageType::Validator => deploy_validator(&name, temp_dir.path(), global)?,
-        PackageType::Tool => deploy_tool(&name, temp_dir.path(), agent_filter, global)?,
-        PackageType::Plugin => deploy_plugin(&name, temp_dir.path(), agent_filter, global)?,
+        PackageType::Skill => deploy_skill(name, temp_dir.path(), agent_filter, global).await?,
+        PackageType::Validator => deploy_validator(name, temp_dir.path(), global)?,
+        PackageType::Tool => deploy_tool(name, temp_dir.path(), agent_filter, global)?,
+        PackageType::Plugin => deploy_plugin(name, temp_dir.path(), agent_filter, global)?,
     };
 
-    // Update lockfile
+    record_install(name, version_detail, pkg_type, &targets)?;
+    Ok(())
+}
+
+/// Metadata-only install for tool packages when no downloadable artifact exists.
+///
+/// Uses MCP config from the API response (mcp field or tool_md content) to register
+/// the MCP server directly without needing a ZIP download.
+async fn install_tool_from_metadata(
+    name: &str,
+    version_detail: &crate::registry::types::VersionDetail,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
+    // Verify this is actually a tool
+    let is_tool = version_detail
+        .package_type
+        .as_deref()
+        .map(|t| t == "tool")
+        .unwrap_or(false);
+
+    if !is_tool {
+        return Err(RegistryError::NotFound(format!(
+            "Package '{}' has no downloadable artifact and is not a tool",
+            name
+        )));
+    }
+
+    // Try three sources of MCP config, in order:
+    // 1. Explicit mcp field from API
+    // 2. Parse tool_md content from API
+    // 3. Fetch package detail for tool_md/mcp
+
+    if let Some(ref mcp) = version_detail.mcp {
+        println!("  Installing from registry MCP metadata...");
+        return install_tool_from_mcp_config(name, version_detail, mcp, agent_filter, global).await;
+    }
+
+    if let Some(ref tool_md) = version_detail.tool_md {
+        println!("  Installing from registry TOOL.md...");
+        return install_tool_from_tool_md_content(name, version_detail, tool_md, agent_filter, global).await;
+    }
+
+    // Try fetching the full package detail which may have mcp/tool_md
+    let client = RegistryClient::authenticated().unwrap_or_default();
+    let detail = client.package_info(name).await?;
+
+    if let Some(ref mcp) = detail.mcp {
+        println!("  Installing from registry MCP metadata...");
+        let mcp_clone = mcp.clone();
+        return install_tool_from_mcp_config(name, version_detail, &mcp_clone, agent_filter, global).await;
+    }
+
+    if let Some(ref tool_md) = detail.tool_md {
+        println!("  Installing from registry TOOL.md...");
+        return install_tool_from_tool_md_content(name, version_detail, tool_md, agent_filter, global).await;
+    }
+
+    Err(RegistryError::Validation(format!(
+        "Tool '{}' has no downloadable artifact and no MCP configuration in the registry. \
+         The registry entry may be incomplete.",
+        name
+    )))
+}
+
+/// Install a tool using an explicit MCP config from the registry.
+async fn install_tool_from_mcp_config(
+    name: &str,
+    version_detail: &crate::registry::types::VersionDetail,
+    mcp: &crate::registry::types::McpConfig,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
+    let config = agents::load_agents_config()?;
+    let agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    let entry = mcp_config::McpServerEntry {
+        command: mcp.command.clone(),
+        args: mcp.args.clone(),
+        env: mcp.env.clone(),
+    };
+
+    let mut targets = Vec::new();
+    for agent in &agents {
+        if let Some(ref mcp_cfg) = agent.def.mcp_config {
+            let config_path = if global {
+                agents::agent_global_mcp_config(&agent.def)
+            } else {
+                agents::agent_project_mcp_config(&agent.def)
+            };
+            if let Some(config_path) = config_path {
+                mcp_config::register_mcp_server(
+                    &config_path,
+                    &mcp_cfg.servers_key,
+                    name,
+                    &entry,
+                )?;
+                println!(
+                    "  Registered in {} ({})",
+                    config_path.display(),
+                    agent.def.name
+                );
+                targets.push(agent.def.id.clone());
+            }
+        }
+    }
+
+    record_install(name, version_detail, PackageType::Tool, &targets)?;
+    Ok(())
+}
+
+/// Install a tool by parsing TOOL.md content from the registry.
+async fn install_tool_from_tool_md_content(
+    name: &str,
+    version_detail: &crate::registry::types::VersionDetail,
+    tool_md_content: &str,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
+    // Write TOOL.md to a temp dir and use the existing deploy_tool path
+    let temp_dir = tempfile::tempdir()?;
+    std::fs::write(temp_dir.path().join("TOOL.md"), tool_md_content)?;
+    let targets = deploy_tool(name, temp_dir.path(), agent_filter, global)?;
+    record_install(name, version_detail, PackageType::Tool, &targets)?;
+    Ok(())
+}
+
+/// Record a successful install in the lockfile.
+fn record_install(
+    name: &str,
+    version_detail: &crate::registry::types::VersionDetail,
+    pkg_type: PackageType,
+    targets: &[String],
+) -> Result<(), RegistryError> {
     let project_root = std::env::current_dir()?;
     let mut lf = Lockfile::load(&project_root)?;
     lf.add_package(
-        name.clone(),
+        name.to_string(),
         LockedPackage {
             package_type: pkg_type,
-            version: resolved_version.clone(),
+            version: version_detail.version.clone(),
             resolved: version_detail.download_url.clone(),
-            integrity: version_detail.integrity.clone(),
+            integrity: version_detail.integrity.clone().unwrap_or_default(),
             installed_at: chrono::Utc::now().to_rfc3339(),
-            targets: targets.clone(),
+            targets: targets.to_vec(),
         },
     );
     lf.save(&project_root)?;
     println!("  Updated mirdan-lock.json");
 
-    println!("\nInstalled {}@{} ({})", name, resolved_version, pkg_type);
-    for target in &targets {
+    println!(
+        "\nInstalled {}@{} ({})",
+        name, version_detail.version, pkg_type
+    );
+    for target in targets {
         println!("  -> {}", target);
     }
-
     Ok(())
 }
 
@@ -2390,5 +2586,295 @@ work with files in a controlled directory.
         assert!(lf.packages.is_empty());
 
         std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    // --- metadata-only tool install tests ---
+
+    #[tokio::test]
+    async fn test_install_tool_from_mcp_config_registers_server() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let mcp = crate::registry::types::McpConfig {
+            command: "npx".to_string(),
+            args: vec![
+                "-y".to_string(),
+                "@modelcontextprotocol/server-brave-search".to_string(),
+            ],
+            env: {
+                let mut m = std::collections::BTreeMap::new();
+                m.insert("BRAVE_API_KEY".to_string(), "test-key".to_string());
+                m
+            },
+        };
+
+        let version_detail = crate::registry::types::VersionDetail {
+            name: "brave-search".to_string(),
+            version: "1.0.0".to_string(),
+            package_type: Some("tool".to_string()),
+            download_url: "https://example.com/download".to_string(),
+            integrity: None,
+            size: None,
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+            description: Some("Test tool".to_string()),
+            author: None,
+            license: None,
+            tags: None,
+            mcp: Some(mcp.clone()),
+            tool_md: None,
+        };
+
+        install_tool_from_mcp_config("brave-search", &version_detail, &mcp, None, false)
+            .await
+            .unwrap();
+
+        // Verify .mcp.json was created with the correct entry
+        let mcp_json_path = work.path().join(".mcp.json");
+        assert!(mcp_json_path.exists(), ".mcp.json should exist");
+        let content = std::fs::read_to_string(&mcp_json_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        let server = &json["mcpServers"]["brave-search"];
+        assert_eq!(server["command"].as_str().unwrap(), "npx");
+        assert_eq!(server["args"][0].as_str().unwrap(), "-y");
+        assert_eq!(
+            server["args"][1].as_str().unwrap(),
+            "@modelcontextprotocol/server-brave-search"
+        );
+        assert_eq!(server["env"]["BRAVE_API_KEY"].as_str().unwrap(), "test-key");
+
+        // Verify lockfile was updated
+        let lf = Lockfile::load(work.path()).unwrap();
+        let pkg = lf.get_package("brave-search").unwrap();
+        assert_eq!(pkg.package_type, PackageType::Tool);
+        assert_eq!(pkg.version, "1.0.0");
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_install_tool_from_tool_md_content() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let tool_md = r#"---
+name: test-tool
+description: A test tool
+metadata:
+  version: "2.0.0"
+mcp:
+  command: uvx
+  args:
+    - "mcp-server-test"
+  transport: stdio
+---
+
+# Test Tool
+"#;
+
+        let version_detail = crate::registry::types::VersionDetail {
+            name: "test-tool".to_string(),
+            version: "2.0.0".to_string(),
+            package_type: Some("tool".to_string()),
+            download_url: "https://example.com/download".to_string(),
+            integrity: None,
+            size: None,
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+            description: Some("A test tool".to_string()),
+            author: None,
+            license: None,
+            tags: None,
+            mcp: None,
+            tool_md: Some(tool_md.to_string()),
+        };
+
+        install_tool_from_tool_md_content("test-tool", &version_detail, tool_md, None, false)
+            .await
+            .unwrap();
+
+        // Verify .mcp.json was created with parsed TOOL.md content
+        let mcp_json_path = work.path().join(".mcp.json");
+        assert!(mcp_json_path.exists(), ".mcp.json should exist");
+        let content = std::fs::read_to_string(&mcp_json_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        let server = &json["mcpServers"]["test-tool"];
+        assert_eq!(server["command"].as_str().unwrap(), "uvx");
+        assert_eq!(server["args"][0].as_str().unwrap(), "mcp-server-test");
+
+        // Verify tool was stored
+        let store = work.path().join(".tools/test-tool");
+        assert!(store.join("TOOL.md").exists(), "TOOL.md should be in store");
+
+        // Verify lockfile
+        let lf = Lockfile::load(work.path()).unwrap();
+        let pkg = lf.get_package("test-tool").unwrap();
+        assert_eq!(pkg.package_type, PackageType::Tool);
+        assert_eq!(pkg.version, "2.0.0");
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_install_tool_from_metadata_rejects_non_tool() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let version_detail = crate::registry::types::VersionDetail {
+            name: "some-skill".to_string(),
+            version: "1.0.0".to_string(),
+            package_type: Some("skill".to_string()),
+            download_url: "https://example.com/download".to_string(),
+            integrity: None,
+            size: None,
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+            description: None,
+            author: None,
+            license: None,
+            tags: None,
+            mcp: None,
+            tool_md: None,
+        };
+
+        let result =
+            install_tool_from_metadata("some-skill", &version_detail, None, false).await;
+        assert!(result.is_err(), "Should reject non-tool packages");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not a tool"),
+            "Error should mention not a tool: {}",
+            err
+        );
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_install_tool_from_mcp_config_then_uninstall() {
+        let work = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+
+        let mcp = crate::registry::types::McpConfig {
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "@test/server".to_string()],
+            env: std::collections::BTreeMap::new(),
+        };
+
+        let version_detail = crate::registry::types::VersionDetail {
+            name: "ephemeral-tool".to_string(),
+            version: "1.0.0".to_string(),
+            package_type: Some("tool".to_string()),
+            download_url: "https://example.com/download".to_string(),
+            integrity: None,
+            size: None,
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+            description: None,
+            author: None,
+            license: None,
+            tags: None,
+            mcp: Some(mcp.clone()),
+            tool_md: None,
+        };
+
+        // Install
+        install_tool_from_mcp_config("ephemeral-tool", &version_detail, &mcp, None, false)
+            .await
+            .unwrap();
+
+        // Verify it's registered
+        let mcp_json_path = work.path().join(".mcp.json");
+        let content = std::fs::read_to_string(&mcp_json_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(json["mcpServers"]["ephemeral-tool"].is_object());
+
+        // Uninstall
+        uninstall_tool("ephemeral-tool", None, false).unwrap();
+
+        // Verify it's gone from .mcp.json
+        let content = std::fs::read_to_string(&mcp_json_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(
+            json["mcpServers"]["ephemeral-tool"].is_null(),
+            "Server should be removed after uninstall"
+        );
+
+        std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_parse_package_type_from_string() {
+        assert_eq!(
+            package_type::parse_package_type("tool"),
+            Some(PackageType::Tool)
+        );
+        assert_eq!(
+            package_type::parse_package_type("skill"),
+            Some(PackageType::Skill)
+        );
+        assert_eq!(
+            package_type::parse_package_type("validator"),
+            Some(PackageType::Validator)
+        );
+        assert_eq!(
+            package_type::parse_package_type("plugin"),
+            Some(PackageType::Plugin)
+        );
+        assert_eq!(package_type::parse_package_type("unknown"), None);
+        assert_eq!(package_type::parse_package_type("Tool"), None);
+        assert_eq!(package_type::parse_package_type(""), None);
+    }
+
+    #[test]
+    fn test_version_detail_deserializes_with_mcp() {
+        let json = r#"{
+            "name": "brave-search",
+            "version": "1.0.0",
+            "type": "tool",
+            "description": "Web search",
+            "downloadUrl": "https://example.com/download",
+            "publishedAt": "2026-01-01T00:00:00Z",
+            "mcp": {
+                "command": "npx",
+                "args": ["-y", "@mcp/server-brave"],
+                "env": {"BRAVE_API_KEY": "test"}
+            }
+        }"#;
+
+        let detail: crate::registry::types::VersionDetail =
+            serde_json::from_str(json).unwrap();
+
+        assert_eq!(detail.name, "brave-search");
+        assert_eq!(detail.package_type.as_deref(), Some("tool"));
+        assert!(detail.integrity.is_none());
+        assert!(detail.size.is_none());
+
+        let mcp = detail.mcp.unwrap();
+        assert_eq!(mcp.command, "npx");
+        assert_eq!(mcp.args, vec!["-y", "@mcp/server-brave"]);
+        assert_eq!(mcp.env.get("BRAVE_API_KEY").unwrap(), "test");
+    }
+
+    #[test]
+    fn test_version_detail_deserializes_without_optional_fields() {
+        let json = r#"{
+            "name": "minimal",
+            "version": "0.1.0",
+            "downloadUrl": "https://example.com/download",
+            "publishedAt": "2026-01-01T00:00:00Z"
+        }"#;
+
+        let detail: crate::registry::types::VersionDetail =
+            serde_json::from_str(json).unwrap();
+
+        assert_eq!(detail.name, "minimal");
+        assert!(detail.package_type.is_none());
+        assert!(detail.integrity.is_none());
+        assert!(detail.size.is_none());
+        assert!(detail.mcp.is_none());
+        assert!(detail.tool_md.is_none());
     }
 }

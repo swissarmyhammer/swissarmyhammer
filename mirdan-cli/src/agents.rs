@@ -240,7 +240,7 @@ pub fn agent_global_mcp_config(agent: &AgentDef) -> Option<PathBuf> {
 
 /// Resolve the project-level plugin directory for an agent (if configured).
 pub fn agent_project_plugin_dir(agent: &AgentDef) -> Option<PathBuf> {
-    agent.plugin_path.as_ref().map(|p| PathBuf::from(p))
+    agent.plugin_path.as_ref().map(PathBuf::from)
 }
 
 /// Resolve the global plugin directory for an agent (if configured).

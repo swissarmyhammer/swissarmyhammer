@@ -63,6 +63,12 @@ pub struct PackageDetail {
     pub created_at: String,
     pub updated_at: String,
     pub readme: Option<String>,
+    /// MCP configuration for tool packages.
+    #[serde(default)]
+    pub mcp: Option<McpConfig>,
+    /// Raw TOOL.md content.
+    #[serde(default)]
+    pub tool_md: Option<String>,
 }
 
 /// Version list from `GET /api/packages/:name/versions`.
@@ -80,20 +86,41 @@ pub struct VersionInfo {
     pub published_at: String,
 }
 
+/// MCP server configuration returned by the registry for tool packages.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+}
+
 /// Version detail from `GET /api/packages/:name/latest` or `GET /api/packages/:name/:version`.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionDetail {
     pub name: String,
     pub version: String,
+    #[serde(rename = "type", default)]
+    pub package_type: Option<String>,
     pub download_url: String,
-    pub integrity: String,
-    pub size: u64,
+    #[serde(default)]
+    pub integrity: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
     pub published_at: String,
     pub description: Option<String>,
     pub author: Option<String>,
     pub license: Option<String>,
     pub tags: Option<Vec<String>>,
+    /// MCP configuration for tool packages (when provided by registry).
+    #[serde(default)]
+    pub mcp: Option<McpConfig>,
+    /// Raw TOOL.md content (when provided by registry).
+    #[serde(default)]
+    pub tool_md: Option<String>,
 }
 
 /// Request body for `POST /api/packages/updates`.
