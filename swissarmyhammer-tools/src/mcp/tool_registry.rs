@@ -1735,7 +1735,12 @@ register_tool_category!(
 ///
 /// Shared helper for all tools that need to send log notifications to the MCP client.
 /// If `context.peer` is `None`, this is a no-op.
-pub async fn send_mcp_log(context: &ToolContext, level: LoggingLevel, logger: &str, message: String) {
+pub async fn send_mcp_log(
+    context: &ToolContext,
+    level: LoggingLevel,
+    logger: &str,
+    message: String,
+) {
     if let Some(peer) = &context.peer {
         let param = LoggingMessageNotificationParam {
             level,

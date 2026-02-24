@@ -20,10 +20,15 @@ async fn setup(
     swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
     rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientInfo>,
 ) {
-    let server =
-        start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, agent_mode)
-            .await
-            .expect("Failed to start MCP server");
+    let server = start_mcp_server_with_options(
+        McpServerMode::Http { port: None },
+        None,
+        None,
+        None,
+        agent_mode,
+    )
+    .await
+    .expect("Failed to start MCP server");
     let client = create_test_client(server.url()).await;
     (server, client)
 }
@@ -44,9 +49,7 @@ async fn test_builtin_skills_discovered_via_list() {
     let result = client
         .call_tool(CallToolRequestParams {
             name: "skill".into(),
-            arguments: serde_json::json!({"op": "list skill"})
-                .as_object()
-                .cloned(),
+            arguments: serde_json::json!({"op": "list skill"}).as_object().cloned(),
             meta: None,
             task: None,
         })
@@ -340,9 +343,7 @@ async fn test_skill_invoke_via_shorthand() {
     let result = client
         .call_tool(CallToolRequestParams {
             name: "skill".into(),
-            arguments: serde_json::json!({"name": "plan"})
-                .as_object()
-                .cloned(),
+            arguments: serde_json::json!({"name": "plan"}).as_object().cloned(),
             meta: None,
             task: None,
         })

@@ -302,13 +302,7 @@ impl FlowTool {
         message: String,
     ) {
         tracing::info!("📨 MCP log [{}]: {}", flow_name, message);
-        send_mcp_log(
-            context,
-            level,
-            &format!("flow:{}", flow_name),
-            message,
-        )
-        .await;
+        send_mcp_log(context, level, &format!("flow:{}", flow_name), message).await;
     }
 
     /// Send flow start notification via MCP peer and internal channel
@@ -715,8 +709,8 @@ impl swissarmyhammer_common::health::Doctorable for FlowTool {
     }
 
     fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
-        use swissarmyhammer_common::health::HealthCheck;
         use std::collections::HashMap;
+        use swissarmyhammer_common::health::HealthCheck;
 
         let mut checks = Vec::new();
         let resolver = WorkflowResolver::new();
@@ -811,9 +805,7 @@ impl swissarmyhammer_common::health::Doctorable for FlowTool {
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().is_file())
-                    .filter(|e| {
-                        e.path().extension().and_then(|s| s.to_str()) == Some("mermaid")
-                    })
+                    .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("mermaid"))
                 {
                     // Track names for conflict detection
                     if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
@@ -827,18 +819,12 @@ impl swissarmyhammer_common::health::Doctorable for FlowTool {
                     match std::fs::read_to_string(entry.path()) {
                         Ok(content) => {
                             if content.trim().is_empty() {
-                                parse_errors.push(format!(
-                                    "{}: file is empty",
-                                    entry.path().display()
-                                ));
+                                parse_errors
+                                    .push(format!("{}: file is empty", entry.path().display()));
                             }
                         }
                         Err(e) => {
-                            parse_errors.push(format!(
-                                "{}: {}",
-                                entry.path().display(),
-                                e
-                            ));
+                            parse_errors.push(format!("{}: {}", entry.path().display(), e));
                         }
                     }
                 }

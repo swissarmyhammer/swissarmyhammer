@@ -829,7 +829,9 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let title = op
                 .get_string("title")
                 .ok_or_else(|| McpError::invalid_params("missing required field: title", None))?;
-            processor.process(&AddSubtask::new(task_id, title), ctx).await
+            processor
+                .process(&AddSubtask::new(task_id, title), ctx)
+                .await
         }
         (Verb::Complete, Noun::Subtask) => {
             let task_id = op

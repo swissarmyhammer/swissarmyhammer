@@ -6,7 +6,7 @@ use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use serde_json::json;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
-use swissarmyhammer_web::{FetchError, WebFetcher, WebFetchRequest};
+use swissarmyhammer_web::{FetchError, WebFetchRequest, WebFetcher};
 
 /// Fetch web content and convert HTML to markdown
 #[derive(Debug, Default, Deserialize)]
@@ -101,8 +101,12 @@ pub async fn execute_fetch(
         }
         Err(e) => {
             let (error_type, response_time_ms) = match &e {
-                FetchError::InvalidUrl(_) => return Err(McpError::invalid_params(e.to_string(), None)),
-                FetchError::SecurityViolation(_) => return Err(McpError::invalid_params(e.to_string(), None)),
+                FetchError::InvalidUrl(_) => {
+                    return Err(McpError::invalid_params(e.to_string(), None))
+                }
+                FetchError::SecurityViolation(_) => {
+                    return Err(McpError::invalid_params(e.to_string(), None))
+                }
                 FetchError::FetchFailed {
                     error_type,
                     response_time_ms,

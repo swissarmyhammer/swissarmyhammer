@@ -240,13 +240,11 @@ impl McpTool for SkillTool {
                     value
                 };
                 Ok(BaseToolImpl::create_success_response(
-                    serde_json::to_string_pretty(&value)
-                        .unwrap_or_else(|_| value.to_string()),
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
                 ))
             }
             ExecutionResult::Logged { value, .. } => Ok(BaseToolImpl::create_success_response(
-                serde_json::to_string_pretty(&value)
-                    .unwrap_or_else(|_| value.to_string()),
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
             )),
             ExecutionResult::Failed { error, .. } => Err(McpError::internal_error(
                 format!("skill operation failed: {}", error),
@@ -349,8 +347,7 @@ mod tests {
         let ctx = crate::test_utils::create_test_context().await;
 
         let args: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_value(serde_json::json!({"op": "use skill", "name": "plan"}))
-                .unwrap();
+            serde_json::from_value(serde_json::json!({"op": "use skill", "name": "plan"})).unwrap();
         let result = tool.execute(args, &ctx).await;
         assert!(result.is_ok());
     }
@@ -367,8 +364,7 @@ mod tests {
         let ctx = crate::test_utils::create_test_context().await;
 
         let args: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_value(serde_json::json!({"op": "get skill", "name": "plan"}))
-                .unwrap();
+            serde_json::from_value(serde_json::json!({"op": "get skill", "name": "plan"})).unwrap();
         let result = tool.execute(args, &ctx).await;
         assert!(result.is_ok());
     }
@@ -405,9 +401,11 @@ mod tests {
 
         // The "test" skill includes {% include "_partials/test-driven-development" %}
         let args: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_value(serde_json::json!({"op": "use skill", "name": "test"}))
-                .unwrap();
-        let result = tool.execute(args, &ctx).await.expect("use skill should succeed");
+            serde_json::from_value(serde_json::json!({"op": "use skill", "name": "test"})).unwrap();
+        let result = tool
+            .execute(args, &ctx)
+            .await
+            .expect("use skill should succeed");
 
         let content = result
             .content

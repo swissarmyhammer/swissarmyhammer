@@ -40,8 +40,7 @@ pub struct WorkflowTemplateContext {
 
 impl PartialEq for WorkflowTemplateContext {
     fn eq(&self, other: &Self) -> bool {
-        self.template_context == other.template_context
-            && self.workflow_vars == other.workflow_vars
+        self.template_context == other.template_context && self.workflow_vars == other.workflow_vars
     }
 }
 

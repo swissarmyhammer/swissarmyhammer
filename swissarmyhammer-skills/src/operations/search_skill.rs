@@ -7,7 +7,11 @@ use serde_json::{json, Value};
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Search for skills by name or description
-#[operation(verb = "search", noun = "skill", description = "Search for skills by name or description")]
+#[operation(
+    verb = "search",
+    noun = "skill",
+    description = "Search for skills by name or description"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SearchSkill {
     /// Search query to match against skill names and descriptions

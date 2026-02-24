@@ -81,11 +81,7 @@ pub fn load_skill_from_dir(dir: &Path, source: SkillSource) -> Result<Skill, Str
             let path = entry.path();
             if path.is_file() && path.file_name().map_or(false, |n| n != "SKILL.md") {
                 if let Ok(file_content) = std::fs::read_to_string(&path) {
-                    let filename = path
-                        .file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .to_string();
+                    let filename = path.file_name().unwrap().to_string_lossy().to_string();
                     skill.resources.files.insert(filename, file_content);
                 }
             }
@@ -96,10 +92,7 @@ pub fn load_skill_from_dir(dir: &Path, source: SkillSource) -> Result<Skill, Str
 }
 
 /// Parse a skill from embedded builtin content (name, list of (filename, content) pairs)
-pub fn load_skill_from_builtin(
-    _skill_name: &str,
-    files: &[(&str, &str)],
-) -> Result<Skill, String> {
+pub fn load_skill_from_builtin(_skill_name: &str, files: &[(&str, &str)]) -> Result<Skill, String> {
     // Find the SKILL.md content — the builtin generator uses "SKILL" as the name
     // (it strips the .md extension) and prefixes with the directory name
     let skill_md_content = files

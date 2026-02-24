@@ -166,11 +166,7 @@ fn read_json_config(path: &Path) -> Result<serde_json::Value, RegistryError> {
     }
 
     serde_json::from_str(content).map_err(|e| {
-        RegistryError::Validation(format!(
-            "Invalid JSON in {}: {}",
-            path.display(),
-            e
-        ))
+        RegistryError::Validation(format!("Invalid JSON in {}: {}", path.display(), e))
     })
 }
 
@@ -179,9 +175,8 @@ fn write_json_config(path: &Path, value: &serde_json::Value) -> Result<(), Regis
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(value).map_err(|e| {
-        RegistryError::Validation(format!("Failed to serialize JSON: {}", e))
-    })?;
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|e| RegistryError::Validation(format!("Failed to serialize JSON: {}", e)))?;
     std::fs::write(path, format!("{}\n", json))?;
     Ok(())
 }
@@ -223,10 +218,7 @@ pub fn read_plugin_json(plugin_json_path: &Path) -> Result<String, RegistryError
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| {
-            RegistryError::Validation(format!(
-                "Missing 'name' in {}",
-                plugin_json_path.display()
-            ))
+            RegistryError::Validation(format!("Missing 'name' in {}", plugin_json_path.display()))
         })
 }
 

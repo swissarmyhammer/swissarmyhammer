@@ -7,7 +7,11 @@ use serde_json::{json, Value};
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all available skills with name, description, and source
-#[operation(verb = "list", noun = "skill", description = "List all available skills with their descriptions")]
+#[operation(
+    verb = "list",
+    noun = "skill",
+    description = "List all available skills with their descriptions"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListSkills;
 

@@ -70,10 +70,15 @@ mod tests {
     #[tokio::test]
     async fn test_client_list_tools() {
         // Use agent_mode=true since this test checks for agent tools (files_read)
-        let mut server =
-            start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, true)
-                .await
-                .unwrap();
+        let mut server = start_mcp_server_with_options(
+            McpServerMode::Http { port: None },
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
 
         let client = create_test_client(server.url()).await;
 
@@ -89,10 +94,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_list_prompts() {
-        let mut server =
-            start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, false)
-                .await
-                .unwrap();
+        let mut server = start_mcp_server_with_options(
+            McpServerMode::Http { port: None },
+            None,
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
 
         let client = create_test_client(server.url()).await;
 
@@ -105,10 +115,15 @@ mod tests {
     #[tokio::test]
     async fn test_client_call_tool() {
         // Use agent_mode=true since this test calls files_glob (an agent tool)
-        let mut server =
-            start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, true)
-                .await
-                .unwrap();
+        let mut server = start_mcp_server_with_options(
+            McpServerMode::Http { port: None },
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
 
         let client = create_test_client(server.url()).await;
 

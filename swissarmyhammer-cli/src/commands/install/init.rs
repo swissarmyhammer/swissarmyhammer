@@ -180,8 +180,8 @@ fn install_skills_via_mirdan(global: bool) -> Result<(), String> {
     let prompt_library = PromptLibrary::default();
     let template_context = TemplateContext::new();
 
-    let project_root = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let project_root =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
     let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
         .map_err(|e| format!("Failed to load lockfile: {}", e))?;
 
@@ -192,8 +192,8 @@ fn install_skills_via_mirdan(global: bool) -> Result<(), String> {
         }
 
         // Write builtin to a temp dir so deploy_skill_to_agents can copy it
-        let temp_dir = tempfile::tempdir()
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
         let skill_dir = temp_dir.path().join(name);
         std::fs::create_dir_all(&skill_dir)
             .map_err(|e| format!("Failed to create temp skill dir: {}", e))?;

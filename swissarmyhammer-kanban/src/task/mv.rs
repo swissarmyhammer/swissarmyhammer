@@ -80,9 +80,7 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                     .map(|word| {
                         let mut chars = word.chars();
                         match chars.next() {
-                            Some(first) => {
-                                first.to_uppercase().to_string() + chars.as_str()
-                            }
+                            Some(first) => first.to_uppercase().to_string() + chars.as_str(),
                             None => String::new(),
                         }
                     })
@@ -112,9 +110,7 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                         .map(|word| {
                             let mut chars = word.chars();
                             match chars.next() {
-                                Some(first) => {
-                                    first.to_uppercase().to_string() + chars.as_str()
-                                }
+                                Some(first) => first.to_uppercase().to_string() + chars.as_str(),
                                 None => String::new(),
                             }
                         })
@@ -265,7 +261,9 @@ mod tests {
 
         // Verify the column was created on the board
         let board = ctx.read_board().await.unwrap();
-        let col = board.find_column(&ColumnId::from_string("in-review")).unwrap();
+        let col = board
+            .find_column(&ColumnId::from_string("in-review"))
+            .unwrap();
         assert_eq!(col.name, "In Review");
     }
 }

@@ -64,8 +64,7 @@ pub fn sync(
 
                 // Ensure symlinks exist in each agent's skill directory
                 for agent in &agents {
-                    let link_name =
-                        store::symlink_name(&sanitized, &agent.def.symlink_policy);
+                    let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
                     let agent_skill_dir = if global {
                         agent_global_skill_dir(&agent.def)
                     } else {

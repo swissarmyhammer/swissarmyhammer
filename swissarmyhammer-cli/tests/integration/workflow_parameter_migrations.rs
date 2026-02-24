@@ -205,4 +205,3 @@ async fn test_cli_integration_hello_world_workflow() -> Result<()> {
     assert!(result.stdout.contains("hello-world"));
     Ok(())
 }
-

@@ -7,7 +7,11 @@ use serde_json::{json, Value};
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Load a skill's full instructions by name (progressive disclosure activation)
-#[operation(verb = "use", noun = "skill", description = "Activate a skill by loading its full instructions")]
+#[operation(
+    verb = "use",
+    noun = "skill",
+    description = "Activate a skill by loading its full instructions"
+)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UseSkill {
     /// The skill name to load
@@ -37,14 +41,12 @@ impl Execute<SkillContext, SkillError> for UseSkill {
 
                 ExecutionResult::Unlogged { value: result }
             }
-            None => {
-                ExecutionResult::Failed {
-                    error: SkillError::NotFound {
-                        name: self.name.clone(),
-                    },
-                    log_entry: None,
-                }
-            }
+            None => ExecutionResult::Failed {
+                error: SkillError::NotFound {
+                    name: self.name.clone(),
+                },
+                log_entry: None,
+            },
         }
     }
 

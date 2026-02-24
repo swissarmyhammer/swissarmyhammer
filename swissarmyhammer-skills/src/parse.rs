@@ -31,21 +31,21 @@ pub fn parse_input(input: Value) -> std::result::Result<SkillOperation, SkillErr
     match verb.as_str() {
         "list" | "ls" | "show" | "available" => Ok(SkillOperation::List(ListSkills::new())),
         "use" | "get" | "load" | "activate" | "invoke" => {
-            let name = obj
-                .get("name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| SkillError::Parse {
-                    message: "missing required field: name".to_string(),
-                })?;
+            let name =
+                obj.get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| SkillError::Parse {
+                        message: "missing required field: name".to_string(),
+                    })?;
             Ok(SkillOperation::Use(UseSkill::new(name)))
         }
         "search" | "find" | "lookup" => {
-            let query = obj
-                .get("query")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| SkillError::Parse {
-                    message: "missing required field: query".to_string(),
-                })?;
+            let query =
+                obj.get("query")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| SkillError::Parse {
+                        message: "missing required field: query".to_string(),
+                    })?;
             Ok(SkillOperation::Search(SearchSkill::new(query)))
         }
         _ => Err(SkillError::Parse {
@@ -55,7 +55,9 @@ pub fn parse_input(input: Value) -> std::result::Result<SkillOperation, SkillErr
 }
 
 /// Extract verb and noun from input using multiple strategies
-fn extract_verb_noun(obj: &Map<String, Value>) -> std::result::Result<(String, String), SkillError> {
+fn extract_verb_noun(
+    obj: &Map<String, Value>,
+) -> std::result::Result<(String, String), SkillError> {
     // Strategy 1: "op" field with "verb noun" string
     if let Some(op_str) = obj.get("op").and_then(|v| v.as_str()) {
         let parts: Vec<&str> = op_str.split_whitespace().collect();
@@ -70,10 +72,7 @@ fn extract_verb_noun(obj: &Map<String, Value>) -> std::result::Result<(String, S
 
     // Strategy 2: Separate verb/noun fields
     if let Some(verb) = obj.get("verb").and_then(|v| v.as_str()) {
-        let noun = obj
-            .get("noun")
-            .and_then(|v| v.as_str())
-            .unwrap_or("skill");
+        let noun = obj.get("noun").and_then(|v| v.as_str()).unwrap_or("skill");
         return Ok((verb.to_string(), noun.to_string()));
     }
 

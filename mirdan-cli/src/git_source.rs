@@ -1051,8 +1051,10 @@ mod tests {
         let temp_dir = git_clone(&source).unwrap();
         let packages = discover_packages(temp_dir.path(), None, None).unwrap();
 
-        let types: std::collections::HashSet<_> =
-            packages.iter().map(|p| format!("{}", p.package_type)).collect();
+        let types: std::collections::HashSet<_> = packages
+            .iter()
+            .map(|p| format!("{}", p.package_type))
+            .collect();
 
         assert!(
             types.contains("plugin"),
@@ -1087,8 +1089,7 @@ mod tests {
         // The plugins/ directory is a PRIORITY_DIR, so the scanner finds
         // all plugins inside it. external_plugins/ is not a priority dir
         // and the recursive scan is skipped once plugins/ yields results.
-        let source =
-            parse_git_source("anthropics/claude-plugins-official", None).unwrap();
+        let source = parse_git_source("anthropics/claude-plugins-official", None).unwrap();
         let temp_dir = git_clone(&source).unwrap();
         let packages = discover_packages(temp_dir.path(), None, None).unwrap();
 
@@ -1138,13 +1139,11 @@ mod tests {
 
     #[test]
     fn test_clone_anthropics_plugins_select_one() {
-        let source =
-            parse_git_source("anthropics/claude-plugins-official", None).unwrap();
+        let source = parse_git_source("anthropics/claude-plugins-official", None).unwrap();
         let temp_dir = git_clone(&source).unwrap();
 
         // Select "example-plugin" (lives in plugins/, a PRIORITY_DIR)
-        let filtered =
-            discover_packages(temp_dir.path(), None, Some("example-plugin")).unwrap();
+        let filtered = discover_packages(temp_dir.path(), None, Some("example-plugin")).unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "example-plugin");
         assert_eq!(filtered[0].package_type, PackageType::Plugin);
@@ -1152,12 +1151,10 @@ mod tests {
 
     #[test]
     fn test_clone_anthropics_plugins_select_nonexistent() {
-        let source =
-            parse_git_source("anthropics/claude-plugins-official", None).unwrap();
+        let source = parse_git_source("anthropics/claude-plugins-official", None).unwrap();
         let temp_dir = git_clone(&source).unwrap();
 
-        let result =
-            discover_packages(temp_dir.path(), None, Some("zzz-not-a-plugin"));
+        let result = discover_packages(temp_dir.path(), None, Some("zzz-not-a-plugin"));
         assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
     }
 

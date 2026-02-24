@@ -10,9 +10,7 @@ use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
-use swissarmyhammer_tools::mcp::unified_server::{
-    start_mcp_server_with_options, McpServerMode,
-};
+use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server_with_options, McpServerMode};
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
     register_file_tools, register_flow_tools, register_git_tools, register_js_tools,

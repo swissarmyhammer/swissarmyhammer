@@ -346,8 +346,7 @@ async fn download_package(
     // Verify integrity (skip if not provided by registry)
     let integrity_hash = version_detail.integrity.as_deref().unwrap_or("");
     if !integrity_hash.is_empty() {
-        lockfile::verify_integrity(&data, integrity_hash)
-            .map_err(RegistryError::Integrity)?;
+        lockfile::verify_integrity(&data, integrity_hash).map_err(RegistryError::Integrity)?;
         println!("  Integrity verified");
     }
 
@@ -426,7 +425,14 @@ async fn install_tool_from_metadata(
 
     if let Some(ref tool_md) = version_detail.tool_md {
         println!("  Installing from registry TOOL.md...");
-        return install_tool_from_tool_md_content(name, version_detail, tool_md, agent_filter, global).await;
+        return install_tool_from_tool_md_content(
+            name,
+            version_detail,
+            tool_md,
+            agent_filter,
+            global,
+        )
+        .await;
     }
 
     // Try fetching the full package detail which may have mcp/tool_md
@@ -436,12 +442,26 @@ async fn install_tool_from_metadata(
     if let Some(ref mcp) = detail.mcp {
         println!("  Installing from registry MCP metadata...");
         let mcp_clone = mcp.clone();
-        return install_tool_from_mcp_config(name, version_detail, &mcp_clone, agent_filter, global).await;
+        return install_tool_from_mcp_config(
+            name,
+            version_detail,
+            &mcp_clone,
+            agent_filter,
+            global,
+        )
+        .await;
     }
 
     if let Some(ref tool_md) = detail.tool_md {
         println!("  Installing from registry TOOL.md...");
-        return install_tool_from_tool_md_content(name, version_detail, tool_md, agent_filter, global).await;
+        return install_tool_from_tool_md_content(
+            name,
+            version_detail,
+            tool_md,
+            agent_filter,
+            global,
+        )
+        .await;
     }
 
     Err(RegistryError::Validation(format!(
@@ -477,12 +497,7 @@ async fn install_tool_from_mcp_config(
                 agents::agent_project_mcp_config(&agent.def)
             };
             if let Some(config_path) = config_path {
-                mcp_config::register_mcp_server(
-                    &config_path,
-                    &mcp_cfg.servers_key,
-                    name,
-                    &entry,
-                )?;
+                mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
                 println!(
                     "  Registered in {} ({})",
                     config_path.display(),
@@ -825,12 +840,7 @@ pub async fn run_install_mcp(
             };
 
             if let Some(config_path) = config_path {
-                mcp_config::register_mcp_server(
-                    &config_path,
-                    &mcp_cfg.servers_key,
-                    name,
-                    &entry,
-                )?;
+                mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
                 println!(
                     "  Installed MCP server '{}' for {} ({})",
                     name,
@@ -997,12 +1007,7 @@ fn deploy_tool(
             };
 
             if let Some(config_path) = config_path {
-                mcp_config::register_mcp_server(
-                    &config_path,
-                    &mcp_cfg.servers_key,
-                    name,
-                    &entry,
-                )?;
+                mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
                 println!(
                     "  Registered in {} ({})",
                     config_path.display(),
@@ -1042,11 +1047,7 @@ fn deploy_plugin(
             let target = base_dir.join(&sanitized);
             store::remove_if_exists(&target)?;
             copy_dir_recursive(source_dir, &target)?;
-            println!(
-                "  Deployed to {} ({})",
-                target.display(),
-                agent.def.name
-            );
+            println!("  Deployed to {} ({})", target.display(), agent.def.name);
             targets.push(agent.def.id.clone());
 
             // If plugin contains .mcp.json, also register those MCP servers
@@ -1091,10 +1092,7 @@ fn deploy_plugin(
                 }
             }
         } else {
-            tracing::debug!(
-                "Agent {} has no plugin path, skipping",
-                agent.def.id
-            );
+            tracing::debug!("Agent {} has no plugin path, skipping", agent.def.id);
         }
     }
 
@@ -1182,11 +1180,7 @@ fn uninstall_plugin(
             let target = base_dir.join(&sanitized);
             if target.exists() {
                 std::fs::remove_dir_all(&target)?;
-                println!(
-                    "  Removed from {} ({})",
-                    target.display(),
-                    agent.def.name
-                );
+                println!("  Removed from {} ({})", target.display(), agent.def.name);
                 removed += 1;
             }
         }
@@ -1610,7 +1604,11 @@ work with files in a controlled directory.
         assert_eq!(mcp_fm.command, "npx");
         assert_eq!(
             mcp_fm.args,
-            vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp/safe-dir"]
+            vec![
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "/tmp/safe-dir"
+            ]
         );
         assert_eq!(mcp_fm.transport, Some("stdio".to_string()));
         assert_eq!(mcp_fm.env.get("NODE_ENV").unwrap(), "production");
@@ -1669,7 +1667,11 @@ work with files in a controlled directory.
             .collect();
         assert_eq!(
             args,
-            vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp/safe-dir"],
+            vec![
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "/tmp/safe-dir"
+            ],
             "args should match TOOL.md"
         );
         assert_eq!(
@@ -1748,10 +1750,9 @@ work with files in a controlled directory.
         deploy_tool("fs-tool", &src, None, false).unwrap();
 
         // Both servers should be present
-        let mcp: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
-        )
-        .unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(work.path().join(".mcp.json")).unwrap())
+                .unwrap();
         assert_eq!(
             mcp["mcpServers"]["existing-server"]["command"]
                 .as_str()
@@ -1769,10 +1770,9 @@ work with files in a controlled directory.
         uninstall_tool("fs-tool", None, false).unwrap();
 
         // Existing server should still be there
-        let mcp: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
-        )
-        .unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(work.path().join(".mcp.json")).unwrap())
+                .unwrap();
         assert_eq!(
             mcp["mcpServers"]["existing-server"]["command"]
                 .as_str()
@@ -1812,10 +1812,8 @@ work with files in a controlled directory.
         assert_eq!(pkg_type, Some(PackageType::Plugin));
 
         // Read name from plugin.json
-        let name = mcp_config::read_plugin_json(
-            &plugin_dir.join(".claude-plugin/plugin.json"),
-        )
-        .unwrap();
+        let name =
+            mcp_config::read_plugin_json(&plugin_dir.join(".claude-plugin/plugin.json")).unwrap();
         assert_eq!(name, "my-plugin");
     }
 
@@ -1967,10 +1965,9 @@ work with files in a controlled directory.
 
         // 4. Verify on-disk state
         assert!(work.path().join(".tools/fs-tool/TOOL.md").exists());
-        let mcp: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
-        )
-        .unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(work.path().join(".mcp.json")).unwrap())
+                .unwrap();
         assert_eq!(mcp["mcpServers"]["fs-tool"]["command"], "npx");
 
         // 5. Verify list discovers the tool
@@ -1983,10 +1980,9 @@ work with files in a controlled directory.
         // 6. Uninstall and verify cleanup
         uninstall_tool("fs-tool", None, false).unwrap();
         assert!(!work.path().join(".tools/fs-tool").exists());
-        let mcp: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
-        )
-        .unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(work.path().join(".mcp.json")).unwrap())
+                .unwrap();
         assert!(mcp["mcpServers"]["fs-tool"].is_null());
 
         // 7. Clean lockfile
@@ -2361,7 +2357,9 @@ work with files in a controlled directory.
         // 1. Install a skill
         let skill_src = work.path().join("src-skill");
         make_local_skill(&skill_src, "test-skill", "1.0.0");
-        let skill_targets = deploy_skill("test-skill", &skill_src, None, false).await.unwrap();
+        let skill_targets = deploy_skill("test-skill", &skill_src, None, false)
+            .await
+            .unwrap();
         assert!(!skill_targets.is_empty());
 
         // 2. Install a validator
@@ -2384,49 +2382,94 @@ work with files in a controlled directory.
 
         // 5. Verify all four are on disk in separate locations
         assert!(work.path().join(".skills/test-skill/SKILL.md").exists());
-        assert!(work.path().join(".avp/validators/test-val/VALIDATOR.md").exists());
+        assert!(work
+            .path()
+            .join(".avp/validators/test-val/VALIDATOR.md")
+            .exists());
         assert!(work.path().join(".tools/test-tool/TOOL.md").exists());
-        assert!(work.path().join(".claude/plugins/test-plugin/.claude-plugin/plugin.json").exists());
+        assert!(work
+            .path()
+            .join(".claude/plugins/test-plugin/.claude-plugin/plugin.json")
+            .exists());
 
         // 6. Verify list discovers all four
         let all = crate::list::discover_packages(false, false, false, false, None);
         let names: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"test-skill"), "Should find skill in list: {:?}", names);
-        assert!(names.contains(&"test-val"), "Should find validator in list: {:?}", names);
-        assert!(names.contains(&"test-tool"), "Should find tool in list: {:?}", names);
-        assert!(names.contains(&"test-plugin"), "Should find plugin in list: {:?}", names);
+        assert!(
+            names.contains(&"test-skill"),
+            "Should find skill in list: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"test-val"),
+            "Should find validator in list: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"test-tool"),
+            "Should find tool in list: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"test-plugin"),
+            "Should find plugin in list: {:?}",
+            names
+        );
 
         // 7. Verify type-specific filters work
         let skills_only = crate::list::discover_packages(true, false, false, false, None);
-        assert!(skills_only.iter().all(|p| p.package_type == PackageType::Skill));
+        assert!(skills_only
+            .iter()
+            .all(|p| p.package_type == PackageType::Skill));
         assert!(skills_only.iter().any(|p| p.name == "test-skill"));
 
         let tools_only = crate::list::discover_packages(false, false, true, false, None);
-        assert!(tools_only.iter().all(|p| p.package_type == PackageType::Tool));
+        assert!(tools_only
+            .iter()
+            .all(|p| p.package_type == PackageType::Tool));
         assert!(tools_only.iter().any(|p| p.name == "test-tool"));
 
         let plugins_only = crate::list::discover_packages(false, false, false, true, None);
-        assert!(plugins_only.iter().all(|p| p.package_type == PackageType::Plugin));
+        assert!(plugins_only
+            .iter()
+            .all(|p| p.package_type == PackageType::Plugin));
         assert!(plugins_only.iter().any(|p| p.name == "test-plugin"));
 
         let vals_only = crate::list::discover_packages(false, true, false, false, None);
-        assert!(vals_only.iter().all(|p| p.package_type == PackageType::Validator));
+        assert!(vals_only
+            .iter()
+            .all(|p| p.package_type == PackageType::Validator));
         assert!(vals_only.iter().any(|p| p.name == "test-val"));
 
         // 8. Uninstall each type independently — others remain
         uninstall_tool("test-tool", None, false).unwrap();
         assert!(!work.path().join(".tools/test-tool").exists());
-        assert!(work.path().join(".skills/test-skill/SKILL.md").exists(), "Skill should survive tool uninstall");
-        assert!(work.path().join(".avp/validators/test-val").exists(), "Validator should survive tool uninstall");
-        assert!(work.path().join(".claude/plugins/test-plugin").exists(), "Plugin should survive tool uninstall");
+        assert!(
+            work.path().join(".skills/test-skill/SKILL.md").exists(),
+            "Skill should survive tool uninstall"
+        );
+        assert!(
+            work.path().join(".avp/validators/test-val").exists(),
+            "Validator should survive tool uninstall"
+        );
+        assert!(
+            work.path().join(".claude/plugins/test-plugin").exists(),
+            "Plugin should survive tool uninstall"
+        );
 
         uninstall_plugin("test-plugin", None, false).unwrap();
         assert!(!work.path().join(".claude/plugins/test-plugin").exists());
-        assert!(work.path().join(".skills/test-skill/SKILL.md").exists(), "Skill should survive plugin uninstall");
+        assert!(
+            work.path().join(".skills/test-skill/SKILL.md").exists(),
+            "Skill should survive plugin uninstall"
+        );
 
         uninstall_validator("test-val", false).unwrap();
         assert!(!work.path().join(".avp/validators/test-val").exists());
-        assert!(work.path().join(".skills/test-skill/SKILL.md").exists(), "Skill should survive validator uninstall");
+        assert!(
+            work.path().join(".skills/test-skill/SKILL.md").exists(),
+            "Skill should survive validator uninstall"
+        );
 
         std::env::set_current_dir(old_dir).unwrap();
     }
@@ -2446,10 +2489,9 @@ work with files in a controlled directory.
         assert!(store.join("TOOL.md").exists());
 
         // Verify v1 is registered
-        let mcp: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
-        )
-        .unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(work.path().join(".mcp.json")).unwrap())
+                .unwrap();
         assert!(mcp["mcpServers"]["fs-tool"].is_object());
 
         // Deploy v2 on top (same name, different version)
@@ -2462,10 +2504,9 @@ work with files in a controlled directory.
         assert_eq!(version, "2.0.0", "Version should be updated to 2.0.0");
 
         // MCP config should still have exactly one entry for fs-tool (not duplicated)
-        let mcp: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(work.path().join(".mcp.json")).unwrap(),
-        )
-        .unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(work.path().join(".mcp.json")).unwrap())
+                .unwrap();
         let servers = mcp["mcpServers"].as_object().unwrap();
         let fs_entries: Vec<_> = servers.keys().filter(|k| *k == "fs-tool").collect();
         assert_eq!(fs_entries.len(), 1, "Should have exactly one fs-tool entry");
@@ -2495,7 +2536,7 @@ work with files in a controlled directory.
         // Modify v2 source to have a different command file
         let src_v2 = work.path().join("src-v2");
         make_local_plugin(&src_v2, "my-plugin", true); // now with bundled MCP
-        // Add an extra file to v2
+                                                       // Add an extra file to v2
         std::fs::write(src_v2.join("CHANGELOG.md"), "# Changes\nv2").unwrap();
 
         deploy_plugin("my-plugin", &src_v2, None, false).unwrap();
@@ -2739,8 +2780,7 @@ mcp:
             tool_md: None,
         };
 
-        let result =
-            install_tool_from_metadata("some-skill", &version_detail, None, false).await;
+        let result = install_tool_from_metadata("some-skill", &version_detail, None, false).await;
         assert!(result.is_err(), "Should reject non-tool packages");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -2844,8 +2884,7 @@ mcp:
             }
         }"#;
 
-        let detail: crate::registry::types::VersionDetail =
-            serde_json::from_str(json).unwrap();
+        let detail: crate::registry::types::VersionDetail = serde_json::from_str(json).unwrap();
 
         assert_eq!(detail.name, "brave-search");
         assert_eq!(detail.package_type.as_deref(), Some("tool"));
@@ -2867,8 +2906,7 @@ mcp:
             "publishedAt": "2026-01-01T00:00:00Z"
         }"#;
 
-        let detail: crate::registry::types::VersionDetail =
-            serde_json::from_str(json).unwrap();
+        let detail: crate::registry::types::VersionDetail = serde_json::from_str(json).unwrap();
 
         assert_eq!(detail.name, "minimal");
         assert!(detail.package_type.is_none());

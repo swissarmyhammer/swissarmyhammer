@@ -869,7 +869,11 @@ impl PromptLibrary {
     /// # Returns
     ///
     /// The rendered template string with partials resolved.
-    pub fn render_text(&self, template: &str, template_context: &TemplateContext) -> Result<String> {
+    pub fn render_text(
+        &self,
+        template: &str,
+        template_context: &TemplateContext,
+    ) -> Result<String> {
         let full_library = self.build_full_library()?;
         let enhanced_context = Self::enhance_context(template_context);
         Self::render_with_library(template, &enhanced_context, full_library)

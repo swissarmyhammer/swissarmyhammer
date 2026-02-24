@@ -61,18 +61,9 @@ fn test_skills_partial_renders_with_available_skills() {
         rendered.contains("## Skills"),
         "Should contain Skills header"
     );
-    assert!(
-        rendered.contains("**plan**"),
-        "Should list plan skill"
-    );
-    assert!(
-        rendered.contains("**commit**"),
-        "Should list commit skill"
-    );
-    assert!(
-        rendered.contains("**test**"),
-        "Should list test skill"
-    );
+    assert!(rendered.contains("**plan**"), "Should list plan skill");
+    assert!(rendered.contains("**commit**"), "Should list commit skill");
+    assert!(rendered.contains("**test**"), "Should list test skill");
     assert!(
         rendered.contains("use skill"),
         "Should contain use skill instruction"

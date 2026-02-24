@@ -679,8 +679,7 @@ async fn start_stdio_server(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
     let temp_server =
-        McpServer::new_with_work_dir(library, work_dir, model_override.clone(), agent_mode)
-            .await?;
+        McpServer::new_with_work_dir(library, work_dir, model_override.clone(), agent_mode).await?;
     let temp_server_arc = Arc::new(temp_server);
 
     let (http_port, router, http_listener) = setup_http_server_for_stdio(temp_server_arc).await?;
@@ -804,9 +803,14 @@ async fn start_http_server(
     };
 
     tracing::debug!("Creating MCP server");
-    let server_arc =
-        initialize_mcp_server(library, actual_port, model_override, working_dir, agent_mode)
-            .await?;
+    let server_arc = initialize_mcp_server(
+        library,
+        actual_port,
+        model_override,
+        working_dir,
+        agent_mode,
+    )
+    .await?;
     tracing::debug!("MCP server initialized");
     tracing::debug!("Set MCP server port {} in tool context", actual_port);
     tracing::debug!("Set MCP server self-reference in tool context");

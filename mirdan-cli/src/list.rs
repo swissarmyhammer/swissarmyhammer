@@ -88,7 +88,11 @@ pub fn discover_packages(
                 // Global plugins
                 if let Some(plugin_dir) = agents::agent_global_plugin_dir(&agent.def) {
                     if plugin_dir.exists() {
-                        scan_plugins(&plugin_dir, &format!("{} (global)", agent.def.name), &mut packages);
+                        scan_plugins(
+                            &plugin_dir,
+                            &format!("{} (global)", agent.def.name),
+                            &mut packages,
+                        );
                     }
                 }
             }
@@ -109,7 +113,13 @@ pub fn run_list(
     agent_filter: Option<&str>,
     json: bool,
 ) -> Result<(), RegistryError> {
-    let packages = discover_packages(skills_only, validators_only, tools_only, plugins_only, agent_filter);
+    let packages = discover_packages(
+        skills_only,
+        validators_only,
+        tools_only,
+        plugins_only,
+        agent_filter,
+    );
 
     if json {
         let entries: Vec<serde_json::Value> = packages

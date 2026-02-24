@@ -23,8 +23,7 @@ pub use search::duckduckgo::{DuckDuckGoClient, DuckDuckGoError};
 pub use search::WebSearcher;
 pub use security::{SecurityError, SecurityPolicy, SecurityValidator};
 pub use types::{
-    CodeBlock, ContentFetchStats, ContentMetadata, ContentType, DuckDuckGoConfig,
-    SafeSearchLevel, ScoringConfig, SearchCategory, SearchMetadata, SearchResult,
-    SearchResultContent, TimeRange, WebFetchRequest, WebSearchError, WebSearchRequest,
-    WebSearchResponse,
+    CodeBlock, ContentFetchStats, ContentMetadata, ContentType, DuckDuckGoConfig, SafeSearchLevel,
+    ScoringConfig, SearchCategory, SearchMetadata, SearchResult, SearchResultContent, TimeRange,
+    WebFetchRequest, WebSearchError, WebSearchRequest, WebSearchResponse,
 };

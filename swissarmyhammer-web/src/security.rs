@@ -473,11 +473,7 @@ mod tests {
     fn test_ipv6_restrictions() {
         let validator = SecurityValidator::new();
 
-        let blocked_ipv6 = [
-            "http://[::1]",
-            "https://[::ffff:127.0.0.1]",
-            "http://[::]",
-        ];
+        let blocked_ipv6 = ["http://[::1]", "https://[::ffff:127.0.0.1]", "http://[::]"];
 
         for url_str in &blocked_ipv6 {
             assert!(
@@ -522,12 +518,7 @@ mod tests {
     fn test_edge_case_urls() {
         let validator = SecurityValidator::new();
 
-        let malformed = [
-            "",
-            "not-a-url",
-            "://missing-scheme",
-            "https://",
-        ];
+        let malformed = ["", "not-a-url", "://missing-scheme", "https://"];
 
         for url_str in &malformed {
             assert!(

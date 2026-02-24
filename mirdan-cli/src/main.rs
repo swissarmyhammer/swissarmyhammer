@@ -176,9 +176,7 @@ async fn main() {
             outdated::run_update(name.as_deref(), agent_filter, global).await,
         ),
 
-        Commands::Sync { global } => {
-            handle_registry_result(sync::run_sync(agent_filter, global))
-        }
+        Commands::Sync { global } => handle_registry_result(sync::run_sync(agent_filter, global)),
 
         Commands::Doctor { verbose } => doctor::run_doctor(verbose).await,
     };
@@ -660,7 +658,14 @@ mod tests {
     #[test]
     fn test_cli_parsing_install_mcp() {
         let cli = Cli::parse_from([
-            "mirdan", "install", "sah", "--mcp", "--command", "sah", "--args", "serve",
+            "mirdan",
+            "install",
+            "sah",
+            "--mcp",
+            "--command",
+            "sah",
+            "--args",
+            "serve",
         ]);
         match cli.command {
             Commands::Install {
@@ -689,18 +694,12 @@ mod tests {
     #[test]
     fn test_cli_parsing_sync() {
         let cli = Cli::parse_from(["mirdan", "sync"]);
-        assert!(matches!(
-            cli.command,
-            Commands::Sync { global: false }
-        ));
+        assert!(matches!(cli.command, Commands::Sync { global: false }));
     }
 
     #[test]
     fn test_cli_parsing_sync_global() {
         let cli = Cli::parse_from(["mirdan", "sync", "--global"]);
-        assert!(matches!(
-            cli.command,
-            Commands::Sync { global: true }
-        ));
+        assert!(matches!(cli.command, Commands::Sync { global: true }));
     }
 }

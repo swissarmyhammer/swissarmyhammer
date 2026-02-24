@@ -1,15 +1,15 @@
 //! SearchUrl operation — delegates to swissarmyhammer-web search pipeline
 
 use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
-use swissarmyhammer_web::search::content_fetcher::ContentFetcher;
-use swissarmyhammer_web::search::duckduckgo::DuckDuckGoError;
-use swissarmyhammer_web::types::*;
-use swissarmyhammer_web::WebSearcher;
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use std::time::Instant;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+use swissarmyhammer_web::search::content_fetcher::ContentFetcher;
+use swissarmyhammer_web::search::duckduckgo::DuckDuckGoError;
+use swissarmyhammer_web::types::*;
+use swissarmyhammer_web::WebSearcher;
 
 /// Search the web using DuckDuckGo with optional content fetching
 #[derive(Debug, Default, Deserialize)]

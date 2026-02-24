@@ -250,8 +250,7 @@ mod tests {
         let ssl_error = std::io::Error::other("SSL certificate error");
         assert_eq!(WebFetcher::categorize_error(&ssl_error), "ssl_error");
 
-        let parse_error =
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid encoding");
+        let parse_error = std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid encoding");
         assert_eq!(WebFetcher::categorize_error(&parse_error), "content_error");
     }
 }

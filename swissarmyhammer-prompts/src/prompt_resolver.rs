@@ -67,11 +67,10 @@ impl PromptResolver {
                 let base_name = base_name.strip_suffix(".md").unwrap_or(base_name);
 
                 // Strip frontmatter from partial content so it doesn't bleed into rendered output
-                let template_content =
-                    match crate::frontmatter::parse_frontmatter(&file.content) {
-                        Ok(fm) => fm.content,
-                        Err(_) => file.content.clone(),
-                    };
+                let template_content = match crate::frontmatter::parse_frontmatter(&file.content) {
+                    Ok(fm) => fm.content,
+                    Err(_) => file.content.clone(),
+                };
 
                 // Add the partial with the base name (e.g., "workflow_guards")
                 let mut partial_prompt =

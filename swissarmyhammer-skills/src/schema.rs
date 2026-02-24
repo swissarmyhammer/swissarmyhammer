@@ -43,7 +43,10 @@ fn generate_skill_examples() -> Vec<Value> {
 /// Get verb aliases for skill operations
 fn get_skill_verb_aliases() -> Map<String, Value> {
     let mut aliases = Map::new();
-    aliases.insert("use".to_string(), json!(["get", "load", "activate", "invoke"]));
+    aliases.insert(
+        "use".to_string(),
+        json!(["get", "load", "activate", "invoke"]),
+    );
     aliases.insert("list".to_string(), json!(["ls", "show", "available"]));
     aliases.insert("search".to_string(), json!(["find", "lookup"]));
     aliases

@@ -412,8 +412,13 @@ impl McpServer {
         agent_mode: bool,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
-        Self::register_all_tools(&mut tool_registry, skill_library, prompt_library, agent_mode)
-            .await;
+        Self::register_all_tools(
+            &mut tool_registry,
+            skill_library,
+            prompt_library,
+            agent_mode,
+        )
+        .await;
 
         let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
         tool_context.use_case_agents = Arc::new(use_case_agents);

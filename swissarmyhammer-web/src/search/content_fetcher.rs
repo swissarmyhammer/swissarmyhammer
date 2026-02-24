@@ -4,9 +4,7 @@
 //! HTML to markdown conversion, with comprehensive rate limiting, content quality assessment,
 //! and concurrent processing support.
 
-use crate::types::{
-    CodeBlock, ContentMetadata, ContentType, SearchResult, SearchResultContent,
-};
+use crate::types::{CodeBlock, ContentMetadata, ContentType, SearchResult, SearchResultContent};
 use dashmap::DashMap;
 use html2md;
 use regex::Regex;

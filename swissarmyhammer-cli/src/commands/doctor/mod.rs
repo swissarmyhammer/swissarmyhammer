@@ -124,7 +124,6 @@ impl Doctor {
         Ok(())
     }
 
-
     /// Check SwissArmyHammer directory in Git repository
     fn check_swissarmyhammer_directory(&mut self, git_root: &std::path::Path) -> Result<()> {
         let swissarmyhammer_dir = git_root.join(SwissarmyhammerDirectory::dir_name());

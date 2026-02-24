@@ -11,7 +11,7 @@
 //! - Configurable scoring for search result ranking
 
 use crate::chrome;
-use crate::types::{DuckDuckGoConfig, ScoringConfig, WebSearchRequest, SearchResult};
+use crate::types::{DuckDuckGoConfig, ScoringConfig, SearchResult, WebSearchRequest};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::error::CdpError;
 use futures::StreamExt;

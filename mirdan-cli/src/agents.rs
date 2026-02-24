@@ -248,7 +248,6 @@ pub fn agent_global_plugin_dir(agent: &AgentDef) -> Option<PathBuf> {
     agent.global_plugin_path.as_ref().map(|p| expand_tilde(p))
 }
 
-
 /// Run the `mirdan agents` command.
 pub fn run_agents(all: bool, json: bool) -> Result<(), RegistryError> {
     let config = load_agents_config()?;

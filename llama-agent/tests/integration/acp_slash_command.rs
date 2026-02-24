@@ -548,5 +548,4 @@ mod acp_slash_command_tests {
 
         tracing::info!("✓ Skills correctly override duplicate MCP prompts");
     }
-
 }

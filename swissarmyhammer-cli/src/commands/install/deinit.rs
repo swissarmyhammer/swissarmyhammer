@@ -107,10 +107,7 @@ fn uninstall_project_legacy() -> Result<(), String> {
 
     if let Some(mcp_servers) = mcp_settings.get("mcpServers").and_then(|m| m.as_object()) {
         if mcp_servers.is_empty() {
-            mcp_settings
-                .as_object_mut()
-                .unwrap()
-                .remove("mcpServers");
+            mcp_settings.as_object_mut().unwrap().remove("mcpServers");
         }
     }
 

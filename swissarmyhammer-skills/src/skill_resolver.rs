@@ -152,11 +152,7 @@ impl SkillResolver {
                         skills.insert(skill.name.as_str().to_string(), skill);
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to load skill from {}: {}",
-                            path.display(),
-                            e
-                        );
+                        tracing::warn!("Failed to load skill from {}: {}", path.display(), e);
                     }
                 }
             }

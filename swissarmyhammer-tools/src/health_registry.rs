@@ -100,11 +100,9 @@ impl Doctorable for PromptHealthChecker {
                         if content.starts_with("---") {
                             let parts: Vec<&str> = content.splitn(3, "---").collect();
                             if parts.len() >= 3 {
-                                if let Err(e) =
-                                    serde_yaml::from_str::<serde_yaml::Value>(parts[1])
+                                if let Err(e) = serde_yaml::from_str::<serde_yaml::Value>(parts[1])
                                 {
-                                    yaml_errors
-                                        .push((entry.path().to_path_buf(), e.to_string()));
+                                    yaml_errors.push((entry.path().to_path_buf(), e.to_string()));
                                 }
                             }
                         }
@@ -128,10 +126,7 @@ impl Doctorable for PromptHealthChecker {
         } else {
             for (path, error) in yaml_errors {
                 checks.push(HealthCheck::error(
-                    format!(
-                        "YAML parsing: {:?}",
-                        path.file_name().unwrap_or_default()
-                    ),
+                    format!("YAML parsing: {:?}", path.file_name().unwrap_or_default()),
                     error,
                     Some(format!("Fix the YAML syntax in {:?}", path)),
                     cat,
@@ -248,10 +243,7 @@ mod tests {
         let checks = collect_all_health_checks().await;
 
         // Should have prompt-related checks
-        let prompt_checks: Vec<_> = checks
-            .iter()
-            .filter(|c| c.category == "prompts")
-            .collect();
+        let prompt_checks: Vec<_> = checks.iter().filter(|c| c.category == "prompts").collect();
         assert!(
             !prompt_checks.is_empty(),
             "Should have prompt health checks"
@@ -265,9 +257,7 @@ mod tests {
         // Should have workflow-related checks from FlowTool
         let workflow_checks: Vec<_> = checks
             .iter()
-            .filter(|c| {
-                c.name.contains("Workflow") || c.name.contains("workflow")
-            })
+            .filter(|c| c.name.contains("Workflow") || c.name.contains("workflow"))
             .collect();
         assert!(
             !workflow_checks.is_empty(),
@@ -282,9 +272,7 @@ mod tests {
         // Should have skill-related checks from SkillTool
         let skill_checks: Vec<_> = checks
             .iter()
-            .filter(|c| {
-                c.name.contains("Skill") || c.name.contains("skill")
-            })
+            .filter(|c| c.name.contains("Skill") || c.name.contains("skill"))
             .collect();
         assert!(
             !skill_checks.is_empty(),
