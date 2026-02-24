@@ -11,12 +11,47 @@ use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
+use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
 /// Default minimum similarity threshold for duplicate detection
 const DEFAULT_MIN_SIMILARITY: f32 = 0.85;
 
 /// Default minimum chunk size in bytes to consider
 const DEFAULT_MIN_CHUNK_BYTES: usize = 100;
+
+/// Operation metadata for duplicate code detection
+#[derive(Debug, Default)]
+pub struct FindDuplicates;
+
+static FIND_DUPLICATES_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("min_similarity")
+        .description("Minimum cosine similarity threshold 0.0-1.0 (default: 0.85)")
+        .param_type(ParamType::Number),
+    ParamMeta::new("min_chunk_bytes")
+        .description("Minimum chunk size in bytes to consider (default: 100)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("file")
+        .description("Optional: find duplicates only for chunks in this specific file")
+        .param_type(ParamType::String),
+    ParamMeta::new("path")
+        .description("Workspace path (default: current directory)")
+        .param_type(ParamType::String),
+];
+
+impl Operation for FindDuplicates {
+    fn verb(&self) -> &'static str {
+        "find"
+    }
+    fn noun(&self) -> &'static str {
+        "duplicates"
+    }
+    fn description(&self) -> &'static str {
+        "Detect duplicate code clusters using semantic similarity analysis"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        FIND_DUPLICATES_PARAMS
+    }
+}
 
 /// MCP tool for detecting duplicate code
 #[derive(Default)]
@@ -90,42 +125,50 @@ impl McpTool for TreesitterDuplicatesTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let request: DuplicatesRequest = BaseToolImpl::parse_arguments(arguments)?;
-        let workspace_path = resolve_workspace_path(request.path.as_ref(), context);
+        execute_duplicates(arguments, context).await
+    }
+}
 
-        tracing::debug!(
-            "Finding duplicate code in {:?} (min_similarity: {}, min_bytes: {})",
-            workspace_path,
-            request.min_similarity,
-            request.min_chunk_bytes
-        );
+/// Execute a duplicate code detection operation
+pub async fn execute_duplicates(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let request: DuplicatesRequest = BaseToolImpl::parse_arguments(arguments)?;
+    let workspace_path = resolve_workspace_path(request.path.as_ref(), context);
 
-        let workspace = open_workspace(&workspace_path).await?;
+    tracing::debug!(
+        "Finding duplicate code in {:?} (min_similarity: {}, min_bytes: {})",
+        workspace_path,
+        request.min_similarity,
+        request.min_chunk_bytes
+    );
 
-        if let Some(file_path) = &request.file {
-            let results = workspace
-                .find_duplicates_in_file(PathBuf::from(file_path), request.min_similarity)
-                .await
-                .map_err(|e| {
-                    McpError::internal_error(format!("Duplicate detection failed: {}", e), None)
-                })?;
+    let workspace = open_workspace(&workspace_path).await?;
 
-            let header = format!("similar chunks to code in {}", file_path);
-            Ok(BaseToolImpl::create_success_response(
-                format_similar_chunks(&results, &header),
-            ))
-        } else {
-            let clusters = workspace
-                .find_all_duplicates(request.min_similarity, request.min_chunk_bytes)
-                .await
-                .map_err(|e| {
-                    McpError::internal_error(format!("Duplicate detection failed: {}", e), None)
-                })?;
+    if let Some(file_path) = &request.file {
+        let results = workspace
+            .find_duplicates_in_file(PathBuf::from(file_path), request.min_similarity)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("Duplicate detection failed: {}", e), None)
+            })?;
 
-            Ok(BaseToolImpl::create_success_response(
-                format_duplicate_clusters(&clusters),
-            ))
-        }
+        let header = format!("similar chunks to code in {}", file_path);
+        Ok(BaseToolImpl::create_success_response(
+            format_similar_chunks(&results, &header),
+        ))
+    } else {
+        let clusters = workspace
+            .find_all_duplicates(request.min_similarity, request.min_chunk_bytes)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("Duplicate detection failed: {}", e), None)
+            })?;
+
+        Ok(BaseToolImpl::create_success_response(
+            format_duplicate_clusters(&clusters),
+        ))
     }
 }
 
