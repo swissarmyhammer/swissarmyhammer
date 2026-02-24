@@ -1,19 +1,10 @@
 //! Doctor command implementation
 //!
-//! Diagnoses configuration and setup issues for swissarmyhammer
+//! Diagnoses configuration and setup issues for swissarmyhammer.
 //!
-//! This module provides comprehensive system diagnostics for SwissArmyHammer installations,
-//! checking various aspects of the system configuration to ensure optimal operation.
-//!
-//! # Features
-//!
-//! - Installation verification (binary permissions, PATH configuration)
-//! - Claude Code MCP integration checking
-//! - Prompt directory validation
-//! - YAML front matter parsing verification
-//! - Workflow system diagnostics
-//! - Disk space monitoring
-//! - File permission checks
+//! CLI-specific checks (installation, PATH, Claude config) live here.
+//! Tool-specific health checks are provided by each tool's `Doctorable` impl
+//! and collected via `swissarmyhammer_tools::collect_all_health_checks()`.
 
 use crate::exit_codes::EXIT_ERROR;
 use anyhow::Result;
@@ -88,9 +79,6 @@ impl Doctor {
         self.run_system_checks()?;
         self.run_tool_health_checks().await?;
         self.run_configuration_checks()?;
-        self.run_prompt_checks()?;
-        self.run_workflow_checks()?;
-        self.run_skill_checks()?;
 
         // Return exit code without printing results
         Ok(self.get_exit_code())
@@ -136,27 +124,6 @@ impl Doctor {
         Ok(())
     }
 
-    /// Run prompt checks
-    fn run_prompt_checks(&mut self) -> Result<()> {
-        checks::check_prompt_directories(&mut self.checks)?;
-        checks::check_yaml_parsing(&mut self.checks)?;
-        Ok(())
-    }
-
-    /// Run workflow checks
-    fn run_workflow_checks(&mut self) -> Result<()> {
-        checks::check_workflow_directories(&mut self.checks)?;
-        checks::check_workflow_permissions(&mut self.checks)?;
-        checks::check_workflow_parsing(&mut self.checks)?;
-        checks::check_workflow_dependencies(&mut self.checks)?;
-        Ok(())
-    }
-
-    /// Run skill checks
-    fn run_skill_checks(&mut self) -> Result<()> {
-        checks::check_skills(&mut self.checks)?;
-        Ok(())
-    }
 
     /// Check SwissArmyHammer directory in Git repository
     fn check_swissarmyhammer_directory(&mut self, git_root: &std::path::Path) -> Result<()> {
@@ -233,43 +200,6 @@ impl Doctor {
             }
         }
 
-        // Check subdirectories
-        let subdirs = ["todo", "workflows", "prompts"];
-        for subdir in &subdirs {
-            let subdir_path = swissarmyhammer_dir.join(subdir);
-            if subdir_path.exists() {
-                if subdir_path.is_dir() {
-                    let file_count = match std::fs::read_dir(&subdir_path) {
-                        Ok(entries) => entries.count(),
-                        Err(_) => 0,
-                    };
-                    self.checks.push(Check {
-                        name: format!("{} Directory", capitalize_first(subdir)),
-                        status: CheckStatus::Ok,
-                        message: format!("{} items", file_count),
-                        fix: None,
-                    });
-                } else {
-                    self.checks.push(Check {
-                        name: format!("{} Directory", capitalize_first(subdir)),
-                        status: CheckStatus::Warning,
-                        message: "Exists but is not a directory".to_string(),
-                        fix: Some(format!(
-                            "Remove {} and let SwissArmyHammer recreate it",
-                            subdir
-                        )),
-                    });
-                }
-            } else {
-                self.checks.push(Check {
-                    name: format!("{} Directory", capitalize_first(subdir)),
-                    status: CheckStatus::Warning,
-                    message: "Will be created when needed".to_string(),
-                    fix: None,
-                });
-            }
-        }
-
         // Check for potential issues
         let abort_file = swissarmyhammer_dir.join(".abort");
         if abort_file.exists() {
@@ -282,15 +212,6 @@ impl Doctor {
         }
 
         Ok(())
-    }
-}
-
-/// Helper function to capitalize first letter of a string
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
 
