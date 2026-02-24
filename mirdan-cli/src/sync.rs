@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{self, agent_global_skill_dir, agent_project_skill_dir};
 use crate::lockfile::Lockfile;
-use crate::mcp_config;
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
 use crate::store;
@@ -84,28 +83,56 @@ pub fn sync(
                     report.links_created += 1;
                 }
             }
-            PackageType::Mcp => {
+            PackageType::Tool => {
                 // Verify MCP config exists in at least one agent
                 let mut found = false;
                 for agent in &agents {
                     if let Some(mcp_def) = &agent.def.mcp_config {
                         let config_path = if global {
-                            agents::mcp_global_config_path(&agent.def)
+                            agents::agent_global_mcp_config(&agent.def)
                         } else {
-                            agents::mcp_project_config_path(&agent.def)
+                            agents::agent_project_mcp_config(&agent.def)
                         };
                         if let Some(path) = config_path {
                             if path.exists() {
-                                let settings = mcp_config::read_config(&path)?;
-                                if settings
-                                    .get(&mcp_def.servers_key)
-                                    .and_then(|s| s.get(name))
-                                    .is_some()
-                                {
-                                    found = true;
-                                    break;
+                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                    if let Ok(settings) =
+                                        serde_json::from_str::<serde_json::Value>(&content)
+                                    {
+                                        if settings
+                                            .get(&mcp_def.servers_key)
+                                            .and_then(|s| s.get(name))
+                                            .is_some()
+                                        {
+                                            found = true;
+                                            break;
+                                        }
+                                    }
                                 }
                             }
+                        }
+                    }
+                }
+                if found {
+                    report.packages_verified += 1;
+                } else {
+                    report.missing_packages.push(name.clone());
+                }
+            }
+            PackageType::Plugin => {
+                // Verify plugin directory exists in at least one agent
+                let mut found = false;
+                for agent in &agents {
+                    let plugin_dir = if global {
+                        agents::agent_global_plugin_dir(&agent.def)
+                    } else {
+                        agents::agent_project_plugin_dir(&agent.def)
+                    };
+                    if let Some(base_dir) = plugin_dir {
+                        let target = base_dir.join(store::sanitize_dir_name(name));
+                        if target.exists() {
+                            found = true;
+                            break;
                         }
                     }
                 }
@@ -310,7 +337,7 @@ mod tests {
         lf.add_package(
             "sah".to_string(),
             LockedPackage {
-                package_type: PackageType::Mcp,
+                package_type: PackageType::Tool,
                 version: "0.0.0".to_string(),
                 resolved: "mcp:sah".to_string(),
                 integrity: String::new(),

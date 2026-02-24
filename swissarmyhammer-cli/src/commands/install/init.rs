@@ -40,31 +40,41 @@ fn install_mcp_all_agents(global: bool) -> Result<(), String> {
     let agents = mirdan::agents::get_detected_agents(&config);
 
     let entry = mirdan::mcp_config::McpServerEntry {
-        name: "sah".to_string(),
         command: "sah".to_string(),
         args: vec!["serve".to_string()],
-        env: None,
+        env: std::collections::BTreeMap::new(),
     };
 
     let mut installed_count = 0;
     for agent in &agents {
-        match mirdan::mcp_config::install_mcp_for_agent(&agent.def, &entry, global) {
-            Ok(Some(path)) => {
-                println!(
-                    "sah MCP server installed for {} ({})",
-                    agent.def.name,
-                    path.display()
-                );
-                installed_count += 1;
-            }
-            Ok(None) => {
-                // Agent doesn't support MCP — skip silently
-            }
-            Err(e) => {
-                eprintln!(
-                    "Warning: failed to install MCP for {}: {}",
-                    agent.def.name, e
-                );
+        if let Some(mcp_def) = &agent.def.mcp_config {
+            let config_path = if global {
+                mirdan::agents::agent_global_mcp_config(&agent.def)
+            } else {
+                mirdan::agents::agent_project_mcp_config(&agent.def)
+            };
+            if let Some(config_path) = config_path {
+                match mirdan::mcp_config::register_mcp_server(
+                    &config_path,
+                    &mcp_def.servers_key,
+                    "sah",
+                    &entry,
+                ) {
+                    Ok(()) => {
+                        println!(
+                            "sah MCP server installed for {} ({})",
+                            agent.def.name,
+                            config_path.display()
+                        );
+                        installed_count += 1;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: failed to install MCP for {}: {}",
+                            agent.def.name, e
+                        );
+                    }
+                }
             }
         }
     }

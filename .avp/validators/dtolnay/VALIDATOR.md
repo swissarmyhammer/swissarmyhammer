@@ -1,7 +1,8 @@
 ---
 name: dtolnay
 description: Enforces Rust coding style inspired by dtolnay (David Tolnay) - author of serde, syn, anyhow, thiserror
-version: "0.1.1"
+metadata:
+  version: "0.1.1"
 trigger: PostToolUse
 match:
   tools:

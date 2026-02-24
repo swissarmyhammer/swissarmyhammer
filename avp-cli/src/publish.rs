@@ -164,9 +164,13 @@ fn parse_validator_frontmatter(content: &str) -> Result<(String, String), Regist
         .to_string();
 
     let version = yaml
-        .get("version")
+        .get("metadata")
+        .and_then(|m| m.get("version"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| RegistryError::Validation("Missing 'version' in frontmatter".to_string()))?
+        .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
+        .ok_or_else(|| {
+            RegistryError::Validation("Missing 'version' in frontmatter metadata".to_string())
+        })?
         .to_string();
 
     Ok((name, version))
@@ -242,7 +246,8 @@ mod tests {
     fn test_parse_validator_frontmatter() {
         let content = r#"---
 name: test-validator
-version: "1.0.0"
+metadata:
+  version: "1.0.0"
 trigger: PostToolUse
 ---
 # Body
@@ -255,7 +260,8 @@ trigger: PostToolUse
     #[test]
     fn test_parse_validator_frontmatter_missing_name() {
         let content = r#"---
-version: "1.0.0"
+metadata:
+  version: "1.0.0"
 ---
 "#;
         assert!(parse_validator_frontmatter(content).is_err());

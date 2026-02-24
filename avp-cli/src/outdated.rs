@@ -36,7 +36,7 @@ fn collect_local_packages() -> Vec<LocalPackage> {
         .into_iter()
         .map(|rs| LocalPackage {
             name: rs.name().to_string(),
-            version: rs.manifest.version.clone(),
+            version: rs.manifest.metadata.version.clone(),
             source: rs.source.clone(),
         })
         .collect();

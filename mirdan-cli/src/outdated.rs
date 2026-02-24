@@ -13,7 +13,7 @@ use crate::table;
 /// Discovers installed packages from the filesystem and checks the registry
 /// for newer versions.
 pub async fn run_outdated() -> Result<(), RegistryError> {
-    let packages = list::discover_packages(false, false, None);
+    let packages = list::discover_packages(false, false, false, false, None);
 
     if packages.is_empty() {
         println!("No packages installed. Run 'mirdan install <package>' to install one.");
@@ -74,7 +74,7 @@ pub async fn run_update(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
-    let packages = list::discover_packages(false, false, agent_filter);
+    let packages = list::discover_packages(false, false, false, false, agent_filter);
 
     if packages.is_empty() {
         println!("No packages installed.");

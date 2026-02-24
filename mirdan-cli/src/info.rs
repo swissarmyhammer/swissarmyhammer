@@ -173,11 +173,12 @@ fn read_frontmatter_field(path: &Path, field: &str) -> String {
 
     let frontmatter = &rest[..end];
     if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
-        if let Some(value) = yaml.get(field).and_then(|v| v.as_str()).or_else(|| {
-            yaml.get("metadata")
-                .and_then(|m| m.get(field))
-                .and_then(|v| v.as_str())
-        }) {
+        if let Some(value) = yaml
+            .get("metadata")
+            .and_then(|m| m.get(field))
+            .and_then(|v| v.as_str())
+            .or_else(|| yaml.get(field).and_then(|v| v.as_str()))
+        {
             return value.to_string();
         }
     }
@@ -224,7 +225,7 @@ metadata:
         std::fs::create_dir_all(&val_dir).unwrap();
         std::fs::write(
             val_dir.join("VALIDATOR.md"),
-            "---\nname: test-val\nversion: \"1.0.0\"\n---\n# Test\n",
+            "---\nname: test-val\nmetadata:\n  version: \"1.0.0\"\n---\n# Test\n",
         )
         .unwrap();
 
@@ -246,7 +247,7 @@ metadata:
         std::fs::create_dir_all(&val_dir).unwrap();
         std::fs::write(
             val_dir.join("VALIDATOR.md"),
-            "---\nname: test-val\nversion: \"1.0.0\"\n---\n# Test\n",
+            "---\nname: test-val\nmetadata:\n  version: \"1.0.0\"\n---\n# Test\n",
         )
         .unwrap();
 

@@ -43,7 +43,8 @@ pub fn run_new(name: &str, global: bool) -> Result<(), RegistryError> {
         r#"---
 name: {name}
 description: "TODO: Describe what this RuleSet validates"
-version: "0.1.0"
+metadata:
+  version: "0.1.0"
 trigger: PostToolUse
 match:
   tools: [Write, Edit]

@@ -1,7 +1,8 @@
 ---
 name: test-driven-development
 description: Enforce test-driven development — write tests first, keep tests in sync with code
-version: "0.1.0"
+metadata:
+  version: "0.1.0"
 trigger: PostToolUse
 match:
   tools:

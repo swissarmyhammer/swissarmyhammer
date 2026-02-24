@@ -43,6 +43,20 @@ pub fn skill_store_dir(global: bool) -> PathBuf {
     }
 }
 
+/// Return the central tool store directory.
+///
+/// - Project scope: `.tools/`
+/// - Global scope: `~/.tools/`
+pub fn tool_store_dir(global: bool) -> PathBuf {
+    if global {
+        dirs::home_dir()
+            .expect("Could not find home directory")
+            .join(".tools")
+    } else {
+        PathBuf::from(".tools")
+    }
+}
+
 /// Compute the symlink name for a sanitized package path, given a policy.
 ///
 /// - `LastSegment`: `"anthropics/skills/algorithmic-art"` → `"algorithmic-art"`
@@ -209,6 +223,20 @@ mod tests {
     fn test_skill_store_dir_global() {
         let dir = skill_store_dir(true);
         assert!(dir.ends_with(".skills"));
+        let home = dirs::home_dir().unwrap();
+        assert!(dir.starts_with(home));
+    }
+
+    #[test]
+    fn test_tool_store_dir_project() {
+        let dir = tool_store_dir(false);
+        assert_eq!(dir, PathBuf::from(".tools"));
+    }
+
+    #[test]
+    fn test_tool_store_dir_global() {
+        let dir = tool_store_dir(true);
+        assert!(dir.ends_with(".tools"));
         let home = dirs::home_dir().unwrap();
         assert!(dir.starts_with(home));
     }

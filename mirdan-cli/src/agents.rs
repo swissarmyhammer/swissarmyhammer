@@ -33,14 +33,15 @@ pub enum SymlinkPolicy {
     FullPath,
 }
 
-/// MCP configuration for agents that support MCP servers.
+/// MCP configuration paths for an agent (used for Tool deployment).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpConfigDef {
-    /// Project-level config file (e.g. ".mcp.json"). None if agent doesn't support project-level MCP.
-    pub project_file: Option<String>,
-    /// Global config file (e.g. "~/.claude.json").
-    pub global_file: Option<String>,
-    /// JSON key containing server entries (default: "mcpServers").
+    /// Project-level MCP config file path (e.g. `.mcp.json`).
+    pub project_path: String,
+    /// Global MCP config file path (e.g. `~/.claude.json`).
+    #[serde(default)]
+    pub global_path: Option<String>,
+    /// JSON key under which MCP servers are stored (default: `"mcpServers"`).
     #[serde(default = "default_servers_key")]
     pub servers_key: String,
 }
@@ -59,9 +60,15 @@ pub struct AgentDef {
     pub detect: Vec<DetectMethod>,
     #[serde(default)]
     pub symlink_policy: SymlinkPolicy,
-    /// MCP server configuration support (None if agent doesn't support MCP).
+    /// MCP config paths for tool deployment.
     #[serde(default)]
     pub mcp_config: Option<McpConfigDef>,
+    /// Project-level plugin directory (e.g. `.claude/plugins`).
+    #[serde(default)]
+    pub plugin_path: Option<String>,
+    /// Global plugin directory (e.g. `~/.claude/plugins`).
+    #[serde(default)]
+    pub global_plugin_path: Option<String>,
 }
 
 /// How to detect if an agent is installed.
@@ -214,25 +221,33 @@ pub fn agent_global_skill_dir(agent: &AgentDef) -> PathBuf {
     expand_tilde(&agent.global_path)
 }
 
-/// Resolve the project-level MCP config path for an agent (e.g. ".mcp.json").
-/// Returns None if the agent doesn't support MCP or has no project-level config.
-pub fn mcp_project_config_path(agent: &AgentDef) -> Option<PathBuf> {
+/// Resolve the project-level MCP config file path for an agent (if configured).
+pub fn agent_project_mcp_config(agent: &AgentDef) -> Option<PathBuf> {
     agent
         .mcp_config
         .as_ref()
-        .and_then(|c| c.project_file.as_ref())
-        .map(PathBuf::from)
+        .map(|c| PathBuf::from(&c.project_path))
 }
 
-/// Resolve the global MCP config path for an agent (e.g. "~/.claude.json").
-/// Returns None if the agent doesn't support MCP or has no global file.
-pub fn mcp_global_config_path(agent: &AgentDef) -> Option<PathBuf> {
+/// Resolve the global MCP config file path for an agent (if configured).
+pub fn agent_global_mcp_config(agent: &AgentDef) -> Option<PathBuf> {
     agent
         .mcp_config
         .as_ref()
-        .and_then(|c| c.global_file.as_ref())
+        .and_then(|c| c.global_path.as_ref())
         .map(|p| expand_tilde(p))
 }
+
+/// Resolve the project-level plugin directory for an agent (if configured).
+pub fn agent_project_plugin_dir(agent: &AgentDef) -> Option<PathBuf> {
+    agent.plugin_path.as_ref().map(|p| PathBuf::from(p))
+}
+
+/// Resolve the global plugin directory for an agent (if configured).
+pub fn agent_global_plugin_dir(agent: &AgentDef) -> Option<PathBuf> {
+    agent.global_plugin_path.as_ref().map(|p| expand_tilde(p))
+}
+
 
 /// Run the `mirdan agents` command.
 pub fn run_agents(all: bool, json: bool) -> Result<(), RegistryError> {
@@ -392,6 +407,8 @@ mod tests {
                 }],
                 symlink_policy: SymlinkPolicy::default(),
                 mcp_config: None,
+                plugin_path: None,
+                global_plugin_path: None,
             }],
         };
         let detected = get_detected_agents(&config);
@@ -409,6 +426,8 @@ mod tests {
             detect: vec![],
             symlink_policy: SymlinkPolicy::default(),
             mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
         };
         assert_eq!(agent_project_skill_dir(&def), PathBuf::from(".test/skills"));
     }
@@ -425,11 +444,9 @@ mod tests {
                         dir: "/nonexistent/path/that/should/not/exist".to_string(),
                     }],
                     symlink_policy: SymlinkPolicy::default(),
-                    mcp_config: Some(McpConfigDef {
-                        project_file: Some(".mcp.json".to_string()),
-                        global_file: Some("~/.claude.json".to_string()),
-                        servers_key: "mcpServers".to_string(),
-                    }),
+                    mcp_config: None,
+                    plugin_path: None,
+                    global_plugin_path: None,
                 },
                 AgentDef {
                     id: "cursor".to_string(),
@@ -440,11 +457,9 @@ mod tests {
                         dir: "/nonexistent/cursor/path".to_string(),
                     }],
                     symlink_policy: SymlinkPolicy::default(),
-                    mcp_config: Some(McpConfigDef {
-                        project_file: Some(".cursor/mcp.json".to_string()),
-                        global_file: Some("~/.cursor/mcp.json".to_string()),
-                        servers_key: "mcpServers".to_string(),
-                    }),
+                    mcp_config: None,
+                    plugin_path: None,
+                    global_plugin_path: None,
                 },
             ],
         }

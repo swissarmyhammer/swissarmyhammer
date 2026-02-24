@@ -54,21 +54,34 @@ fn uninstall_mcp_all_agents(global: bool) -> Result<(), String> {
 
     let mut removed_count = 0;
     for agent in &agents {
-        match mirdan::mcp_config::uninstall_mcp_for_agent(&agent.def, "sah", global) {
-            Ok(Some(path)) => {
-                println!(
-                    "sah MCP server removed from {} ({})",
-                    agent.def.name,
-                    path.display()
-                );
-                removed_count += 1;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!(
-                    "Warning: failed to remove MCP from {}: {}",
-                    agent.def.name, e
-                );
+        if let Some(mcp_def) = &agent.def.mcp_config {
+            let config_path = if global {
+                mirdan::agents::agent_global_mcp_config(&agent.def)
+            } else {
+                mirdan::agents::agent_project_mcp_config(&agent.def)
+            };
+            if let Some(config_path) = config_path {
+                match mirdan::mcp_config::unregister_mcp_server(
+                    &config_path,
+                    &mcp_def.servers_key,
+                    "sah",
+                ) {
+                    Ok(true) => {
+                        println!(
+                            "sah MCP server removed from {} ({})",
+                            agent.def.name,
+                            config_path.display()
+                        );
+                        removed_count += 1;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: failed to remove MCP from {}: {}",
+                            agent.def.name, e
+                        );
+                    }
+                }
             }
         }
     }

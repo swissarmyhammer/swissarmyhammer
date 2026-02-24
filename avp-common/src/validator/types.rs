@@ -521,6 +521,17 @@ impl ExecutedValidator {
 // RuleSet Types (New Architecture)
 // ============================================================================
 
+/// Metadata for a RuleSet, containing version and other package-level information.
+///
+/// This matches the skills spec where metadata is a nested object rather than
+/// top-level fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuleSetMetadata {
+    /// Semantic version (e.g., "1.0.0").
+    #[serde(default)]
+    pub version: String,
+}
+
 /// Manifest for a RuleSet, parsed from VALIDATOR.md.
 ///
 /// The manifest defines shared configuration for all rules in the RuleSet:
@@ -535,8 +546,9 @@ pub struct RuleSetManifest {
     /// Human-readable description of the RuleSet's purpose.
     pub description: String,
 
-    /// Semantic version (e.g., "1.0.0").
-    pub version: String,
+    /// Package metadata (version, etc.).
+    #[serde(default)]
+    pub metadata: RuleSetMetadata,
 
     /// Hook event type that triggers all rules in this RuleSet.
     /// Rules inherit this and cannot override.
@@ -592,8 +604,8 @@ impl RuleSetManifest {
         }
 
         // Default version
-        if self.version.is_empty() {
-            self.version = "1.0.0".to_string();
+        if self.metadata.version.is_empty() {
+            self.metadata.version = "1.0.0".to_string();
         }
     }
 }

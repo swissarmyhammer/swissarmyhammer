@@ -1,11 +1,13 @@
 //! Mirdan - Universal skill and validator package manager for AI coding agents.
 //!
-//! Mirdan manages two package types across all detected AI coding agents:
+//! Mirdan manages four package types across all detected AI coding agents:
 //!
 //! - **Skills** (agentskills.io spec): Deployed to each agent's skill directory
 //! - **Validators** (AVP spec): Deployed to .avp/validators/
+//! - **Tools** (MCP server definitions): Deployed to .tools/ + agent MCP configs
+//! - **Plugins** (Claude Code plugins): Deployed to .claude/plugins/
 //!
-//! Package type is auto-detected from contents (SKILL.md vs VALIDATOR.md + rules/).
+//! Package type is auto-detected from contents.
 
 pub mod agents;
 pub mod auth;
