@@ -131,21 +131,7 @@ async fn main() {
         }
 
         Commands::Uninstall { name, global } => {
-            // Check lockfile to see if this is an MCP package
-            let is_mcp = {
-                let project_root = std::env::current_dir().unwrap_or_default();
-                let lf = mirdan::lockfile::Lockfile::load(&project_root).unwrap_or_default();
-                lf.get_package(&name)
-                    .map(|p| p.package_type == mirdan::package_type::PackageType::Mcp)
-                    .unwrap_or(false)
-            };
-            if is_mcp {
-                handle_registry_result(
-                    install::run_uninstall_mcp(&name, agent_filter, global).await,
-                )
-            } else {
-                handle_registry_result(install::run_uninstall(&name, agent_filter, global).await)
-            }
+            handle_registry_result(install::run_uninstall(&name, agent_filter, global).await)
         }
 
         Commands::List {
