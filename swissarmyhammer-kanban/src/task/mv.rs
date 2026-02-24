@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::{ColumnId, Ordinal, Position, SwimlaneId, TaskId};
+use crate::types::{Column, ColumnId, Ordinal, Position, Swimlane, SwimlaneId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
@@ -59,23 +59,73 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
 
-        let result = async {
+        let result: Result<Value, KanbanError> = async {
             let mut task = ctx.read_task(&self.id).await?;
-            let board = ctx.read_board().await?;
+            let mut board = ctx.read_board().await?;
 
-            // Validate column exists
+            // Auto-create column if it doesn't exist
             if board.find_column(&self.position.column).is_none() {
-                return Err(KanbanError::ColumnNotFound {
-                    id: self.position.column.to_string(),
+                let order = board
+                    .columns
+                    .iter()
+                    .map(|c| c.order)
+                    .max()
+                    .map(|o| o + 1)
+                    .unwrap_or(0);
+                let name = self
+                    .position
+                    .column
+                    .as_str()
+                    .split(['-', '_'])
+                    .map(|word| {
+                        let mut chars = word.chars();
+                        match chars.next() {
+                            Some(first) => {
+                                first.to_uppercase().to_string() + chars.as_str()
+                            }
+                            None => String::new(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                board.columns.push(Column {
+                    id: self.position.column.clone(),
+                    name,
+                    order,
                 });
+                ctx.write_board(&board).await?;
             }
 
-            // Validate swimlane exists if specified
+            // Auto-create swimlane if it doesn't exist
             if let Some(ref swimlane_id) = self.position.swimlane {
                 if board.find_swimlane(swimlane_id).is_none() {
-                    return Err(KanbanError::SwimlaneNotFound {
-                        id: swimlane_id.to_string(),
+                    let order = board
+                        .swimlanes
+                        .iter()
+                        .map(|s| s.order)
+                        .max()
+                        .map(|o| o + 1)
+                        .unwrap_or(0);
+                    let name = swimlane_id
+                        .as_str()
+                        .split(['-', '_'])
+                        .map(|word| {
+                            let mut chars = word.chars();
+                            match chars.next() {
+                                Some(first) => {
+                                    first.to_uppercase().to_string() + chars.as_str()
+                                }
+                                None => String::new(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    board.swimlanes.push(Swimlane {
+                        id: swimlane_id.clone(),
+                        name,
+                        order,
                     });
+                    ctx.write_board(&board).await?;
                 }
             }
 
@@ -195,7 +245,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_move_task_invalid_column() {
+    async fn test_move_task_auto_creates_column() {
         let (_temp, ctx) = setup().await;
 
         let add_result = AddTask::new("Task")
@@ -205,11 +255,17 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        let result = MoveTask::to_column(task_id, "nonexistent")
+        let result = MoveTask::to_column(task_id, "in-review")
             .execute(&ctx)
             .await
-            .into_result();
+            .into_result()
+            .unwrap();
 
-        assert!(matches!(result, Err(KanbanError::ColumnNotFound { .. })));
+        assert_eq!(result["position"]["column"], "in-review");
+
+        // Verify the column was created on the board
+        let board = ctx.read_board().await.unwrap();
+        let col = board.find_column(&ColumnId::from_string("in-review")).unwrap();
+        assert_eq!(col.name, "In Review");
     }
 }

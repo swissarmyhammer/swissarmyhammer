@@ -125,9 +125,6 @@ acp-conformance/.swissarmyhammer/sessions
 
 .work
 
-# SwissArmyHammer abort files (temporary test files)
-.swissarmyhammer/.abort
-
 # SwissArmyHammer temporary files
 .swissarmyhammer/tmp/
 

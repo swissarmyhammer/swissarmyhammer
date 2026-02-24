@@ -14,7 +14,6 @@ use crate::{
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
-use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::ModelConfig;
 
 /// Workflow execution engine
@@ -28,8 +27,8 @@ pub struct WorkflowExecutor {
 
     /// Optional workflow storage for test mode
     test_storage: Option<Arc<crate::storage::WorkflowStorage>>,
-    /// Working directory for file operations (including abort file)
-    working_dir: std::path::PathBuf,
+    /// Working directory for file operations
+    _working_dir: std::path::PathBuf,
 
     /// Optional agent configuration for workflow operations
     _agent: Option<Arc<ModelConfig>>,
@@ -47,7 +46,7 @@ impl WorkflowExecutor {
             max_history_size: DEFAULT_MAX_HISTORY_SIZE,
             metrics: WorkflowMetrics::new(),
             test_storage,
-            working_dir,
+            _working_dir: working_dir,
             _agent: agent,
         }
     }
@@ -212,18 +211,6 @@ impl WorkflowExecutor {
         if let Some(abort_reason_value) = run.context.get_workflow_var("__ABORT_REQUESTED__") {
             if let Some(abort_reason) = abort_reason_value.as_str() {
                 tracing::error!("***Workflow Aborted***: {}", abort_reason);
-
-                // Create abort file for external detection
-                if let Ok(sah_dir) =
-                    swissarmyhammer_common::SwissarmyhammerDirectory::from_git_root()
-                {
-                    let abort_path = sah_dir.root().join(".abort");
-                    if let Err(e) = std::fs::write(abort_path, abort_reason) {
-                        tracing::warn!("Failed to write abort file: {}", e);
-                    }
-                } else {
-                    tracing::warn!("Not in Git repository, cannot create abort file");
-                }
                 return Err(ExecutorError::Abort(abort_reason.to_string()));
             }
         }
@@ -297,26 +284,6 @@ impl WorkflowExecutor {
         Ok(false) // No transition, workflow is stuck
     }
 
-    /// Check for abort file before each execution iteration
-    fn check_abort_file(&self) -> ExecutorResult<()> {
-        let abort_path = self
-            .working_dir
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join(".abort");
-        if abort_path.exists() {
-            let reason = std::fs::read_to_string(&abort_path)
-                .unwrap_or_else(|_| "Unknown abort reason".to_string());
-
-            // Clean up the abort file after detection
-            if let Err(e) = std::fs::remove_file(&abort_path) {
-                tracing::warn!("Failed to clean up abort file after detection: {}", e);
-            }
-
-            return Err(ExecutorError::Abort(reason));
-        }
-        Ok(())
-    }
-
     /// Execute states with a maximum transition limit to prevent infinite loops
     pub async fn execute_state_with_limit(
         &mut self,
@@ -332,9 +299,6 @@ impl WorkflowExecutor {
         let mut current_remaining = transition_limit;
 
         loop {
-            // Check for abort file before each iteration
-            self.check_abort_file()?;
-
             tracing::debug!(
                 "Workflow execution loop - current state: {}",
                 run.current_state

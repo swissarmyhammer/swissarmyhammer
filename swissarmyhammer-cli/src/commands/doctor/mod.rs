@@ -200,17 +200,6 @@ impl Doctor {
             }
         }
 
-        // Check for potential issues
-        let abort_file = swissarmyhammer_dir.join(".abort");
-        if abort_file.exists() {
-            self.checks.push(Check {
-                name: "Abort File".to_string(),
-                status: CheckStatus::Warning,
-                message: "Previous workflow may have been aborted".to_string(),
-                fix: Some("Remove .abort file if workflows are working correctly".to_string()),
-            });
-        }
-
         Ok(())
     }
 }

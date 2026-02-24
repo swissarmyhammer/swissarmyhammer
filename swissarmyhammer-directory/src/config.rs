@@ -66,9 +66,6 @@ tmp/
 # Todo tracking (ephemeral development session tracking)
 todo/
 
-# Abort signals (workflow control files)
-.abort
-
 # Logs
 *.log
 mcp.log
