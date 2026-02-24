@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: Coding discipline. Activate this skill before writing any code — it defines how to write tests and implementation. Write a failing test first, then make it pass, then refactor. No exceptions.
+description: Use this skill whenever you are about to write or edit source code. Load it before making any code changes — it defines the required workflow of writing a failing test first, then making it pass, then refactoring. No exceptions.
 ---
 
 # Test-Driven Development

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install dependencies
+        run: cargo install --locked cargo-nextest
+      - name: Run tests
+        run: cargo nextest run --no-fail-fast
+
+  fmt:
+    name: Rustfmt
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Enforce formatting
+        run: cargo fmt --check
+
+  clippy:
+    name: Clippy
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Linting
+        run: cargo clippy
+
+  examples:
+    name: Run all examples
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build examples
+        run: |
+          cargo metadata --format-version 1 \
+            | jq -r '
+                .workspace_members as $members
+                | .packages[]
+                | select(.id as $id | $members | index($id))
+                | .name as $pkg
+                | .targets[]
+                | select(.kind[] == "example")
+                | "\($pkg) \(.name)"
+              ' \
+            | while read -r pkg name; do
+                echo "::group::Running example: $pkg/$name"
+                cargo build --example "$name" -p "$pkg"
+                echo "::endgroup::"
+              done
