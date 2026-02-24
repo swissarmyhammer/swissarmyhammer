@@ -2,13 +2,12 @@
 
 use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
-use swissarmyhammer_web::{FetchError, WebFetcher, WebFetchRequest};
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use serde_json::json;
-use std::time::Instant;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+use swissarmyhammer_web::{FetchError, WebFetcher, WebFetchRequest};
 
 /// Fetch web content and convert HTML to markdown
 #[derive(Debug, Default, Deserialize)]
@@ -68,20 +67,6 @@ pub async fn execute_fetch(
 
     tracing::debug!("Fetching web content from URL: {}", request.url);
 
-    let fetcher = WebFetcher::new();
-
-    // Validate URL via swissarmyhammer-web security checks
-    let validated_url = fetcher.validate_url(&request).await.map_err(|e| match &e {
-        FetchError::InvalidUrl(msg) => McpError::invalid_params(msg.clone(), None),
-        FetchError::SecurityViolation(msg) => McpError::invalid_params(msg.clone(), None),
-        FetchError::FetchFailed { message, .. } => {
-            McpError::internal_error(message.clone(), None)
-        }
-    })?;
-
-    // Create markdowndown configuration from request parameters
-    let config = fetcher.create_markdowndown_config(&request);
-
     // Generate progress token and send start notification
     let progress_token = generate_progress_token();
     if let Some(sender) = &context.progress_sender {
@@ -92,19 +77,16 @@ pub async fn execute_fetch(
                 format!("Web fetch: Fetching: {}", request.url),
                 json!({
                     "url": request.url,
-                    "timeout": config.http.timeout.as_secs()
+                    "timeout": request.timeout.unwrap_or(30)
                 }),
             )
             .ok();
     }
 
-    let start_time = Instant::now();
+    let fetcher = WebFetcher::new();
 
-    match markdowndown::convert_url_with_config(&validated_url, config).await {
-        Ok(markdown) => {
-            let response_time_ms = start_time.elapsed().as_millis() as u64;
-            let markdown_content = markdown.to_string();
-
+    match fetcher.fetch_url(&request).await {
+        Ok(result) => {
             if let Some(sender) = &context.progress_sender {
                 sender
                     .send_progress_with_metadata(
@@ -112,12 +94,12 @@ pub async fn execute_fetch(
                         Some(100),
                         format!(
                             "Web fetch: Complete - {} chars in {:.1}s",
-                            markdown_content.len(),
-                            response_time_ms as f64 / 1000.0
+                            result.markdown.len(),
+                            result.response_time_ms as f64 / 1000.0
                         ),
                         json!({
-                            "markdown_length": markdown_content.len(),
-                            "duration_ms": response_time_ms
+                            "markdown_length": result.markdown.len(),
+                            "duration_ms": result.response_time_ms
                         }),
                     )
                     .ok();
@@ -126,7 +108,7 @@ pub async fn execute_fetch(
             Ok(CallToolResult {
                 content: vec![rmcp::model::Annotated::new(
                     rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                        text: markdown_content,
+                        text: result.markdown,
                         meta: None,
                     }),
                     None,
@@ -137,8 +119,15 @@ pub async fn execute_fetch(
             })
         }
         Err(e) => {
-            let response_time_ms = start_time.elapsed().as_millis() as u64;
-            let error_type = WebFetcher::categorize_error(&e);
+            let (error_type, response_time_ms) = match &e {
+                FetchError::InvalidUrl(_) => return Err(McpError::invalid_params(e.to_string(), None)),
+                FetchError::SecurityViolation(_) => return Err(McpError::invalid_params(e.to_string(), None)),
+                FetchError::FetchFailed {
+                    error_type,
+                    response_time_ms,
+                    ..
+                } => (error_type.clone(), *response_time_ms),
+            };
 
             if let Some(sender) = &context.progress_sender {
                 sender
@@ -155,22 +144,12 @@ pub async fn execute_fetch(
                     .ok();
             }
 
-            tracing::warn!(
-                "Failed to fetch content from {} after {}ms: {} (category: {})",
-                request.url,
-                response_time_ms,
-                e,
-                error_type
-            );
-
             let metadata = json!({
                 "url": request.url,
                 "error_type": error_type,
                 "error_details": e.to_string(),
-                "status_code": null,
                 "response_time_ms": response_time_ms,
                 "performance_impact": if response_time_ms > 10000 { "high" } else { "low" },
-                "optimization_enabled": true
             });
 
             let response = json!({

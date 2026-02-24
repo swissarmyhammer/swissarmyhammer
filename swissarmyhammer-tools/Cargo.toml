@@ -78,8 +78,7 @@ async-watcher = { workspace = true }
 encoding_rs = { workspace = true }
 filetime = { workspace = true }
 
-# Web fetch (markdowndown used directly in web/fetch.rs for URL conversion)
-markdowndown = { workspace = true }
+# Web dependencies
 libc = { workspace = true }
 rand = { workspace = true }
 futures-util = { workspace = true }
