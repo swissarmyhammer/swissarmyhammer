@@ -21,28 +21,16 @@ fn main() -> std::io::Result<()> {
     let cmd = cli::Cli::command();
     let repo_root = Path::new("..");
 
-    let md = doc_gen::generate_markdown_with_brew(
+    doc_gen::generate_markdown_with_brew(
         &cmd,
         &repo_root.join("doc/src/reference"),
         "avp",
         Some("swissarmyhammer/tap/avp-cli"),
     )?;
-    println!(
-        "cargo::warning=Generated {} ({} bytes)",
-        md.path.display(),
-        md.size
-    );
 
-    let man = doc_gen::generate_manpage(&cmd, &repo_root.join("docs"), "avp")?;
-    println!(
-        "cargo::warning=Generated {} ({} bytes)",
-        man.path.display(),
-        man.size
-    );
+    doc_gen::generate_manpage(&cmd, &repo_root.join("docs"), "avp")?;
 
-    for path in doc_gen::generate_completions(cmd, &repo_root.join("completions"), "avp")? {
-        println!("cargo::warning=Generated {}", path.display());
-    }
+    doc_gen::generate_completions(cmd, &repo_root.join("completions"), "avp")?;
 
     Ok(())
 }

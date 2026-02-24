@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: Follow test driven development. Use this any time you are coding, all the time.
+description: Coding discipline. Activate this skill before writing any code — it defines how to write tests and implementation. Write a failing test first, then make it pass, then refactor. No exceptions.
 ---
 
 # Test-Driven Development
