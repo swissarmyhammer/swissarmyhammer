@@ -10,12 +10,48 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use serde_json::json;
+use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
 /// Default number of results to return
 const DEFAULT_TOP_K: usize = 10;
 
 /// Default minimum similarity threshold (0.0-1.0)
 const DEFAULT_MIN_SIMILARITY: f32 = 0.9;
+
+/// Operation metadata for semantic code search
+#[derive(Debug, Default)]
+pub struct SearchCode;
+
+static SEARCH_CODE_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("query")
+        .description("The text or code snippet to search for similar chunks")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("top_k")
+        .description("Maximum number of results to return (default: 10)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("min_similarity")
+        .description("Minimum cosine similarity threshold 0.0-1.0 (default: 0.9)")
+        .param_type(ParamType::Number),
+    ParamMeta::new("path")
+        .description("Workspace path (default: current directory)")
+        .param_type(ParamType::String),
+];
+
+impl Operation for SearchCode {
+    fn verb(&self) -> &'static str {
+        "search"
+    }
+    fn noun(&self) -> &'static str {
+        "code"
+    }
+    fn description(&self) -> &'static str {
+        "Semantic search for similar code chunks using embeddings"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SEARCH_CODE_PARAMS
+    }
+}
 
 /// MCP tool for semantic code search
 #[derive(Default)]
@@ -89,28 +125,36 @@ impl McpTool for TreesitterSearchTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let request: SearchRequest = BaseToolImpl::parse_arguments(arguments)?;
-        let workspace_path = resolve_workspace_path(request.path.as_ref(), context);
-
-        tracing::debug!(
-            "Performing semantic search in {:?} for: {}",
-            workspace_path,
-            request.query
-        );
-
-        let workspace = open_workspace(&workspace_path).await?;
-
-        let results = workspace
-            .semantic_search(request.query.clone(), request.top_k, request.min_similarity)
-            .await
-            .map_err(|e| {
-                McpError::internal_error(format!("Semantic search failed: {}", e), None)
-            })?;
-
-        Ok(BaseToolImpl::create_success_response(
-            format_similar_chunks(&results, "similar code chunks"),
-        ))
+        execute_search(arguments, context).await
     }
+}
+
+/// Execute a semantic code search operation
+pub async fn execute_search(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let request: SearchRequest = BaseToolImpl::parse_arguments(arguments)?;
+    let workspace_path = resolve_workspace_path(request.path.as_ref(), context);
+
+    tracing::debug!(
+        "Performing semantic search in {:?} for: {}",
+        workspace_path,
+        request.query
+    );
+
+    let workspace = open_workspace(&workspace_path).await?;
+
+    let results = workspace
+        .semantic_search(request.query.clone(), request.top_k, request.min_similarity)
+        .await
+        .map_err(|e| {
+            McpError::internal_error(format!("Semantic search failed: {}", e), None)
+        })?;
+
+    Ok(BaseToolImpl::create_success_response(
+        format_similar_chunks(&results, "similar code chunks"),
+    ))
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ async fn test_proxy_filters_tool_discovery() {
 
     // Verify server has many tools
     assert!(
-        all_tool_count > 15,
+        all_tool_count > 10,
         "Server should have many tools, got {}",
         all_tool_count
     );

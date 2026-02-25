@@ -11,6 +11,42 @@ use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
+use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+
+/// Operation metadata for tree-sitter AST queries
+#[derive(Debug, Default)]
+pub struct QueryAst;
+
+static QUERY_AST_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("query")
+        .description("Tree-sitter S-expression query pattern (e.g., '(function_item name: (identifier) @name)')")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("files")
+        .description("Optional list of specific files to query")
+        .param_type(ParamType::Array),
+    ParamMeta::new("language")
+        .description("Optional language filter (e.g., 'rust', 'python', 'javascript')")
+        .param_type(ParamType::String),
+    ParamMeta::new("path")
+        .description("Workspace path (default: current directory)")
+        .param_type(ParamType::String),
+];
+
+impl Operation for QueryAst {
+    fn verb(&self) -> &'static str {
+        "query"
+    }
+    fn noun(&self) -> &'static str {
+        "ast"
+    }
+    fn description(&self) -> &'static str {
+        "Execute tree-sitter S-expression queries to find AST patterns in code"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        QUERY_AST_PARAMS
+    }
+}
 
 /// MCP tool for executing tree-sitter queries
 #[derive(Default)]
@@ -74,32 +110,40 @@ impl McpTool for TreesitterQueryTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let request: QueryRequest = BaseToolImpl::parse_arguments(arguments)?;
-        let workspace_path = resolve_workspace_path(request.path.as_ref(), context);
-
-        tracing::debug!(
-            "Executing tree-sitter query in {:?}: {}",
-            workspace_path,
-            request.query
-        );
-
-        let workspace = open_workspace(&workspace_path).await?;
-
-        let files = request
-            .files
-            .map(|f| f.into_iter().map(PathBuf::from).collect());
-
-        let results = workspace
-            .tree_sitter_query(request.query.clone(), files, request.language.clone())
-            .await
-            .map_err(|e| {
-                McpError::internal_error(format!("Query execution failed: {}", e), None)
-            })?;
-
-        Ok(BaseToolImpl::create_success_response(format_query_matches(
-            &results,
-        )))
+        execute_query(arguments, context).await
     }
+}
+
+/// Execute a tree-sitter AST query operation
+pub async fn execute_query(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let request: QueryRequest = BaseToolImpl::parse_arguments(arguments)?;
+    let workspace_path = resolve_workspace_path(request.path.as_ref(), context);
+
+    tracing::debug!(
+        "Executing tree-sitter query in {:?}: {}",
+        workspace_path,
+        request.query
+    );
+
+    let workspace = open_workspace(&workspace_path).await?;
+
+    let files = request
+        .files
+        .map(|f| f.into_iter().map(PathBuf::from).collect());
+
+    let results = workspace
+        .tree_sitter_query(request.query.clone(), files, request.language.clone())
+        .await
+        .map_err(|e| {
+            McpError::internal_error(format!("Query execution failed: {}", e), None)
+        })?;
+
+    Ok(BaseToolImpl::create_success_response(format_query_matches(
+        &results,
+    )))
 }
 
 #[cfg(test)]
