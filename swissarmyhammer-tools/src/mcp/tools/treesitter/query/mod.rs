@@ -137,9 +137,7 @@ pub async fn execute_query(
     let results = workspace
         .tree_sitter_query(request.query.clone(), files, request.language.clone())
         .await
-        .map_err(|e| {
-            McpError::internal_error(format!("Query execution failed: {}", e), None)
-        })?;
+        .map_err(|e| McpError::internal_error(format!("Query execution failed: {}", e), None))?;
 
     Ok(BaseToolImpl::create_success_response(format_query_matches(
         &results,
