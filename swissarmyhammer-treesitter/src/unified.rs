@@ -516,11 +516,16 @@ impl Workspace {
         let file_count = db.file_count().unwrap_or(0);
         let embedded_count = db.embedded_chunk_count().unwrap_or(0);
 
+        // The index is ready only when files exist AND no background indexer
+        // is still running (i.e. the leader lock is not held).
+        let indexing_in_progress = self.election.is_locked();
+        let is_ready = file_count > 0 && !indexing_in_progress;
+
         Ok(IndexStatusInfo {
             files_total: file_count,
             files_indexed: file_count,
             files_embedded: if embedded_count > 0 { file_count } else { 0 },
-            is_ready: file_count > 0,
+            is_ready,
             root_path: self.workspace_root.clone(),
         })
     }

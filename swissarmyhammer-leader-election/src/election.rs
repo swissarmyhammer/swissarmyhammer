@@ -154,6 +154,27 @@ impl LeaderElection {
         self.socket_path.exists()
     }
 
+    /// Check if the leader lock is currently held by another process.
+    ///
+    /// Opens the lock file read-only and attempts a non-blocking exclusive lock.
+    /// If the lock cannot be acquired, another process holds it (i.e. indexing
+    /// is in progress). Returns false if the file doesn't exist or the lock is
+    /// free.
+    pub fn is_locked(&self) -> bool {
+        let Ok(file) = File::open(&self.lock_path) else {
+            return false;
+        };
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                // Lock was free — unlock immediately
+                let _ = file.unlock();
+                false
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => true,
+            Err(_) => false,
+        }
+    }
+
     /// Get the path to the Unix socket
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
