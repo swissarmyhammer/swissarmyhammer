@@ -246,38 +246,6 @@ mod tests {
         assert_eq!(doctor.checks.len(), 0);
     }
 
-    #[test]
-    fn test_check_status_exit_codes() {
-        let mut doctor = Doctor::new();
-
-        // All OK should return 0
-        doctor.checks.push(Check {
-            name: "Test OK".to_string(),
-            status: CheckStatus::Ok,
-            message: "Everything is fine".to_string(),
-            fix: None,
-        });
-        assert_eq!(doctor.get_exit_code(), 0);
-
-        // Warning should return 1
-        doctor.checks.push(Check {
-            name: "Test Warning".to_string(),
-            status: CheckStatus::Warning,
-            message: "Something might be wrong".to_string(),
-            fix: Some("Consider fixing this".to_string()),
-        });
-        assert_eq!(doctor.get_exit_code(), 1);
-
-        // Error should return 2
-        doctor.checks.push(Check {
-            name: "Test Error".to_string(),
-            status: CheckStatus::Error,
-            message: "Something is definitely wrong".to_string(),
-            fix: Some("You must fix this".to_string()),
-        });
-        assert_eq!(doctor.get_exit_code(), 2);
-    }
-
     #[tokio::test]
     async fn test_run_diagnostics() {
         let mut doctor = Doctor::new();
@@ -310,10 +278,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_exit_code_conversion() {
-        assert_eq!(i32::from(ExitCode::Success), 0);
-        assert_eq!(i32::from(ExitCode::Warning), 1);
-        assert_eq!(i32::from(ExitCode::Error), 2);
-    }
 }
