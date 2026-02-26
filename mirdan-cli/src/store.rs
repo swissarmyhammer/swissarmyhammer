@@ -415,7 +415,12 @@ mod tests {
         ];
 
         // --- first deploy ---
-        deploy_to_store_and_agents(&store_path, &agent_dirs, "my-skill", "# V1\nOriginal content");
+        deploy_to_store_and_agents(
+            &store_path,
+            &agent_dirs,
+            "my-skill",
+            "# V1\nOriginal content",
+        );
 
         for agent_dir in &agent_dirs {
             let link = agent_dir.join("my-skill");
@@ -425,7 +430,12 @@ mod tests {
         }
 
         // --- second deploy (no deinit, updated content) ---
-        deploy_to_store_and_agents(&store_path, &agent_dirs, "my-skill", "# V2\nUpdated content");
+        deploy_to_store_and_agents(
+            &store_path,
+            &agent_dirs,
+            "my-skill",
+            "# V2\nUpdated content",
+        );
 
         // Store should have new content
         let store_content = std::fs::read_to_string(store_path.join("SKILL.md")).unwrap();
@@ -476,7 +486,12 @@ mod tests {
         for agent_dir in &agent_dirs {
             for skill in &skills {
                 let link = agent_dir.join(skill);
-                assert!(link.exists(), "{} should exist in {}", skill, agent_dir.display());
+                assert!(
+                    link.exists(),
+                    "{} should exist in {}",
+                    skill,
+                    agent_dir.display()
+                );
             }
         }
 
@@ -516,7 +531,11 @@ mod tests {
                 );
 
                 let meta = std::fs::symlink_metadata(&link).unwrap();
-                assert!(meta.file_type().is_symlink(), "{} should be a symlink", skill);
+                assert!(
+                    meta.file_type().is_symlink(),
+                    "{} should be a symlink",
+                    skill
+                );
 
                 let content = std::fs::read_to_string(link.join("SKILL.md")).unwrap();
                 assert_eq!(

@@ -194,7 +194,6 @@ fn install_skills_via_mirdan(global: bool) -> Result<(), String> {
 
     let mut installed_count = 0;
     for (name, skill) in &skills {
-
         // Write builtin to a temp dir so deploy_skill_to_agents can copy it
         let temp_dir =
             tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
