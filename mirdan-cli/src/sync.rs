@@ -10,7 +10,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::agents::{self, agent_global_skill_dir, agent_project_skill_dir};
+use crate::agents::{
+    self, agent_global_agent_dir, agent_global_skill_dir, agent_project_agent_dir,
+    agent_project_skill_dir,
+};
 use crate::lockfile::Lockfile;
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
@@ -155,6 +158,41 @@ pub fn sync(
                     report.packages_verified += 1;
                 } else {
                     report.missing_packages.push(name.clone());
+                }
+            }
+            PackageType::Agent => {
+                let sanitized = store::sanitize_dir_name(name);
+                let agent_store = store::agent_store_dir(global);
+                let store_path = agent_store.join(&sanitized);
+
+                if !store_path.exists() {
+                    report.missing_packages.push(name.clone());
+                    continue;
+                }
+
+                report.packages_verified += 1;
+
+                // Ensure symlinks exist in each coding agent's agent directory
+                for agent in &agents {
+                    let agent_dir = if global {
+                        agent_global_agent_dir(&agent.def)
+                    } else {
+                        agent_project_agent_dir(&agent.def)
+                    };
+
+                    if let Some(base_dir) = agent_dir {
+                        let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
+                        let link_path = base_dir.join(&link_name);
+
+                        // Skip if link already exists and is valid
+                        if std::fs::symlink_metadata(&link_path).is_ok() {
+                            continue;
+                        }
+
+                        // Create missing symlink
+                        store::create_skill_link(&store_path, &link_path)?;
+                        report.links_created += 1;
+                    }
                 }
             }
         }

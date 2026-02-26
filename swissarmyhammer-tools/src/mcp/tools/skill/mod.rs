@@ -25,12 +25,13 @@ static USE_SKILL: Lazy<UseSkill> = Lazy::new(|| UseSkill::new(""));
 static SEARCH_SKILL: Lazy<SearchSkill> = Lazy::new(|| SearchSkill::new(""));
 
 /// All skill operations for schema generation
-static SKILL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
-    vec![
+static SKILL_OPERATIONS: Lazy<&'static [&'static dyn Operation]> = Lazy::new(|| {
+    let ops: Vec<&'static dyn Operation> = vec![
         &*LIST_SKILLS as &dyn Operation,
         &*USE_SKILL as &dyn Operation,
         &*SEARCH_SKILL as &dyn Operation,
-    ]
+    ];
+    Box::leak(ops.into_boxed_slice())
 });
 
 /// Static description prefix (the `<available_skills>` section is appended dynamically)
@@ -38,8 +39,8 @@ static DESCRIPTION_PREFIX: &str = include_str!("description.md");
 
 /// MCP tool for skill discovery and activation
 pub struct SkillTool {
-    /// Dynamic description including available skills
-    description: String,
+    /// Static description computed once at construction time
+    description: &'static str,
     /// Shared skill library
     library: Arc<RwLock<SkillLibrary>>,
     /// Prompt library for rendering skill templates with partials
@@ -52,8 +53,8 @@ impl SkillTool {
         library: Arc<RwLock<SkillLibrary>>,
         prompt_library: Arc<RwLock<PromptLibrary>>,
     ) -> Self {
-        // Build the dynamic description with available skills
         let description = build_description(&library);
+        let description: &'static str = Box::leak(description.into_boxed_str());
         Self {
             description,
             library,
@@ -174,12 +175,7 @@ impl McpTool for SkillTool {
     }
 
     fn description(&self) -> &'static str {
-        // We need 'static but our description is dynamic.
-        // Leak the string so it lives for 'static — this is fine since
-        // the tool is registered once and lives for the process lifetime.
-        // SAFETY: This leaks a small amount of memory (once per process).
-        let leaked: &'static str = Box::leak(self.description.clone().into_boxed_str());
-        leaked
+        self.description
     }
 
     fn schema(&self) -> serde_json::Value {
@@ -187,14 +183,7 @@ impl McpTool for SkillTool {
     }
 
     fn operations(&self) -> &'static [&'static dyn Operation] {
-        let ops: &[&'static dyn Operation] = &SKILL_OPERATIONS;
-        // SAFETY: SKILL_OPERATIONS is a static Lazy<Vec<...>> initialized once
-        unsafe {
-            std::mem::transmute::<
-                &[&dyn Operation],
-                &'static [&'static dyn swissarmyhammer_operations::Operation],
-            >(ops)
-        }
+        *SKILL_OPERATIONS
     }
 
     async fn execute(

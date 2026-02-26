@@ -69,6 +69,12 @@ pub struct AgentDef {
     /// Global plugin directory (e.g. `~/.claude/plugins`).
     #[serde(default)]
     pub global_plugin_path: Option<String>,
+    /// Project-level agent (subagent) directory (e.g. `.claude/agents`).
+    #[serde(default)]
+    pub agent_path: Option<String>,
+    /// Global agent (subagent) directory (e.g. `~/.claude/agents`).
+    #[serde(default)]
+    pub global_agent_path: Option<String>,
 }
 
 /// How to detect if an agent is installed.
@@ -248,6 +254,16 @@ pub fn agent_global_plugin_dir(agent: &AgentDef) -> Option<PathBuf> {
     agent.global_plugin_path.as_ref().map(|p| expand_tilde(p))
 }
 
+/// Resolve the project-level agent (subagent) directory for an agent (if configured).
+pub fn agent_project_agent_dir(agent: &AgentDef) -> Option<PathBuf> {
+    agent.agent_path.as_ref().map(PathBuf::from)
+}
+
+/// Resolve the global agent (subagent) directory for an agent (if configured).
+pub fn agent_global_agent_dir(agent: &AgentDef) -> Option<PathBuf> {
+    agent.global_agent_path.as_ref().map(|p| expand_tilde(p))
+}
+
 /// Run the `mirdan agents` command.
 pub fn run_agents(all: bool, json: bool) -> Result<(), RegistryError> {
     let config = load_agents_config()?;
@@ -408,6 +424,8 @@ mod tests {
                 mcp_config: None,
                 plugin_path: None,
                 global_plugin_path: None,
+                agent_path: None,
+                global_agent_path: None,
             }],
         };
         let detected = get_detected_agents(&config);
@@ -427,6 +445,8 @@ mod tests {
             mcp_config: None,
             plugin_path: None,
             global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
         };
         assert_eq!(agent_project_skill_dir(&def), PathBuf::from(".test/skills"));
     }
@@ -446,6 +466,8 @@ mod tests {
                     mcp_config: None,
                     plugin_path: None,
                     global_plugin_path: None,
+                    agent_path: Some(".claude/agents".to_string()),
+                    global_agent_path: Some("~/.claude/agents".to_string()),
                 },
                 AgentDef {
                     id: "cursor".to_string(),
@@ -459,6 +481,8 @@ mod tests {
                     mcp_config: None,
                     plugin_path: None,
                     global_plugin_path: None,
+                    agent_path: None,
+                    global_agent_path: None,
                 },
             ],
         }

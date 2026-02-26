@@ -2,7 +2,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_prompts::{PromptLibrary, PromptPartialAdapter};
+use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptPartialAdapter};
 use swissarmyhammer_templating::Template;
 
 fn get_builtin_prompts_path() -> PathBuf {
@@ -11,6 +11,45 @@ fn get_builtin_prompts_path() -> PathBuf {
         .parent()
         .unwrap()
         .join("builtin/prompts")
+}
+
+fn get_builtin_partials_path() -> PathBuf {
+    // Shared partials live at builtin/_partials/ (outside prompts)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("builtin/_partials")
+}
+
+/// Load shared partials from builtin/_partials/ into the library with _partials/ prefix
+fn load_shared_partials(library: &mut PromptLibrary) {
+    let partials_path = get_builtin_partials_path();
+    for entry in walkdir::WalkDir::new(&partials_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.is_file() && path.extension().is_some_and(|e| e == "md" || e == "liquid") {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                // Strip YAML frontmatter so it doesn't bleed into rendered output
+                let template_content = strip_frontmatter(&content);
+                let relative = path.strip_prefix(&partials_path).unwrap();
+                let name = relative.with_extension("").to_string_lossy().to_string();
+                let prefixed = format!("_partials/{}", name);
+                let _ = library.add(Prompt::new(&prefixed, &template_content));
+            }
+        }
+    }
+}
+
+/// Strip YAML frontmatter (---\n...\n---\n) from content
+fn strip_frontmatter(content: &str) -> String {
+    if content.starts_with("---") {
+        if let Some(end) = content[3..].find("\n---") {
+            return content[3 + end + 4..].to_string();
+        }
+    }
+    content.to_string()
 }
 
 #[test]
@@ -34,6 +73,7 @@ fn test_detected_projects_includes_rust_instructions() {
     library
         .add_directory(get_builtin_prompts_path())
         .expect("Failed to load builtin prompts");
+    load_shared_partials(&mut library);
 
     // Get the prompt directly
     let prompt = library
@@ -91,6 +131,7 @@ fn test_detected_projects_includes_nodejs_instructions() {
     library
         .add_directory(get_builtin_prompts_path())
         .expect("Failed to load builtin prompts");
+    load_shared_partials(&mut library);
 
     // Get the prompt directly
     let prompt = library
@@ -156,6 +197,7 @@ fn test_detected_projects_includes_flutter_instructions() {
     library
         .add_directory(get_builtin_prompts_path())
         .expect("Failed to load builtin prompts");
+    load_shared_partials(&mut library);
 
     // Get the prompt directly
     let prompt = library
@@ -230,6 +272,7 @@ fn test_detected_projects_deduplicates_instructions() {
     library
         .add_directory(get_builtin_prompts_path())
         .expect("Failed to load builtin prompts");
+    load_shared_partials(&mut library);
 
     // Get the prompt directly
     let prompt = library

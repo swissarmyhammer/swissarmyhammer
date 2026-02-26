@@ -30,6 +30,9 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
     // Install builtin skills via mirdan store + sync
     install_skills_via_mirdan(global)?;
 
+    // Install builtin agents to .agents/ (or ~/.agents/)
+    install_agents_via_mirdan(global)?;
+
     Ok(())
 }
 
@@ -278,6 +281,133 @@ fn render_skill_instructions(
     let mut rendered = skill.clone();
     rendered.instructions = rendered_instructions;
     rendered
+}
+
+/// Install builtin agents via mirdan's deploy + lockfile.
+///
+/// 1. Write each builtin agent to a temp dir (they're embedded in the binary)
+/// 2. Call `deploy_agent_to_agents()` for each — handles store copy + symlinks
+/// 3. Write lockfile entries via `Lockfile`
+///
+/// Agent instructions are rendered through the prompt library's Liquid template
+/// engine before writing to disk, so `{% include %}` partials are expanded.
+fn install_agents_via_mirdan(global: bool) -> Result<(), String> {
+    use swissarmyhammer_agents::AgentResolver;
+
+    let resolver = AgentResolver::new();
+    let agents = resolver.resolve_builtins();
+
+    let prompt_library = PromptLibrary::default();
+    let template_context = TemplateContext::new();
+
+    let project_root =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
+        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+
+    let mut installed_count = 0;
+    for (name, agent) in &agents {
+        // Write builtin agent to a temp dir so deploy_agent_to_agents can copy it
+        let temp_dir =
+            tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+        let agent_dir = temp_dir.path().join(name);
+        std::fs::create_dir_all(&agent_dir)
+            .map_err(|e| format!("Failed to create temp agent dir: {}", e))?;
+
+        // Render instructions through the prompt library's Liquid engine
+        // so {% include %} partials are expanded before writing to disk
+        let rendered_instructions =
+            match prompt_library.render_text(&agent.instructions, &template_context) {
+                Ok(rendered) => rendered,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: failed to render partials for agent '{}': {}",
+                        name, e
+                    );
+                    agent.instructions.clone()
+                }
+            };
+
+        // Write the AGENT.md from the rendered content
+        let agent_md_path = agent_dir.join("AGENT.md");
+        let content = format_agent_md(agent, &rendered_instructions);
+        std::fs::write(&agent_md_path, &content)
+            .map_err(|e| format!("Failed to write {}: {}", agent_md_path.display(), e))?;
+
+        // Deploy via mirdan: store copy + coding agent symlinks
+        let targets = mirdan::install::deploy_agent_to_agents(name, &agent_dir, None, global)
+            .map_err(|e| format!("Failed to deploy agent '{}': {}", name, e))?;
+
+        // Record in lockfile
+        lockfile.add_package(
+            name.clone(),
+            mirdan::lockfile::LockedPackage {
+                package_type: mirdan::package_type::PackageType::Agent,
+                version: "0.0.0".to_string(),
+                resolved: "builtin".to_string(),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets,
+            },
+        );
+
+        installed_count += 1;
+    }
+
+    if installed_count > 0 {
+        lockfile
+            .save(&project_root)
+            .map_err(|e| format!("Failed to save lockfile: {}", e))?;
+        println!(
+            "Installed {} builtin agents (lockfile updated)",
+            installed_count
+        );
+    }
+
+    Ok(())
+}
+
+/// Format an Agent back into AGENT.md content (frontmatter + rendered body)
+fn format_agent_md(agent: &swissarmyhammer_agents::Agent, rendered_instructions: &str) -> String {
+    let mut content = String::from("---\n");
+    content.push_str(&format!("name: {}\n", agent.name));
+    content.push_str(&format!("description: {}\n", agent.description));
+
+    if let Some(ref model) = agent.model {
+        content.push_str(&format!("model: {}\n", model));
+    }
+
+    if !agent.tools.is_empty() {
+        if agent.tools.len() == 1 && agent.tools[0] == "*" {
+            content.push_str("tools: \"*\"\n");
+        } else {
+            let tools = agent.tools.join(" ");
+            content.push_str(&format!("tools: \"{}\"\n", tools));
+        }
+    }
+
+    if !agent.disallowed_tools.is_empty() {
+        let tools = agent.disallowed_tools.join(" ");
+        content.push_str(&format!("disallowed-tools: \"{}\"\n", tools));
+    }
+
+    if let Some(ref isolation) = agent.isolation {
+        content.push_str(&format!("isolation: {}\n", isolation));
+    }
+
+    if let Some(max_turns) = agent.max_turns {
+        content.push_str(&format!("max-turns: {}\n", max_turns));
+    }
+
+    if agent.background {
+        content.push_str("background: true\n");
+    }
+
+    content.push_str("---\n\n");
+    content.push_str(rendered_instructions);
+    content.push('\n');
+
+    content
 }
 
 /// Format a Skill back into SKILL.md content (frontmatter + body)

@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::agents::{self, agent_global_skill_dir, agent_project_skill_dir};
+use crate::agents::{
+    self, agent_global_agent_dir, agent_global_skill_dir, agent_project_agent_dir,
+    agent_project_skill_dir,
+};
 use crate::git_source::{self, InstallSource};
 use crate::lockfile::{self, LockedPackage, Lockfile};
 use crate::mcp_config;
@@ -107,6 +110,7 @@ async fn run_install_local(
                 mcp_config::read_plugin_json(&dir.join(".claude-plugin/plugin.json"))?;
             (plugin_name, "0.0.0".to_string())
         }
+        PackageType::Agent => read_frontmatter(&dir.join("AGENT.md"))?,
     };
 
     println!("Installing {} from local path ({})...", name, pkg_type);
@@ -116,6 +120,7 @@ async fn run_install_local(
         PackageType::Validator => deploy_validator(&name, &dir, global)?,
         PackageType::Tool => deploy_tool(&name, &dir, agent_filter, global)?,
         PackageType::Plugin => deploy_plugin(&name, &dir, agent_filter, global)?,
+        PackageType::Agent => deploy_agent(&name, &dir, agent_filter, global).await?,
     };
 
     // Update lockfile
@@ -185,6 +190,7 @@ async fn run_install_git(
             PackageType::Validator => deploy_validator(&pkg.name, &pkg.path, global)?,
             PackageType::Tool => deploy_tool(&pkg.name, &pkg.path, agent_filter, global)?,
             PackageType::Plugin => deploy_plugin(&pkg.name, &pkg.path, agent_filter, global)?,
+            PackageType::Agent => deploy_agent(&pkg.name, &pkg.path, agent_filter, global).await?,
         };
 
         // Read version from frontmatter (or plugin.json for plugins)
@@ -199,6 +205,9 @@ async fn run_install_git(
                 .map(|(_, v)| v)
                 .unwrap_or_else(|_| "0.0.0".to_string()),
             PackageType::Plugin => "0.0.0".to_string(),
+            PackageType::Agent => read_frontmatter(&pkg.path.join("AGENT.md"))
+                .map(|(_, v)| v)
+                .unwrap_or_else(|_| "0.0.0".to_string()),
         };
 
         lf.add_package(
@@ -383,6 +392,7 @@ async fn install_from_archive(
         PackageType::Validator => deploy_validator(name, temp_dir.path(), global)?,
         PackageType::Tool => deploy_tool(name, temp_dir.path(), agent_filter, global)?,
         PackageType::Plugin => deploy_plugin(name, temp_dir.path(), agent_filter, global)?,
+        PackageType::Agent => deploy_agent(name, temp_dir.path(), agent_filter, global).await?,
     };
 
     record_install(name, version_detail, pkg_type, &targets)?;
@@ -627,6 +637,81 @@ async fn deploy_skill(
     deploy_skill_to_agents(name, source_dir, agent_filter, global)
 }
 
+/// Deploy an agent (subagent) to the central store, then symlink into each coding agent's agent directory.
+///
+/// This is the public, synchronous API. Mirrors [`deploy_skill_to_agents`] but uses
+/// the `.agents/` store and agent-specific agent directories (e.g. `.claude/agents/`).
+pub fn deploy_agent_to_agents(
+    name: &str,
+    source_dir: &Path,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<Vec<String>, RegistryError> {
+    let config = agents::load_agents_config()?;
+    let agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    if agents.is_empty() {
+        return Err(RegistryError::Validation(
+            "No agents detected. Run 'mirdan agents' to check.".to_string(),
+        ));
+    }
+
+    // 1. Copy source into the central agent store
+    let sanitized = sanitize_dir_name(name);
+    let store_path = store::agent_store_dir(global).join(&sanitized);
+
+    // Remove existing store entry
+    store::remove_if_exists(&store_path)?;
+
+    copy_dir_recursive(source_dir, &store_path)?;
+    println!("  Stored in {}", store_path.display());
+
+    // 2. Create symlinks from each coding agent's agent directory
+    let mut targets = Vec::new();
+
+    for agent in &agents {
+        let agent_dir = if global {
+            agent_global_agent_dir(&agent.def)
+        } else {
+            agent_project_agent_dir(&agent.def)
+        };
+
+        if let Some(base_dir) = agent_dir {
+            let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
+            let link_path = base_dir.join(&link_name);
+
+            // Remove existing (real dir or stale symlink)
+            store::remove_if_exists(&link_path)?;
+
+            store::create_skill_link(&store_path, &link_path)?;
+            println!(
+                "  Linked {} -> {} ({})",
+                link_path.display(),
+                store_path.display(),
+                agent.def.name
+            );
+            targets.push(agent.def.id.clone());
+        } else {
+            tracing::debug!(
+                "Agent {} has no agent directory configured, skipping",
+                agent.def.id
+            );
+        }
+    }
+
+    Ok(targets)
+}
+
+/// Async wrapper around [`deploy_agent_to_agents`] for use in async install paths.
+async fn deploy_agent(
+    name: &str,
+    source_dir: &Path,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<Vec<String>, RegistryError> {
+    deploy_agent_to_agents(name, source_dir, agent_filter, global)
+}
+
 /// Deploy a validator to .avp/validators/.
 fn deploy_validator(
     name: &str,
@@ -690,6 +775,7 @@ pub async fn run_uninstall(
                     PackageType::Validator => uninstall_validator(pkg_name, global)?,
                     PackageType::Tool => uninstall_tool(pkg_name, agent_filter, global)?,
                     PackageType::Plugin => uninstall_plugin(pkg_name, agent_filter, global)?,
+                    PackageType::Agent => uninstall_agent(pkg_name, agent_filter, global)?,
                 }
                 lf.remove_package(pkg_name);
                 println!("  Uninstalled {}", pkg_name);
@@ -715,6 +801,7 @@ pub async fn run_uninstall(
         PackageType::Validator => uninstall_validator(name, global)?,
         PackageType::Tool => uninstall_tool(name, agent_filter, global)?,
         PackageType::Plugin => uninstall_plugin(name, agent_filter, global)?,
+        PackageType::Agent => uninstall_agent(name, agent_filter, global)?,
     }
 
     // Update lockfile
@@ -946,6 +1033,13 @@ fn guess_installed_type(name: &str, global: bool) -> PackageType {
         .exists()
     {
         return PackageType::Tool;
+    }
+    // Check agent store
+    if store::agent_store_dir(global)
+        .join(sanitize_dir_name(name))
+        .exists()
+    {
+        return PackageType::Agent;
     }
     // Check plugin dirs
     if let Ok(config) = agents::load_agents_config() {
@@ -1192,6 +1286,73 @@ fn uninstall_plugin(
             "Plugin '{}' not found ({} scope)",
             name, scope
         )));
+    }
+
+    Ok(())
+}
+
+fn uninstall_agent(
+    name: &str,
+    agent_filter: Option<&str>,
+    global: bool,
+) -> Result<(), RegistryError> {
+    let config = agents::load_agents_config()?;
+    let target_agents = agents::resolve_target_agents(&config, agent_filter)?;
+
+    let sanitized = sanitize_dir_name(name);
+    let mut removed = 0;
+
+    // 1. Remove symlinks from each coding agent's agent directory
+    for agent in &target_agents {
+        let agent_dir = if global {
+            agent_global_agent_dir(&agent.def)
+        } else {
+            agent_project_agent_dir(&agent.def)
+        };
+
+        if let Some(base_dir) = agent_dir {
+            let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
+            let link_path = base_dir.join(&link_name);
+
+            if std::fs::symlink_metadata(&link_path).is_ok() {
+                store::remove_if_exists(&link_path)?;
+                println!(
+                    "  Removed from {} ({})",
+                    link_path.display(),
+                    agent.def.name
+                );
+                removed += 1;
+            }
+        }
+    }
+
+    if removed == 0 {
+        let scope = if global { "global" } else { "project" };
+        return Err(RegistryError::NotFound(format!(
+            "Agent '{}' not found in any coding agent ({} scope)",
+            name, scope
+        )));
+    }
+
+    // 2. Remove store entry if no remaining symlinks reference it
+    let store_path = store::agent_store_dir(global).join(&sanitized);
+    if store_path.exists() {
+        let all_agents = agents::get_detected_agents(&config);
+        let all_agent_dirs: Vec<PathBuf> = all_agents
+            .iter()
+            .filter_map(|a| {
+                if global {
+                    agent_global_agent_dir(&a.def)
+                } else {
+                    agent_project_agent_dir(&a.def)
+                }
+            })
+            .collect();
+
+        if !store::store_entry_still_referenced(&store_path, &all_agent_dirs) {
+            std::fs::remove_dir_all(&store_path)?;
+            println!("  Removed store entry {}", store_path.display());
+        }
     }
 
     Ok(())

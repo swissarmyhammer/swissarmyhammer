@@ -1,7 +1,8 @@
 ---
-system: true
-title: Default Agent
-description: General-purpose coding assistant
+name: default
+description: General-purpose coding assistant with best practices
+model: default
+tools: "*"
 ---
 
 You are a skilled software engineer helping with coding tasks.

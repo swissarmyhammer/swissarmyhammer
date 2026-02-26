@@ -33,7 +33,6 @@ fn assert_valid_render(rendered: &str) {
 /// Test cases for builtin prompts that should render successfully
 /// because it requires specific parameters
 #[rstest]
-#[case(".system/default")]
 #[case("double_check")]
 fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
     let library = setup_prompt_library();

@@ -1119,6 +1119,26 @@ impl agent_client_protocol::Agent for AcpServer {
                 Self::convert_error(e)
             })?;
 
+        // Inject the default mode's system prompt as the initial System message
+        if let Some(system_prompt) = self
+            .config
+            .mode_system_prompts
+            .get(&self.config.default_mode_id)
+        {
+            self.agent_server
+                .set_session_system_prompt(&llama_session.id, system_prompt.clone())
+                .await
+                .map_err(|e| {
+                    tracing::warn!("Failed to set default system prompt: {}", e);
+                    agent_client_protocol::Error::internal_error()
+                })?;
+            tracing::info!(
+                "Injected system prompt from mode '{}' ({} chars)",
+                self.config.default_mode_id,
+                system_prompt.len()
+            );
+        }
+
         // Merge default MCP servers from config with request MCP servers
         let mut all_mcp_servers = self.config.default_mcp_servers.clone();
         all_mcp_servers.extend(request.mcp_servers.clone());
@@ -1305,6 +1325,26 @@ impl agent_client_protocol::Agent for AcpServer {
                 agent_client_protocol::Error::internal_error()
             })?;
 
+        // Swap the system prompt to the new mode's agent instructions
+        if let Some(system_prompt) = self.config.mode_system_prompts.get(mode_id.0.as_ref()) {
+            self.agent_server
+                .set_session_system_prompt(&llama_session_id, system_prompt.clone())
+                .await
+                .map_err(|e| {
+                    tracing::warn!(
+                        "Failed to update system prompt for mode '{}': {}",
+                        mode_id.0,
+                        e
+                    );
+                    agent_client_protocol::Error::internal_error()
+                })?;
+            tracing::info!(
+                "Swapped system prompt for mode '{}' ({} chars)",
+                mode_id.0,
+                system_prompt.len()
+            );
+        }
+
         tracing::info!("Session mode set to: {}", mode_id.0);
 
         // Send CurrentModeUpdate notification to inform client of the mode change
@@ -1315,14 +1355,10 @@ impl agent_client_protocol::Agent for AcpServer {
 
         // Add metadata to indicate mode was successfully set
         let mut meta = serde_json::Map::new();
-        meta.insert("mode_set".to_string(), serde_json::Value::Bool(false));
+        meta.insert("mode_set".to_string(), serde_json::Value::Bool(true));
         meta.insert(
             "mode_id".to_string(),
             serde_json::Value::String(mode_id.0.to_string()),
-        );
-        meta.insert(
-            "message".to_string(),
-            serde_json::Value::String("Session modes are not yet implemented".to_string()),
         );
         response.meta = Some(meta);
 
@@ -3384,28 +3420,16 @@ mod tests {
 
         let response = result.unwrap();
 
-        // Verify the response contains metadata indicating modes are not implemented
+        // Verify the response contains metadata
         assert!(response.meta.is_some(), "Response should contain metadata");
 
         let meta = response.meta.unwrap();
 
-        // Verify mode_set is false (modes not implemented)
+        // Verify mode was successfully set
         assert_eq!(
             meta.get("mode_set"),
-            Some(&serde_json::Value::Bool(false)),
-            "mode_set should be false since modes are not implemented"
-        );
-
-        // Verify message explains modes are not implemented
-        assert!(
-            meta.get("message").is_some(),
-            "Response should contain explanation message"
-        );
-        let message = meta.get("message").unwrap().as_str().unwrap();
-        assert!(
-            message.contains("not yet implemented"),
-            "Message should explain modes are not implemented: {}",
-            message
+            Some(&serde_json::Value::Bool(true)),
+            "mode_set should be true since modes are now implemented"
         );
 
         // Verify mode_id is echoed back in metadata
@@ -3658,5 +3682,126 @@ mod tests {
             // Per JSON-RPC 2.0 spec, parse error responses should have null id
             // (this is validated by the agent_client_protocol library)
         }
+    }
+
+    // --- set_session_system_prompt tests ---
+
+    #[tokio::test]
+    #[serial]
+    async fn test_set_session_system_prompt_inserts_into_empty_session() {
+        let server = create_test_server().await;
+        let session = server.agent_server.create_session().await.unwrap();
+
+        // Session starts with no messages
+        let before = server
+            .agent_server
+            .session_manager()
+            .get_session(&session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(before.messages.is_empty());
+
+        // Set a system prompt
+        server
+            .agent_server
+            .set_session_system_prompt(&session.id, "You are a planner.".to_string())
+            .await
+            .unwrap();
+
+        let after = server
+            .agent_server
+            .session_manager()
+            .get_session(&session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.messages.len(), 1);
+        assert_eq!(after.messages[0].role, crate::types::MessageRole::System);
+        assert_eq!(after.messages[0].content, "You are a planner.");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_set_session_system_prompt_replaces_existing() {
+        let server = create_test_server().await;
+        let session = server.agent_server.create_session().await.unwrap();
+
+        // Set initial system prompt
+        server
+            .agent_server
+            .set_session_system_prompt(&session.id, "You are a planner.".to_string())
+            .await
+            .unwrap();
+
+        // Swap to a different system prompt
+        server
+            .agent_server
+            .set_session_system_prompt(&session.id, "You are an implementer.".to_string())
+            .await
+            .unwrap();
+
+        let after = server
+            .agent_server
+            .session_manager()
+            .get_session(&session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        // Should still be exactly 1 message (replaced, not appended)
+        assert_eq!(after.messages.len(), 1);
+        assert_eq!(after.messages[0].role, crate::types::MessageRole::System);
+        assert_eq!(after.messages[0].content, "You are an implementer.");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_set_session_system_prompt_inserts_before_user_message() {
+        let server = create_test_server().await;
+        let session = server.agent_server.create_session().await.unwrap();
+
+        // Manually add a user message first (no system message present)
+        {
+            let mut s = server
+                .agent_server
+                .session_manager()
+                .get_session(&session.id)
+                .await
+                .unwrap()
+                .unwrap();
+            s.messages.push(crate::types::Message {
+                role: crate::types::MessageRole::User,
+                content: "Hello".to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: std::time::SystemTime::now(),
+            });
+            server
+                .agent_server
+                .session_manager()
+                .update_session(s)
+                .await
+                .unwrap();
+        }
+
+        // Now set the system prompt — should insert at position 0
+        server
+            .agent_server
+            .set_session_system_prompt(&session.id, "You are a reviewer.".to_string())
+            .await
+            .unwrap();
+
+        let after = server
+            .agent_server
+            .session_manager()
+            .get_session(&session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.messages.len(), 2);
+        assert_eq!(after.messages[0].role, crate::types::MessageRole::System);
+        assert_eq!(after.messages[0].content, "You are a reviewer.");
+        assert_eq!(after.messages[1].role, crate::types::MessageRole::User);
+        assert_eq!(after.messages[1].content, "Hello");
     }
 }

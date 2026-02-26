@@ -77,6 +77,15 @@ swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 # Modes system for ACP session modes
 swissarmyhammer-modes = { path = "../swissarmyhammer-modes" }
 
+# Agents (subagents) for mode system prompt resolution
+swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
+
+# Prompt library for Liquid template rendering
+swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+
+# Template context for Liquid rendering
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+
 # Skills for ACP command discovery
 swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
 

@@ -5,6 +5,9 @@ use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
 // Include the generated builtin prompts
 include!(concat!(env!("OUT_DIR"), "/builtin_prompts.rs"));
 
+// Include shared partials from builtin/_partials/ (shared across prompts, skills, and agents)
+include!(concat!(env!("OUT_DIR"), "/builtin_partials.rs"));
+
 /// Handles loading prompts from various sources with proper precedence
 pub struct PromptResolver {
     /// Track the source of each prompt by name
@@ -131,6 +134,14 @@ impl PromptResolver {
         // Add builtin prompts to VFS
         for (name, content) in builtin_prompts {
             self.vfs.add_builtin(name, content);
+        }
+
+        // Add shared partials from builtin/_partials/ with _partials/ prefix
+        // so {% include "_partials/..." %} references resolve correctly
+        let builtin_partials = get_builtin_partials();
+        for (name, content) in builtin_partials {
+            self.vfs
+                .add_builtin(&format!("_partials/{}", name), content);
         }
 
         Ok(())

@@ -43,6 +43,20 @@ pub fn skill_store_dir(global: bool) -> PathBuf {
     }
 }
 
+/// Return the central agent (subagent) store directory.
+///
+/// - Project scope: `.agents/`
+/// - Global scope: `~/.agents/`
+pub fn agent_store_dir(global: bool) -> PathBuf {
+    if global {
+        dirs::home_dir()
+            .expect("Could not find home directory")
+            .join(".agents")
+    } else {
+        PathBuf::from(".agents")
+    }
+}
+
 /// Return the central tool store directory.
 ///
 /// - Project scope: `.tools/`
@@ -223,6 +237,20 @@ mod tests {
     fn test_skill_store_dir_global() {
         let dir = skill_store_dir(true);
         assert!(dir.ends_with(".skills"));
+        let home = dirs::home_dir().unwrap();
+        assert!(dir.starts_with(home));
+    }
+
+    #[test]
+    fn test_agent_store_dir_project() {
+        let dir = agent_store_dir(false);
+        assert_eq!(dir, PathBuf::from(".agents"));
+    }
+
+    #[test]
+    fn test_agent_store_dir_global() {
+        let dir = agent_store_dir(true);
+        assert!(dir.ends_with(".agents"));
         let home = dirs::home_dir().unwrap();
         assert!(dir.starts_with(home));
     }
