@@ -29,11 +29,7 @@ sah provides MCP tools organized by category:
 ### Files
 | Tool | Description |
 |------|-------------|
-| `files_read` | Read file contents |
-| `files_write` | Write or create files |
-| `files_edit` | Edit files with precise string replacement |
-| `files_glob` | Find files by pattern with .gitignore support |
-| `files_grep` | Search file contents (ripgrep-powered) |
+| `files` | Unified file operations (read, write, edit, glob, grep) selected via `op` parameter |
 
 ### Git
 | Tool | Description |

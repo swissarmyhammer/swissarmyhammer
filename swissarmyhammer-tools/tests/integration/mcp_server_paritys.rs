@@ -11,13 +11,7 @@ use swissarmyhammer_tools::mcp::tool_registry::create_fully_registered_tool_regi
 use tracing::info;
 
 /// Expected core tools that must be present in both HTTP and STDIN servers
-const EXPECTED_CORE_TOOLS: &[&str] = &[
-    "files_read",
-    "files_write",
-    "files_edit",
-    "shell_execute",
-    "web",
-];
+const EXPECTED_CORE_TOOLS: &[&str] = &["files", "shell_execute", "web"];
 
 /// Helper function to set up tool comparison tests
 async fn setup_tool_comparison_test(test_name: &str) -> (Vec<String>, Vec<String>) {

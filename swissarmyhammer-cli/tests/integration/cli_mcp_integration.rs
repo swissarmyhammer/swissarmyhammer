@@ -72,18 +72,18 @@ async fn test_files_read_tool_integration() {
 
     // Create a test file to read
     let test_file = env.temp_dir().join("test_file.txt");
-    std::fs::write(&test_file, "Test content for files_read").unwrap();
+    std::fs::write(&test_file, "Test content for files read").unwrap();
 
-    // Test calling files_read tool
-    let args = context.create_arguments(vec![(
-        "path",
-        json!(test_file.to_string_lossy().to_string()),
-    )]);
+    // Test calling unified files tool with read operation
+    let args = context.create_arguments(vec![
+        ("op", json!("read file")),
+        ("path", json!(test_file.to_string_lossy().to_string())),
+    ]);
 
-    let result = context.execute_tool("files_read", args).await;
+    let result = context.execute_tool("files", args).await;
     assert!(
         result.is_ok(),
-        "Failed to execute files_read tool: {:?}",
+        "Failed to execute files tool: {:?}",
         result.err()
     );
 
@@ -123,10 +123,10 @@ async fn test_nonexistent_tool_error() {
 async fn test_invalid_arguments_error() {
     let (_env, context) = setup_test_context().await;
 
-    // Test calling files_read with invalid arguments (missing required fields)
+    // Test calling files with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
 
-    let result = context.execute_tool("files_read", args).await;
+    let result = context.execute_tool("files", args).await;
     assert!(result.is_err(), "Should return error for invalid arguments");
 }
 

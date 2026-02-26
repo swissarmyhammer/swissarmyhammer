@@ -50,17 +50,7 @@ use crate::test_utils::ProcessGuard;
 
 /// Sample of expected tools with their names - this is not exhaustive but validates key tools
 #[allow(dead_code)]
-const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
-    "abort_create",
-    "files_read",
-    "files_write",
-    "files_edit",
-    "files_glob",
-    "files_grep",
-    "shell_execute",
-    "kanban",
-    "web",
-];
+const EXPECTED_SAMPLE_TOOLS: &[&str] = &["abort_create", "files", "shell_execute", "kanban", "web"];
 
 /// Comprehensive integration test for sah serve MCP tools
 /// Initialize MCP connection and return the initialize response

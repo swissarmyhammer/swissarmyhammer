@@ -37,8 +37,8 @@ async fn test_mcp_server_with_rmcp_client() {
 
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
     assert!(
-        tool_names.contains(&"files_read".to_string()),
-        "Should have files_read tool"
+        tool_names.contains(&"files".to_string()),
+        "Should have files tool"
     );
     assert!(
         tool_names.contains(&"shell_execute".to_string()),
@@ -51,11 +51,12 @@ async fn test_mcp_server_with_rmcp_client() {
         .await
         .expect("Failed to list prompts");
 
-    // Test a simple tool call - files_glob should work
+    // Test a simple tool call - files with glob op should work
     let tool_result = client
         .call_tool(CallToolRequestParams {
-            name: "files_glob".into(),
+            name: "files".into(),
             arguments: serde_json::json!({
+                "op": "glob files",
                 "pattern": "*.md"
             })
             .as_object()

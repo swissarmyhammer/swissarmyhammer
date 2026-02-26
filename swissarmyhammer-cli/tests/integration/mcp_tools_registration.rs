@@ -23,27 +23,17 @@ async fn test_mcp_tools_are_registered() {
     let tool_count = registry.len();
     println!("📊 Registered {} MCP tools", tool_count);
 
-    // We should have a significant number of tools. The threshold of 9 is based on the
+    // We should have a significant number of tools. The threshold of 5 is based on the
     // minimum set of core tools across all categories (files, shell, kanban, web, etc.).
     // This acts as a smoke test to catch missing tool registrations.
     assert!(
-        tool_count >= 9,
-        "Expected at least 9 tools, got {}. This suggests tools are not being registered properly.",
+        tool_count >= 5,
+        "Expected at least 5 tools, got {}. This suggests tools are not being registered properly.",
         tool_count
     );
 
     // Check for specific tools we know should be there (internal names, not MCP prefixed)
-    let expected_tools = [
-        "js",
-        "files_read",
-        "files_write",
-        "files_edit",
-        "files_glob",
-        "files_grep",
-        "shell_execute",
-        "kanban",
-        "web",
-    ];
+    let expected_tools = ["js", "files", "shell_execute", "kanban", "web"];
 
     let mut missing_tools = Vec::new();
     let mut found_tools = Vec::new();
@@ -129,7 +119,7 @@ async fn test_cli_categories_are_available() {
     println!("📋 CLI Categories: {:?}", categories);
 
     // These categories should be available (excluding hidden tools like JS and notify)
-    let expected_categories = ["file", "kanban", "shell", "web"];
+    let expected_categories = ["files", "kanban", "shell", "web"];
 
     for &expected_cat in &expected_categories {
         assert!(
