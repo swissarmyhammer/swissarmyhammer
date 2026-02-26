@@ -40,6 +40,7 @@ typed-builder = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-modes = { path = "../swissarmyhammer-modes" }
+swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 

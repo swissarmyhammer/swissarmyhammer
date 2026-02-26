@@ -59,6 +59,11 @@ pub struct Mode {
     /// When set, the caller should load and render this prompt instead of using `system_prompt`
     prompt: Option<String>,
 
+    /// Reference to an agent name to use for system prompt (e.g., "default", "planner")
+    /// When set, the caller should look up the agent and use its instructions as the system prompt.
+    /// Takes precedence over `prompt` if both are set.
+    agent: Option<String>,
+
     /// Path to the source file (if loaded from file)
     #[serde(skip)]
     source_path: Option<PathBuf>,
@@ -78,6 +83,7 @@ impl Mode {
             description: description.into(),
             system_prompt: system_prompt.into(),
             prompt: None,
+            agent: None,
             source_path: None,
         }
     }
@@ -95,6 +101,25 @@ impl Mode {
             description: description.into(),
             system_prompt: String::new(),
             prompt: Some(prompt_path.into()),
+            agent: None,
+            source_path: None,
+        }
+    }
+
+    /// Create a mode that references an agent for its system prompt
+    pub fn with_agent(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        agent_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+            system_prompt: String::new(),
+            prompt: None,
+            agent: Some(agent_name.into()),
             source_path: None,
         }
     }
@@ -149,12 +174,18 @@ impl Mode {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        // Check for agent reference in frontmatter
+        let agent = metadata
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         let system_prompt = parsed.content.trim().to_string();
 
-        // Must have either a prompt reference or embedded content
-        if prompt.is_none() && system_prompt.is_empty() {
+        // Must have either a prompt reference, agent reference, or embedded content
+        if prompt.is_none() && agent.is_none() && system_prompt.is_empty() {
             return Err(SwissArmyHammerError::Other {
-                message: "Mode must have either a 'prompt' field or system prompt content"
+                message: "Mode must have a 'prompt' field, 'agent' field, or system prompt content"
                     .to_string(),
             });
         }
@@ -165,6 +196,7 @@ impl Mode {
             description,
             system_prompt,
             prompt,
+            agent,
             source_path: None,
         })
     }
@@ -218,9 +250,22 @@ impl Mode {
         self.prompt.as_deref()
     }
 
+    /// Get the agent reference name (e.g., "default", "planner")
+    ///
+    /// When this is Some, the caller should look up the agent and use its
+    /// instructions as the system prompt. Takes precedence over `prompt()`.
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref()
+    }
+
     /// Check if this mode uses a prompt reference
     pub fn uses_prompt_reference(&self) -> bool {
         self.prompt.is_some()
+    }
+
+    /// Check if this mode uses an agent reference
+    pub fn uses_agent_reference(&self) -> bool {
+        self.agent.is_some()
     }
 
     /// Get the source file path

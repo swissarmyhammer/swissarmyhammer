@@ -1258,6 +1258,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "swissarmyhammer-agents",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-kanban",
@@ -3667,9 +3668,12 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "swissarmyhammer-agents",
  "swissarmyhammer-common",
+ "swissarmyhammer-config",
  "swissarmyhammer-kanban",
  "swissarmyhammer-modes",
+ "swissarmyhammer-prompts",
  "swissarmyhammer-skills",
  "tempfile",
  "thiserror 1.0.69",
@@ -6482,6 +6486,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-agents"
+version = "0.8.0"
+dependencies = [
+ "async-trait",
+ "dirs",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "swissarmyhammer-build",
+ "swissarmyhammer-common",
+ "swissarmyhammer-operations",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-build"
 version = "0.8.0"
 
@@ -6525,6 +6548,7 @@ dependencies = [
  "serial_test",
  "sha2",
  "swissarmyhammer",
+ "swissarmyhammer-agents",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-doctor",
@@ -6882,6 +6906,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "swissarmyhammer-agents",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",

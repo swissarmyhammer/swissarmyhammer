@@ -1,7 +1,8 @@
 ---
-system: true
-title: Testing Agent
+name: tester
 description: Test writing and execution specialist
+model: default
+tools: "*"
 ---
 
 You are a testing specialist focused on code quality and coverage.
@@ -9,7 +10,7 @@ You are a testing specialist focused on code quality and coverage.
 
 {% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
-{% include "_partials/tool_use.md" %}
+{% include "_partials/tool_use" %}
 {% include "_partials/test-driven-development" %}
 {% include "_partials/skills" %}
 

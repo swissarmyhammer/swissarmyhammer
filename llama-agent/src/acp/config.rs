@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -55,6 +56,13 @@ pub struct AcpConfig {
     /// in addition to any servers specified in the NewSessionRequest.
     #[serde(skip, default)]
     pub default_mcp_servers: Vec<agent_client_protocol::McpServer>,
+
+    /// Pre-resolved system prompts for each mode (mode ID → rendered instructions).
+    ///
+    /// Populated by `load_modes_from_registry()`. When a mode references an agent
+    /// via `agent:` field, the agent's rendered instructions become the system prompt.
+    #[serde(skip, default)]
+    pub mode_system_prompts: HashMap<String, String>,
 }
 
 fn default_mode_id_value() -> String {
@@ -79,6 +87,7 @@ impl Default for AcpConfig {
             available_modes: Vec::new(),
             default_mode_id: "general-purpose".to_string(),
             default_mcp_servers: Vec::new(),
+            mode_system_prompts: HashMap::new(),
         }
     }
 }
@@ -100,24 +109,40 @@ impl AcpConfig {
     pub fn load_modes_from_registry(&mut self) {
         let mut registry = swissarmyhammer_modes::ModeRegistry::new();
 
+        // Load agent library for resolving mode → agent references
+        let mut agent_library = swissarmyhammer_agents::AgentLibrary::new();
+        agent_library.load_defaults();
+
+        // Prompt library + template context for Liquid rendering of agent instructions
+        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+
         match registry.load_all() {
             Ok(modes) => {
+                let mut system_prompts = HashMap::new();
+
                 self.available_modes = modes
                     .into_iter()
                     .map(|mode| {
-                        // Convert to owned strings
                         let id = mode.id().to_string();
-                        let name = mode.name().to_string();
-                        let desc = mode.description().to_string();
-                        // Create SessionModeId first, then pass it (owned) to SessionMode::new
+
+                        // If mode references an agent, use agent's metadata and instructions
+                        let (name, desc, system_prompt) =
+                            resolve_mode_from_agent(&mode, &agent_library, &prompt_library, &template_context);
+
+                        system_prompts.insert(id.clone(), system_prompt);
+
                         let mode_id = agent_client_protocol::SessionModeId::new(id);
                         agent_client_protocol::SessionMode::new(mode_id, name).description(desc)
                     })
                     .collect();
 
+                self.mode_system_prompts = system_prompts;
+
                 tracing::info!(
-                    "Loaded {} modes from registry: {:?}",
+                    "Loaded {} modes from registry (with {} system prompts): {:?}",
                     self.available_modes.len(),
+                    self.mode_system_prompts.len(),
                     self.available_modes
                         .iter()
                         .map(|m| m.id.0.as_ref())
@@ -361,6 +386,51 @@ impl Default for TerminalSettings {
             graceful_shutdown_timeout: GracefulShutdownTimeout::default(),
         }
     }
+}
+
+/// Resolve a mode's display name, description, and system prompt from its agent reference.
+///
+/// If the mode has an `agent:` field, looks up the agent in the AgentLibrary and uses
+/// the agent's name, description, and Liquid-rendered instructions. Falls back to the
+/// mode's own embedded metadata if the agent is not found.
+fn resolve_mode_from_agent(
+    mode: &swissarmyhammer_modes::Mode,
+    agent_library: &swissarmyhammer_agents::AgentLibrary,
+    prompt_library: &swissarmyhammer_prompts::PromptLibrary,
+    template_context: &swissarmyhammer_config::TemplateContext,
+) -> (String, String, String) {
+    // 1. Try agent reference
+    if let Some(agent_name) = mode.agent() {
+        if let Some(agent) = agent_library.get(agent_name) {
+            let rendered = prompt_library
+                .render_text(&agent.instructions, template_context)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "Failed to render agent '{}' instructions: {}",
+                        agent_name,
+                        e
+                    );
+                    agent.instructions.clone()
+                });
+            return (
+                agent.name.to_string(),
+                agent.description.clone(),
+                rendered,
+            );
+        }
+        tracing::warn!(
+            "Mode '{}' references agent '{}' but it was not found, falling back to embedded",
+            mode.id(),
+            agent_name
+        );
+    }
+
+    // 2. Fallback to mode's own metadata
+    (
+        mode.name().to_string(),
+        mode.description().to_string(),
+        mode.system_prompt().to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -680,5 +750,123 @@ capabilities:
         assert_eq!(loaded_config.filesystem.max_file_size, 9999999);
         assert_eq!(loaded_config.filesystem.allowed_paths.len(), 2);
         assert_eq!(loaded_config.terminal.output_buffer_bytes, 2048576);
+    }
+
+    // --- resolve_mode_from_agent tests ---
+
+    /// Helper: create agent library with builtins for resolution tests
+    fn test_agent_library() -> swissarmyhammer_agents::AgentLibrary {
+        let mut lib = swissarmyhammer_agents::AgentLibrary::new();
+        lib.load_defaults();
+        lib
+    }
+
+    #[test]
+    fn test_resolve_mode_from_agent_uses_agent_metadata() {
+        let agent_library = test_agent_library();
+        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+
+        // Create a mode that references the builtin "planner" agent
+        let mode = swissarmyhammer_modes::Mode::with_agent(
+            "test-mode",
+            "Mode Name",
+            "Mode Desc",
+            "planner",
+        );
+
+        let (name, desc, system_prompt) =
+            resolve_mode_from_agent(&mode, &agent_library, &prompt_library, &template_context);
+
+        // Name and description should come from the agent, NOT the mode
+        assert_ne!(name, "Mode Name", "name should come from agent, not mode");
+        assert_ne!(desc, "Mode Desc", "desc should come from agent, not mode");
+        assert!(!system_prompt.is_empty(), "system prompt should not be empty");
+    }
+
+    #[test]
+    fn test_resolve_mode_from_agent_fallback_when_agent_missing() {
+        let agent_library = swissarmyhammer_agents::AgentLibrary::new(); // empty
+        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+
+        // References a nonexistent agent
+        let mode = swissarmyhammer_modes::Mode::with_agent(
+            "test-mode",
+            "Fallback Name",
+            "Fallback Desc",
+            "nonexistent-agent",
+        );
+
+        let (name, desc, _system_prompt) =
+            resolve_mode_from_agent(&mode, &agent_library, &prompt_library, &template_context);
+
+        // Should fall back to mode's own metadata
+        assert_eq!(name, "Fallback Name");
+        assert_eq!(desc, "Fallback Desc");
+    }
+
+    #[test]
+    fn test_resolve_mode_from_agent_no_agent_ref() {
+        let agent_library = test_agent_library();
+        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+
+        // Mode with no agent reference (embedded system prompt)
+        let mode = swissarmyhammer_modes::Mode::new(
+            "embedded-mode",
+            "Embedded Name",
+            "Embedded Desc",
+            "You are a test agent.",
+        );
+
+        let (name, desc, system_prompt) =
+            resolve_mode_from_agent(&mode, &agent_library, &prompt_library, &template_context);
+
+        assert_eq!(name, "Embedded Name");
+        assert_eq!(desc, "Embedded Desc");
+        assert_eq!(system_prompt, "You are a test agent.");
+    }
+
+    #[test]
+    fn test_resolve_mode_system_prompts_populated() {
+        // After load_modes_from_registry, mode_system_prompts should have entries
+        let mut config = AcpConfig::default();
+        config.load_modes_from_registry();
+
+        // Should have at least as many system prompts as modes
+        assert_eq!(
+            config.mode_system_prompts.len(),
+            config.available_modes.len(),
+            "every mode should have a system prompt entry"
+        );
+
+        // Every mode should have a non-empty system prompt
+        for mode in &config.available_modes {
+            let mode_id = mode.id.0.as_ref();
+            assert!(
+                config.mode_system_prompts.contains_key(mode_id),
+                "missing system prompt for mode '{}'",
+                mode_id
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_default_mode_has_system_prompt() {
+        let mut config = AcpConfig::default();
+        config.load_modes_from_registry();
+
+        // The default mode should have a system prompt
+        let default_prompt = config.mode_system_prompts.get(&config.default_mode_id);
+        assert!(
+            default_prompt.is_some(),
+            "default mode '{}' should have a system prompt",
+            config.default_mode_id
+        );
+        assert!(
+            !default_prompt.unwrap().is_empty(),
+            "default mode system prompt should not be empty"
+        );
     }
 }

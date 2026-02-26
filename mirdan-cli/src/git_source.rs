@@ -407,6 +407,12 @@ fn scan_dir_for_package(
                     .and_then(|c| extract_name_from_frontmatter(&c))
             }
             PackageType::Plugin => extract_name_from_plugin_json(dir),
+            PackageType::Agent => {
+                let md_file = dir.join("AGENT.md");
+                std::fs::read_to_string(&md_file)
+                    .ok()
+                    .and_then(|c| extract_name_from_frontmatter(&c))
+            }
         };
 
         if let Some(name) = name {

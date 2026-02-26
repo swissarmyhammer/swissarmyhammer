@@ -24,7 +24,9 @@ use super::tool_registry::{
     register_kanban_tools, register_questions_tools, register_shell_tools,
     register_treesitter_tools, register_web_tools, ToolContext, ToolRegistry,
 };
+use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
+use swissarmyhammer_agents::AgentLibrary;
 use swissarmyhammer_skills::SkillLibrary;
 
 /// Server instructions displayed to MCP clients
@@ -48,6 +50,9 @@ pub struct McpServer {
     /// Skill library - kept alive to back the SkillTool's shared reference
     #[allow(dead_code)]
     skill_library: Arc<RwLock<SkillLibrary>>,
+    /// Agent library - kept alive to back the AgentTool's shared reference
+    #[allow(dead_code)]
+    agent_library: Arc<RwLock<AgentLibrary>>,
 }
 
 /// Determine if a retry should be attempted based on the error and attempt count.
@@ -224,6 +229,14 @@ impl McpServer {
             tracing::debug!("Loaded {} skills", lib.len());
         }
 
+        // Initialize agent library
+        let agent_library = Arc::new(RwLock::new(AgentLibrary::new()));
+        {
+            let mut lib = agent_library.write().await;
+            lib.load_defaults();
+            tracing::debug!("Loaded {} agents", lib.names().len());
+        }
+
         // Wrap prompt library in Arc<RwLock<>> for shared access by skill tool
         let prompt_library = Arc::new(RwLock::new(library));
 
@@ -234,6 +247,7 @@ impl McpServer {
             use_case_agents,
             Some(work_dir),
             skill_library.clone(),
+            agent_library.clone(),
             prompt_library.clone(),
             agent_mode,
         )
@@ -245,6 +259,7 @@ impl McpServer {
             tool_registry: tool_registry_arc,
             tool_context,
             skill_library,
+            agent_library,
         };
 
         Ok(server)
@@ -408,6 +423,7 @@ impl McpServer {
         use_case_agents: HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
         working_dir: Option<PathBuf>,
         skill_library: Arc<RwLock<SkillLibrary>>,
+        agent_library: Arc<RwLock<AgentLibrary>>,
         prompt_library: Arc<RwLock<PromptLibrary>>,
         agent_mode: bool,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
@@ -415,6 +431,7 @@ impl McpServer {
         Self::register_all_tools(
             &mut tool_registry,
             skill_library,
+            agent_library,
             prompt_library,
             agent_mode,
         )
@@ -445,6 +462,7 @@ impl McpServer {
     async fn register_all_tools(
         tool_registry: &mut ToolRegistry,
         skill_library: Arc<RwLock<SkillLibrary>>,
+        agent_library: Arc<RwLock<AgentLibrary>>,
         prompt_library: Arc<RwLock<PromptLibrary>>,
         agent_mode: bool,
     ) {
@@ -456,6 +474,10 @@ impl McpServer {
         register_web_tools(tool_registry);
         register_treesitter_tools(tool_registry);
         register_js_tools(tool_registry);
+
+        // Agent discovery is always available — coding agents like Claude Code
+        // need to discover and delegate to subagents via MCP sidecar mode
+        register_agent_tools(tool_registry, agent_library, prompt_library.clone());
 
         // Agent tools: only register when powering a full agent
         // Off-the-shelf agents like Claude Code already have these capabilities natively

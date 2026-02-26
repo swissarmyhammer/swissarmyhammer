@@ -17,6 +17,7 @@ pub enum PackageType {
     Validator,
     Tool,
     Plugin,
+    Agent,
 }
 
 impl fmt::Display for PackageType {
@@ -26,6 +27,7 @@ impl fmt::Display for PackageType {
             PackageType::Validator => write!(f, "validator"),
             PackageType::Tool => write!(f, "tool"),
             PackageType::Plugin => write!(f, "plugin"),
+            PackageType::Agent => write!(f, "agent"),
         }
     }
 }
@@ -47,6 +49,8 @@ pub fn detect_package_type(dir: &Path) -> Option<PackageType> {
         Some(PackageType::Tool)
     } else if dir.join(".claude-plugin").join("plugin.json").exists() {
         Some(PackageType::Plugin)
+    } else if dir.join("AGENT.md").exists() {
+        Some(PackageType::Agent)
     } else {
         None
     }
@@ -61,6 +65,7 @@ pub fn parse_package_type(s: &str) -> Option<PackageType> {
         "validator" => Some(PackageType::Validator),
         "tool" => Some(PackageType::Tool),
         "plugin" => Some(PackageType::Plugin),
+        "agent" => Some(PackageType::Agent),
         _ => None,
     }
 }

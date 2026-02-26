@@ -12,6 +12,8 @@ agents:
       servers_key: mcpServers
     plugin_path: .claude/plugins
     global_plugin_path: "~/.claude/plugins"
+    agent_path: .claude/agents
+    global_agent_path: "~/.claude/agents"
   - id: cursor
     name: Cursor
     project_path: .cursor/skills
