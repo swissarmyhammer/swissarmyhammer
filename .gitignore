@@ -194,6 +194,9 @@ docs/*.1
 avp-lock.json
 mirdan-lock.json
 
+# Installed skills (generated from builtin/skills/ during install)
+.skills/
+
 # Kanban test artifacts
 .kanban/
 swissarmyhammer-config/.swissarmyhammer/
