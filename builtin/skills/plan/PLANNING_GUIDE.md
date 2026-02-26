@@ -8,7 +8,7 @@ as an autonomous coding agent without a host IDE's planning mode.
 Before exploring any code, make sure you understand what's being asked.
 
 1. **Parse the goal** — identify whether this is a new feature, bug fix, refactor, or enhancement. This shapes everything that follows.
-2. **Ask clarifying questions** — if the request is ambiguous, ask the user about requirements, constraints, and preferences before committing to an approach. Use the `question_ask` tool.
+2. **Ask clarifying questions** — if the request is ambiguous, ask the user about requirements, constraints, and preferences before committing to an approach. Use the `question` tool with `op: "ask question"`.
 3. **Identify acceptance criteria** — what does "done" look like? What should work when this is complete? What tests should pass?
 
 ## Phase 2: Explore the Codebase
@@ -18,12 +18,12 @@ Follow a zoom-in funnel from broad to specific. Do NOT chain `cd`, `ls`, `cat` c
 ### Step 1: Project structure and configuration
 
 - Read project config files (`Cargo.toml`, `package.json`, `pyproject.toml`, etc.) to understand the tech stack, dependencies, and build system.
-- Use `files_glob` to list the top-level directory structure and understand project organization.
+- Use `files` with `op: "glob"` to list the top-level directory structure and understand project organization.
 - Check for project conventions in `CLAUDE.md`, `AGENTS.md`, or `.swissarmyhammer/` directories.
 
 ### Step 2: Keyword search for relevant areas
 
-- Use `files_grep` with keywords from the task description to locate relevant files across the codebase.
+- Use `files` with `op: "grep"` and keywords from the task description to locate relevant files across the codebase.
 - Search for type names, function names, error messages, or domain terms mentioned in the request.
 - Use `treesitter_search` to find definitions of types, functions, and structs by name.
 
@@ -95,7 +95,7 @@ If there are unresolved questions, add a kanban card for each one so they are tr
 
 ## Phase 5: Present and Gate
 
-1. Present the plan to the user for review using `question_ask`. Summarize the kanban cards you created.
+1. Present the plan to the user for review using the `question` tool with `op: "ask question"`. Summarize the kanban cards you created.
 2. Accept edits, rejections, or approvals. Update the board accordingly.
 3. The board is ready for execution — no separate "capture" step needed.
 
