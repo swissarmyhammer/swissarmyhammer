@@ -86,7 +86,7 @@ fn spawn_server_task(
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let upstream_url = "http://127.0.0.1:8080/mcp".to_string();
-/// let filter = ToolFilter::new(vec!["^files_.*".to_string()], vec![])?;
+/// let filter = ToolFilter::new(vec!["^files$".to_string()], vec![])?;
 /// let proxy = FilteringMcpProxy::new(upstream_url, filter);
 ///
 /// let (port, handle) = start_proxy_server(Arc::new(proxy), None).await?;
@@ -140,8 +140,8 @@ mod tests {
         let upstream_port = upstream_handle.info().port.unwrap();
         let upstream_url = format!("http://127.0.0.1:{}/mcp", upstream_port);
 
-        // Create filter allowing only files_read
-        let filter = ToolFilter::new(vec!["^files_read$".to_string()], vec![]).unwrap();
+        // Create filter allowing only the files tool
+        let filter = ToolFilter::new(vec!["^files$".to_string()], vec![]).unwrap();
 
         // Create proxy pointing to upstream URL
         let proxy = Arc::new(FilteringMcpProxy::new(upstream_url, filter));

@@ -1252,7 +1252,7 @@ mod tests {
     async fn test_stream_json_to_acp_assistant_tool_use() {
         // Test: Convert assistant tool use message from stream-json to ACP ToolCall
         let translator = create_test_translator();
-        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_123","name":"mcp__sah__files_read","input":{"path":"test.txt"}}]}}"#;
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_123","name":"mcp__sah__files","input":{"path":"test.txt"}}]}}"#;
         let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
@@ -1266,8 +1266,8 @@ mod tests {
             SessionUpdate::ToolCall(tool_call) => {
                 // Verify ToolCall structure per ACP spec
                 assert_eq!(tool_call.tool_call_id.0.as_ref(), "toolu_123");
-                assert_eq!(tool_call.title, "mcp__sah__files_read");
-                assert_eq!(tool_call.kind, agent_client_protocol::ToolKind::Read);
+                assert_eq!(tool_call.title, "mcp__sah__files");
+                assert_eq!(tool_call.kind, agent_client_protocol::ToolKind::Other);
                 assert_eq!(
                     tool_call.status,
                     agent_client_protocol::ToolCallStatus::Pending
