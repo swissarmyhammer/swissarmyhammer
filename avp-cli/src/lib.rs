@@ -6,7 +6,6 @@
 //! - Chain of Responsibility with Success/BlockingError starters
 //! - JSON serialization and validation
 //! - Validator execution via ACP agent
-//! - Package management via the AVP registry
 //!
 //! # Quick Start
 //!
@@ -38,20 +37,47 @@
 //! }
 //! ```
 
-pub mod auth;
+use std::fmt;
+
 mod cli;
 pub use cli::{Cli, Commands};
 pub mod doctor;
 pub mod edit;
-pub mod info;
 pub mod install;
-pub mod list;
 pub mod new;
-pub mod outdated;
-pub mod package;
-pub mod publish;
-pub mod registry;
-pub mod search;
+
+/// Error type for AVP CLI operations.
+#[derive(Debug)]
+pub enum AvpCliError {
+    /// File system error.
+    Io(std::io::Error),
+    /// Validation failure (e.g. invalid name, missing file).
+    Validation(String),
+}
+
+impl fmt::Display for AvpCliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "I/O error: {}", e),
+            Self::Validation(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for AvpCliError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for AvpCliError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
 
 // Re-export everything from avp-common for backwards compatibility
 pub use avp_common::*;

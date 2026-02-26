@@ -62,89 +62,6 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
-(list)
-_arguments "${_arguments_options[@]}" : \
-'-v[Show detailed output including descriptions]' \
-'--verbose[Show detailed output including descriptions]' \
-'--global[Show only global (user-level) validators]' \
-'--local[Show only local (project-level) validators]' \
-'--json[Output as JSON]' \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(login)
-_arguments "${_arguments_options[@]}" : \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(logout)
-_arguments "${_arguments_options[@]}" : \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(whoami)
-_arguments "${_arguments_options[@]}" : \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(search)
-_arguments "${_arguments_options[@]}" : \
-'--tag=[Filter by tag]:TAG:_default' \
-'--json[Output as JSON]' \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':query -- Search query:_default' \
-&& ret=0
-;;
-(info)
-_arguments "${_arguments_options[@]}" : \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':name -- Package name:_default' \
-&& ret=0
-;;
-(install)
-_arguments "${_arguments_options[@]}" : \
-'--local[Install to project (.avp/validators/) \[default\]]' \
-'--project[Install to project (.avp/validators/) \[default\]]' \
-'--global[Install globally (~/.avp/validators/)]' \
-'--user[Install globally (~/.avp/validators/)]' \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':package -- Package name, optionally with @version (e.g. no-secrets@1.2.3):_default' \
-&& ret=0
-;;
-(uninstall)
-_arguments "${_arguments_options[@]}" : \
-'--local[Remove from project (.avp/validators/) \[default\]]' \
-'--project[Remove from project (.avp/validators/) \[default\]]' \
-'--global[Remove from global (~/.avp/validators/)]' \
-'--user[Remove from global (~/.avp/validators/)]' \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':name -- Package name:_default' \
-&& ret=0
-;;
 (edit)
 _arguments "${_arguments_options[@]}" : \
 '--local[Edit in project (.avp/validators/) \[default\]]' \
@@ -171,46 +88,6 @@ _arguments "${_arguments_options[@]}" : \
 ':name -- RuleSet name (kebab-case):_default' \
 && ret=0
 ;;
-(publish)
-_arguments "${_arguments_options[@]}" : \
-'--dry-run[Validate and show what would be published without uploading]' \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-'::path -- Path to the RuleSet directory to publish:_files' \
-&& ret=0
-;;
-(unpublish)
-_arguments "${_arguments_options[@]}" : \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':name_version -- Package name@version (e.g. no-secrets@1.2.3):_default' \
-&& ret=0
-;;
-(outdated)
-_arguments "${_arguments_options[@]}" : \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(update)
-_arguments "${_arguments_options[@]}" : \
-'--local[Update project packages \[default\]]' \
-'--project[Update project packages \[default\]]' \
-'--global[Update global (~/.avp/validators/) packages]' \
-'--user[Update global (~/.avp/validators/) packages]' \
-'-d[Enable debug output to stderr]' \
-'--debug[Enable debug output to stderr]' \
-'-h[Print help]' \
-'--help[Print help]' \
-'::name -- Specific package to update (all if omitted):_default' \
-&& ret=0
-;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_avp__help_commands" \
@@ -235,59 +112,11 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(login)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(logout)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(whoami)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(search)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(info)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(install)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(uninstall)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
 (edit)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (new)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(publish)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(unpublish)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(outdated)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(update)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -310,20 +139,8 @@ _avp_commands() {
 'init:Install AVP hooks into Claude Code settings' \
 'deinit:Remove AVP hooks from Claude Code settings and delete .avp directory' \
 'doctor:Diagnose AVP configuration and setup' \
-'list:List all available validators' \
-'login:Authenticate with the AVP registry' \
-'logout:Log out from the AVP registry' \
-'whoami:Show current authenticated user' \
-'search:Search the AVP registry for packages' \
-'info:Show detailed information about a package' \
-'install:Install a package from the registry' \
-'uninstall:Remove an installed package' \
 'edit:Edit an existing RuleSet in \$EDITOR' \
 'new:Create a new RuleSet from template' \
-'publish:Publish a package to the registry' \
-'unpublish:Remove a published package version from the registry' \
-'outdated:Check for available package updates' \
-'update:Update installed packages to latest versions' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'avp commands' commands "$@"
@@ -349,20 +166,8 @@ _avp__help_commands() {
 'init:Install AVP hooks into Claude Code settings' \
 'deinit:Remove AVP hooks from Claude Code settings and delete .avp directory' \
 'doctor:Diagnose AVP configuration and setup' \
-'list:List all available validators' \
-'login:Authenticate with the AVP registry' \
-'logout:Log out from the AVP registry' \
-'whoami:Show current authenticated user' \
-'search:Search the AVP registry for packages' \
-'info:Show detailed information about a package' \
-'install:Install a package from the registry' \
-'uninstall:Remove an installed package' \
 'edit:Edit an existing RuleSet in \$EDITOR' \
 'new:Create a new RuleSet from template' \
-'publish:Publish a package to the registry' \
-'unpublish:Remove a published package version from the registry' \
-'outdated:Check for available package updates' \
-'update:Update installed packages to latest versions' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'avp help commands' commands "$@"
@@ -387,145 +192,25 @@ _avp__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'avp help help commands' commands "$@"
 }
-(( $+functions[_avp__help__info_commands] )) ||
-_avp__help__info_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help info commands' commands "$@"
-}
 (( $+functions[_avp__help__init_commands] )) ||
 _avp__help__init_commands() {
     local commands; commands=()
     _describe -t commands 'avp help init commands' commands "$@"
-}
-(( $+functions[_avp__help__install_commands] )) ||
-_avp__help__install_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help install commands' commands "$@"
-}
-(( $+functions[_avp__help__list_commands] )) ||
-_avp__help__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help list commands' commands "$@"
-}
-(( $+functions[_avp__help__login_commands] )) ||
-_avp__help__login_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help login commands' commands "$@"
-}
-(( $+functions[_avp__help__logout_commands] )) ||
-_avp__help__logout_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help logout commands' commands "$@"
 }
 (( $+functions[_avp__help__new_commands] )) ||
 _avp__help__new_commands() {
     local commands; commands=()
     _describe -t commands 'avp help new commands' commands "$@"
 }
-(( $+functions[_avp__help__outdated_commands] )) ||
-_avp__help__outdated_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help outdated commands' commands "$@"
-}
-(( $+functions[_avp__help__publish_commands] )) ||
-_avp__help__publish_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help publish commands' commands "$@"
-}
-(( $+functions[_avp__help__search_commands] )) ||
-_avp__help__search_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help search commands' commands "$@"
-}
-(( $+functions[_avp__help__uninstall_commands] )) ||
-_avp__help__uninstall_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help uninstall commands' commands "$@"
-}
-(( $+functions[_avp__help__unpublish_commands] )) ||
-_avp__help__unpublish_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help unpublish commands' commands "$@"
-}
-(( $+functions[_avp__help__update_commands] )) ||
-_avp__help__update_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help update commands' commands "$@"
-}
-(( $+functions[_avp__help__whoami_commands] )) ||
-_avp__help__whoami_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp help whoami commands' commands "$@"
-}
-(( $+functions[_avp__info_commands] )) ||
-_avp__info_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp info commands' commands "$@"
-}
 (( $+functions[_avp__init_commands] )) ||
 _avp__init_commands() {
     local commands; commands=()
     _describe -t commands 'avp init commands' commands "$@"
 }
-(( $+functions[_avp__install_commands] )) ||
-_avp__install_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp install commands' commands "$@"
-}
-(( $+functions[_avp__list_commands] )) ||
-_avp__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp list commands' commands "$@"
-}
-(( $+functions[_avp__login_commands] )) ||
-_avp__login_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp login commands' commands "$@"
-}
-(( $+functions[_avp__logout_commands] )) ||
-_avp__logout_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp logout commands' commands "$@"
-}
 (( $+functions[_avp__new_commands] )) ||
 _avp__new_commands() {
     local commands; commands=()
     _describe -t commands 'avp new commands' commands "$@"
-}
-(( $+functions[_avp__outdated_commands] )) ||
-_avp__outdated_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp outdated commands' commands "$@"
-}
-(( $+functions[_avp__publish_commands] )) ||
-_avp__publish_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp publish commands' commands "$@"
-}
-(( $+functions[_avp__search_commands] )) ||
-_avp__search_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp search commands' commands "$@"
-}
-(( $+functions[_avp__uninstall_commands] )) ||
-_avp__uninstall_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp uninstall commands' commands "$@"
-}
-(( $+functions[_avp__unpublish_commands] )) ||
-_avp__unpublish_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp unpublish commands' commands "$@"
-}
-(( $+functions[_avp__update_commands] )) ||
-_avp__update_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp update commands' commands "$@"
-}
-(( $+functions[_avp__whoami_commands] )) ||
-_avp__whoami_commands() {
-    local commands; commands=()
-    _describe -t commands 'avp whoami commands' commands "$@"
 }
 
 if [ "$funcstack[1]" = "_avp" ]; then

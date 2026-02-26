@@ -5,19 +5,8 @@
 //! - `avp init [target]`: Install AVP hooks into Claude Code settings (default: project)
 //! - `avp deinit [target]`: Remove AVP hooks and .avp directory (default: project)
 //! - `avp doctor`: Diagnose AVP configuration and setup
-//! - `avp list`: List all available validators
-//! - `avp login`: Authenticate with the AVP registry
-//! - `avp logout`: Log out from the AVP registry
-//! - `avp whoami`: Show current authenticated user
-//! - `avp search <query>`: Search the registry for packages
-//! - `avp info <name>`: Show detailed package information
-//! - `avp install <package>`: Install a package from the registry
-//! - `avp uninstall <name>`: Remove an installed package
 //! - `avp new <name>`: Create a new RuleSet from template
-//! - `avp publish`: Publish current directory as a package
-//! - `avp unpublish <name@version>`: Remove a published version
-//! - `avp outdated`: Check for available updates
-//! - `avp update [name]`: Update installed packages
+//! - `avp edit <name>`: Edit an existing RuleSet in $EDITOR
 //!
 //! Targets: project, local, user
 //!
@@ -36,24 +25,11 @@ mod banner;
 /// Exit code returned when a hook blocks the action.
 const BLOCKING_ERROR_EXIT_CODE: i32 = 2;
 
-use avp::install;
-use avp::registry::RegistryError;
-use avp::{auth, doctor, edit, info, list, new, outdated, package, publish, search};
+use avp::{doctor, edit, install, new};
 use avp::{Cli, Commands};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
 use avp_common::AvpError;
-
-/// Helper to run an async registry command and map errors to exit codes.
-fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
-    match result {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            1
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -99,44 +75,13 @@ async fn dispatch_command(cli: Cli) -> i32 {
 }
 
 /// Handle an explicit subcommand.
-async fn dispatch_subcommand(cmd: Commands, debug: bool) -> i32 {
+async fn dispatch_subcommand(cmd: Commands, _debug: bool) -> i32 {
     match cmd {
         Commands::Init { target } => result_to_exit(install::install(target)),
         Commands::Deinit { target } => result_to_exit(install::uninstall(target)),
         Commands::Doctor { verbose } => doctor::run_doctor(verbose),
-        Commands::List {
-            verbose,
-            global,
-            local,
-            json,
-        } => list::run_list(verbose, debug, global, local, json),
-        Commands::Login => handle_registry_result(auth::login().await),
-        Commands::Logout => handle_registry_result(auth::logout().await),
-        Commands::Whoami => handle_registry_result(auth::whoami().await),
-        Commands::Search { query, tag, json } => {
-            handle_registry_result(search::run_search(&query, tag.as_deref(), json).await)
-        }
-        Commands::Info { name } => handle_registry_result(info::run_info(&name).await),
-        Commands::Install {
-            package, global, ..
-        } => handle_registry_result(package::run_install(&package, global).await),
-        Commands::Uninstall { name, global, .. } => {
-            handle_registry_result(package::run_uninstall(&name, global).await)
-        }
-        Commands::Edit { name, global, .. } => {
-            handle_registry_result(edit::run_edit(&name, global))
-        }
-        Commands::New { name, global, .. } => handle_registry_result(new::run_new(&name, global)),
-        Commands::Publish { path, dry_run } => {
-            handle_registry_result(publish::run_publish(&path, dry_run).await)
-        }
-        Commands::Unpublish { name_version } => {
-            handle_registry_result(publish::run_unpublish(&name_version).await)
-        }
-        Commands::Outdated => handle_registry_result(outdated::run_outdated().await),
-        Commands::Update { name, global, .. } => {
-            handle_registry_result(outdated::run_update(name.as_deref(), global).await)
-        }
+        Commands::Edit { name, global, .. } => result_to_exit(edit::run_edit(&name, global)),
+        Commands::New { name, global, .. } => result_to_exit(new::run_new(&name, global)),
     }
 }
 
@@ -321,215 +266,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parsing_list() {
-        let cli = Cli::parse_from(["avp", "list"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::List {
-                verbose: false,
-                global: false,
-                local: false,
-                json: false
-            })
-        ));
-    }
-
-    #[test]
-    fn test_cli_parsing_list_verbose() {
-        let cli = Cli::parse_from(["avp", "list", "-v"]);
-        match cli.command {
-            Some(Commands::List { verbose, .. }) => assert!(verbose),
-            _ => panic!("Expected List command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_list_verbose_long() {
-        let cli = Cli::parse_from(["avp", "list", "--verbose"]);
-        match cli.command {
-            Some(Commands::List { verbose, .. }) => assert!(verbose),
-            _ => panic!("Expected List command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_list_global() {
-        let cli = Cli::parse_from(["avp", "list", "--global"]);
-        match cli.command {
-            Some(Commands::List { global, .. }) => assert!(global),
-            _ => panic!("Expected List command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_list_json() {
-        let cli = Cli::parse_from(["avp", "list", "--json"]);
-        match cli.command {
-            Some(Commands::List { json, .. }) => assert!(json),
-            _ => panic!("Expected List command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_login() {
-        let cli = Cli::parse_from(["avp", "login"]);
-        assert!(matches!(cli.command, Some(Commands::Login)));
-    }
-
-    #[test]
-    fn test_cli_parsing_logout() {
-        let cli = Cli::parse_from(["avp", "logout"]);
-        assert!(matches!(cli.command, Some(Commands::Logout)));
-    }
-
-    #[test]
-    fn test_cli_parsing_whoami() {
-        let cli = Cli::parse_from(["avp", "whoami"]);
-        assert!(matches!(cli.command, Some(Commands::Whoami)));
-    }
-
-    #[test]
-    fn test_cli_parsing_debug_with_login() {
-        let cli = Cli::parse_from(["avp", "--debug", "login"]);
-        assert!(cli.debug);
-        assert!(matches!(cli.command, Some(Commands::Login)));
-    }
-
-    #[test]
-    fn test_cli_parsing_search() {
-        let cli = Cli::parse_from(["avp", "search", "security"]);
-        match cli.command {
-            Some(Commands::Search { query, tag, json }) => {
-                assert_eq!(query, "security");
-                assert_eq!(tag, None);
-                assert!(!json);
-            }
-            _ => panic!("Expected Search command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_search_with_tag() {
-        let cli = Cli::parse_from(["avp", "search", "test", "--tag", "security"]);
-        match cli.command {
-            Some(Commands::Search { query, tag, .. }) => {
-                assert_eq!(query, "test");
-                assert_eq!(tag, Some("security".to_string()));
-            }
-            _ => panic!("Expected Search command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_search_json() {
-        let cli = Cli::parse_from(["avp", "search", "test", "--json"]);
-        match cli.command {
-            Some(Commands::Search { json, .. }) => assert!(json),
-            _ => panic!("Expected Search command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_info() {
-        let cli = Cli::parse_from(["avp", "info", "no-secrets"]);
-        match cli.command {
-            Some(Commands::Info { name }) => assert_eq!(name, "no-secrets"),
-            _ => panic!("Expected Info command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_install() {
-        let cli = Cli::parse_from(["avp", "install", "no-secrets"]);
-        match cli.command {
-            Some(Commands::Install {
-                package,
-                global,
-                local,
-            }) => {
-                assert_eq!(package, "no-secrets");
-                assert!(!global);
-                assert!(!local);
-            }
-            _ => panic!("Expected Install command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_install_local() {
-        let cli = Cli::parse_from(["avp", "install", "no-secrets", "--local"]);
-        match cli.command {
-            Some(Commands::Install { local, global, .. }) => {
-                assert!(local);
-                assert!(!global);
-            }
-            _ => panic!("Expected Install command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_install_project_alias() {
-        let cli = Cli::parse_from(["avp", "install", "no-secrets", "--project"]);
-        match cli.command {
-            Some(Commands::Install { local, .. }) => assert!(local),
-            _ => panic!("Expected Install command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_install_user_alias() {
-        let cli = Cli::parse_from(["avp", "install", "no-secrets", "--user"]);
-        match cli.command {
-            Some(Commands::Install { global, .. }) => assert!(global),
-            _ => panic!("Expected Install command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_install_with_version() {
-        let cli = Cli::parse_from(["avp", "install", "no-secrets@1.2.3"]);
-        match cli.command {
-            Some(Commands::Install { package, .. }) => {
-                assert_eq!(package, "no-secrets@1.2.3");
-            }
-            _ => panic!("Expected Install command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_install_global() {
-        let cli = Cli::parse_from(["avp", "install", "no-secrets", "--global"]);
-        match cli.command {
-            Some(Commands::Install { global, .. }) => assert!(global),
-            _ => panic!("Expected Install command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_uninstall() {
-        let cli = Cli::parse_from(["avp", "uninstall", "no-secrets"]);
-        match cli.command {
-            Some(Commands::Uninstall { name, global, .. }) => {
-                assert_eq!(name, "no-secrets");
-                assert!(!global);
-            }
-            _ => panic!("Expected Uninstall command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_uninstall_local() {
-        let cli = Cli::parse_from(["avp", "uninstall", "no-secrets", "--local"]);
-        match cli.command {
-            Some(Commands::Uninstall { local, global, .. }) => {
-                assert!(local);
-                assert!(!global);
-            }
-            _ => panic!("Expected Uninstall command"),
-        }
-    }
-
-    #[test]
     fn test_cli_parsing_edit() {
         let cli = Cli::parse_from(["avp", "edit", "my-ruleset"]);
         match cli.command {
@@ -639,103 +375,6 @@ mod tests {
                 assert!(global);
             }
             _ => panic!("Expected New command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_publish() {
-        let cli = Cli::parse_from(["avp", "publish"]);
-        match cli.command {
-            Some(Commands::Publish { path, dry_run }) => {
-                assert_eq!(path, std::path::PathBuf::from("."));
-                assert!(!dry_run);
-            }
-            _ => panic!("Expected Publish command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_publish_with_path() {
-        let cli = Cli::parse_from(["avp", "publish", "./my-package"]);
-        match cli.command {
-            Some(Commands::Publish { path, dry_run }) => {
-                assert_eq!(path, std::path::PathBuf::from("./my-package"));
-                assert!(!dry_run);
-            }
-            _ => panic!("Expected Publish command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_publish_dry_run() {
-        let cli = Cli::parse_from(["avp", "publish", "--dry-run"]);
-        match cli.command {
-            Some(Commands::Publish { path, dry_run }) => {
-                assert_eq!(path, std::path::PathBuf::from("."));
-                assert!(dry_run);
-            }
-            _ => panic!("Expected Publish command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_publish_path_and_dry_run() {
-        let cli = Cli::parse_from(["avp", "publish", "../other", "--dry-run"]);
-        match cli.command {
-            Some(Commands::Publish { path, dry_run }) => {
-                assert_eq!(path, std::path::PathBuf::from("../other"));
-                assert!(dry_run);
-            }
-            _ => panic!("Expected Publish command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_unpublish() {
-        let cli = Cli::parse_from(["avp", "unpublish", "my-pkg@1.0.0"]);
-        match cli.command {
-            Some(Commands::Unpublish { name_version }) => {
-                assert_eq!(name_version, "my-pkg@1.0.0");
-            }
-            _ => panic!("Expected Unpublish command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_outdated() {
-        let cli = Cli::parse_from(["avp", "outdated"]);
-        assert!(matches!(cli.command, Some(Commands::Outdated)));
-    }
-
-    #[test]
-    fn test_cli_parsing_update() {
-        let cli = Cli::parse_from(["avp", "update"]);
-        match cli.command {
-            Some(Commands::Update { name, global, .. }) => {
-                assert_eq!(name, None);
-                assert!(!global);
-            }
-            _ => panic!("Expected Update command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_update_specific() {
-        let cli = Cli::parse_from(["avp", "update", "no-secrets"]);
-        match cli.command {
-            Some(Commands::Update { name, .. }) => {
-                assert_eq!(name, Some("no-secrets".to_string()));
-            }
-            _ => panic!("Expected Update command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parsing_update_global() {
-        let cli = Cli::parse_from(["avp", "update", "--global"]);
-        match cli.command {
-            Some(Commands::Update { global, .. }) => assert!(global),
-            _ => panic!("Expected Update command"),
         }
     }
 
