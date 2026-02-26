@@ -359,6 +359,15 @@ description: A test mode
     }
 
     #[test]
+    fn test_mode_from_markdown_with_agent_ref() {
+        let content = "---\nname: Test\ndescription: Test mode\nagent: planner\n---\n";
+        let mode = Mode::from_markdown(content, "test").unwrap();
+        assert!(mode.uses_agent_reference());
+        assert_eq!(mode.agent(), Some("planner"));
+        assert!(mode.system_prompt().is_empty());
+    }
+
+    #[test]
     fn test_mode_with_source_path() {
         let mode = Mode::new("test", "Test", "Description", "Prompt")
             .with_source_path(PathBuf::from("/path/to/mode.md"));

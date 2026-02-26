@@ -25,13 +25,14 @@ static LIST_AGENTS: Lazy<ListAgents> = Lazy::new(ListAgents::new);
 static USE_AGENT: Lazy<UseAgent> = Lazy::new(|| UseAgent::new(""));
 static SEARCH_AGENT: Lazy<SearchAgent> = Lazy::new(|| SearchAgent::new(""));
 
-/// All agent operations for schema generation
-static AGENT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
-    vec![
+/// All agent operations for schema generation (leaked once, lives for process lifetime)
+static AGENT_OPERATIONS: Lazy<&'static [&'static dyn Operation]> = Lazy::new(|| {
+    let ops: Vec<&'static dyn Operation> = vec![
         &*LIST_AGENTS as &dyn Operation,
         &*USE_AGENT as &dyn Operation,
         &*SEARCH_AGENT as &dyn Operation,
-    ]
+    ];
+    Box::leak(ops.into_boxed_slice())
 });
 
 /// Static description prefix (the `<available_agents>` section is appended dynamically)
@@ -39,8 +40,8 @@ static DESCRIPTION_PREFIX: &str = include_str!("description.md");
 
 /// MCP tool for agent discovery and activation
 pub struct AgentMcpTool {
-    /// Dynamic description including available agents
-    description: String,
+    /// Static description computed once at construction time
+    description: &'static str,
     /// Shared agent library
     library: Arc<RwLock<AgentLibrary>>,
     /// Prompt library for rendering agent templates with partials
@@ -54,6 +55,7 @@ impl AgentMcpTool {
         prompt_library: Arc<RwLock<PromptLibrary>>,
     ) -> Self {
         let description = build_description(&library);
+        let description: &'static str = Box::leak(description.into_boxed_str());
         Self {
             description,
             library,
@@ -137,9 +139,7 @@ impl McpTool for AgentMcpTool {
     }
 
     fn description(&self) -> &'static str {
-        // Leak the string so it lives for 'static — registered once per process lifetime.
-        let leaked: &'static str = Box::leak(self.description.clone().into_boxed_str());
-        leaked
+        self.description
     }
 
     fn schema(&self) -> serde_json::Value {
@@ -147,14 +147,7 @@ impl McpTool for AgentMcpTool {
     }
 
     fn operations(&self) -> &'static [&'static dyn Operation] {
-        let ops: &[&'static dyn Operation] = &AGENT_OPERATIONS;
-        // SAFETY: AGENT_OPERATIONS is a static Lazy<Vec<...>> initialized once
-        unsafe {
-            std::mem::transmute::<
-                &[&dyn Operation],
-                &'static [&'static dyn swissarmyhammer_operations::Operation],
-            >(ops)
-        }
+        *AGENT_OPERATIONS
     }
 
     async fn execute(
