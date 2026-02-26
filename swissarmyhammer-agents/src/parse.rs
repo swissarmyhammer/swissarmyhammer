@@ -69,10 +69,7 @@ fn extract_verb_noun(
 
     // Strategy 2: Separate verb/noun fields
     if let Some(verb) = obj.get("verb").and_then(|v| v.as_str()) {
-        let noun = obj
-            .get("noun")
-            .and_then(|v| v.as_str())
-            .unwrap_or("agent");
+        let noun = obj.get("noun").and_then(|v| v.as_str()).unwrap_or("agent");
         return Ok((verb.to_string(), noun.to_string()));
     }
 

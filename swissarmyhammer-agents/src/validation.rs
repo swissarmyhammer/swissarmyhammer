@@ -58,11 +58,10 @@ mod tests {
 
     #[test]
     fn test_validate_frontmatter() {
-        assert!(validate_frontmatter(
-            &Some("test".to_string()),
-            &Some("description".to_string()),
-        )
-        .is_ok());
+        assert!(
+            validate_frontmatter(&Some("test".to_string()), &Some("description".to_string()),)
+                .is_ok()
+        );
 
         assert!(validate_frontmatter(&None, &Some("description".to_string())).is_err());
         assert!(validate_frontmatter(&Some("test".to_string()), &None).is_err());

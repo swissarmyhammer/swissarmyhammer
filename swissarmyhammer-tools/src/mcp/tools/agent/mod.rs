@@ -13,8 +13,8 @@ use rmcp::ErrorData as McpError;
 use serde_json::Value;
 use std::sync::Arc;
 use swissarmyhammer_agents::{
-    parse_input, AgentContext, AgentLibrary, AgentOperation, ExecutionResult, ListAgents, Operation,
-    SearchAgent, UseAgent,
+    parse_input, AgentContext, AgentLibrary, AgentOperation, ExecutionResult, ListAgents,
+    Operation, SearchAgent, UseAgent,
 };
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::PromptLibrary;

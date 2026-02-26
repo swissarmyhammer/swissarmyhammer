@@ -1331,7 +1331,11 @@ impl agent_client_protocol::Agent for AcpServer {
                 .set_session_system_prompt(&llama_session_id, system_prompt.clone())
                 .await
                 .map_err(|e| {
-                    tracing::warn!("Failed to update system prompt for mode '{}': {}", mode_id.0, e);
+                    tracing::warn!(
+                        "Failed to update system prompt for mode '{}': {}",
+                        mode_id.0,
+                        e
+                    );
                     agent_client_protocol::Error::internal_error()
                 })?;
             tracing::info!(

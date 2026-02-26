@@ -164,8 +164,8 @@ fn test_default_system_prompt_includes_skills_section() {
         .parent()
         .unwrap()
         .join("builtin/agents/default/AGENT.md");
-    let agent_content = std::fs::read_to_string(&agent_md_path)
-        .expect("Failed to read default agent AGENT.md");
+    let agent_content =
+        std::fs::read_to_string(&agent_md_path).expect("Failed to read default agent AGENT.md");
     // Extract body after frontmatter
     let instructions = agent_content
         .strip_prefix("---")

@@ -15,11 +15,9 @@ use swissarmyhammer_treesitter::Workspace;
 #[derive(Debug, Default)]
 pub struct GetStatus;
 
-static GET_STATUS_PARAMS: &[ParamMeta] = &[
-    ParamMeta::new("path")
-        .description("Workspace path (default: current directory)")
-        .param_type(ParamType::String),
-];
+static GET_STATUS_PARAMS: &[ParamMeta] = &[ParamMeta::new("path")
+    .description("Workspace path (default: current directory)")
+    .param_type(ParamType::String)];
 
 impl Operation for GetStatus {
     fn verb(&self) -> &'static str {

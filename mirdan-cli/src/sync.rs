@@ -181,8 +181,7 @@ pub fn sync(
                     };
 
                     if let Some(base_dir) = agent_dir {
-                        let link_name =
-                            store::symlink_name(&sanitized, &agent.def.symlink_policy);
+                        let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
                         let link_path = base_dir.join(&link_name);
 
                         // Skip if link already exists and is valid

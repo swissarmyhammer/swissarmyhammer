@@ -148,9 +148,7 @@ pub async fn execute_search(
     let results = workspace
         .semantic_search(request.query.clone(), request.top_k, request.min_similarity)
         .await
-        .map_err(|e| {
-            McpError::internal_error(format!("Semantic search failed: {}", e), None)
-        })?;
+        .map_err(|e| McpError::internal_error(format!("Semantic search failed: {}", e), None))?;
 
     Ok(BaseToolImpl::create_success_response(
         format_similar_chunks(&results, "similar code chunks"),

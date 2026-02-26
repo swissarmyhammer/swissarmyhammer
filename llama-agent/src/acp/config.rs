@@ -127,8 +127,12 @@ impl AcpConfig {
                         let id = mode.id().to_string();
 
                         // If mode references an agent, use agent's metadata and instructions
-                        let (name, desc, system_prompt) =
-                            resolve_mode_from_agent(&mode, &agent_library, &prompt_library, &template_context);
+                        let (name, desc, system_prompt) = resolve_mode_from_agent(
+                            &mode,
+                            &agent_library,
+                            &prompt_library,
+                            &template_context,
+                        );
 
                         system_prompts.insert(id.clone(), system_prompt);
 
@@ -412,11 +416,7 @@ fn resolve_mode_from_agent(
                     );
                     agent.instructions.clone()
                 });
-            return (
-                agent.name.to_string(),
-                agent.description.clone(),
-                rendered,
-            );
+            return (agent.name.to_string(), agent.description.clone(), rendered);
         }
         tracing::warn!(
             "Mode '{}' references agent '{}' but it was not found, falling back to embedded",
@@ -781,7 +781,10 @@ capabilities:
         // Name and description should come from the agent, NOT the mode
         assert_ne!(name, "Mode Name", "name should come from agent, not mode");
         assert_ne!(desc, "Mode Desc", "desc should come from agent, not mode");
-        assert!(!system_prompt.is_empty(), "system prompt should not be empty");
+        assert!(
+            !system_prompt.is_empty(),
+            "system prompt should not be empty"
+        );
     }
 
     #[test]
