@@ -7064,8 +7064,8 @@ All done!"#;
             // Split the opening tag across chunks
             let chunks = vec![
                 "<tool_ca",
-                "ll><files_write><file_path>/test/file.txt</file_path><content>Hello ",
-                "World!</content></files_write></tool_call>",
+                "ll><files><file_path>/test/file.txt</file_path><content>Hello ",
+                "World!</content></files></tool_call>",
             ];
 
             let mut all_calls = Vec::new();
@@ -7075,7 +7075,7 @@ All done!"#;
             }
 
             assert_eq!(all_calls.len(), 1);
-            assert_eq!(all_calls[0].name, "files_write");
+            assert_eq!(all_calls[0].name, "files");
             assert_eq!(all_calls[0].arguments["file_path"], "/test/file.txt");
             assert_eq!(all_calls[0].arguments["content"], "Hello World!");
         }
@@ -7086,7 +7086,7 @@ All done!"#;
 
             // Split the closing tag across chunks
             let chunks = vec![
-                "<tool_call><files_write><file_path>/test.txt</file_path><content>Test content</content></files_write></tool_ca",
+                "<tool_call><files><file_path>/test.txt</file_path><content>Test content</content></files></tool_ca",
                 "ll>",
             ];
 
@@ -7097,7 +7097,7 @@ All done!"#;
             }
 
             assert_eq!(all_calls.len(), 1);
-            assert_eq!(all_calls[0].name, "files_write");
+            assert_eq!(all_calls[0].name, "files");
             assert_eq!(all_calls[0].arguments["content"], "Test content");
         }
 
@@ -7107,10 +7107,10 @@ All done!"#;
 
             // Split the content across multiple chunks, simulating a large file write
             let chunks = vec![
-                "<tool_call><files_write><file_path>/test/file.txt</file_path><content>Line 1\n",
+                "<tool_call><files><file_path>/test/file.txt</file_path><content>Line 1\n",
                 "Line 2\n",
                 "Line 3\n",
-                "Line 4</content></files_write></tool_call>",
+                "Line 4</content></files></tool_call>",
             ];
 
             let mut all_calls = Vec::new();
@@ -7120,7 +7120,7 @@ All done!"#;
             }
 
             assert_eq!(all_calls.len(), 1);
-            assert_eq!(all_calls[0].name, "files_write");
+            assert_eq!(all_calls[0].name, "files");
             assert_eq!(
                 all_calls[0].arguments["content"],
                 "Line 1\nLine 2\nLine 3\nLine 4"
@@ -7153,7 +7153,7 @@ All done!"#;
 
             // Split JSON tool call across chunks
             let chunks = vec![
-                r#"{"function_name": "files_write", "arguments": {"file_path": "/test.txt", "con"#,
+                r#"{"function_name": "files", "arguments": {"file_path": "/test.txt", "con"#,
                 r#"tent": "Hello World!"}}"#,
             ];
 
@@ -7164,7 +7164,7 @@ All done!"#;
             }
 
             assert_eq!(all_calls.len(), 1);
-            assert_eq!(all_calls[0].name, "files_write");
+            assert_eq!(all_calls[0].name, "files");
             assert_eq!(all_calls[0].arguments["content"], "Hello World!");
         }
 
@@ -7174,9 +7174,9 @@ All done!"#;
 
             // Multiple tool calls split across chunks
             let chunks = vec![
-                "<tool_call><files_read><path>/file1.txt</path></files_read></too",
-                "l_call><tool_call><files_read><path>/file2.txt</path></files",
-                "_read></tool_call>",
+                "<tool_call><files><path>/file1.txt</path></files></too",
+                "l_call><tool_call><files><path>/file2.txt</path></file",
+                "s></tool_call>",
             ];
 
             let mut all_calls = Vec::new();
@@ -7186,9 +7186,9 @@ All done!"#;
             }
 
             assert_eq!(all_calls.len(), 2);
-            assert_eq!(all_calls[0].name, "files_read");
+            assert_eq!(all_calls[0].name, "files");
             assert_eq!(all_calls[0].arguments["path"], "/file1.txt");
-            assert_eq!(all_calls[1].name, "files_read");
+            assert_eq!(all_calls[1].name, "files");
             assert_eq!(all_calls[1].arguments["path"], "/file2.txt");
         }
 
@@ -7274,8 +7274,8 @@ All done!"#;
             let mut parser = Qwen3CoderStreamingParser::new();
 
             // Simulate a large file write split across many chunks
-            let header = "<tool_call><files_write><file_path>/large_file.txt</file_path><content>";
-            let footer = "</content></files_write></tool_call>";
+            let header = "<tool_call><files><file_path>/large_file.txt</file_path><content>";
+            let footer = "</content></files></tool_call>";
             let line = "This is a line of content that will be repeated many times.\n";
 
             // Start with header
@@ -7290,7 +7290,7 @@ All done!"#;
             let calls = parser.process_delta(footer).unwrap();
 
             assert_eq!(calls.len(), 1);
-            assert_eq!(calls[0].name, "files_write");
+            assert_eq!(calls[0].name, "files");
             assert_eq!(calls[0].arguments["file_path"], "/large_file.txt");
 
             // Verify content has all 100 lines

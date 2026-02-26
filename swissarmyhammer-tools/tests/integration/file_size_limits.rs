@@ -2,7 +2,7 @@
 //!
 //! These tests verify that file size limits are correctly enforced across all file tools.
 //! Based on the FILE_SIZE_LIMITS.md audit, most components use 10 MB (10,485,760 bytes),
-//! with one minor inconsistency in files_write using 10,000,000 bytes.
+//! with one minor inconsistency in the write operation using 10,000,000 bytes.
 
 use serde_json::json;
 use std::fs;
@@ -15,7 +15,7 @@ use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::files;
 
-/// Expected file size limit for files_write tool (binary - now consistent)
+/// Expected file size limit for write file operation (binary - now consistent)
 const WRITE_TOOL_SIZE_LIMIT: usize = 10 * 1024 * 1024; // 10,485,760 bytes
 
 /// Expected file size limit for most other components (binary)
@@ -59,7 +59,7 @@ fn extract_response_text(call_result: &rmcp::model::CallToolResult) -> &str {
 async fn test_write_tool_accepts_content_at_limit() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -69,6 +69,7 @@ async fn test_write_tool_accepts_content_at_limit() {
     let content = "x".repeat(WRITE_TOOL_SIZE_LIMIT);
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(content));
 
@@ -91,7 +92,7 @@ async fn test_write_tool_accepts_content_at_limit() {
 async fn test_write_tool_rejects_content_over_limit() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -101,6 +102,7 @@ async fn test_write_tool_rejects_content_over_limit() {
     let content = "x".repeat(WRITE_TOOL_SIZE_LIMIT + 1);
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(content));
 
@@ -127,7 +129,7 @@ async fn test_write_tool_rejects_content_over_limit() {
 async fn test_write_tool_accepts_content_just_under_limit() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -137,6 +139,7 @@ async fn test_write_tool_accepts_content_just_under_limit() {
     let content = "x".repeat(WRITE_TOOL_SIZE_LIMIT - 1);
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(content));
 
@@ -158,7 +161,7 @@ async fn test_write_tool_accepts_content_just_under_limit() {
 async fn test_write_tool_rejects_large_content() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -168,6 +171,7 @@ async fn test_write_tool_rejects_large_content() {
     let content = "x".repeat(20 * 1024 * 1024);
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(content));
 
@@ -194,7 +198,7 @@ async fn test_write_tool_rejects_large_content() {
 async fn test_write_tool_empty_content_accepted() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -204,6 +208,7 @@ async fn test_write_tool_empty_content_accepted() {
     let content = "";
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(content));
 
@@ -226,7 +231,7 @@ async fn test_write_tool_empty_content_accepted() {
 async fn test_read_tool_handles_large_files() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -239,6 +244,7 @@ async fn test_read_tool_handles_large_files() {
 
     // Test reading with a limit to avoid memory issues
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("read file"));
     arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("limit".to_string(), json!(1000)); // Read only first 1000 lines
 
@@ -260,7 +266,7 @@ async fn test_read_tool_handles_large_files() {
 async fn test_read_tool_with_offset_on_large_file() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -275,6 +281,7 @@ async fn test_read_tool_with_offset_on_large_file() {
 
     // Test reading with offset and limit
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("read file"));
     arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("offset".to_string(), json!(5000));
     arguments.insert("limit".to_string(), json!(100));
@@ -300,7 +307,7 @@ async fn test_read_tool_with_offset_on_large_file() {
 async fn test_edit_tool_handles_large_files() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -312,6 +319,7 @@ async fn test_edit_tool_handles_large_files() {
 
     // Test editing the file
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!("target"));
     arguments.insert("new_string".to_string(), json!("modified"));
@@ -336,7 +344,7 @@ async fn test_edit_tool_handles_large_files() {
 async fn test_edit_tool_replace_all_on_large_file() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -348,6 +356,7 @@ async fn test_edit_tool_replace_all_on_large_file() {
 
     // Test replace all on large file
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!("foo"));
     arguments.insert("new_string".to_string(), json!("baz"));
@@ -441,7 +450,7 @@ async fn test_shell_execute_handles_large_output() {
 async fn test_grep_tool_handles_large_files() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -460,6 +469,7 @@ async fn test_grep_tool_handles_large_files() {
 
     // Test grep on large file
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("grep files"));
     arguments.insert("pattern".to_string(), json!("TARGET_PATTERN"));
     arguments.insert("path".to_string(), json!(temp_dir.to_string_lossy()));
 
@@ -481,8 +491,7 @@ async fn test_grep_tool_handles_large_files() {
 async fn test_write_then_read_at_size_limit() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -492,18 +501,20 @@ async fn test_write_then_read_at_size_limit() {
     let content = "x".repeat(WRITE_TOOL_SIZE_LIMIT);
 
     let mut write_args = serde_json::Map::new();
+    write_args.insert("op".to_string(), json!("write file"));
     write_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     write_args.insert("content".to_string(), json!(content));
 
-    let write_result = write_tool.execute(write_args, &context).await;
+    let write_result = tool.execute(write_args, &context).await;
     assert!(write_result.is_ok(), "Write at limit should succeed");
 
     // Read the file with limit to avoid memory issues
     let mut read_args = serde_json::Map::new();
+    read_args.insert("op".to_string(), json!("read file"));
     read_args.insert("path".to_string(), json!(test_file.to_string_lossy()));
     read_args.insert("limit".to_string(), json!(1000)); // Read only first 1000 lines
 
-    let read_result = read_tool.execute(read_args, &context).await;
+    let read_result = tool.execute(read_args, &context).await;
     assert!(read_result.is_ok(), "Read should succeed on large file");
 
     let call_result = read_result.unwrap();
@@ -514,8 +525,7 @@ async fn test_write_then_read_at_size_limit() {
 async fn test_write_then_edit_at_size_limit() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -525,20 +535,22 @@ async fn test_write_then_edit_at_size_limit() {
     let content = "target content\n".repeat(350_000); // ~5 MB
 
     let mut write_args = serde_json::Map::new();
+    write_args.insert("op".to_string(), json!("write file"));
     write_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     write_args.insert("content".to_string(), json!(content));
 
-    let write_result = write_tool.execute(write_args, &context).await;
+    let write_result = tool.execute(write_args, &context).await;
     assert!(write_result.is_ok(), "Write should succeed");
 
     // Edit the file
     let mut edit_args = serde_json::Map::new();
+    edit_args.insert("op".to_string(), json!("edit file"));
     edit_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     edit_args.insert("old_string".to_string(), json!("target"));
     edit_args.insert("new_string".to_string(), json!("modified"));
     edit_args.insert("replace_all".to_string(), json!(false));
 
-    let edit_result = edit_tool.execute(edit_args, &context).await;
+    let edit_result = tool.execute(edit_args, &context).await;
     assert!(edit_result.is_ok(), "Edit should succeed on large file");
 
     let call_result = edit_result.unwrap();

@@ -758,7 +758,7 @@ mod tests {
             "file_path": "/workspace/src/main.rs"
         });
 
-        let locations = ToolCallReport::extract_file_locations("mcp__files_read", &args);
+        let locations = ToolCallReport::extract_file_locations("mcp__files", &args);
         assert_eq!(locations.len(), 1);
         assert!(locations[0].path.ends_with("main.rs"));
     }

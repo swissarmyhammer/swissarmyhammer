@@ -8,8 +8,7 @@ use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
-use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
-use swissarmyhammer_tools::mcp::tools::files::write::WriteFileTool;
+use swissarmyhammer_tools::mcp::tools::files::FilesTool;
 use tempfile::TempDir;
 
 /// Helper to create a basic test context
@@ -86,18 +85,18 @@ async fn test_file_operations_enforce_rate_limits() {
     let test_file = temp_dir.path().join("test.txt");
 
     let context = create_test_context().await;
-    let write_tool = WriteFileTool::new();
-    let read_tool = ReadFileTool::new();
+    let files_tool = FilesTool::new();
 
     // Write a file
     let mut write_args = serde_json::Map::new();
+    write_args.insert("op".to_string(), serde_json::json!("write file"));
     write_args.insert(
         "file_path".to_string(),
         serde_json::json!(test_file.to_string_lossy()),
     );
     write_args.insert("content".to_string(), serde_json::json!("test content"));
 
-    let result = write_tool.execute(write_args, &context).await;
+    let result = files_tool.execute(write_args, &context).await;
     assert!(
         result.is_ok(),
         "Write should succeed with normal rate limits"
@@ -105,12 +104,13 @@ async fn test_file_operations_enforce_rate_limits() {
 
     // Read the file
     let mut read_args = serde_json::Map::new();
+    read_args.insert("op".to_string(), serde_json::json!("read file"));
     read_args.insert(
         "path".to_string(),
         serde_json::json!(test_file.to_string_lossy()),
     );
 
-    let result = read_tool.execute(read_args, &context).await;
+    let result = files_tool.execute(read_args, &context).await;
     assert!(
         result.is_ok(),
         "Read should succeed with normal rate limits"

@@ -105,11 +105,7 @@ Use logs to:
 The MCP server exposes these tool categories:
 
 File System:
-• files_read - Read file contents
-• files_write - Create or overwrite files
-• files_edit - Precise string replacements
-• files_glob - Pattern-based file discovery
-• files_grep - Content search with ripgrep
+• files - Unified file operations (read, write, edit, glob, grep) selected via op parameter
 
 Development Workflow:
 • todo_create, todo_show, todo_list - Todo tracking
@@ -159,7 +155,7 @@ Automated todo execution:
 # Claude Code uses MCP to:
 # 1. List todos with todo_list
 # 2. Read todo details with todo_show
-# 3. Edit code with files_edit
+# 3. Edit code with files (op: edit)
 # 4. Run tests with shell_execute
 # 5. Mark complete with todo_mark_complete
 ```

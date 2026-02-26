@@ -3464,12 +3464,28 @@ mod tests {
 
         // Test MCP tool classification
         assert_eq!(
-            ToolKind::classify_tool("mcp__files_read", &json!({})),
+            ToolKind::classify_tool("mcp__files", &json!({"op": "read file"})),
             ToolKind::Read
         );
         assert_eq!(
-            ToolKind::classify_tool("mcp__files_write", &json!({})),
+            ToolKind::classify_tool("mcp__files", &json!({"op": "edit file"})),
             ToolKind::Edit
+        );
+        assert_eq!(
+            ToolKind::classify_tool("mcp__files", &json!({"op": "grep files"})),
+            ToolKind::Search
+        );
+        assert_eq!(
+            ToolKind::classify_tool("mcp__files", &json!({})),
+            ToolKind::Other
+        );
+        assert_eq!(
+            ToolKind::classify_tool("mcp__sah__files", &json!({"op": "write file"})),
+            ToolKind::Edit
+        );
+        assert_eq!(
+            ToolKind::classify_tool("files", &json!({"op": "read file"})),
+            ToolKind::Read
         );
         assert_eq!(
             ToolKind::classify_tool("mcp__shell_execute", &json!({})),
@@ -3543,9 +3559,21 @@ mod tests {
         );
         assert_eq!(title, "Searching for 'error.*log'");
 
-        // Test MCP tools
-        let title = ToolCallReport::generate_title("mcp__files_read", &json!({}));
-        assert_eq!(title, "Files read");
+        // Test operation-based tools
+        let title = ToolCallReport::generate_title("files", &json!({"op": "read file", "path": "/src/main.rs"}));
+        assert_eq!(title, "Reading main.rs");
+
+        let title = ToolCallReport::generate_title("files", &json!({"op": "edit file", "file_path": "/src/lib.rs"}));
+        assert_eq!(title, "Editing lib.rs");
+
+        let title = ToolCallReport::generate_title("files", &json!({"op": "grep files", "pattern": "TODO"}));
+        assert_eq!(title, "Searching for 'TODO'");
+
+        let title = ToolCallReport::generate_title("mcp__sah__files", &json!({"op": "write file", "path": "/out.txt"}));
+        assert_eq!(title, "Writing to out.txt");
+
+        let title = ToolCallReport::generate_title("mcp__files", &json!({}));
+        assert_eq!(title, "Files operation");
 
         // Test fallback for unknown tools
         let title = ToolCallReport::generate_title("unknown_tool", &json!({}));

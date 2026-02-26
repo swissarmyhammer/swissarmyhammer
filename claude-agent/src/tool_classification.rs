@@ -9,7 +9,7 @@ use crate::tool_types::{ToolCallReport, ToolKind};
 
 impl ToolKind {
     /// Classify a tool by its name and parameters to determine the appropriate kind
-    pub fn classify_tool(tool_name: &str, _arguments: &serde_json::Value) -> Self {
+    pub fn classify_tool(tool_name: &str, arguments: &serde_json::Value) -> Self {
         // ACP requires comprehensive tool call reporting with rich metadata:
         // 1. toolCallId: Unique identifier for correlation across updates
         // 2. title: Human-readable description of tool operation
@@ -48,16 +48,20 @@ impl ToolKind {
             "fetch" | "http_get" | "download" | "curl" | "wget" => ToolKind::Fetch,
 
             // Internal reasoning and planning tools
-            // The Think kind is for agent internal reasoning that produces strategic plans,
-            // analyzes approaches, or generates structured thinking before taking action.
-            // Currently no tools in this agent explicitly use this kind, but it's available
-            // for future agent reasoning features or MCP servers that provide thinking tools.
             "think" | "reason" | "plan" | "analyze_approach" | "generate_strategy" => {
                 ToolKind::Think
             }
 
-            // MCP tools - classify by prefix pattern
+            // Operation-based tools - classify by op argument
+            "files" => Self::classify_by_op(arguments),
+
+            // MCP tools - classify by prefix pattern or op argument
             tool if tool.contains("mcp__") => {
+                // Check for operation-based tools (e.g., mcp__sah__files)
+                if tool.ends_with("__files") || tool.ends_with("__treesitter") {
+                    return Self::classify_by_op(arguments);
+                }
+
                 if tool.contains("read")
                     || tool.contains("get")
                     || tool.contains("show")
@@ -88,6 +92,23 @@ impl ToolKind {
             }
 
             // Default fallback for unknown tools
+            _ => ToolKind::Other,
+        }
+    }
+
+    /// Classify an operation-based tool by inspecting the `op` argument
+    fn classify_by_op(arguments: &serde_json::Value) -> Self {
+        let op = arguments
+            .get("op")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        match op {
+            "read file" => ToolKind::Read,
+            "write file" | "edit file" => ToolKind::Edit,
+            "glob files" => ToolKind::Read,
+            "grep files" | "search code" => ToolKind::Search,
+            "query ast" => ToolKind::Read,
             _ => ToolKind::Other,
         }
     }
@@ -151,8 +172,16 @@ impl ToolCallReport {
                     "Searching files".to_string()
                 }
             }
+            // Operation-based tools - generate title from op and arguments
+            "files" => Self::generate_op_title(arguments),
+
             // MCP tools - generate titles based on tool name and parameters
             tool if tool.starts_with("mcp__") => {
+                // Check for operation-based tools (e.g., mcp__sah__files)
+                if tool.ends_with("__files") || tool.ends_with("__treesitter") {
+                    return Self::generate_op_title(arguments);
+                }
+
                 let clean_name = tool.strip_prefix("mcp__").unwrap_or(tool).replace('_', " ");
 
                 // Capitalize first letter
@@ -171,6 +200,58 @@ impl ToolCallReport {
                     Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
                 }
             }
+        }
+    }
+
+    /// Generate a title for operation-based tools by inspecting the `op` argument
+    fn generate_op_title(arguments: &serde_json::Value) -> String {
+        let op = arguments
+            .get("op")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let path = arguments
+            .get("path")
+            .or_else(|| arguments.get("file_path"))
+            .and_then(|v| v.as_str());
+        let filename = path.map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(p)
+        });
+
+        match op {
+            "read file" => match filename {
+                Some(f) => format!("Reading {}", f),
+                None => "Reading file".to_string(),
+            },
+            "write file" => match filename {
+                Some(f) => format!("Writing to {}", f),
+                None => "Writing file".to_string(),
+            },
+            "edit file" => match filename {
+                Some(f) => format!("Editing {}", f),
+                None => "Editing file".to_string(),
+            },
+            "glob files" => {
+                if let Some(pattern) = arguments.get("pattern").and_then(|v| v.as_str()) {
+                    format!("Globbing '{}'", pattern)
+                } else {
+                    "Globbing files".to_string()
+                }
+            }
+            "grep files" => {
+                if let Some(pattern) = arguments.get("pattern").and_then(|v| v.as_str()) {
+                    format!("Searching for '{}'", pattern)
+                } else {
+                    "Searching files".to_string()
+                }
+            }
+            "query ast" => match filename {
+                Some(f) => format!("Querying AST of {}", f),
+                None => "Querying AST".to_string(),
+            },
+            _ => "Files operation".to_string(),
         }
     }
 }

@@ -416,8 +416,7 @@ mod tests {
 
         // Test that various tool names are allowed by default
         let test_tools = vec![
-            "files_read",
-            "files_write",
+            "files",
             "shell_execute",
             "web_fetch",
             "any_other_tool",

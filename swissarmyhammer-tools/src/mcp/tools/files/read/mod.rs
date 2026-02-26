@@ -51,12 +51,44 @@
 //! # }
 //! ```
 
-use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use crate::mcp::tools::files::shared_utils::FilePathValidator;
-use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
+use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 use tracing::{debug, info};
+
+/// Operation metadata for reading files
+#[derive(Debug, Default)]
+pub struct ReadFile;
+
+static READ_FILE_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("path")
+        .description("Path to the file to read (absolute or relative to current working directory)")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("offset")
+        .description("Starting line number for partial reading (optional)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("limit")
+        .description("Maximum number of lines to read (optional)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for ReadFile {
+    fn verb(&self) -> &'static str {
+        "read"
+    }
+    fn noun(&self) -> &'static str {
+        "file"
+    }
+    fn description(&self) -> &'static str {
+        "Read file contents from the local filesystem"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        READ_FILE_PARAMS
+    }
+}
 
 /// Tool for reading file contents from the local filesystem with comprehensive security validation
 ///
@@ -85,186 +117,130 @@ use tracing::{debug, info};
 /// * `offset`: Optional starting line number (1-based, max 1,000,000)
 /// * `limit`: Optional maximum lines to read (1-100,000 lines)
 ///
-/// ## Usage Examples
+/// ## Usage
 ///
-/// ```rust,no_run
-/// use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
-/// use swissarmyhammer_tools::mcp::tool_registry::McpTool;
-///
-/// let tool = ReadFileTool::new();
-/// assert_eq!(tool.name, "files_read");
-/// ```
+/// File reading is accessed through the unified `FilesTool` with `op: "read file"`.
 #[derive(Default, Debug, Clone)]
 pub struct ReadFileTool;
 
 impl ReadFileTool {
     /// Creates a new instance of the ReadFileTool
-    ///
-    /// Returns a new `ReadFileTool` instance ready for file reading operations.
-    /// The tool is lightweight and can be cloned efficiently for concurrent usage.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
-    /// use swissarmyhammer_tools::mcp::tool_registry::McpTool;
-    ///
-    /// let tool = ReadFileTool::new();
-    /// assert_eq!(tool.name(), "files_read");
-    /// ```
     pub fn new() -> Self {
         Self
     }
 }
 
-// No health checks needed
-crate::impl_empty_doctorable!(ReadFileTool);
 
-#[async_trait]
-impl AgentTool for ReadFileTool {}
+/// Execute a file read operation
+pub async fn execute_read(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    _context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    use crate::mcp::tools::files::shared_utils::SecureFileAccess;
+    use serde::Deserialize;
+    use swissarmyhammer_common::rate_limiter::get_rate_limiter;
 
-#[async_trait]
-impl McpTool for ReadFileTool {
-    fn name(&self) -> &'static str {
-        "files_read"
+    tracing::debug!(
+        "files read execute() called with arguments: {:?}",
+        arguments
+    );
+
+    #[derive(Deserialize)]
+    struct ReadRequest {
+        #[serde(alias = "absolute_path", alias = "file_path")]
+        path: String,
+        offset: Option<usize>,
+        limit: Option<usize>,
     }
 
-    fn description(&self) -> &'static str {
-        include_str!("description.md")
-    }
-
-    fn schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file to read (absolute or relative to current working directory)"
-                },
-                "offset": {
-                    "type": "number",
-                    "description": "Starting line number for partial reading (optional)"
-                },
-                "limit": {
-                    "type": "number",
-                    "description": "Maximum number of lines to read (optional)"
-                }
-            },
-            "required": ["path"]
-        })
-    }
-
-    async fn execute(
-        &self,
-        arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        use crate::mcp::tools::files::shared_utils::SecureFileAccess;
-        use serde::Deserialize;
-        use swissarmyhammer_common::rate_limiter::get_rate_limiter;
-
-        tracing::debug!(
-            "files_read execute() called with arguments: {:?}",
-            arguments
-        );
-
-        #[derive(Deserialize)]
-        struct ReadRequest {
-            #[serde(alias = "absolute_path", alias = "file_path")]
-            path: String,
-            offset: Option<usize>,
-            limit: Option<usize>,
+    // Parse arguments
+    let request: ReadRequest = match BaseToolImpl::parse_arguments::<ReadRequest>(arguments) {
+        Ok(r) => {
+            tracing::debug!(
+                "Parsed request successfully: path={}, offset={:?}, limit={:?}",
+                r.path,
+                r.offset,
+                r.limit
+            );
+            r
         }
+        Err(e) => {
+            tracing::error!("Failed to parse arguments: {}", e);
+            return Err(e);
+        }
+    };
 
-        // Parse arguments
-        let request: ReadRequest = match BaseToolImpl::parse_arguments::<ReadRequest>(arguments) {
-            Ok(r) => {
-                tracing::debug!(
-                    "Parsed request successfully: path={}, offset={:?}, limit={:?}",
-                    r.path,
-                    r.offset,
-                    r.limit
-                );
-                r
-            }
-            Err(e) => {
-                tracing::error!("Failed to parse arguments: {}", e);
-                return Err(e);
-            }
-        };
+    // Check rate limit using tokio task ID as client identifier
+    let rate_limiter = get_rate_limiter();
+    let client_id = format!("task_{:?}", tokio::task::try_id());
+    if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_read", 1) {
+        tracing::warn!("Rate limit exceeded for file_read: {}", e);
+        return Err(McpError::invalid_request(
+            format!("Rate limit exceeded: {}", e),
+            None,
+        ));
+    }
 
-        // Check rate limit using tokio task ID as client identifier
-        let rate_limiter = get_rate_limiter();
-        let client_id = format!("task_{:?}", tokio::task::try_id());
-        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_read", 1) {
-            tracing::warn!("Rate limit exceeded for file_read: {}", e);
+    // Validate parameters before security layer
+    if let Some(offset) = request.offset {
+        if offset > 1_000_000 {
             return Err(McpError::invalid_request(
-                format!("Rate limit exceeded: {}", e),
+                "offset must be less than 1,000,000 lines".to_string(),
                 None,
             ));
         }
+    }
 
-        // Validate parameters before security layer
-        if let Some(offset) = request.offset {
-            if offset > 1_000_000 {
-                return Err(McpError::invalid_request(
-                    "offset must be less than 1,000,000 lines".to_string(),
-                    None,
-                ));
-            }
-        }
-
-        if let Some(limit) = request.limit {
-            if limit == 0 {
-                return Err(McpError::invalid_request(
-                    "limit must be greater than 0".to_string(),
-                    None,
-                ));
-            }
-            if limit > 100_000 {
-                return Err(McpError::invalid_request(
-                    "limit must be less than or equal to 100,000 lines".to_string(),
-                    None,
-                ));
-            }
-        }
-
-        if request.path.is_empty() {
+    if let Some(limit) = request.limit {
+        if limit == 0 {
             return Err(McpError::invalid_request(
-                "path cannot be empty".to_string(),
+                "limit must be greater than 0".to_string(),
                 None,
             ));
         }
-
-        // Validate path using consistent validator approach
-        let validator = FilePathValidator::default();
-        let validated_path = validator.validate_path(&request.path)?;
-
-        // Create secure file access with enhanced security validation
-        let secure_access = SecureFileAccess::default_secure();
-
-        // Log file access attempt for security auditing
-        info!(
-            path = %request.path,
-            validated_path = %validated_path.display(),
-            offset = request.offset,
-            limit = request.limit,
-            "Attempting to read file"
-        );
-
-        // Perform secure read operation
-        let content = secure_access.read(
-            &validated_path.to_string_lossy(),
-            request.offset,
-            request.limit,
-        )?;
-
-        debug!(
-            path = %request.path,
-            content_length = content.len(),
-            "Successfully read file content"
-        );
-
-        Ok(BaseToolImpl::create_success_response(content))
+        if limit > 100_000 {
+            return Err(McpError::invalid_request(
+                "limit must be less than or equal to 100,000 lines".to_string(),
+                None,
+            ));
+        }
     }
+
+    if request.path.is_empty() {
+        return Err(McpError::invalid_request(
+            "path cannot be empty".to_string(),
+            None,
+        ));
+    }
+
+    // Validate path using consistent validator approach
+    let validator = FilePathValidator::default();
+    let validated_path = validator.validate_path(&request.path)?;
+
+    // Create secure file access with enhanced security validation
+    let secure_access = SecureFileAccess::default_secure();
+
+    // Log file access attempt for security auditing
+    info!(
+        path = %request.path,
+        validated_path = %validated_path.display(),
+        offset = request.offset,
+        limit = request.limit,
+        "Attempting to read file"
+    );
+
+    // Perform secure read operation
+    let content = secure_access.read(
+        &validated_path.to_string_lossy(),
+        request.offset,
+        request.limit,
+    )?;
+
+    debug!(
+        path = %request.path,
+        content_length = content.len(),
+        "Successfully read file content"
+    );
+
+    Ok(BaseToolImpl::create_success_response(content))
 }

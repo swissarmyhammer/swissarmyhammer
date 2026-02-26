@@ -2408,7 +2408,7 @@ mod tests {
         assert_eq!(infer_tool_kind("view_data"), ToolKind::Read);
         assert_eq!(infer_tool_kind("load_config"), ToolKind::Read);
         assert_eq!(infer_tool_kind("fetch_local"), ToolKind::Read);
-        assert_eq!(infer_tool_kind("files_glob"), ToolKind::Read);
+        assert_eq!(infer_tool_kind("files"), ToolKind::Other);
     }
 
     #[test]
@@ -2447,7 +2447,7 @@ mod tests {
         use agent_client_protocol::ToolKind;
 
         assert_eq!(infer_tool_kind("search_files"), ToolKind::Search);
-        assert_eq!(infer_tool_kind("files_grep"), ToolKind::Search);
+        assert_eq!(infer_tool_kind("grep_files"), ToolKind::Search);
         assert_eq!(infer_tool_kind("find_in_files"), ToolKind::Search);
     }
 
@@ -2503,8 +2503,7 @@ mod tests {
     fn test_infer_tool_kind_mcp_style_names() {
         use agent_client_protocol::ToolKind;
 
-        assert_eq!(infer_tool_kind("mcp__files_read"), ToolKind::Read);
-        assert_eq!(infer_tool_kind("mcp__files_write"), ToolKind::Edit);
+        assert_eq!(infer_tool_kind("mcp__files"), ToolKind::Other);
         assert_eq!(infer_tool_kind("mcp__shell_execute"), ToolKind::Execute);
         assert_eq!(infer_tool_kind("mcp__web"), ToolKind::Fetch);
     }
@@ -2769,7 +2768,7 @@ mod tests {
         use agent_client_protocol::ToolCallStatus;
 
         let complex_result = serde_json::json!({
-            "files_read": ["file1.txt", "file2.txt"],
+            "files": ["file1.txt", "file2.txt"],
             "total_lines": 150,
             "metadata": {
                 "encoding": "utf-8",
@@ -2925,10 +2924,8 @@ mod tests {
     #[test]
     fn test_needs_permission_mcp_tools() {
         // Test MCP-style tool names
-        assert!(!needs_permission("mcp__files_read"));
-        assert!(needs_permission("mcp__files_write"));
+        assert!(needs_permission("mcp__files")); // Unified files tool - ambiguous, defaults to requiring permission
         assert!(needs_permission("mcp__shell_execute"));
-        assert!(!needs_permission("mcp__files_list"));
         assert!(needs_permission("mcp__web"));
     }
 
@@ -3029,12 +3026,8 @@ mod tests {
     #[test]
     fn test_needs_permission_real_world_tool_names() {
         // Test real-world tool names from MCP servers
-        assert!(!needs_permission("mcp__swissarmyhammer__files_read"));
-        assert!(needs_permission("mcp__swissarmyhammer__files_write"));
-        assert!(needs_permission("mcp__swissarmyhammer__files_edit"));
+        assert!(needs_permission("mcp__swissarmyhammer__files")); // Unified files tool - ambiguous, defaults to requiring permission
         assert!(needs_permission("mcp__swissarmyhammer__shell_execute"));
-        assert!(!needs_permission("mcp__swissarmyhammer__files_glob"));
-        assert!(!needs_permission("mcp__swissarmyhammer__files_grep"));
         assert!(needs_permission("mcp__swissarmyhammer__web"));
     }
 }

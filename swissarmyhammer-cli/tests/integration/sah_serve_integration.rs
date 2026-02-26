@@ -52,11 +52,7 @@ use crate::test_utils::ProcessGuard;
 #[allow(dead_code)]
 const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "abort_create",
-    "files_read",
-    "files_write",
-    "files_edit",
-    "files_glob",
-    "files_grep",
+    "files",
     "shell_execute",
     "kanban",
     "web",

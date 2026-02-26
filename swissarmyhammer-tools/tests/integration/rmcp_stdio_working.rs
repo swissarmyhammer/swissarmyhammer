@@ -18,7 +18,7 @@ use swissarmyhammer_tools::mcp::{
 #[tokio::test]
 async fn test_rmcp_client_lists_tools_and_prompts() {
     // Start in-process HTTP MCP server
-    // Use agent_mode=true since this test checks for agent tools (files_read, files_grep)
+    // Use agent_mode=true since this test checks for agent tools (files)
     let mut server =
         start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, true)
             .await
@@ -38,12 +38,8 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
 
     assert!(
-        tool_names.contains(&"files_read".to_string()),
-        "Should have files_read tool"
-    );
-    assert!(
-        tool_names.contains(&"files_grep".to_string()),
-        "Should have files_grep tool"
+        tool_names.contains(&"files".to_string()),
+        "Should have files tool"
     );
 
     // List prompts
@@ -58,8 +54,9 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
     // Test a tool call to verify full functionality
     let tool_result = client
         .call_tool(CallToolRequestParams {
-            name: "files_grep".into(),
+            name: "files".into(),
             arguments: serde_json::json!({
+                "op": "grep files",
                 "pattern": "test"
             })
             .as_object()

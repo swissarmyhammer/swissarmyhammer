@@ -12,9 +12,7 @@ use tracing::info;
 
 /// Expected core tools that must be present in both HTTP and STDIN servers
 const EXPECTED_CORE_TOOLS: &[&str] = &[
-    "files_read",
-    "files_write",
-    "files_edit",
+    "files",
     "shell_execute",
     "web",
 ];
