@@ -612,7 +612,7 @@ impl ToolContext {
 /// # Implementation Guidelines
 ///
 /// ## Tool Names
-/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `files_read`).
+/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `files`).
 /// Names must be unique within the registry and should be stable across versions.
 ///
 /// ## Descriptions
@@ -652,7 +652,7 @@ pub trait McpTool: Doctorable + Send + Sync {
     /// Get the tool's unique identifier name
     ///
     /// The name must be unique within the registry and should follow the
-    /// `{domain}_{action}` pattern (e.g., `memo_create`, `files_read`).
+    /// `{domain}_{action}` pattern (e.g., `memo_create`, `files`).
     /// Names should be stable across versions.
     fn name(&self) -> &'static str;
 
@@ -729,7 +729,7 @@ pub trait McpTool: Doctorable + Send + Sync {
     ///
     /// * `memo_create` → Some("memo")
     /// * `kanban` → Some("kanban")
-    /// * `files_read` → Some("file")
+    /// * `files` → Some("file")
     fn cli_category(&self) -> Option<&'static str> {
         // Extract category from tool name by taking prefix before first underscore
         let name = <Self as McpTool>::name(self);
@@ -761,7 +761,7 @@ pub trait McpTool: Doctorable + Send + Sync {
     ///
     /// * `memo_create` → "create"
     /// * `kanban` → "kanban"
-    /// * `files_read` → "read"
+    /// * `files` → "files"
     fn cli_name(&self) -> &'static str {
         // Extract action from tool name by taking suffix after first underscore
         let name = <Self as McpTool>::name(self);
@@ -838,7 +838,7 @@ pub trait McpTool: Doctorable + Send + Sync {
 ///
 /// ```rust,ignore
 /// impl AgentTool for ShellExecuteTool {}
-/// impl AgentTool for ReadFileTool {}
+/// impl AgentTool for FilesTool {}
 /// ```
 pub trait AgentTool: McpTool {}
 
@@ -2124,9 +2124,9 @@ mod tests {
         "Kanban board operations for task management"
     );
     test_tool!(
-        FilesReadTool,
-        "files_read",
-        "Read and return file contents from the local filesystem"
+        FilesTool,
+        "files",
+        "Unified file operations (read, write, edit, glob, grep)"
     );
     test_tool!(
         WebTool,
@@ -2159,7 +2159,7 @@ mod tests {
     #[test]
     fn test_cli_category_extraction() {
         // Test known categories
-        assert_eq!(FilesReadTool.cli_category(), Some("file"));
+        assert_eq!(FilesTool.cli_category(), Some("file"));
         assert_eq!(WebTool.cli_category(), Some("web"));
         assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
@@ -2174,7 +2174,7 @@ mod tests {
     #[test]
     fn test_cli_name_extraction() {
         // Test action extraction
-        assert_eq!(FilesReadTool.cli_name(), "read");
+        assert_eq!(FilesTool.cli_name(), "files");
         assert_eq!(WebTool.cli_name(), "search_and_fetch");
         assert_eq!(ShellExecuteTool.cli_name(), "execute");
         assert_eq!(OutlineGenerateTool.cli_name(), "generate");
@@ -2190,8 +2190,8 @@ mod tests {
     fn test_cli_about_extraction() {
         // Test first line extraction
         assert_eq!(
-            FilesReadTool.cli_about(),
-            Some("Read and return file contents from the local filesystem")
+            FilesTool.cli_about(),
+            Some("Unified file operations (read, write, edit, glob, grep)")
         );
         assert_eq!(MultiLineTool.cli_about(), Some("First line of description"));
     }
@@ -2199,7 +2199,7 @@ mod tests {
     #[test]
     fn test_hidden_from_cli_default() {
         // Test default implementation returns false
-        assert!(!FilesReadTool.hidden_from_cli());
+        assert!(!FilesTool.hidden_from_cli());
         assert!(!UnknownCategoryTool.hidden_from_cli());
         assert!(!NoUnderscoreTool.hidden_from_cli());
     }
@@ -2220,9 +2220,9 @@ mod tests {
     #[test]
     fn test_files_category_alias() {
         // Test that "files" prefix maps to "file" category
-        let tool = FilesReadTool;
+        let tool = FilesTool;
         assert_eq!(tool.cli_category(), Some("file"));
-        assert_eq!(tool.cli_name(), "read");
+        assert_eq!(tool.cli_name(), "files");
     }
 
     // Test tools for validation testing

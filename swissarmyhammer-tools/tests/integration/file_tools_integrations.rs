@@ -33,13 +33,14 @@ const DANGEROUS_PATHS: &[&str] = &[
     "/tmp/../../../../../proc/version",
 ];
 
-/// File tools to test for security
-const FILE_TOOLS: &[&str] = &[
-    "files_read",
-    "files_write",
-    "files_edit",
-    "files_glob",
-    "files_grep",
+/// File tool operations to test for security
+/// All operations are dispatched through the unified "files" tool with an "op" field.
+const FILE_OPS: &[&str] = &[
+    "read file",
+    "write file",
+    "edit file",
+    "glob files",
+    "grep files",
 ];
 
 /// Create malformed inputs for testing
@@ -206,37 +207,42 @@ fn assert_error_contains_any(error_msg: &str, expected_messages: &[&str], contex
     );
 }
 
-/// Builder helper for files_read arguments
+/// Builder helper for files read arguments
 fn read_args(path: &str) -> serde_json::Map<String, serde_json::Value> {
-    build_args(&[("path", json!(path))])
+    build_args(&[("op", json!("read file")), ("path", json!(path))])
 }
 
-/// Builder helper for files_write arguments
+/// Builder helper for files write arguments
 fn write_args(file_path: &str, content: &str) -> serde_json::Map<String, serde_json::Value> {
-    build_args(&[("file_path", json!(file_path)), ("content", json!(content))])
+    build_args(&[
+        ("op", json!("write file")),
+        ("file_path", json!(file_path)),
+        ("content", json!(content)),
+    ])
 }
 
-/// Builder helper for files_edit arguments
+/// Builder helper for files edit arguments
 fn edit_args(
     file_path: &str,
     old_string: &str,
     new_string: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
     build_args(&[
+        ("op", json!("edit file")),
         ("file_path", json!(file_path)),
         ("old_string", json!(old_string)),
         ("new_string", json!(new_string)),
     ])
 }
 
-/// Builder helper for files_glob arguments
+/// Builder helper for files glob arguments
 fn glob_args(pattern: &str) -> serde_json::Map<String, serde_json::Value> {
-    build_args(&[("pattern", json!(pattern))])
+    build_args(&[("op", json!("glob files")), ("pattern", json!(pattern))])
 }
 
-/// Builder helper for files_grep arguments
+/// Builder helper for files grep arguments
 fn grep_args(pattern: &str) -> serde_json::Map<String, serde_json::Value> {
-    build_args(&[("pattern", json!(pattern))])
+    build_args(&[("op", json!("grep files")), ("pattern", json!(pattern))])
 }
 
 /// Run concurrent operations and aggregate results
@@ -291,21 +297,21 @@ fn create_stress_test_operation(
             let content_size = 1000 + (i % 10) * 500;
             let content = format!("Stress test content for file {}\n", i).repeat(content_size);
 
-            let write_tool = registry.get_tool("files_write").unwrap();
+            let write_tool = registry.get_tool("files").unwrap();
             let write_args_map = write_args(&file_path.to_string_lossy(), &content);
             write_tool
                 .execute(write_args_map, &context)
                 .await
                 .map_err(|_| "Write failed")?;
 
-            let read_tool = registry.get_tool("files_read").unwrap();
+            let read_tool = registry.get_tool("files").unwrap();
             let read_args_map = read_args(&file_path.to_string_lossy());
             read_tool
                 .execute(read_args_map, &context)
                 .await
                 .map_err(|_| "Read failed")?;
 
-            let edit_tool = registry.get_tool("files_edit").unwrap();
+            let edit_tool = registry.get_tool("files").unwrap();
             let mut edit_args_map = edit_args(
                 &file_path.to_string_lossy(),
                 &format!("file {}", i),
@@ -369,8 +375,9 @@ fn spawn_write_operations(
             let file_path = temp_dir_clone.join(format!("new_file_{}.txt", i));
             let content = format!("New file content {}\n", i).repeat(50 + i % 50);
 
-            let write_tool = registry_clone.get_tool("files_write").unwrap();
+            let write_tool = registry_clone.get_tool("files").unwrap();
             let mut write_args = serde_json::Map::new();
+            write_args.insert("op".to_string(), json!("write file"));
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
 
@@ -397,8 +404,9 @@ fn spawn_read_operations(
             let file_index = i % base_files;
             let file_path = temp_dir_clone.join(format!("base_file_{}.txt", file_index));
 
-            let read_tool = registry_clone.get_tool("files_read").unwrap();
+            let read_tool = registry_clone.get_tool("files").unwrap();
             let mut read_args = serde_json::Map::new();
+            read_args.insert("op".to_string(), json!("read file"));
             read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
             read_tool.execute(read_args, &context_clone).await
@@ -424,8 +432,9 @@ fn spawn_edit_operations(
             let file_index = i % base_files;
             let file_path = temp_dir_clone.join(format!("base_file_{}.txt", file_index));
 
-            let edit_tool = registry_clone.get_tool("files_edit").unwrap();
+            let edit_tool = registry_clone.get_tool("files").unwrap();
             let mut edit_args = serde_json::Map::new();
+            edit_args.insert("op".to_string(), json!("edit file"));
             edit_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             edit_args.insert(
                 "old_string".to_string(),
@@ -456,8 +465,9 @@ fn spawn_glob_operations(
         let temp_dir_clone = temp_dir_path.clone();
 
         join_set.spawn(async move {
-            let glob_tool = registry_clone.get_tool("files_glob").unwrap();
+            let glob_tool = registry_clone.get_tool("files").unwrap();
             let mut glob_args = serde_json::Map::new();
+            glob_args.insert("op".to_string(), json!("glob files"));
 
             let pattern = match i % 4 {
                 0 => "*.txt",
@@ -515,8 +525,9 @@ fn spawn_concurrent_reads(
         let file_path = shared_file.clone();
 
         join_set.spawn(async move {
-            let read_tool = registry_clone.get_tool("files_read").unwrap();
+            let read_tool = registry_clone.get_tool("files").unwrap();
             let mut read_args = serde_json::Map::new();
+            read_args.insert("op".to_string(), json!("read file"));
             read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
             if i % 3 == 0 {
@@ -546,8 +557,9 @@ fn spawn_concurrent_writes(
             let file_path = temp_dir_clone.join(format!("concurrent_write_{}.txt", i));
             let content = format!("Concurrent write operation {}\n", i).repeat(100);
 
-            let write_tool = registry_clone.get_tool("files_write").unwrap();
+            let write_tool = registry_clone.get_tool("files").unwrap();
             let mut write_args = serde_json::Map::new();
+            write_args.insert("op".to_string(), json!("write file"));
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
 
@@ -570,8 +582,9 @@ fn spawn_concurrent_greps(
         let temp_dir_clone = temp_dir_path.clone();
 
         join_set.spawn(async move {
-            let grep_tool = registry_clone.get_tool("files_grep").unwrap();
+            let grep_tool = registry_clone.get_tool("files").unwrap();
             let mut grep_args = serde_json::Map::new();
+            grep_args.insert("op".to_string(), json!("grep files"));
 
             let pattern = if i % 2 == 0 {
                 "SHARED_FILE_CONTENT"
@@ -601,37 +614,37 @@ where
     (result, delta)
 }
 
-/// Build security test arguments for a given tool and dangerous path
+/// Build security test arguments for a given operation and dangerous path
 fn build_security_test_arguments(
-    tool_name: &str,
+    op: &str,
     dangerous_path: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
-    match tool_name {
-        "files_read" => read_args(dangerous_path),
-        "files_write" => write_args(dangerous_path, "malicious content"),
-        "files_edit" => edit_args(dangerous_path, "old", "new"),
-        "files_glob" => {
+    match op {
+        "read file" => read_args(dangerous_path),
+        "write file" => write_args(dangerous_path, "malicious content"),
+        "edit file" => edit_args(dangerous_path, "old", "new"),
+        "glob files" => {
             let mut args = glob_args("*");
             args.insert("path".to_string(), json!(dangerous_path));
             args
         }
-        "files_grep" => {
+        "grep files" => {
             let mut args = grep_args("password");
             args.insert("path".to_string(), json!(dangerous_path));
             args
         }
-        _ => panic!("Unsupported tool for security testing: {}", tool_name),
+        _ => panic!("Unsupported operation for security testing: {}", op),
     }
 }
 
-/// Test path security for a given tool
-async fn test_path_security_for_tool(
-    tool_name: &str,
+/// Test path security for a given operation
+async fn test_path_security_for_op(
+    op: &str,
     registry: &ToolRegistry,
     context: &ToolContext,
     dangerous_paths: &[&str],
 ) {
-    let tool = registry.get_tool(tool_name).unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     for dangerous_path in dangerous_paths {
         // Skip Windows-style paths on Unix - backslashes are literal characters, not path separators
@@ -641,7 +654,7 @@ async fn test_path_security_for_tool(
             continue;
         }
 
-        let arguments = build_security_test_arguments(tool_name, dangerous_path);
+        let arguments = build_security_test_arguments(op, dangerous_path);
         let result = tool.execute(arguments, context).await;
 
         match result {
@@ -659,18 +672,18 @@ async fn test_path_security_for_tool(
                     "not allowed",
                 ];
                 let context_msg = format!(
-                    "{} tool should block or safely handle path traversal: {}",
-                    tool_name, dangerous_path
+                    "files tool (op={}) should block or safely handle path traversal: {}",
+                    op, dangerous_path
                 );
                 assert_error_contains_any(&error_msg, expected_messages, &context_msg);
             }
             Ok(call_result) => {
                 // For write operations, success is a security failure - we shouldn't be able
                 // to write to dangerous paths
-                if tool_name == "files_write" {
+                if op == "write file" {
                     panic!(
-                        "{} tool allowed write to dangerous path '{}': {:?}",
-                        tool_name, dangerous_path, call_result
+                        "files tool (op={}) allowed write to dangerous path '{}': {:?}",
+                        op, dangerous_path, call_result
                     );
                 }
                 // For read operations, success with is_error=true is acceptable (tool handled it)
@@ -693,7 +706,7 @@ async fn test_read_with_offset_limit(
 ) {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let test_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
     let (_env, _temp_dir, test_file) = create_test_file("test_file.txt", test_content);
@@ -830,10 +843,10 @@ async fn test_read_tool_discovery_and_registration() {
     let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
-        "files_read",
+        "files",
         &["file"],
-        &["path"],
-        &["offset", "limit"],
+        &["op"],
+        &["path", "offset", "limit"],
     );
 }
 
@@ -841,7 +854,7 @@ async fn test_read_tool_discovery_and_registration() {
 async fn test_read_tool_execution_success_cases() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create temporary file for testing
     let test_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
@@ -886,7 +899,7 @@ async fn test_read_tool_limit_only() {
 async fn test_read_tool_missing_file_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test reading non-existent file
     let arguments = read_args("/non/existent/file.txt");
@@ -908,7 +921,7 @@ async fn test_read_tool_missing_file_error() {
 async fn test_read_tool_relative_path_support() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test reading with relative path - now just verify it doesn't reject due to being relative
     let arguments = read_args("relative/path/file.txt");
@@ -930,7 +943,7 @@ async fn test_read_tool_relative_path_support() {
 async fn test_read_tool_empty_path_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test reading with empty path
     let arguments = read_args("");
@@ -951,7 +964,7 @@ async fn test_read_tool_empty_path_error() {
 async fn test_read_tool_missing_required_parameter() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test execution without required path parameter
     let arguments = serde_json::Map::new(); // Empty arguments
@@ -968,7 +981,7 @@ async fn test_read_tool_missing_required_parameter() {
 async fn test_read_tool_path_traversal_protection() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test various path traversal attempts
     let dangerous_paths = vec![
@@ -1003,7 +1016,7 @@ async fn test_read_tool_path_traversal_protection() {
 async fn test_read_tool_handles_large_files_safely() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create a reasonably large test file
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1045,7 +1058,7 @@ async fn test_read_tool_handles_large_files_safely() {
 async fn test_read_tool_empty_file() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create empty file
     let (_env, _temp_dir, test_file) = create_test_file("empty_file.txt", "");
@@ -1065,7 +1078,7 @@ async fn test_read_tool_empty_file() {
 async fn test_read_tool_single_line_file() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let test_content = "Single line without newline";
     let (_env, _temp_dir, test_file) = create_test_file("single_line.txt", test_content);
@@ -1085,7 +1098,7 @@ async fn test_read_tool_single_line_file() {
 async fn test_read_tool_with_unicode_content() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let test_content = "Hello 🌍\n世界\nПривет мир\n";
     let (_env, _temp_dir, test_file) = create_test_file("unicode_file.txt", test_content);
@@ -1105,7 +1118,7 @@ async fn test_read_tool_with_unicode_content() {
 async fn test_read_tool_excessive_offset_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let mut arguments = read_args("/tmp/test.txt");
     arguments.insert("offset".to_string(), json!(2_000_000));
@@ -1122,7 +1135,7 @@ async fn test_read_tool_excessive_offset_error() {
 async fn test_read_tool_zero_limit_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let mut arguments = read_args("/tmp/test.txt");
     arguments.insert("limit".to_string(), json!(0));
@@ -1139,7 +1152,7 @@ async fn test_read_tool_zero_limit_error() {
 async fn test_read_tool_excessive_limit_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let mut arguments = read_args("/tmp/test.txt");
     arguments.insert("limit".to_string(), json!(200_000));
@@ -1156,7 +1169,7 @@ async fn test_read_tool_excessive_limit_error() {
 async fn test_read_tool_file_not_found_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test non-existent file
     let arguments = read_args("/tmp/definitely_does_not_exist_12345.txt");
@@ -1169,7 +1182,7 @@ async fn test_read_tool_file_not_found_error() {
 async fn test_read_tool_permission_denied_scenarios() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test unreadable file (if we can create one)
     let (_env, _temp_dir, test_file) = create_test_file("unreadable.txt", "secret content");
@@ -1197,7 +1210,7 @@ async fn test_read_tool_permission_denied_scenarios() {
 async fn test_read_tool_large_file_handling() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create a larger file to test performance
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1240,7 +1253,7 @@ async fn test_read_tool_large_file_handling() {
 async fn test_read_tool_edge_cases() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test empty file
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1284,10 +1297,10 @@ async fn test_glob_tool_discovery_and_registration() {
     let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
-        "files_glob",
-        &["pattern"],
-        &["pattern"],
-        &["path", "case_sensitive", "respect_git_ignore"],
+        "files",
+        &["file"],
+        &["op"],
+        &["pattern", "path", "case_sensitive", "respect_git_ignore"],
     );
 }
 
@@ -1295,7 +1308,7 @@ async fn test_glob_tool_discovery_and_registration() {
 async fn test_glob_tool_basic_pattern_matching() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_glob").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test directory structure
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1341,7 +1354,7 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     // to test the gitignore functionality.
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_glob").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test directory with .gitignore and git repo
     let (_env, temp_dir) = create_test_dir_with_git();
@@ -1439,7 +1452,7 @@ async fn test_glob_tool_advanced_gitignore_integration() {
 async fn test_glob_tool_pattern_validation() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_glob").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test empty pattern
     let arguments = glob_args("");
@@ -1465,7 +1478,7 @@ async fn test_glob_tool_pattern_validation() {
 async fn test_glob_tool_case_sensitivity() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_glob").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test files with mixed case
     let (_env, temp_dir) = create_test_dir_with_git();
@@ -1514,7 +1527,7 @@ async fn test_glob_tool_case_sensitivity() {
 async fn test_glob_tool_modification_time_sorting() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_glob").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test files with different modification times
     let (_env, temp_dir) = create_test_dir_with_git();
@@ -1562,7 +1575,7 @@ async fn test_glob_tool_modification_time_sorting() {
 async fn test_glob_tool_no_matches() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_glob").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test directory with no matching files
     let (_env, temp_dir) = create_test_dir_with_git();
@@ -1586,7 +1599,7 @@ async fn test_glob_tool_no_matches() {
 async fn test_glob_tool_recursive_patterns() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_glob").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create nested directory structure
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1638,10 +1651,11 @@ async fn test_grep_tool_discovery_and_registration() {
     let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
-        "files_grep",
-        &["search", "grep"],
-        &["pattern"],
+        "files",
+        &["file"],
+        &["op"],
         &[
+            "pattern",
             "path",
             "glob",
             "type",
@@ -1656,7 +1670,7 @@ async fn test_grep_tool_discovery_and_registration() {
 async fn test_grep_tool_basic_pattern_matching() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test files with content to search
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1678,7 +1692,7 @@ async fn test_grep_tool_basic_pattern_matching() {
     }
 
     // Test basic search for "function"
-    let mut arguments = glob_args("function");
+    let mut arguments = grep_args("function");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -1699,7 +1713,7 @@ async fn test_grep_tool_basic_pattern_matching() {
 async fn test_grep_tool_file_type_filtering() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test files with different extensions
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1718,7 +1732,7 @@ async fn test_grep_tool_file_type_filtering() {
     }
 
     // Test filtering by Rust files only
-    let mut arguments = glob_args("test");
+    let mut arguments = grep_args("test");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     arguments.insert("type".to_string(), json!("rust"));
 
@@ -1743,7 +1757,7 @@ async fn test_grep_tool_file_type_filtering() {
 async fn test_grep_tool_glob_filtering() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test files in different directories
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1765,7 +1779,7 @@ async fn test_grep_tool_glob_filtering() {
     }
 
     // Test filtering by glob pattern - use a simpler glob that should work
-    let mut arguments = glob_args("VERSION");
+    let mut arguments = grep_args("VERSION");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     arguments.insert("glob".to_string(), json!("*.rs")); // Simplified glob pattern
 
@@ -1795,7 +1809,7 @@ async fn test_grep_tool_glob_filtering() {
 async fn test_grep_tool_case_sensitivity() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file with mixed case content
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1805,7 +1819,7 @@ async fn test_grep_tool_case_sensitivity() {
     fs::write(test_file, content).unwrap();
 
     // Test case sensitive search
-    let mut arguments = glob_args("Hello");
+    let mut arguments = grep_args("Hello");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     arguments.insert("case_insensitive".to_string(), json!(false));
 
@@ -1819,7 +1833,7 @@ async fn test_grep_tool_case_sensitivity() {
     assert!(response_text.contains("1 matches") || response_text.contains("Hello World"));
 
     // Test case insensitive search
-    let mut arguments = glob_args("hello");
+    let mut arguments = grep_args("hello");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     arguments.insert("case_insensitive".to_string(), json!(true));
 
@@ -1837,7 +1851,7 @@ async fn test_grep_tool_case_sensitivity() {
 async fn test_grep_tool_context_lines() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file with multiple lines
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1847,7 +1861,7 @@ async fn test_grep_tool_context_lines() {
     fs::write(test_file, content).unwrap();
 
     // Test with context lines
-    let mut arguments = glob_args("MATCH");
+    let mut arguments = grep_args("MATCH");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     arguments.insert("context_lines".to_string(), json!(1));
     arguments.insert("output_mode".to_string(), json!("content"));
@@ -1866,7 +1880,7 @@ async fn test_grep_tool_context_lines() {
 async fn test_grep_tool_output_modes() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test files
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1887,7 +1901,7 @@ async fn test_grep_tool_output_modes() {
     }
 
     // Test files_with_matches mode
-    let mut arguments = glob_args("target");
+    let mut arguments = grep_args("target");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     arguments.insert("output_mode".to_string(), json!("files_with_matches"));
     arguments.insert("case_insensitive".to_string(), json!(true));
@@ -1907,7 +1921,7 @@ async fn test_grep_tool_output_modes() {
     );
 
     // Test count mode
-    let mut arguments = glob_args("target");
+    let mut arguments = grep_args("target");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     arguments.insert("output_mode".to_string(), json!("count"));
     arguments.insert("case_insensitive".to_string(), json!(true));
@@ -1932,12 +1946,12 @@ async fn test_grep_tool_output_modes() {
 async fn test_grep_tool_error_handling() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test invalid regex pattern
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
-    let mut arguments = glob_args("[invalid");
+    let mut arguments = grep_args("[invalid");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -1956,7 +1970,7 @@ async fn test_grep_tool_error_handling() {
     );
 
     // Test non-existent directory
-    let mut arguments = glob_args("test");
+    let mut arguments = grep_args("test");
     arguments.insert("path".to_string(), json!("/non/existent/directory"));
 
     let result = tool.execute(arguments, &context).await;
@@ -1967,7 +1981,7 @@ async fn test_grep_tool_error_handling() {
     assert!(error_msg.contains("does not exist") || error_msg.contains("not found"));
 
     // Test invalid output mode
-    let mut arguments = glob_args("test");
+    let mut arguments = grep_args("test");
     arguments.insert("output_mode".to_string(), json!("invalid_mode"));
 
     let result = tool.execute(arguments, &context).await;
@@ -1982,7 +1996,7 @@ async fn test_grep_tool_error_handling() {
 async fn test_grep_tool_binary_file_exclusion() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test directory with mixed file types
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -1998,7 +2012,7 @@ async fn test_grep_tool_binary_file_exclusion() {
     fs::write(binary_file, binary_content).unwrap();
 
     // Test search - should find text file but skip binary
-    let mut arguments = glob_args("searchable");
+    let mut arguments = grep_args("searchable");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -2017,7 +2031,7 @@ async fn test_grep_tool_binary_file_exclusion() {
 async fn test_grep_tool_no_matches() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file without target pattern
     let (_env, temp_dir, _test_file) =
@@ -2043,7 +2057,7 @@ async fn test_grep_tool_no_matches() {
 async fn test_grep_tool_timing_info() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file
     let (_env, temp_dir, _test_file) = create_test_file("test.txt", "Test content for timing");
@@ -2067,7 +2081,7 @@ async fn test_grep_tool_timing_info() {
 async fn test_grep_tool_single_file_vs_directory() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_grep").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test directory with multiple files
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -2088,7 +2102,7 @@ async fn test_grep_tool_single_file_vs_directory() {
     }
 
     // Test searching entire directory
-    let mut arguments = glob_args("target");
+    let mut arguments = grep_args("target");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -2102,7 +2116,7 @@ async fn test_grep_tool_single_file_vs_directory() {
 
     // Test searching single file
     let single_file = &temp_dir.join("target.txt");
-    let mut arguments = glob_args("target");
+    let mut arguments = grep_args("target");
     arguments.insert("path".to_string(), json!(single_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -2124,10 +2138,10 @@ async fn test_write_tool_discovery_and_registration() {
     let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
-        "files_write",
-        &["file", "write"],
+        "files",
+        &["file"],
+        &["op"],
         &["file_path", "content"],
-        &[],
     );
 }
 
@@ -2135,7 +2149,7 @@ async fn test_write_tool_discovery_and_registration() {
 async fn test_write_tool_execution_success_cases() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create temporary directory for testing
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -2145,6 +2159,7 @@ async fn test_write_tool_execution_success_cases() {
 
     // Test basic file writing
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(test_content));
 
@@ -2165,7 +2180,7 @@ async fn test_write_tool_execution_success_cases() {
 async fn test_write_tool_overwrite_existing_file() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create temporary file with initial content
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -2176,6 +2191,7 @@ async fn test_write_tool_overwrite_existing_file() {
 
     let new_content = "New overwritten content";
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(new_content));
 
@@ -2195,7 +2211,7 @@ async fn test_write_tool_overwrite_existing_file() {
 async fn test_write_tool_creates_parent_directories() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file in nested directories that don't exist
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -2208,6 +2224,7 @@ async fn test_write_tool_creates_parent_directories() {
     let test_content = "File in deeply nested directory";
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert(
         "file_path".to_string(),
         json!(nested_file.to_string_lossy()),
@@ -2233,7 +2250,7 @@ async fn test_write_tool_creates_parent_directories() {
 async fn test_write_tool_unicode_content() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -2241,6 +2258,7 @@ async fn test_write_tool_unicode_content() {
     let unicode_content = "Hello 🦀 Rust!\n你好世界\nПривет мир\n🚀✨🎉";
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(unicode_content));
 
@@ -2259,7 +2277,7 @@ async fn test_write_tool_unicode_content() {
 async fn test_write_tool_empty_content() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -2267,6 +2285,7 @@ async fn test_write_tool_empty_content() {
     let empty_content = "";
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(empty_content));
 
@@ -2283,7 +2302,7 @@ async fn test_write_tool_empty_content() {
 async fn test_write_tool_error_handling() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_write").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Test invalid file path (empty)
     let arguments = write_args("", "test content");
@@ -2327,10 +2346,10 @@ async fn test_edit_tool_discovery_and_registration() {
     let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
-        "files_edit",
-        &["string", "replacement"],
-        &["file_path", "old_string", "new_string"],
-        &["replace_all"],
+        "files",
+        &["file"],
+        &["op"],
+        &["file_path", "old_string", "new_string", "replace_all"],
     );
 }
 
@@ -2338,7 +2357,7 @@ async fn test_edit_tool_discovery_and_registration() {
 async fn test_edit_tool_single_replacement_success() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file with content to edit (single occurrence)
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -2349,6 +2368,7 @@ async fn test_edit_tool_single_replacement_success() {
 
     // Test single replacement
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!("world"));
     arguments.insert("new_string".to_string(), json!("universe"));
@@ -2376,7 +2396,7 @@ async fn test_edit_tool_single_replacement_success() {
 async fn test_edit_tool_replace_all_success() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file with multiple occurrences
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -2387,6 +2407,7 @@ async fn test_edit_tool_replace_all_success() {
 
     // Test replace all
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!("test"));
     arguments.insert("new_string".to_string(), json!("example"));
@@ -2407,7 +2428,7 @@ async fn test_edit_tool_replace_all_success() {
 async fn test_edit_tool_string_not_found_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -2418,6 +2439,7 @@ async fn test_edit_tool_string_not_found_error() {
 
     // Try to replace non-existent string
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!("nonexistent"));
     arguments.insert("new_string".to_string(), json!("replacement"));
@@ -2435,7 +2457,7 @@ async fn test_edit_tool_string_not_found_error() {
 async fn test_edit_tool_multiple_occurrences_without_replace_all() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     // Create test file with duplicate content
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -2446,6 +2468,7 @@ async fn test_edit_tool_multiple_occurrences_without_replace_all() {
 
     // Try single replacement on multiple occurrences (should fail)
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!("duplicate"));
     arguments.insert("new_string".to_string(), json!("unique"));
@@ -2466,7 +2489,7 @@ async fn test_edit_tool_multiple_occurrences_without_replace_all() {
 async fn test_edit_tool_unicode_content() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -2476,6 +2499,7 @@ async fn test_edit_tool_unicode_content() {
 
     // Edit unicode content
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!("🌍"));
     arguments.insert("new_string".to_string(), json!("🦀"));
@@ -2496,7 +2520,7 @@ async fn test_edit_tool_unicode_content() {
 async fn test_edit_tool_preserves_line_endings() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -2507,6 +2531,7 @@ async fn test_edit_tool_preserves_line_endings() {
 
     // Edit while preserving line endings
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!("target"));
     arguments.insert("new_string".to_string(), json!("replacement"));
@@ -2531,13 +2556,14 @@ async fn test_edit_tool_preserves_line_endings() {
 async fn test_edit_tool_file_not_exists_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let nonexistent_file = &temp_dir.join("does_not_exist.txt");
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert(
         "file_path".to_string(),
         json!(nonexistent_file.to_string_lossy()),
@@ -2557,12 +2583,13 @@ async fn test_edit_tool_file_not_exists_error() {
 async fn test_edit_tool_empty_parameters_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let (_env, _temp_dir, test_file) = create_test_file("test.txt", "test content");
 
     // Test empty old_string
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("old_string".to_string(), json!(""));
     arguments.insert("new_string".to_string(), json!("new"));
@@ -2579,13 +2606,14 @@ async fn test_edit_tool_empty_parameters_error() {
 async fn test_edit_tool_multiple_edits_sequential() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let (_env, _temp_dir, test_file) =
         create_test_file("multi_edit_test.txt", "Hello world! This is a test.");
 
     // Test multiple sequential edits
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert(
         "edits".to_string(),
@@ -2616,12 +2644,13 @@ async fn test_edit_tool_multiple_edits_sequential() {
 async fn test_edit_tool_multiple_edits_with_aliases() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let (_env, _temp_dir, test_file) = create_test_file("alias_test.txt", "foo bar baz");
 
     // Test parameter aliases
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("filePath".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert(
         "edits".to_string(),
@@ -2648,12 +2677,13 @@ async fn test_edit_tool_multiple_edits_with_aliases() {
 async fn test_edit_tool_multiple_edits_with_replace_all() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let (_env, _temp_dir, test_file) =
         create_test_file("replace_all_multi.txt", "test test test, example example");
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert(
         "edits".to_string(),
@@ -2685,12 +2715,13 @@ async fn test_edit_tool_multiple_edits_with_replace_all() {
 async fn test_edit_tool_single_mode_with_path_aliases() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let (_env, _temp_dir, test_file) = create_test_file("single_alias.txt", "test content");
 
     // Test single edit mode with different parameter aliases
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("oldText".to_string(), json!("test"));
     arguments.insert("newText".to_string(), json!("demo"));
@@ -2706,11 +2737,12 @@ async fn test_edit_tool_single_mode_with_path_aliases() {
 async fn test_edit_tool_empty_edits_array_error() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let (_env, _temp_dir, test_file) = create_test_file("empty_edits.txt", "content");
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("edits".to_string(), json!([]));
 
@@ -2726,7 +2758,7 @@ async fn test_edit_tool_empty_edits_array_error() {
 async fn test_edit_tool_chain_of_transformations() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let tool = registry.get_tool("files_edit").unwrap();
+    let tool = registry.get_tool("files").unwrap();
 
     let (_env, _temp_dir, test_file) = create_test_file(
         "chain_test.txt",
@@ -2735,6 +2767,7 @@ async fn test_edit_tool_chain_of_transformations() {
 
     // Apply a chain of transformations
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("edit file"));
     arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert(
         "edits".to_string(),
@@ -2772,8 +2805,8 @@ async fn test_edit_tool_chain_of_transformations() {
 async fn test_write_then_read_workflow() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -2782,6 +2815,7 @@ async fn test_write_then_read_workflow() {
 
     // Step 1: Write file
     let mut write_args = serde_json::Map::new();
+    write_args.insert("op".to_string(), json!("write file"));
     write_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     write_args.insert("content".to_string(), json!(test_content));
 
@@ -2793,6 +2827,7 @@ async fn test_write_then_read_workflow() {
 
     // Step 2: Read the same file
     let mut read_args = serde_json::Map::new();
+    read_args.insert("op".to_string(), json!("read file"));
     read_args.insert("path".to_string(), json!(test_file.to_string_lossy()));
 
     let read_result = read_tool.execute(read_args, &context).await;
@@ -2810,8 +2845,8 @@ async fn test_write_then_read_workflow() {
 async fn test_write_then_edit_workflow() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let edit_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -2843,8 +2878,8 @@ async fn test_write_then_edit_workflow() {
 async fn test_read_then_edit_workflow() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let read_tool = registry.get_tool("files_read").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
+    let edit_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -2883,8 +2918,8 @@ async fn test_read_then_edit_workflow() {
 async fn test_glob_then_grep_workflow() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let glob_tool = registry.get_tool("files_glob").unwrap();
-    let grep_tool = registry.get_tool("files_grep").unwrap();
+    let glob_tool = registry.get_tool("files").unwrap();
+    let grep_tool = registry.get_tool("files").unwrap();
 
     // Create test directory structure with multiple files
     let (_env, temp_dir) = create_test_dir_with_git();
@@ -2944,9 +2979,9 @@ async fn test_complex_file_workflow() {
     // Test a complex workflow: glob -> read -> edit -> read (to verify)
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let glob_tool = registry.get_tool("files_glob").unwrap();
-    let read_tool = registry.get_tool("files_read").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
+    let glob_tool = registry.get_tool("files").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
+    let edit_tool = registry.get_tool("files").unwrap();
 
     // Create test project structure
     let (_env, temp_dir) = create_test_dir_with_git();
@@ -2977,6 +3012,7 @@ async fn test_complex_file_workflow() {
     // Step 1: Find JSON files in src directory (scoped glob, not overly broad **/*)
     // Use respect_git_ignore: false because files are untracked in the fresh git repo
     let mut glob_args = serde_json::Map::new();
+    glob_args.insert("op".to_string(), json!("glob files"));
     glob_args.insert("pattern".to_string(), json!("src/**/*.json"));
     glob_args.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     glob_args.insert("respect_git_ignore".to_string(), json!(false));
@@ -3028,8 +3064,8 @@ async fn test_error_handling_in_workflow() {
     // Test error handling when tools fail in a workflow
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let read_tool = registry.get_tool("files_read").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
+    let edit_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3037,6 +3073,7 @@ async fn test_error_handling_in_workflow() {
 
     // Step 1: Try to read non-existent file (should fail)
     let mut read_args = serde_json::Map::new();
+    read_args.insert("op".to_string(), json!("read file"));
     read_args.insert(
         "path".to_string(),
         json!(nonexistent_file.to_string_lossy()),
@@ -3050,6 +3087,7 @@ async fn test_error_handling_in_workflow() {
 
     // Step 2: Try to edit the same non-existent file (should also fail)
     let mut edit_args = serde_json::Map::new();
+    edit_args.insert("op".to_string(), json!("edit file"));
     edit_args.insert(
         "file_path".to_string(),
         json!(nonexistent_file.to_string_lossy()),
@@ -3080,8 +3118,8 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
 
-    for tool_name in FILE_TOOLS {
-        test_path_security_for_tool(tool_name, &registry, &context, DANGEROUS_PATHS).await;
+    for op in FILE_OPS {
+        test_path_security_for_op(op, &registry, &context, DANGEROUS_PATHS).await;
     }
 }
 
@@ -3089,7 +3127,7 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
 async fn test_symlink_read_security() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3105,6 +3143,7 @@ async fn test_symlink_read_security() {
 
     if symlink_file.exists() {
         let mut read_args = serde_json::Map::new();
+        read_args.insert("op".to_string(), json!("read file"));
         read_args.insert("path".to_string(), json!(symlink_file.to_string_lossy()));
 
         let read_result = read_tool.execute(read_args, &context).await;
@@ -3130,7 +3169,7 @@ async fn test_symlink_read_security() {
 async fn test_symlink_write_security() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3144,6 +3183,7 @@ async fn test_symlink_write_security() {
 
     if symlink_file.exists() {
         let mut write_args = serde_json::Map::new();
+        write_args.insert("op".to_string(), json!("write file"));
         write_args.insert(
             "file_path".to_string(),
             json!(symlink_file.to_string_lossy()),
@@ -3161,26 +3201,23 @@ async fn test_symlink_write_security() {
     }
 }
 
-/// Test restricted path access for a single tool
+/// Test restricted path access for a single operation
 async fn test_restricted_path_access(
-    tool_name: &str,
+    op: &str,
     tool: &dyn swissarmyhammer_tools::mcp::tool_registry::McpTool,
     path: &str,
     context: &ToolContext,
 ) {
-    if tool_name == "files_read" {
-        let mut read_args = serde_json::Map::new();
-        read_args.insert("path".to_string(), json!(path));
-        let read_result = tool.execute(read_args, context).await;
+    if op == "read file" {
+        let args = read_args(path);
+        let read_result = tool.execute(args, context).await;
         if let Err(error) = read_result {
             let error_msg = format!("{:?}", error);
             println!("Restricted read blocked: {} - {}", path, error_msg);
         }
-    } else if tool_name == "files_write" {
-        let mut write_args = serde_json::Map::new();
-        write_args.insert("file_path".to_string(), json!(path));
-        write_args.insert("content".to_string(), json!("unauthorized write"));
-        let write_result = tool.execute(write_args, context).await;
+    } else if op == "write file" {
+        let args = write_args(path, "unauthorized write");
+        let write_result = tool.execute(args, context).await;
         if let Err(error) = write_result {
             let error_msg = format!("{:?}", error);
             println!("Restricted write blocked: {} - {}", path, error_msg);
@@ -3199,8 +3236,8 @@ async fn test_workspace_boundary_enforcement() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
 
-    let read_tool = registry.get_tool("files_read").unwrap();
-    let write_tool = registry.get_tool("files_write").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
 
     let restricted_paths = vec![
         "/etc/passwd",
@@ -3213,8 +3250,8 @@ async fn test_workspace_boundary_enforcement() {
     ];
 
     for restricted_path in restricted_paths {
-        test_restricted_path_access("files_read", read_tool, restricted_path, &context).await;
-        test_restricted_path_access("files_write", write_tool, restricted_path, &context).await;
+        test_restricted_path_access("read file", read_tool, restricted_path, &context).await;
+        test_restricted_path_access("write file", write_tool, restricted_path, &context).await;
     }
 }
 
@@ -3222,13 +3259,14 @@ async fn test_workspace_boundary_enforcement() {
 async fn test_read_tool_malformed_input() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     let test_dir = tempfile::tempdir().expect("Failed to create temp directory");
     let malformed_inputs = create_malformed_inputs(test_dir.path());
 
     for malformed_input in &malformed_inputs {
         let mut read_args = serde_json::Map::new();
+        read_args.insert("op".to_string(), json!("read file"));
         read_args.insert("path".to_string(), json!(malformed_input));
 
         let read_result = read_tool.execute(read_args, &context).await;
@@ -3247,13 +3285,14 @@ async fn test_read_tool_malformed_input() {
 async fn test_write_tool_malformed_input() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
 
     let test_dir = tempfile::tempdir().expect("Failed to create temp directory");
     let malformed_inputs = create_malformed_inputs(test_dir.path());
 
     for malformed_input in &malformed_inputs {
         let mut write_args = serde_json::Map::new();
+        write_args.insert("op".to_string(), json!("write file"));
         write_args.insert("file_path".to_string(), json!(malformed_input));
         write_args.insert("content".to_string(), json!("test content"));
 
@@ -3280,13 +3319,14 @@ async fn test_write_tool_malformed_input() {
 async fn test_glob_tool_malformed_input() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let glob_tool = registry.get_tool("files_glob").unwrap();
+    let glob_tool = registry.get_tool("files").unwrap();
 
     let test_dir = tempfile::tempdir().expect("Failed to create temp directory");
     let malformed_inputs = create_malformed_inputs(test_dir.path());
 
     for malformed_input in &malformed_inputs {
         let mut glob_args = serde_json::Map::new();
+        glob_args.insert("op".to_string(), json!("glob files"));
         glob_args.insert("pattern".to_string(), json!(malformed_input));
 
         let glob_result = glob_tool.execute(glob_args, &context).await;
@@ -3305,13 +3345,14 @@ async fn test_glob_tool_malformed_input() {
 async fn test_grep_tool_malformed_input() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let grep_tool = registry.get_tool("files_grep").unwrap();
+    let grep_tool = registry.get_tool("files").unwrap();
 
     let test_dir = tempfile::tempdir().expect("Failed to create temp directory");
     let malformed_inputs = create_malformed_inputs(test_dir.path());
 
     for malformed_input in &malformed_inputs {
         let mut grep_args = serde_json::Map::new();
+        grep_args.insert("op".to_string(), json!("grep files"));
         grep_args.insert("pattern".to_string(), json!(malformed_input));
 
         let grep_result = grep_tool.execute(grep_args, &context).await;
@@ -3328,35 +3369,27 @@ async fn test_grep_tool_malformed_input() {
     }
 }
 
-/// Test privileged location access for a tool
+/// Test privileged location access for a given operation
 async fn test_privileged_location_access(
     tool: &dyn swissarmyhammer_tools::mcp::tool_registry::McpTool,
     location: &str,
-    tool_name: &str,
+    op: &str,
     context: &ToolContext,
 ) {
-    if tool_name == "files_write" {
-        let mut write_args = serde_json::Map::new();
-        write_args.insert("file_path".to_string(), json!(location));
-        write_args.insert(
-            "content".to_string(),
-            json!("# privilege escalation attempt"),
-        );
+    if op == "write file" {
+        let args = write_args(location, "# privilege escalation attempt");
 
-        let write_result = tool.execute(write_args, context).await;
+        let write_result = tool.execute(args, context).await;
         if let Err(error) = write_result {
             let error_msg = format!("{:?}", error);
             println!("Privileged write blocked: {} - {}", location, error_msg);
         } else {
             println!("Warning: Write to {} succeeded unexpectedly", location);
         }
-    } else if tool_name == "files_edit" {
-        let mut edit_args = serde_json::Map::new();
-        edit_args.insert("file_path".to_string(), json!(location));
-        edit_args.insert("old_string".to_string(), json!("root"));
-        edit_args.insert("new_string".to_string(), json!("compromised"));
+    } else if op == "edit file" {
+        let args = edit_args(location, "root", "compromised");
 
-        let edit_result = tool.execute(edit_args, context).await;
+        let edit_result = tool.execute(args, context).await;
         if let Err(error) = edit_result {
             let error_msg = format!("{:?}", error);
             println!("Privileged edit blocked: {} - {}", location, error_msg);
@@ -3369,8 +3402,8 @@ async fn test_permission_escalation_prevention() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
 
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let edit_tool = registry.get_tool("files").unwrap();
 
     let privileged_locations = vec![
         "/etc/sudoers",
@@ -3383,9 +3416,9 @@ async fn test_permission_escalation_prevention() {
     ];
 
     for privileged_location in privileged_locations {
-        test_privileged_location_access(write_tool, privileged_location, "files_write", &context)
+        test_privileged_location_access(write_tool, privileged_location, "write file", &context)
             .await;
-        test_privileged_location_access(edit_tool, privileged_location, "files_edit", &context)
+        test_privileged_location_access(edit_tool, privileged_location, "edit file", &context)
             .await;
     }
 }
@@ -3394,7 +3427,7 @@ async fn test_permission_escalation_prevention() {
 async fn test_read_tool_excessive_parameters() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3402,6 +3435,7 @@ async fn test_read_tool_excessive_parameters() {
     fs::write(test_file, "small content").unwrap();
 
     let mut read_args = serde_json::Map::new();
+    read_args.insert("op".to_string(), json!("read file"));
     read_args.insert("path".to_string(), json!(test_file.to_string_lossy()));
     read_args.insert("offset".to_string(), json!(u32::MAX));
     read_args.insert("limit".to_string(), json!(u32::MAX));
@@ -3423,7 +3457,7 @@ async fn test_read_tool_excessive_parameters() {
 async fn test_write_tool_large_content_limits() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3431,6 +3465,7 @@ async fn test_write_tool_large_content_limits() {
     let large_file = &temp_dir.join("large_test.txt");
 
     let mut write_args = serde_json::Map::new();
+    write_args.insert("op".to_string(), json!("write file"));
     write_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
     write_args.insert("content".to_string(), json!(huge_content));
 
@@ -3445,13 +3480,14 @@ async fn test_write_tool_large_content_limits() {
 async fn test_glob_tool_complex_patterns() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let glob_tool = registry.get_tool("files_glob").unwrap();
+    let glob_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let recursive_pattern = "**/**/".repeat(100) + "*";
 
     let mut glob_args = serde_json::Map::new();
+    glob_args.insert("op".to_string(), json!("glob files"));
     glob_args.insert("pattern".to_string(), json!(recursive_pattern));
     glob_args.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
 
@@ -3484,7 +3520,7 @@ async fn test_concurrent_file_operations_safety() {
     let write_op = |registry: Arc<ToolRegistry>, context: Arc<ToolContext>, i: usize| {
         let file_clone = file_for_write.clone();
         async move {
-            let write_tool = registry.get_tool("files_write").unwrap();
+            let write_tool = registry.get_tool("files").unwrap();
             let write_args = write_args(
                 &file_clone.to_string_lossy(),
                 &format!("content from task {}", i / 2),
@@ -3500,7 +3536,7 @@ async fn test_concurrent_file_operations_safety() {
     let read_op = |registry: Arc<ToolRegistry>, context: Arc<ToolContext>, _i: usize| {
         let file_clone = file_for_read.clone();
         async move {
-            let read_tool = registry.get_tool("files_read").unwrap();
+            let read_tool = registry.get_tool("files").unwrap();
             let read_args = read_args(&file_clone.to_string_lossy());
             read_tool
                 .execute(read_args, &context)
@@ -3543,7 +3579,7 @@ async fn test_concurrent_file_operations_safety() {
 async fn test_full_file_read_memory_usage() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3571,6 +3607,7 @@ async fn test_full_file_read_memory_usage() {
     println!("File path: {}", large_file.to_string_lossy());
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("read file"));
     arguments.insert("path".to_string(), json!(large_file.to_string_lossy()));
 
     println!("Reading file with memory profiling...");
@@ -3610,7 +3647,7 @@ async fn test_full_file_read_memory_usage() {
 async fn test_offset_limit_read_memory_usage() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3627,6 +3664,7 @@ async fn test_offset_limit_read_memory_usage() {
     let profiler = MemoryProfiler::new();
 
     let mut offset_args = serde_json::Map::new();
+    offset_args.insert("op".to_string(), json!("read file"));
     offset_args.insert("path".to_string(), json!(large_file.to_string_lossy()));
     offset_args.insert("offset".to_string(), json!(500));
     offset_args.insert("limit".to_string(), json!(100));
@@ -3658,7 +3696,7 @@ async fn test_offset_limit_read_memory_usage() {
 async fn test_large_file_write_memory_usage() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3679,6 +3717,7 @@ async fn test_large_file_write_memory_usage() {
     let profiler = MemoryProfiler::new();
 
     let mut arguments = serde_json::Map::new();
+    arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(content));
 
@@ -3720,8 +3759,8 @@ async fn test_large_file_write_memory_usage() {
 async fn test_large_file_edit_memory_usage() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let edit_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -3738,6 +3777,7 @@ async fn test_large_file_edit_memory_usage() {
 
     // Write the large file
     let mut write_args = serde_json::Map::new();
+    write_args.insert("op".to_string(), json!("write file"));
     write_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
     write_args.insert("content".to_string(), json!(content));
     write_tool.execute(write_args, &context).await.unwrap();
@@ -3746,6 +3786,7 @@ async fn test_large_file_edit_memory_usage() {
     let profiler = MemoryProfiler::new();
 
     let mut edit_args = serde_json::Map::new();
+    edit_args.insert("op".to_string(), json!("edit file"));
     edit_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
     edit_args.insert(
         "old_string".to_string(),
@@ -3784,6 +3825,7 @@ async fn test_large_file_edit_memory_usage() {
     let profiler = MemoryProfiler::new();
 
     let mut edit_all_args = serde_json::Map::new();
+    edit_all_args.insert("op".to_string(), json!("edit file"));
     edit_all_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
     edit_all_args.insert("old_string".to_string(), json!("original_content_here"));
     edit_all_args.insert(
@@ -3845,16 +3887,18 @@ async fn test_concurrent_operations_memory_usage() {
             let content = format!("Concurrent test content for file {}\n", i).repeat(1000);
 
             // Write file
-            let write_tool = registry_clone.get_tool("files_write").unwrap();
+            let write_tool = registry_clone.get_tool("files").unwrap();
             let mut write_args = serde_json::Map::new();
+            write_args.insert("op".to_string(), json!("write file"));
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
 
             let write_result = write_tool.execute(write_args, &context_clone).await;
 
             // Read file back
-            let read_tool = registry_clone.get_tool("files_read").unwrap();
+            let read_tool = registry_clone.get_tool("files").unwrap();
             let mut read_args = serde_json::Map::new();
+            read_args.insert("op".to_string(), json!("read file"));
             read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
             let read_result = read_tool.execute(read_args, &context_clone).await;
@@ -4102,8 +4146,8 @@ fn extract_text_content(raw_content: &rmcp::model::RawContent) -> &str {
 async fn test_write_read_roundtrip_properties() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     // Test various file path and content combinations
     let repeated_content = "Pattern ".repeat(100);
@@ -4138,6 +4182,7 @@ async fn test_write_read_roundtrip_properties() {
 
         // Write file
         let mut write_args = serde_json::Map::new();
+        write_args.insert("op".to_string(), json!("write file"));
         write_args.insert("file_path".to_string(), json!(full_path.to_string_lossy()));
         write_args.insert("content".to_string(), json!(content));
 
@@ -4148,6 +4193,7 @@ async fn test_write_read_roundtrip_properties() {
 
         // Read file back
         let mut read_args = serde_json::Map::new();
+        read_args.insert("op".to_string(), json!("read file"));
         read_args.insert("path".to_string(), json!(full_path.to_string_lossy()));
 
         let read_result = read_tool.execute(read_args, &context).await;
@@ -4169,9 +4215,9 @@ async fn test_write_read_roundtrip_properties() {
 async fn test_edit_operation_consistency_properties() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let edit_tool = registry.get_tool("files").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     // Test various edit scenarios
     let test_cases = vec![
@@ -4189,6 +4235,7 @@ async fn test_edit_operation_consistency_properties() {
 
         // Write original file
         let mut write_args = serde_json::Map::new();
+        write_args.insert("op".to_string(), json!("write file"));
         write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
         write_args.insert("content".to_string(), json!(original_content));
 
@@ -4196,6 +4243,7 @@ async fn test_edit_operation_consistency_properties() {
 
         // Perform edit
         let mut edit_args = serde_json::Map::new();
+        edit_args.insert("op".to_string(), json!("edit file"));
         edit_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
         edit_args.insert("old_string".to_string(), json!(old_string));
         edit_args.insert("new_string".to_string(), json!(new_string));
@@ -4208,6 +4256,7 @@ async fn test_edit_operation_consistency_properties() {
 
         // Read back and verify
         let mut read_args = serde_json::Map::new();
+        read_args.insert("op".to_string(), json!("read file"));
         read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
         let response = read_tool.execute(read_args, &context).await.unwrap();
@@ -4228,8 +4277,8 @@ async fn test_edit_operation_consistency_properties() {
 async fn test_glob_pattern_consistency_properties() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let glob_tool = registry.get_tool("files_glob").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let glob_tool = registry.get_tool("files").unwrap();
 
     // Test different file extensions and patterns
     let test_cases = vec![
@@ -4249,6 +4298,7 @@ async fn test_glob_pattern_consistency_properties() {
             let content = format!("Content for file {}", i);
 
             let mut write_args = serde_json::Map::new();
+            write_args.insert("op".to_string(), json!("write file"));
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
 
@@ -4257,6 +4307,7 @@ async fn test_glob_pattern_consistency_properties() {
 
         // Test glob pattern
         let mut glob_args = serde_json::Map::new();
+        glob_args.insert("op".to_string(), json!("glob files"));
         glob_args.insert("pattern".to_string(), json!(pattern));
         glob_args.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
 
@@ -4292,8 +4343,8 @@ async fn test_glob_pattern_consistency_properties() {
 async fn test_read_offset_limit_consistency_properties() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let read_tool = registry.get_tool("files").unwrap();
 
     // Create content with multiple lines for line-based testing
     let lines: Vec<String> = (1..=20)
@@ -4306,6 +4357,7 @@ async fn test_read_offset_limit_consistency_properties() {
 
     // Write file
     let mut write_args = serde_json::Map::new();
+    write_args.insert("op".to_string(), json!("write file"));
     write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
     write_args.insert("content".to_string(), json!(content));
     write_tool.execute(write_args, &context).await.unwrap();
@@ -4321,6 +4373,7 @@ async fn test_read_offset_limit_consistency_properties() {
 
     for (offset, limit) in test_cases {
         let mut read_args = serde_json::Map::new();
+        read_args.insert("op".to_string(), json!("read file"));
         read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
         read_args.insert("offset".to_string(), json!(offset));
         read_args.insert("limit".to_string(), json!(limit));
@@ -4374,8 +4427,8 @@ async fn test_read_offset_limit_consistency_properties() {
 async fn test_grep_pattern_robustness_properties() {
     let registry = create_test_registry().await;
     let context = create_test_context().await;
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let grep_tool = registry.get_tool("files_grep").unwrap();
+    let write_tool = registry.get_tool("files").unwrap();
+    let grep_tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
@@ -4397,6 +4450,7 @@ async fn test_grep_pattern_robustness_properties() {
 
         // Write file
         let mut write_args = serde_json::Map::new();
+        write_args.insert("op".to_string(), json!("write file"));
         write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
         write_args.insert("content".to_string(), json!(content));
         write_tool.execute(write_args, &context).await.unwrap();
@@ -4405,6 +4459,7 @@ async fn test_grep_pattern_robustness_properties() {
     // Test each pattern
     for (content, pattern, should_match) in test_cases.iter() {
         let mut grep_args = serde_json::Map::new();
+        grep_args.insert("op".to_string(), json!("grep files"));
         grep_args.insert("pattern".to_string(), json!(pattern));
         grep_args.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
         grep_args.insert("output_mode".to_string(), json!("files_with_matches"));

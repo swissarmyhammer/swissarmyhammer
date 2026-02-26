@@ -69,7 +69,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_list_tools() {
-        // Use agent_mode=true since this test checks for agent tools (files_read)
+        // Use agent_mode=true since this test checks for agent tools (files)
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
@@ -86,7 +86,7 @@ mod tests {
         assert!(!tools.tools.is_empty());
 
         let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
-        assert!(tool_names.contains(&"files_read".to_string()));
+        assert!(tool_names.contains(&"files".to_string()));
 
         client.cancel().await.unwrap();
         server.shutdown().await.unwrap();
@@ -114,7 +114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_call_tool() {
-        // Use agent_mode=true since this test calls files_glob (an agent tool)
+        // Use agent_mode=true since this test calls files (an agent tool)
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
@@ -129,8 +129,9 @@ mod tests {
 
         let result = client
             .call_tool(CallToolRequestParams {
-                name: "files_glob".into(),
+                name: "files".into(),
                 arguments: serde_json::json!({
+                    "op": "glob files",
                     "pattern": "*.md"
                 })
                 .as_object()

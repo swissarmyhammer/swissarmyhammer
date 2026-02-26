@@ -2,14 +2,49 @@
 //!
 //! This module provides the GlobFileTool for fast file pattern matching with advanced filtering.
 
-use crate::mcp::tool_registry::{send_mcp_log, AgentTool, BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
 use crate::mcp::tools::files::shared_utils::FilePathValidator;
-use async_trait::async_trait;
 use ignore::WalkBuilder;
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use std::path::Path;
 use std::time::{Instant, SystemTime};
+use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+
+/// Operation metadata for glob file matching
+#[derive(Debug, Default)]
+pub struct GlobFiles;
+
+static GLOB_FILES_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("pattern")
+        .description("Glob pattern to match files (e.g., **/*.js, src/**/*.ts)")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("path")
+        .description("Directory to search within (optional)")
+        .param_type(ParamType::String),
+    ParamMeta::new("case_sensitive")
+        .description("Case-sensitive matching (default: false)")
+        .param_type(ParamType::Boolean),
+    ParamMeta::new("respect_git_ignore")
+        .description("Honor .gitignore patterns (default: true)")
+        .param_type(ParamType::Boolean),
+];
+
+impl Operation for GlobFiles {
+    fn verb(&self) -> &'static str {
+        "glob"
+    }
+    fn noun(&self) -> &'static str {
+        "files"
+    }
+    fn description(&self) -> &'static str {
+        "Fast file pattern matching with advanced filtering and sorting"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GLOB_FILES_PARAMS
+    }
+}
 
 /// Tool for fast file pattern matching with advanced filtering and sorting
 #[derive(Default)]
@@ -22,184 +57,137 @@ impl GlobFileTool {
     }
 }
 
-// No health checks needed
-crate::impl_empty_doctorable!(GlobFileTool);
+/// Execute a glob file matching operation
+pub async fn execute_glob(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    use serde::Deserialize;
+    use swissarmyhammer_common::rate_limiter::get_rate_limiter;
 
-#[async_trait]
-impl AgentTool for GlobFileTool {}
-
-#[async_trait]
-impl McpTool for GlobFileTool {
-    fn name(&self) -> &'static str {
-        "files_glob"
+    #[derive(Deserialize)]
+    struct GlobRequest {
+        pattern: String,
+        #[serde(alias = "file_path", alias = "absolute_path")]
+        path: Option<String>,
+        case_sensitive: Option<bool>,
+        respect_git_ignore: Option<bool>,
     }
 
-    fn description(&self) -> &'static str {
-        include_str!("description.md")
+    // Parse arguments
+    let request: GlobRequest = BaseToolImpl::parse_arguments(arguments)?;
+
+    // Check rate limit (glob is an expensive search operation) using tokio task ID as client identifier
+    let rate_limiter = get_rate_limiter();
+    let client_id = format!("task_{:?}", tokio::task::try_id());
+    if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_glob", 2) {
+        tracing::warn!("Rate limit exceeded for file_glob: {}", e);
+        return Err(McpError::invalid_request(
+            format!("Rate limit exceeded: {}", e),
+            None,
+        ));
     }
 
-    fn schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Glob pattern to match files (e.g., **/*.js, src/**/*.ts)"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Directory to search within (optional)"
-                },
-                "case_sensitive": {
-                    "type": "boolean",
-                    "description": "Case-sensitive matching (default: false)",
-                    "default": false
-                },
-                "respect_git_ignore": {
-                    "type": "boolean",
-                    "description": "Honor .gitignore patterns (default: true)",
-                    "default": true
-                }
-            },
-            "required": ["pattern"]
-        })
-    }
+    // Validate pattern - pass the path to allow broader patterns when search is scoped
+    validate_glob_pattern(&request.pattern, request.path.as_deref())?;
 
-    async fn execute(
-        &self,
-        arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        use serde::Deserialize;
+    // Use FilePathValidator for comprehensive security validation
+    let validator = FilePathValidator::new();
 
-        #[derive(Deserialize)]
-        struct GlobRequest {
-            pattern: String,
-            #[serde(alias = "file_path", alias = "absolute_path")]
-            path: Option<String>,
-            case_sensitive: Option<bool>,
-            respect_git_ignore: Option<bool>,
-        }
-
-        // Parse arguments
-        let request: GlobRequest = BaseToolImpl::parse_arguments(arguments)?;
-
-        // Check rate limit (glob is an expensive search operation) using tokio task ID as client identifier
-        use swissarmyhammer_common::rate_limiter::get_rate_limiter;
-        let rate_limiter = get_rate_limiter();
-        let client_id = format!("task_{:?}", tokio::task::try_id());
-        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_glob", 2) {
-            tracing::warn!("Rate limit exceeded for file_glob: {}", e);
-            return Err(McpError::invalid_request(
-                format!("Rate limit exceeded: {}", e),
-                None,
-            ));
-        }
-
-        // Validate pattern - pass the path to allow broader patterns when search is scoped
-        validate_glob_pattern(&request.pattern, request.path.as_deref())?;
-
-        // Use FilePathValidator for comprehensive security validation
-        let validator = FilePathValidator::new();
-
-        // Determine starting directory
-        let search_dir = match request.path {
-            Some(path_str) => {
-                // Use comprehensive security validation
-                let validated_path = validator.validate_path(&path_str)?;
-                if !validated_path.exists() {
-                    return Err(rmcp::ErrorData::invalid_request(
-                        format!(
-                            "Search directory does not exist: {}",
-                            validated_path.display()
-                        ),
-                        None,
-                    ));
-                }
-                validated_path
-            }
-            None => std::env::current_dir().map_err(|e| {
-                rmcp::ErrorData::internal_error(
-                    format!("Failed to get current directory: {}", e),
+    // Determine starting directory
+    let search_dir = match request.path {
+        Some(path_str) => {
+            // Use comprehensive security validation
+            let validated_path = validator.validate_path(&path_str)?;
+            if !validated_path.exists() {
+                return Err(rmcp::ErrorData::invalid_request(
+                    format!(
+                        "Search directory does not exist: {}",
+                        validated_path.display()
+                    ),
                     None,
-                )
-            })?,
-        };
-
-        let respect_git_ignore = request.respect_git_ignore.unwrap_or(true);
-        let case_sensitive = request.case_sensitive.unwrap_or(false);
-
-        let start_time = Instant::now();
-
-        send_mcp_log(
-            context,
-            LoggingLevel::Info,
-            "glob",
-            format!("Matching pattern: {}", request.pattern),
-        )
-        .await;
-
-        // Use advanced gitignore integration with ignore crate
-        let matched_files = match if respect_git_ignore {
-            find_files_with_gitignore(&search_dir, &request.pattern, case_sensitive)
-        } else {
-            find_files_with_glob(&search_dir, &request.pattern, case_sensitive)
-        } {
-            Ok(files) => files,
-            Err(e) => {
-                send_mcp_log(
-                    context,
-                    LoggingLevel::Error,
-                    "glob",
-                    format!("Failed: {}", e),
-                )
-                .await;
-                return Err(e);
+                ));
             }
-        };
-
-        // Calculate operation duration and file count for completion notification.
-        // Duration measured from start_time to provide performance feedback.
-        let duration_ms = start_time.elapsed().as_millis() as u64;
-        let file_count = matched_files.len();
-
-        // Log the match results at INFO level for visibility
-        tracing::info!(
-            "📁 Glob matched {} files for pattern '{}' in {}ms",
-            file_count,
-            request.pattern,
-            duration_ms
-        );
-
-        send_mcp_log(
-            context,
-            LoggingLevel::Info,
-            "glob",
-            format!("Found {} files in {}ms", file_count, duration_ms),
-        )
-        .await;
-
-        // Format response
-        let mut response_parts = Vec::new();
-
-        if !matched_files.is_empty() {
-            response_parts.push(format!(
-                "Found {} files matching pattern '{}'\n",
-                matched_files.len(),
-                request.pattern
-            ));
-            response_parts.push(matched_files.join("\n"));
-        } else {
-            response_parts.push(format!(
-                "No files found matching pattern '{}'",
-                request.pattern
-            ));
+            validated_path
         }
+        None => std::env::current_dir().map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to get current directory: {}", e), None)
+        })?,
+    };
 
-        Ok(BaseToolImpl::create_success_response(
-            response_parts.join("\n"),
-        ))
+    let respect_git_ignore = request.respect_git_ignore.unwrap_or(true);
+    let case_sensitive = request.case_sensitive.unwrap_or(false);
+
+    let start_time = Instant::now();
+
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "glob",
+        format!("Matching pattern: {}", request.pattern),
+    )
+    .await;
+
+    // Use advanced gitignore integration with ignore crate
+    let matched_files = match if respect_git_ignore {
+        find_files_with_gitignore(&search_dir, &request.pattern, case_sensitive)
+    } else {
+        find_files_with_glob(&search_dir, &request.pattern, case_sensitive)
+    } {
+        Ok(files) => files,
+        Err(e) => {
+            send_mcp_log(
+                context,
+                LoggingLevel::Error,
+                "glob",
+                format!("Failed: {}", e),
+            )
+            .await;
+            return Err(e);
+        }
+    };
+
+    // Calculate operation duration and file count for completion notification.
+    // Duration measured from start_time to provide performance feedback.
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+    let file_count = matched_files.len();
+
+    // Log the match results at INFO level for visibility
+    tracing::info!(
+        "Glob matched {} files for pattern '{}' in {}ms",
+        file_count,
+        request.pattern,
+        duration_ms
+    );
+
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "glob",
+        format!("Found {} files in {}ms", file_count, duration_ms),
+    )
+    .await;
+
+    // Format response
+    let mut response_parts = Vec::new();
+
+    if !matched_files.is_empty() {
+        response_parts.push(format!(
+            "Found {} files matching pattern '{}'\n",
+            matched_files.len(),
+            request.pattern
+        ));
+        response_parts.push(matched_files.join("\n"));
+    } else {
+        response_parts.push(format!(
+            "No files found matching pattern '{}'",
+            request.pattern
+        ));
     }
+
+    Ok(BaseToolImpl::create_success_response(
+        response_parts.join("\n"),
+    ))
 }
 
 /// Maximum number of files to return (performance optimization)
@@ -523,29 +511,17 @@ mod tests {
     use crate::test_utils::create_test_context;
 
     #[test]
-    fn test_glob_file_tool_new() {
-        let tool = GlobFileTool::new();
-        assert_eq!(tool.name(), "files_glob");
-        assert!(!tool.description().is_empty());
-    }
-
-    #[test]
-    fn test_glob_file_tool_schema() {
-        let tool = GlobFileTool::new();
-        let schema = tool.schema();
-
-        assert_eq!(schema["type"], "object");
-        assert!(schema["properties"]["pattern"].is_object());
-        assert!(schema["properties"]["path"].is_object());
-        assert!(schema["properties"]["case_sensitive"].is_object());
-        assert!(schema["properties"]["respect_git_ignore"].is_object());
-        assert_eq!(schema["required"], serde_json::json!(["pattern"]));
+    fn test_glob_file_tool_metadata() {
+        let op = GlobFiles;
+        assert_eq!(op.verb(), "glob");
+        assert_eq!(op.noun(), "files");
+        assert!(!op.description().is_empty());
+        assert!(!op.parameters().is_empty());
     }
 
     #[tokio::test]
     async fn test_glob_validates_pattern() {
         let context = create_test_context().await;
-        let tool = GlobFileTool::new();
 
         // Test empty pattern
         let mut arguments = serde_json::Map::new();
@@ -554,14 +530,13 @@ mod tests {
             serde_json::Value::String("".to_string()),
         );
 
-        let result = tool.execute(arguments, &context).await;
+        let result = execute_glob(arguments, &context).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_glob_rejects_wildcard_star() {
         let context = create_test_context().await;
-        let tool = GlobFileTool::new();
 
         let mut arguments = serde_json::Map::new();
         arguments.insert(
@@ -569,7 +544,7 @@ mod tests {
             serde_json::Value::String("*".to_string()),
         );
 
-        let result = tool.execute(arguments, &context).await;
+        let result = execute_glob(arguments, &context).await;
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(err_msg.contains("not allowed"));
@@ -579,7 +554,6 @@ mod tests {
     #[tokio::test]
     async fn test_glob_rejects_double_star_slash_star() {
         let context = create_test_context().await;
-        let tool = GlobFileTool::new();
 
         let mut arguments = serde_json::Map::new();
         arguments.insert(
@@ -587,7 +561,7 @@ mod tests {
             serde_json::Value::String("**/*".to_string()),
         );
 
-        let result = tool.execute(arguments, &context).await;
+        let result = execute_glob(arguments, &context).await;
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(err_msg.contains("not allowed"));
@@ -597,7 +571,6 @@ mod tests {
     #[tokio::test]
     async fn test_glob_rejects_star_dot_star() {
         let context = create_test_context().await;
-        let tool = GlobFileTool::new();
 
         let mut arguments = serde_json::Map::new();
         arguments.insert(
@@ -605,7 +578,7 @@ mod tests {
             serde_json::Value::String("*.*".to_string()),
         );
 
-        let result = tool.execute(arguments, &context).await;
+        let result = execute_glob(arguments, &context).await;
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(err_msg.contains("not allowed"));
@@ -615,7 +588,6 @@ mod tests {
     #[tokio::test]
     async fn test_glob_rejects_double_star_ext() {
         let context = create_test_context().await;
-        let tool = GlobFileTool::new();
 
         // Test **/*.rs pattern (too broad)
         let mut arguments = serde_json::Map::new();
@@ -624,7 +596,7 @@ mod tests {
             serde_json::Value::String("**/*.rs".to_string()),
         );
 
-        let result = tool.execute(arguments, &context).await;
+        let result = execute_glob(arguments, &context).await;
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(err_msg.contains("too broad"));
@@ -634,7 +606,6 @@ mod tests {
     #[tokio::test]
     async fn test_glob_accepts_scoped_patterns() {
         let context = create_test_context().await;
-        let tool = GlobFileTool::new();
 
         // Create a temporary directory
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
@@ -656,7 +627,7 @@ mod tests {
             serde_json::Value::String(test_dir.display().to_string()),
         );
 
-        let result = tool.execute(arguments, &context).await;
+        let result = execute_glob(arguments, &context).await;
         assert!(result.is_ok());
     }
 }

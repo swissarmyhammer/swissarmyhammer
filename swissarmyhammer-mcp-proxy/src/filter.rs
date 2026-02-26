@@ -78,15 +78,11 @@ mod tests {
 
     #[test]
     fn test_allow_precedence_over_deny() {
-        let filter = ToolFilter::new(
-            vec!["^files_.*".to_string()],
-            vec!["^files_write$".to_string()],
-        )
-        .unwrap();
+        let filter =
+            ToolFilter::new(vec!["^files$".to_string()], vec!["^files$".to_string()]).unwrap();
 
-        // files_write matches both allow and deny, but allow wins
-        assert!(filter.is_allowed("files_write"));
-        assert!(filter.is_allowed("files_read"));
+        // files matches both allow and deny, but allow wins
+        assert!(filter.is_allowed("files"));
     }
 
     #[test]
@@ -97,7 +93,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(filter.is_allowed("files_read"));
+        assert!(filter.is_allowed("files"));
         assert!(filter.is_allowed("web"));
         assert!(!filter.is_allowed("shell_execute")); // Denied
     }
@@ -105,15 +101,15 @@ mod tests {
     #[test]
     fn test_specific_patterns() {
         let filter = ToolFilter::new(
-            vec!["^files_read$".to_string(), "^files_grep$".to_string()],
+            vec!["^files$".to_string(), "^treesitter_search$".to_string()],
             vec![],
         )
         .unwrap();
 
-        assert!(filter.is_allowed("files_read"));
-        assert!(filter.is_allowed("files_grep"));
-        assert!(!filter.is_allowed("files_write"));
-        assert!(!filter.is_allowed("files_edit"));
+        assert!(filter.is_allowed("files"));
+        assert!(filter.is_allowed("treesitter_search"));
+        assert!(!filter.is_allowed("kanban"));
+        assert!(!filter.is_allowed("web"));
         assert!(!filter.is_allowed("shell_execute"));
     }
 
@@ -126,16 +122,15 @@ mod tests {
     #[test]
     fn test_complex_patterns() {
         let filter = ToolFilter::new(
-            vec!["^(files_.*|web)$".to_string()], // Allow files_* and web
-            vec![".*_(write|edit|delete)$".to_string()], // Deny mutations
+            vec!["^(files|web)$".to_string()], // Allow files and web
+            vec!["^shell_.*".to_string()],     // Deny shell tools
         )
         .unwrap();
 
-        assert!(filter.is_allowed("files_read"));
+        assert!(filter.is_allowed("files"));
         assert!(filter.is_allowed("web"));
         // Allow wins over deny, so these are allowed
-        assert!(filter.is_allowed("files_write"));
-        assert!(!filter.is_allowed("web_edit")); // Not in allow list
+        assert!(!filter.is_allowed("kanban")); // Not in allow list
         assert!(!filter.is_allowed("shell_execute")); // Not in allow list
     }
 
@@ -143,7 +138,7 @@ mod tests {
     fn test_no_patterns_allows_all() {
         let filter = ToolFilter::new(vec![], vec![]).unwrap();
 
-        assert!(filter.is_allowed("files_read"));
+        assert!(filter.is_allowed("files"));
         assert!(filter.is_allowed("shell_execute"));
         assert!(filter.is_allowed("anything"));
     }
@@ -151,13 +146,13 @@ mod tests {
     #[test]
     fn test_whitelist_mode() {
         let filter = ToolFilter::new(
-            vec!["^files_read$".to_string()],
+            vec!["^files$".to_string()],
             vec![], // No deny patterns
         )
         .unwrap();
 
-        assert!(filter.is_allowed("files_read")); // In allow list
-        assert!(!filter.is_allowed("files_write")); // Not in allow list = denied
+        assert!(filter.is_allowed("files")); // In allow list
+        assert!(!filter.is_allowed("kanban")); // Not in allow list = denied
         assert!(!filter.is_allowed("shell_execute")); // Not in allow list = denied
     }
 }

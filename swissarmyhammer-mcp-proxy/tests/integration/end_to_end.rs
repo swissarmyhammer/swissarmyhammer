@@ -38,8 +38,8 @@ async fn test_proxy_filters_tool_discovery() {
 
     println!("Upstream server started on port {}", upstream_port);
 
-    // Create restrictive filter: only allow files_read, files_grep, files_glob
-    let filter = ToolFilter::new(vec!["^files_(read|grep|glob)$".to_string()], vec![]).unwrap();
+    // Create restrictive filter: only allow the unified files tool
+    let filter = ToolFilter::new(vec!["^files$".to_string()], vec![]).unwrap();
 
     // Create proxy pointing to upstream URL
     let proxy = Arc::new(FilteringMcpProxy::new(upstream_url, filter));

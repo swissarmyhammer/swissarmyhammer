@@ -415,13 +415,7 @@ mod tests {
         let storage = crate::acp::permissions::PermissionStorage::new();
 
         // Test that various tool names are allowed by default
-        let test_tools = vec![
-            "files_read",
-            "files_write",
-            "shell_execute",
-            "web_fetch",
-            "any_other_tool",
-        ];
+        let test_tools = vec!["files", "shell_execute", "web_fetch", "any_other_tool"];
 
         for tool_name in test_tools {
             let evaluation = engine.evaluate_tool_call(tool_name, &storage);

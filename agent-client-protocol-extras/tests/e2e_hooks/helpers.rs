@@ -117,17 +117,24 @@ pub(crate) fn read_stdin_capture(dir: &Path, script_name: &str) -> Option<String
     std::fs::read_to_string(capture_path).ok()
 }
 
-/// Poll for the stdin capture file to appear, retrying with backoff.
+/// Poll for the stdin capture file to appear with non-empty content,
+/// retrying with backoff.
 ///
 /// Notification-pipeline hooks run in a spawned tokio task that may not be
 /// scheduled immediately, especially under CI load.  This helper replaces
 /// bare `read_stdin_capture` calls in notification-pipeline tests to avoid
 /// flaky race conditions.
+///
+/// The shell scripts use `cat > file` which creates/truncates the file
+/// before stdin has been fully written. We require non-empty content to
+/// avoid reading a partially-written (empty) capture file.
 pub(crate) async fn wait_for_stdin_capture(dir: &Path, script_name: &str) -> Option<String> {
     let capture_path = dir.join(format!("{}.stdin_capture", script_name));
     for _ in 0..40 {
         if let Ok(contents) = std::fs::read_to_string(&capture_path) {
-            return Some(contents);
+            if !contents.is_empty() {
+                return Some(contents);
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
