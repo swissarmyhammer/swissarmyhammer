@@ -174,7 +174,11 @@ fn install_skills_via_mirdan(global: bool) -> Result<(), String> {
     use swissarmyhammer_skills::SkillResolver;
 
     let resolver = SkillResolver::new();
-    let skills = resolver.resolve_all();
+    // Use resolve_builtins() — NOT resolve_all() — so that previously deployed
+    // skills in .skills/ (SkillSource::Local) don't shadow the embedded builtins.
+    // resolve_all() applies precedence (builtin < local < user), which means a
+    // second `sah init` would see every builtin as Local and skip it entirely.
+    let skills = resolver.resolve_builtins();
 
     // Build prompt library for rendering skill templates with partials
     let prompt_library = PromptLibrary::default();
@@ -187,9 +191,6 @@ fn install_skills_via_mirdan(global: bool) -> Result<(), String> {
 
     let mut installed_count = 0;
     for (name, skill) in &skills {
-        if skill.source != swissarmyhammer_skills::SkillSource::Builtin {
-            continue;
-        }
 
         // Write builtin to a temp dir so deploy_skill_to_agents can copy it
         let temp_dir =
