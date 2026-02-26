@@ -1561,6 +1561,52 @@ impl AgentServer {
         Ok(())
     }
 
+    /// Replace or insert the session's system prompt.
+    ///
+    /// If the first message is already `MessageRole::System`, its content is replaced.
+    /// Otherwise a new System message is inserted at position 0.
+    pub async fn set_session_system_prompt(
+        &self,
+        session_id: &SessionId,
+        system_prompt: String,
+    ) -> Result<(), AgentError> {
+        let mut session = self
+            .session_manager
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| {
+                AgentError::Session(crate::types::SessionError::NotFound(session_id.to_string()))
+            })?;
+
+        if let Some(first) = session.messages.first_mut() {
+            if first.role == crate::types::MessageRole::System {
+                first.content = system_prompt;
+            } else {
+                session.messages.insert(
+                    0,
+                    Message {
+                        role: crate::types::MessageRole::System,
+                        content: system_prompt,
+                        tool_call_id: None,
+                        tool_name: None,
+                        timestamp: SystemTime::now(),
+                    },
+                );
+            }
+        } else {
+            session.messages.push(Message {
+                role: crate::types::MessageRole::System,
+                content: system_prompt,
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            });
+        }
+
+        self.session_manager.update_session(session).await?;
+        Ok(())
+    }
+
     /// Create a new session and return its ID.
     ///
     /// This is a convenience method that wraps `create_session` and returns

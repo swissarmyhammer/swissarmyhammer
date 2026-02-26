@@ -14,19 +14,19 @@ The following project(s) were automatically detected:
 
 ### 1. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent`
 **Markers:** Cargo.toml
 
 
-**Workspace:** Yes (38 members)
-  **Members:** swissarmyhammer, swissarmyhammer-cli, swissarmyhammer-tools, swissarmyhammer-config, swissarmyhammer-common, swissarmyhammer-directory, swissarmyhammer-build, swissarmyhammer-git, swissarmyhammer-shell, swissarmyhammer-templating, swissarmyhammer-prompts, swissarmyhammer-modes, swissarmyhammer-workflow, swissarmyhammer-agent, swissarmyhammer-mcp-proxy, swissarmyhammer-js, markdowndown, llama-agent, llama-common, llama-embedding, llama-loader, mermaid-parser, acp-conformance, claude-agent, agent-client-protocol-extras, model-context-protocol-extras, swissarmyhammer-project-detection, avp-common, avp-cli, swissarmyhammer-doctor, swissarmyhammer-treesitter, swissarmyhammer-leader-election, swissarmyhammer-kanban, swissarmyhammer-operations, swissarmyhammer-operations-macros, swissarmyhammer-skills, swissarmyhammer-web, mirdan-cli
+**Workspace:** Yes (39 members)
+  **Members:** swissarmyhammer, swissarmyhammer-cli, swissarmyhammer-tools, swissarmyhammer-config, swissarmyhammer-common, swissarmyhammer-directory, swissarmyhammer-build, swissarmyhammer-git, swissarmyhammer-shell, swissarmyhammer-templating, swissarmyhammer-prompts, swissarmyhammer-modes, swissarmyhammer-workflow, swissarmyhammer-agent, swissarmyhammer-mcp-proxy, swissarmyhammer-js, markdowndown, llama-agent, llama-common, llama-embedding, llama-loader, mermaid-parser, acp-conformance, claude-agent, agent-client-protocol-extras, model-context-protocol-extras, swissarmyhammer-project-detection, avp-common, avp-cli, swissarmyhammer-doctor, swissarmyhammer-treesitter, swissarmyhammer-leader-election, swissarmyhammer-kanban, swissarmyhammer-operations, swissarmyhammer-operations-macros, swissarmyhammer-skills, swissarmyhammer-agents, swissarmyhammer-web, mirdan-cli
 
 
 
 
 ### 2. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/acp-conformance`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/acp-conformance`
 **Markers:** Cargo.toml
 
 
@@ -34,7 +34,7 @@ The following project(s) were automatically detected:
 
 ### 3. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/agent-client-protocol-extras`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/agent-client-protocol-extras`
 **Markers:** Cargo.toml
 
 
@@ -42,7 +42,7 @@ The following project(s) were automatically detected:
 
 ### 4. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/avp-cli`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/avp-cli`
 **Markers:** Cargo.toml
 
 
@@ -50,7 +50,7 @@ The following project(s) were automatically detected:
 
 ### 5. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/avp-common`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/avp-common`
 **Markers:** Cargo.toml
 
 
@@ -58,7 +58,7 @@ The following project(s) were automatically detected:
 
 ### 6. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/claude-agent`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/claude-agent`
 **Markers:** Cargo.toml
 
 
@@ -66,7 +66,7 @@ The following project(s) were automatically detected:
 
 ### 7. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/llama-agent`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/llama-agent`
 **Markers:** Cargo.toml
 
 
@@ -74,7 +74,7 @@ The following project(s) were automatically detected:
 
 ### 8. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/llama-common`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/llama-common`
 **Markers:** Cargo.toml
 
 
@@ -82,7 +82,7 @@ The following project(s) were automatically detected:
 
 ### 9. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/llama-embedding`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/llama-embedding`
 **Markers:** Cargo.toml
 
 
@@ -90,7 +90,7 @@ The following project(s) were automatically detected:
 
 ### 10. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/llama-loader`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/llama-loader`
 **Markers:** Cargo.toml
 
 
@@ -98,7 +98,7 @@ The following project(s) were automatically detected:
 
 ### 11. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/markdowndown`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/markdowndown`
 **Markers:** Cargo.toml
 
 
@@ -106,7 +106,7 @@ The following project(s) were automatically detected:
 
 ### 12. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/mermaid-parser`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/mermaid-parser`
 **Markers:** Cargo.toml
 
 
@@ -114,7 +114,7 @@ The following project(s) were automatically detected:
 
 ### 13. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/mirdan-cli`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/mirdan-cli`
 **Markers:** Cargo.toml
 
 
@@ -122,7 +122,7 @@ The following project(s) were automatically detected:
 
 ### 14. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/model-context-protocol-extras`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/model-context-protocol-extras`
 **Markers:** Cargo.toml
 
 
@@ -130,7 +130,7 @@ The following project(s) were automatically detected:
 
 ### 15. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer`
 **Markers:** Cargo.toml
 
 
@@ -138,7 +138,7 @@ The following project(s) were automatically detected:
 
 ### 16. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-agent`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-agent`
 **Markers:** Cargo.toml
 
 
@@ -146,7 +146,7 @@ The following project(s) were automatically detected:
 
 ### 17. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-build`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-agents`
 **Markers:** Cargo.toml
 
 
@@ -154,7 +154,7 @@ The following project(s) were automatically detected:
 
 ### 18. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-cel`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-build`
 **Markers:** Cargo.toml
 
 
@@ -162,7 +162,7 @@ The following project(s) were automatically detected:
 
 ### 19. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-cli`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-cel`
 **Markers:** Cargo.toml
 
 
@@ -170,7 +170,7 @@ The following project(s) were automatically detected:
 
 ### 20. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-common`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-cli`
 **Markers:** Cargo.toml
 
 
@@ -178,7 +178,7 @@ The following project(s) were automatically detected:
 
 ### 21. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-config`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-common`
 **Markers:** Cargo.toml
 
 
@@ -186,7 +186,7 @@ The following project(s) were automatically detected:
 
 ### 22. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-directory`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-config`
 **Markers:** Cargo.toml
 
 
@@ -194,7 +194,7 @@ The following project(s) were automatically detected:
 
 ### 23. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-doctor`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-directory`
 **Markers:** Cargo.toml
 
 
@@ -202,7 +202,7 @@ The following project(s) were automatically detected:
 
 ### 24. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-git`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-doctor`
 **Markers:** Cargo.toml
 
 
@@ -210,7 +210,7 @@ The following project(s) were automatically detected:
 
 ### 25. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-js`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-git`
 **Markers:** Cargo.toml
 
 
@@ -218,7 +218,7 @@ The following project(s) were automatically detected:
 
 ### 26. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-kanban`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-js`
 **Markers:** Cargo.toml
 
 
@@ -226,7 +226,7 @@ The following project(s) were automatically detected:
 
 ### 27. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-leader-election`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-kanban`
 **Markers:** Cargo.toml
 
 
@@ -234,7 +234,7 @@ The following project(s) were automatically detected:
 
 ### 28. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-mcp-proxy`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-leader-election`
 **Markers:** Cargo.toml
 
 
@@ -242,7 +242,7 @@ The following project(s) were automatically detected:
 
 ### 29. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-modes`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-mcp-proxy`
 **Markers:** Cargo.toml
 
 
@@ -250,7 +250,7 @@ The following project(s) were automatically detected:
 
 ### 30. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-operations`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-modes`
 **Markers:** Cargo.toml
 
 
@@ -258,7 +258,7 @@ The following project(s) were automatically detected:
 
 ### 31. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-operations-macros`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-operations`
 **Markers:** Cargo.toml
 
 
@@ -266,7 +266,7 @@ The following project(s) were automatically detected:
 
 ### 32. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-project-detection`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-operations-macros`
 **Markers:** Cargo.toml
 
 
@@ -274,7 +274,7 @@ The following project(s) were automatically detected:
 
 ### 33. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-prompts`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-project-detection`
 **Markers:** Cargo.toml
 
 
@@ -282,7 +282,7 @@ The following project(s) were automatically detected:
 
 ### 34. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-shell`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-prompts`
 **Markers:** Cargo.toml
 
 
@@ -290,7 +290,7 @@ The following project(s) were automatically detected:
 
 ### 35. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-skills`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-shell`
 **Markers:** Cargo.toml
 
 
@@ -298,7 +298,7 @@ The following project(s) were automatically detected:
 
 ### 36. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-templating`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-skills`
 **Markers:** Cargo.toml
 
 
@@ -306,7 +306,7 @@ The following project(s) were automatically detected:
 
 ### 37. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-tools`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-templating`
 **Markers:** Cargo.toml
 
 
@@ -314,7 +314,7 @@ The following project(s) were automatically detected:
 
 ### 38. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-treesitter`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-tools`
 **Markers:** Cargo.toml
 
 
@@ -322,7 +322,7 @@ The following project(s) were automatically detected:
 
 ### 39. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-web`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-treesitter`
 **Markers:** Cargo.toml
 
 
@@ -330,7 +330,15 @@ The following project(s) were automatically detected:
 
 ### 40. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer/swissarmyhammer-workflow`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-web`
+**Markers:** Cargo.toml
+
+
+
+
+### 41. Rust Project
+
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-agent/swissarmyhammer-workflow`
 **Markers:** Cargo.toml
 
 
@@ -360,8 +368,6 @@ The following project(s) were automatically detected:
 - Lint: `cargo clippy` (catch common mistakes)
 - Documentation: `cargo doc --open`
 - Test: `cargo nextest run`, you might need to install it first with `cargo install cargo-nextest --locked`
-end
-
 
 **Best Practices:**
 - Run `cargo clippy` before committing to catch common issues

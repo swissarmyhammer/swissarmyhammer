@@ -36,6 +36,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }
 swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
+swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 mirdan-cli = { path = "../mirdan-cli" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }

@@ -56,11 +56,11 @@ fn test_builtin_modes_load() {
     assert!(explore_mode.description().contains("codebase"));
     assert!(explore_mode.system_prompt().contains("exploration"));
 
-    // Verify prompt-referencing mode
+    // Verify agent-referencing mode
     let planner_mode = registry.get("planner").unwrap();
     assert_eq!(planner_mode.name(), "Planner");
-    assert!(planner_mode.uses_prompt_reference());
-    assert_eq!(planner_mode.prompt(), Some(".system/planner"));
+    assert!(planner_mode.uses_agent_reference());
+    assert_eq!(planner_mode.agent(), Some("planner"));
 }
 
 #[test]
