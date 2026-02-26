@@ -1,138 +1,118 @@
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use crate::mcp::tools::questions::persistence::save_question_answer;
-use async_trait::async_trait;
 use rmcp::model::{CallToolResult, CreateElicitationRequestParams, ElicitationSchema};
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
-/// Request structure for question_ask tool
+/// Operation metadata for asking questions
+#[derive(Debug, Default)]
+pub struct AskQuestion;
+
+static ASK_QUESTION_PARAMS: &[ParamMeta] = &[ParamMeta::new("question")
+    .description("The question to ask the user")
+    .param_type(ParamType::String)
+    .required()];
+
+impl Operation for AskQuestion {
+    fn verb(&self) -> &'static str {
+        "ask"
+    }
+    fn noun(&self) -> &'static str {
+        "question"
+    }
+    fn description(&self) -> &'static str {
+        "Ask the user a question via MCP elicitation and persist the answer"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        ASK_QUESTION_PARAMS
+    }
+}
+
+/// Request structure for ask question operation
 #[derive(Debug, Deserialize, Serialize)]
 pub struct QuestionAskRequest {
     /// The question to ask the user
     pub question: String,
 }
 
-/// MCP tool for asking users questions via elicitation
-#[derive(Default)]
-pub struct QuestionAskTool;
+/// Execute an ask question operation
+pub async fn execute_ask(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> std::result::Result<CallToolResult, McpError> {
+    // Parse arguments
+    let request: QuestionAskRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-impl QuestionAskTool {
-    /// Creates a new instance of the QuestionAskTool
-    pub fn new() -> Self {
-        Self
-    }
-}
+    tracing::debug!("Asking user question via elicitation");
 
-// No health checks needed
-crate::impl_empty_doctorable!(QuestionAskTool);
+    // Validate question
+    McpValidation::validate_not_empty(&request.question, "question")
+        .map_err(|e| McpErrorHandler::handle_error(e, "validate question"))?;
 
-#[async_trait]
-impl McpTool for QuestionAskTool {
-    fn name(&self) -> &'static str {
-        "question_ask"
-    }
+    // Check if peer is available for elicitation
+    let peer = context.peer.as_ref().ok_or_else(|| {
+        McpError::invalid_request(
+            "Elicitation not available. This tool requires MCP client support for elicitation (MCP protocol 2025-06-18 or later).",
+            None
+        )
+    })?;
 
-    fn description(&self) -> &'static str {
-        include_str!("description.md")
-    }
+    // Create elicitation schema - simple string input
+    let question_text = request.question.clone();
+    let elicitation_schema = ElicitationSchema::builder()
+        .required_string_with("answer", move |s| s.description(question_text))
+        .build_unchecked();
 
-    fn schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "The question to ask the user"
-                }
-            },
-            "required": ["question"]
-        })
-    }
+    // Send elicitation request to client
+    tracing::info!("Sending elicitation request: {}", request.question);
+    let elicitation_request = CreateElicitationRequestParams::FormElicitationParams {
+        meta: None,
+        message: request.question.clone(),
+        requested_schema: elicitation_schema,
+    };
 
-    async fn execute(
-        &self,
-        arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        // Parse arguments
-        let request: QuestionAskRequest = BaseToolImpl::parse_arguments(arguments)?;
-
-        tracing::debug!("Asking user question via elicitation");
-
-        // Validate question
-        McpValidation::validate_not_empty(&request.question, "question")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate question"))?;
-
-        // Check if peer is available for elicitation
-        let peer = context.peer.as_ref().ok_or_else(|| {
-            McpError::invalid_request(
-                "Elicitation not available. This tool requires MCP client support for elicitation (MCP protocol 2025-06-18 or later).",
-                None
-            )
+    // This blocks until the user responds
+    let elicitation_result = peer
+        .create_elicitation(elicitation_request)
+        .await
+        .map_err(|e| {
+            McpError::internal_error(format!("Elicitation request failed: {}", e), None)
         })?;
 
-        // Create elicitation schema - simple string input
-        let question_text = request.question.clone();
-        let elicitation_schema = ElicitationSchema::builder()
-            .required_string_with("answer", move |s| s.description(question_text))
-            .build_unchecked();
-
-        // Send elicitation request to client
-        tracing::info!("Sending elicitation request: {}", request.question);
-        let elicitation_request = CreateElicitationRequestParams::FormElicitationParams {
-            meta: None,
-            message: request.question.clone(),
-            requested_schema: elicitation_schema,
-        };
-
-        // This blocks until the user responds
-        let elicitation_result =
-            peer.create_elicitation(elicitation_request)
-                .await
-                .map_err(|e| {
-                    McpError::internal_error(format!("Elicitation request failed: {}", e), None)
+    // Check if user accepted, declined, or cancelled
+    match elicitation_result.action {
+        rmcp::model::ElicitationAction::Accept => {
+            // Extract answer from response
+            let answer = elicitation_result
+                .content
+                .as_ref()
+                .and_then(|content| content.get("answer"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    McpError::invalid_request("No answer provided in elicitation response", None)
                 })?;
 
-        // Check if user accepted, declined, or cancelled
-        match elicitation_result.action {
-            rmcp::model::ElicitationAction::Accept => {
-                // Extract answer from response
-                let answer = elicitation_result
-                    .content
-                    .as_ref()
-                    .and_then(|content| content.get("answer"))
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        McpError::invalid_request(
-                            "No answer provided in elicitation response",
-                            None,
-                        )
-                    })?;
+            tracing::info!("User answered: {}", answer);
 
-                tracing::info!("User answered: {}", answer);
+            // Save question/answer to file
+            let file_path = save_question_answer(&request.question, answer).map_err(|e| {
+                McpError::internal_error(format!("Failed to save question/answer: {}", e), None)
+            })?;
 
-                // Save question/answer to file
-                let file_path = save_question_answer(&request.question, answer).map_err(|e| {
-                    McpError::internal_error(format!("Failed to save question/answer: {}", e), None)
-                })?;
-
-                // Return success response
-                Ok(BaseToolImpl::create_success_response(
-                    json!({
-                        "answer": answer,
-                        "saved_to": file_path.display().to_string()
-                    })
-                    .to_string(),
-                ))
-            }
-            rmcp::model::ElicitationAction::Decline | rmcp::model::ElicitationAction::Cancel => {
-                Err(McpError::invalid_request(
-                    "User declined or cancelled the question",
-                    None,
-                ))
-            }
+            // Return success response
+            Ok(BaseToolImpl::create_success_response(
+                json!({
+                    "answer": answer,
+                    "saved_to": file_path.display().to_string()
+                })
+                .to_string(),
+            ))
         }
+        rmcp::model::ElicitationAction::Decline | rmcp::model::ElicitationAction::Cancel => Err(
+            McpError::invalid_request("User declined or cancelled the question", None),
+        ),
     }
 }
