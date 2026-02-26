@@ -33,13 +33,7 @@ async fn test_mcp_tools_are_registered() {
     );
 
     // Check for specific tools we know should be there (internal names, not MCP prefixed)
-    let expected_tools = [
-        "js",
-        "files",
-        "shell_execute",
-        "kanban",
-        "web",
-    ];
+    let expected_tools = ["js", "files", "shell_execute", "kanban", "web"];
 
     let mut missing_tools = Vec::new();
     let mut found_tools = Vec::new();

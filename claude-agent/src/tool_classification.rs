@@ -98,10 +98,7 @@ impl ToolKind {
 
     /// Classify an operation-based tool by inspecting the `op` argument
     fn classify_by_op(arguments: &serde_json::Value) -> Self {
-        let op = arguments
-            .get("op")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let op = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
         match op {
             "read file" => ToolKind::Read,
@@ -205,10 +202,7 @@ impl ToolCallReport {
 
     /// Generate a title for operation-based tools by inspecting the `op` argument
     fn generate_op_title(arguments: &serde_json::Value) -> String {
-        let op = arguments
-            .get("op")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let op = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
         let path = arguments
             .get("path")
             .or_else(|| arguments.get("file_path"))

@@ -57,7 +57,6 @@ impl GlobFileTool {
     }
 }
 
-
 /// Execute a glob file matching operation
 pub async fn execute_glob(
     arguments: serde_json::Map<String, serde_json::Value>,
@@ -112,10 +111,7 @@ pub async fn execute_glob(
             validated_path
         }
         None => std::env::current_dir().map_err(|e| {
-            rmcp::ErrorData::internal_error(
-                format!("Failed to get current directory: {}", e),
-                None,
-            )
+            rmcp::ErrorData::internal_error(format!("Failed to get current directory: {}", e), None)
         })?,
     };
 

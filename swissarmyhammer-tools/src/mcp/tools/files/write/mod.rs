@@ -126,7 +126,6 @@ impl WriteFileTool {
     }
 }
 
-
 /// Execute a file write operation
 pub async fn execute_write(
     arguments: serde_json::Map<String, serde_json::Value>,

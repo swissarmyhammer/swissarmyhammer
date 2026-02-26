@@ -154,7 +154,6 @@ struct GrepRequest {
     output_mode: Option<String>,
 }
 
-
 /// Execute a grep content search operation
 pub async fn execute_grep(
     arguments: serde_json::Map<String, serde_json::Value>,

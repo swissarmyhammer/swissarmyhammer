@@ -130,7 +130,6 @@ impl ReadFileTool {
     }
 }
 
-
 /// Execute a file read operation
 pub async fn execute_read(
     arguments: serde_json::Map<String, serde_json::Value>,

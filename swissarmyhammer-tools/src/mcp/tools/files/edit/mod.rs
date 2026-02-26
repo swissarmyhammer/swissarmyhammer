@@ -391,7 +391,6 @@ impl EditFileTool {
     }
 }
 
-
 /// Execute a file edit operation
 pub async fn execute_edit(
     arguments: serde_json::Map<String, serde_json::Value>,
@@ -458,9 +457,7 @@ pub async fn execute_edit(
             ));
         }
         edits
-    } else if let (Some(old_string), Some(new_string)) =
-        (request.old_string, request.new_string)
-    {
+    } else if let (Some(old_string), Some(new_string)) = (request.old_string, request.new_string) {
         // Single edit mode (legacy)
         vec![EditOperation {
             old_text: old_string,

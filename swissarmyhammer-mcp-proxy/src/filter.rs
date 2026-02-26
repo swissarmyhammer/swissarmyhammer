@@ -78,11 +78,8 @@ mod tests {
 
     #[test]
     fn test_allow_precedence_over_deny() {
-        let filter = ToolFilter::new(
-            vec!["^files$".to_string()],
-            vec!["^files$".to_string()],
-        )
-        .unwrap();
+        let filter =
+            ToolFilter::new(vec!["^files$".to_string()], vec!["^files$".to_string()]).unwrap();
 
         // files matches both allow and deny, but allow wins
         assert!(filter.is_allowed("files"));
@@ -126,7 +123,7 @@ mod tests {
     fn test_complex_patterns() {
         let filter = ToolFilter::new(
             vec!["^(files|web)$".to_string()], // Allow files and web
-            vec!["^shell_.*".to_string()],      // Deny shell tools
+            vec!["^shell_.*".to_string()],     // Deny shell tools
         )
         .unwrap();
 

@@ -302,7 +302,10 @@ mod tests {
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_ok());
-        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "goodbye world");
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "goodbye world"
+        );
     }
 
     #[tokio::test]

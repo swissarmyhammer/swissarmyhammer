@@ -3560,16 +3560,28 @@ mod tests {
         assert_eq!(title, "Searching for 'error.*log'");
 
         // Test operation-based tools
-        let title = ToolCallReport::generate_title("files", &json!({"op": "read file", "path": "/src/main.rs"}));
+        let title = ToolCallReport::generate_title(
+            "files",
+            &json!({"op": "read file", "path": "/src/main.rs"}),
+        );
         assert_eq!(title, "Reading main.rs");
 
-        let title = ToolCallReport::generate_title("files", &json!({"op": "edit file", "file_path": "/src/lib.rs"}));
+        let title = ToolCallReport::generate_title(
+            "files",
+            &json!({"op": "edit file", "file_path": "/src/lib.rs"}),
+        );
         assert_eq!(title, "Editing lib.rs");
 
-        let title = ToolCallReport::generate_title("files", &json!({"op": "grep files", "pattern": "TODO"}));
+        let title = ToolCallReport::generate_title(
+            "files",
+            &json!({"op": "grep files", "pattern": "TODO"}),
+        );
         assert_eq!(title, "Searching for 'TODO'");
 
-        let title = ToolCallReport::generate_title("mcp__sah__files", &json!({"op": "write file", "path": "/out.txt"}));
+        let title = ToolCallReport::generate_title(
+            "mcp__sah__files",
+            &json!({"op": "write file", "path": "/out.txt"}),
+        );
         assert_eq!(title, "Writing to out.txt");
 
         let title = ToolCallReport::generate_title("mcp__files", &json!({}));

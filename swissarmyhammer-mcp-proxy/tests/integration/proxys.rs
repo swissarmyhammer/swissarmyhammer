@@ -13,11 +13,7 @@ fn test_filter_logic() {
 
 #[test]
 fn test_filter_allow_precedence() {
-    let filter = ToolFilter::new(
-        vec!["^files$".to_string()],
-        vec!["^files$".to_string()],
-    )
-    .unwrap();
+    let filter = ToolFilter::new(vec!["^files$".to_string()], vec!["^files$".to_string()]).unwrap();
 
     // files matches both allow and deny, but allow wins
     assert!(filter.is_allowed("files"));
