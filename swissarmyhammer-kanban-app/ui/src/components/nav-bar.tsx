@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Check, ChevronDown } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -26,8 +25,6 @@ export function NavBar({
     await invoke("set_active_board", { path });
     onBoardChanged();
   };
-
-  const summary = board?.summary;
 
   return (
     <header className="flex h-12 items-center border-b px-4 gap-3">
@@ -64,23 +61,7 @@ export function NavBar({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <div className="flex items-center gap-2 ml-auto">
-        {summary && (
-          <>
-            <Badge variant="secondary">
-              {summary.total_tasks} tasks
-            </Badge>
-            <Badge variant="default">
-              {summary.ready_tasks} ready
-            </Badge>
-            {summary.blocked_tasks > 0 && (
-              <Badge variant="outline">
-                {summary.blocked_tasks} blocked
-              </Badge>
-            )}
-          </>
-        )}
-      </div>
+      <div className="ml-auto" />
     </header>
   );
 }

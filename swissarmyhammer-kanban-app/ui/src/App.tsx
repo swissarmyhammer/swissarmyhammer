@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { NavBar } from "@/components/nav-bar";
 import { BoardView } from "@/components/board-view";
+import { TaskDetailPanel } from "@/components/task-detail-panel";
 import type { Board, Task, OpenBoard } from "@/types/kanban";
 
 interface TaskListResponse {
@@ -14,6 +15,7 @@ function App() {
   const [board, setBoard] = useState<Board | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -51,7 +53,13 @@ function App() {
         onBoardChanged={refresh}
       />
       {board ? (
-        <BoardView board={board} tasks={tasks} />
+        <>
+          <BoardView board={board} tasks={tasks} onTaskClick={setSelectedTask} />
+          <TaskDetailPanel
+            task={selectedTask}
+            onClose={() => setSelectedTask(null)}
+          />
+        </>
       ) : (
         <main className="flex-1 flex items-center justify-center">
           <p className="text-muted-foreground">

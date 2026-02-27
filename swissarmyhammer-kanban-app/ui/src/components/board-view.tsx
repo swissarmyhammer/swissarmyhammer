@@ -5,9 +5,10 @@ import type { Board, Task } from "@/types/kanban";
 interface BoardViewProps {
   board: Board;
   tasks: Task[];
+  onTaskClick?: (task: Task) => void;
 }
 
-export function BoardView({ board, tasks }: BoardViewProps) {
+export function BoardView({ board, tasks, onTaskClick }: BoardViewProps) {
   const columns = useMemo(
     () => [...board.columns].sort((a, b) => a.order - b.order),
     [board.columns]
@@ -56,6 +57,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
             column={col}
             tasks={tasksByColumn.get(col.id) ?? []}
             blockedIds={blockedIds}
+            onTaskClick={onTaskClick}
           />
         </div>
       ))}
