@@ -3,6 +3,7 @@
   "description": "Default capability for the kanban app",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:default"
   ]
 }

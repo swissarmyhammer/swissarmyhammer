@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, ChevronDown, FolderOpen } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,41 +7,24 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Board, OpenBoard, RecentBoard } from "@/types/kanban";
+import type { Board, OpenBoard } from "@/types/kanban";
 
 interface NavBarProps {
   board: Board | null;
   openBoards: OpenBoard[];
-  recentBoards: RecentBoard[];
   onBoardChanged: () => void;
 }
 
 export function NavBar({
   board,
   openBoards,
-  recentBoards,
   onBoardChanged,
 }: NavBarProps) {
   const handleSwitchBoard = async (path: string) => {
     await invoke("set_active_board", { path });
     onBoardChanged();
-  };
-
-  const handleOpenRecent = async (path: string) => {
-    await invoke("open_board", { path });
-    onBoardChanged();
-  };
-
-  const handleOpenFolder = async () => {
-    // For now, prompt user — folder dialog requires tauri-plugin-dialog
-    const path = window.prompt("Enter board path:");
-    if (path) {
-      await invoke("open_board", { path });
-      onBoardChanged();
-    }
   };
 
   const summary = board?.summary;
@@ -66,31 +49,18 @@ export function NavBar({
                 >
                   {ob.is_active && <Check className="h-4 w-4" />}
                   <span className={ob.is_active ? "font-medium" : ""}>
-                    {ob.path.split("/").pop() || ob.path}
+                    {(() => {
+                      const parts = ob.path.split("/").filter(Boolean);
+                      const last = parts[parts.length - 1];
+                      return last === ".kanban" && parts.length > 1
+                        ? parts[parts.length - 2]
+                        : last || ob.path;
+                    })()}
                   </span>
                 </DropdownMenuItem>
               ))}
             </>
           )}
-          {recentBoards.length > 0 && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel>Recent</DropdownMenuLabel>
-              {recentBoards.slice(0, 5).map((rb) => (
-                <DropdownMenuItem
-                  key={rb.path}
-                  onClick={() => handleOpenRecent(rb.path)}
-                >
-                  {rb.name}
-                </DropdownMenuItem>
-              ))}
-            </>
-          )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={handleOpenFolder}>
-            <FolderOpen className="h-4 w-4" />
-            Open Board...
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 

@@ -3,6 +3,7 @@
 
 mod cli;
 mod commands;
+mod menu;
 mod state;
 
 use clap::Parser;
@@ -22,6 +23,7 @@ fn main() {
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_board,
@@ -31,6 +33,11 @@ fn main() {
             commands::set_active_board,
             commands::get_recent_boards,
         ])
+        .setup(|app| {
+            menu::rebuild_menu(app.handle());
+            Ok(())
+        })
+        .on_menu_event(|app, event| menu::handle_menu_event(app, event))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
