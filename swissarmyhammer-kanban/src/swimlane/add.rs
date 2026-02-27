@@ -49,23 +49,23 @@ impl Execute<KanbanContext, KanbanError> for AddSwimlane {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let mut board = ctx.read_board().await?;
-
             // Check for duplicate ID
-            if board.find_swimlane(&self.id).is_some() {
+            if ctx.swimlane_exists(&self.id).await {
                 return Err(KanbanError::duplicate_id("swimlane", self.id.to_string()));
             }
 
             // Determine order
-            let order = self.order.unwrap_or_else(|| {
-                board
-                    .swimlanes
+            let order = if let Some(order) = self.order {
+                order
+            } else {
+                let swimlanes = ctx.read_all_swimlanes().await?;
+                swimlanes
                     .iter()
                     .map(|s| s.order)
                     .max()
                     .map(|o| o + 1)
                     .unwrap_or(0)
-            });
+            };
 
             let swimlane = Swimlane {
                 id: self.id.clone(),
@@ -73,8 +73,7 @@ impl Execute<KanbanContext, KanbanError> for AddSwimlane {
                 order,
             };
 
-            board.swimlanes.push(swimlane.clone());
-            ctx.write_board(&board).await?;
+            ctx.write_swimlane(&swimlane).await?;
 
             Ok(serde_json::to_value(&swimlane)?)
         }

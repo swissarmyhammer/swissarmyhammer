@@ -1,9 +1,9 @@
 ---
 name: review
-description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Performs structured, layered code review on changed files.
+description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Performs structured, layered code review on changed files. Reviews are thorough and produce verbose output — consider delegating to a review-focused agent to keep the main context clean.
 metadata:
   author: "swissarmyhammer"
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Code Review
@@ -170,6 +170,23 @@ End with a summary:
   - **Request changes**: blockers exist, or warnings are serious enough to address first
   - **Comment only**: you lack enough context to approve or reject — findings are informational
 - Any nits that were not captured as cards, listed inline for reference
+
+## Language-Specific Guidelines
+
+After completing the universal layers above, apply language-specific review criteria based on the project being reviewed. These supplement — not replace — the universal layers.
+
+Consult the matching resource file bundled with this skill:
+
+| Language | Resource | Authority |
+|----------|----------|-----------|
+| Rust | `RUST_REVIEW.md` | dtolnay (serde, thiserror, anyhow) |
+| Dart / Flutter | `DART_FLUTTER_REVIEW.md` | Remi Rousselet (Riverpod, freezed) |
+| Python | `PYTHON_REVIEW.md` | Hynek Schlawack (attrs, structlog) |
+| JavaScript / TypeScript | `JS_TS_REVIEW.md` | Sindre Sorhus (xo, got, execa) |
+
+If the project uses multiple languages, apply all relevant sections. If none of the above match, rely on the universal layers alone.
+
+Language-specific findings follow the same severity levels (blocker, warning, nit) and are captured as kanban cards using the same process described above.
 
 ## Scope Exclusions
 

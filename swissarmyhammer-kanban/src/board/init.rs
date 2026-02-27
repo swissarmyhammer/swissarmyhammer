@@ -56,7 +56,7 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             // Create directory structure
             ctx.create_directories().await?;
 
-            // Build board with default columns
+            // Build board metadata (slim - no columns/swimlanes)
             let mut board = Board::new(&self.name);
             if let Some(desc) = &self.description {
                 board = board.with_description(desc);
@@ -65,7 +65,16 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             // Write board file
             ctx.write_board(&board).await?;
 
-            Ok(serde_json::to_value(&board)?)
+            // Write default columns as individual files
+            for column in Board::default_columns() {
+                ctx.write_column(&column).await?;
+            }
+
+            // Return board with columns in response (for API compatibility)
+            let mut result = serde_json::to_value(&board)?;
+            result["columns"] = serde_json::to_value(Board::default_columns())?;
+            result["swimlanes"] = serde_json::json!([]);
+            Ok(result)
         }
         .await;
 

@@ -47,18 +47,20 @@ impl NextTask {
 impl Execute<KanbanContext, KanbanError> for NextTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let board = ctx.read_board().await?;
+            let all_columns = ctx.read_all_columns().await?;
             let all_tasks = ctx.read_all_tasks().await?;
 
             // Get first column
-            let first_column = match board.first_column() {
+            let first_col = all_columns.iter().min_by_key(|c| c.order);
+            let first_column = match first_col {
                 Some(c) => &c.id,
                 None => return Ok(Value::Null),
             };
 
             // Get terminal column for readiness check
-            let terminal_column = board
-                .terminal_column()
+            let terminal_column = all_columns
+                .iter()
+                .max_by_key(|c| c.order)
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 

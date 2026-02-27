@@ -34,10 +34,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let mut board = ctx.read_board().await?;
-
             // Check swimlane exists
-            if board.find_swimlane(&self.id).is_none() {
+            if !ctx.swimlane_exists(&self.id).await {
                 return Err(KanbanError::SwimlaneNotFound {
                     id: self.id.to_string(),
                 });
@@ -57,8 +55,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
                 });
             }
 
-            board.swimlanes.retain(|s| s.id != self.id);
-            ctx.write_board(&board).await?;
+            ctx.delete_swimlane_file(&self.id).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,

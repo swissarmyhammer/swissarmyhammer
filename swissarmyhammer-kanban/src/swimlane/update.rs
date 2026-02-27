@@ -52,15 +52,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateSwimlane {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut board = ctx.read_board().await?;
-
-            let swimlane = board
-                .swimlanes
-                .iter_mut()
-                .find(|s| s.id == self.id)
-                .ok_or_else(|| KanbanError::SwimlaneNotFound {
-                    id: self.id.to_string(),
-                })?;
+            let mut swimlane = ctx.read_swimlane(&self.id).await?;
 
             if let Some(name) = &self.name {
                 swimlane.name = name.clone();
@@ -69,10 +61,8 @@ impl Execute<KanbanContext, KanbanError> for UpdateSwimlane {
                 swimlane.order = order;
             }
 
-            let result = serde_json::to_value(&*swimlane)?;
-            ctx.write_board(&board).await?;
-
-            Ok(result)
+            ctx.write_swimlane(&swimlane).await?;
+            Ok(serde_json::to_value(&swimlane)?)
         }
         .await;
 

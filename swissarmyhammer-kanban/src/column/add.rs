@@ -49,23 +49,28 @@ impl Execute<KanbanContext, KanbanError> for AddColumn {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let mut board = ctx.read_board().await?;
-
             // Check for duplicate ID
-            if board.find_column(&self.id).is_some() {
+            if ctx.column_exists(&self.id).await {
                 return Err(KanbanError::duplicate_id("column", self.id.to_string()));
             }
 
             // Determine order
             let order = self.order.unwrap_or_else(|| {
-                board
-                    .columns
+                // Synchronous fallback: we'll compute after reading all columns
+                0 // placeholder, overridden below
+            });
+
+            let order = if self.order.is_some() {
+                order
+            } else {
+                let columns = ctx.read_all_columns().await?;
+                columns
                     .iter()
                     .map(|c| c.order)
                     .max()
                     .map(|o| o + 1)
                     .unwrap_or(0)
-            });
+            };
 
             let column = Column {
                 id: self.id.clone(),
@@ -73,8 +78,7 @@ impl Execute<KanbanContext, KanbanError> for AddColumn {
                 order,
             };
 
-            board.columns.push(column.clone());
-            ctx.write_board(&board).await?;
+            ctx.write_column(&column).await?;
 
             Ok(serde_json::to_value(&column)?)
         }

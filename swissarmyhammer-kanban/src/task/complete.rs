@@ -36,11 +36,11 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
 
         let result: Result<Value> = async {
             let mut task = ctx.read_task(&self.id).await?;
-            let board = ctx.read_board().await?;
 
             // Get terminal column (highest order = done)
-            let terminal = board
+            let terminal = ctx
                 .terminal_column()
+                .await?
                 .ok_or_else(|| KanbanError::ColumnNotFound {
                     id: "done".to_string(),
                 })?;

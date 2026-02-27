@@ -45,6 +45,10 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         if !ctx.is_initialized() && operation.op_string() != "init board" {
             let board = crate::types::Board::new("Untitled Board");
             ctx.write_board(&board).await?;
+            // Write default columns as individual files
+            for column in crate::types::Board::default_columns() {
+                ctx.write_column(&column).await?;
+            }
         }
 
         // Execute the operation

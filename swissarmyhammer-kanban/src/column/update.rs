@@ -52,15 +52,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateColumn {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut board = ctx.read_board().await?;
-
-            let column = board
-                .columns
-                .iter_mut()
-                .find(|c| c.id == self.id)
-                .ok_or_else(|| KanbanError::ColumnNotFound {
-                    id: self.id.to_string(),
-                })?;
+            let mut column = ctx.read_column(&self.id).await?;
 
             if let Some(name) = &self.name {
                 column.name = name.clone();
@@ -69,10 +61,8 @@ impl Execute<KanbanContext, KanbanError> for UpdateColumn {
                 column.order = order;
             }
 
-            let result = serde_json::to_value(&*column)?;
-            ctx.write_board(&board).await?;
-
-            Ok(result)
+            ctx.write_column(&column).await?;
+            Ok(serde_json::to_value(&column)?)
         }
         .await;
 

@@ -38,6 +38,8 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let board = ctx.read_board().await?;
+            let all_columns = ctx.read_all_columns().await?;
+            let all_swimlanes = ctx.read_all_swimlanes().await?;
 
             // If counts are not requested, return basic board structure
             if !self.include_counts {
@@ -45,15 +47,18 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 return Ok(json!({
                     "name": board.name,
                     "description": board.description,
-                    "columns": board.columns,
-                    "swimlanes": board.swimlanes,
+                    "columns": all_columns,
+                    "swimlanes": all_swimlanes,
                     "tags": tags,
                 }));
             }
 
             // Read all tasks once for efficiency
             let all_tasks = ctx.read_all_tasks().await?;
-            let terminal = board.terminal_column().unwrap();
+            let terminal = all_columns.iter().max_by_key(|c| c.order);
+            let terminal_id = terminal
+                .map(|c| c.id.as_str())
+                .unwrap_or("done");
 
             // Count tasks by column
             let mut column_counts: HashMap<&ColumnId, usize> = HashMap::new();
@@ -62,7 +67,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             for task in &all_tasks {
                 *column_counts.entry(&task.position.column).or_insert(0) += 1;
 
-                if task.is_ready(&all_tasks, terminal.id.as_str()) {
+                if task.is_ready(&all_tasks, terminal_id) {
                     *column_ready_counts
                         .entry(&task.position.column)
                         .or_insert(0) += 1;
@@ -86,8 +91,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             }
 
             // Enhance columns with counts
-            let columns: Vec<Value> = board
-                .columns
+            let columns: Vec<Value> = all_columns
                 .iter()
                 .map(|col| {
                     let count = column_counts.get(&col.id).copied().unwrap_or(0);
@@ -104,8 +108,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .collect();
 
             // Enhance swimlanes with counts
-            let swimlanes: Vec<Value> = board
-                .swimlanes
+            let swimlanes: Vec<Value> = all_swimlanes
                 .iter()
                 .map(|sl| {
                     let count = swimlane_counts.get(&sl.id).copied().unwrap_or(0);
@@ -140,7 +143,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             let total_tasks = all_tasks.len();
             let ready_tasks = all_tasks
                 .iter()
-                .filter(|t| t.is_ready(&all_tasks, terminal.id.as_str()))
+                .filter(|t| t.is_ready(&all_tasks, terminal_id))
                 .count();
             let blocked_tasks = total_tasks - ready_tasks;
             let total_actors = ctx.list_actor_ids().await?.len();

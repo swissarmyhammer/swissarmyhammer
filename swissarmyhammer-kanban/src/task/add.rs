@@ -85,15 +85,14 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let board = ctx.read_board().await?;
-
             // Determine position
             let position = match &self.position {
                 Some(pos) => pos.clone(),
                 None => {
                     // Default to first column, no swimlane, at the end
-                    let column = board
+                    let column = ctx
                         .first_column()
+                        .await?
                         .expect("board must have at least one column");
 
                     // Find the last ordinal in that column

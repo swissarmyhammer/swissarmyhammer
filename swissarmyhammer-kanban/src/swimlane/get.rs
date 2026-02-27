@@ -25,16 +25,8 @@ impl GetSwimlane {
 impl Execute<KanbanContext, KanbanError> for GetSwimlane {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let board = ctx.read_board().await?;
-
-            let swimlane =
-                board
-                    .find_swimlane(&self.id)
-                    .ok_or_else(|| KanbanError::SwimlaneNotFound {
-                        id: self.id.to_string(),
-                    })?;
-
-            Ok(serde_json::to_value(swimlane)?)
+            let swimlane = ctx.read_swimlane(&self.id).await?;
+            Ok(serde_json::to_value(&swimlane)?)
         }
         .await
         {

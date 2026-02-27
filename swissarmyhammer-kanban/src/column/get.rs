@@ -25,16 +25,8 @@ impl GetColumn {
 impl Execute<KanbanContext, KanbanError> for GetColumn {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let board = ctx.read_board().await?;
-
-            let column =
-                board
-                    .find_column(&self.id)
-                    .ok_or_else(|| KanbanError::ColumnNotFound {
-                        id: self.id.to_string(),
-                    })?;
-
-            Ok(serde_json::to_value(column)?)
+            let column = ctx.read_column(&self.id).await?;
+            Ok(serde_json::to_value(&column)?)
         }
         .await
         {

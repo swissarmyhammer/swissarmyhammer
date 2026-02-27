@@ -19,9 +19,7 @@ pub struct ListSwimlanes;
 impl Execute<KanbanContext, KanbanError> for ListSwimlanes {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let board = ctx.read_board().await?;
-
-            let mut swimlanes = board.swimlanes.clone();
+            let mut swimlanes = ctx.read_all_swimlanes().await?;
             swimlanes.sort_by_key(|s| s.order);
 
             Ok(serde_json::json!({

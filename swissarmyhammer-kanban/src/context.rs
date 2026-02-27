@@ -4,7 +4,10 @@
 //! just data access primitives. Commands do all the work.
 
 use crate::error::{KanbanError, Result};
-use crate::types::{Actor, ActorId, Board, LogEntry, Tag, TagId, Task, TaskId};
+use crate::types::{
+    Actor, ActorId, Board, Column, ColumnId, LogEntry, Swimlane, SwimlaneId, Tag, TagId, Task,
+    TaskId,
+};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -89,6 +92,36 @@ impl KanbanContext {
         self.root.join("tags").join(format!("{}.json", id))
     }
 
+    /// Path to columns directory
+    pub fn columns_dir(&self) -> PathBuf {
+        self.root.join("columns")
+    }
+
+    /// Path to a column's JSON file
+    pub fn column_path(&self, id: &ColumnId) -> PathBuf {
+        self.root.join("columns").join(format!("{}.json", id))
+    }
+
+    /// Path to a column's log file
+    pub fn column_log_path(&self, id: &ColumnId) -> PathBuf {
+        self.root.join("columns").join(format!("{}.jsonl", id))
+    }
+
+    /// Path to swimlanes directory
+    pub fn swimlanes_dir(&self) -> PathBuf {
+        self.root.join("swimlanes")
+    }
+
+    /// Path to a swimlane's JSON file
+    pub fn swimlane_path(&self, id: &SwimlaneId) -> PathBuf {
+        self.root.join("swimlanes").join(format!("{}.json", id))
+    }
+
+    /// Path to a swimlane's log file
+    pub fn swimlane_log_path(&self, id: &SwimlaneId) -> PathBuf {
+        self.root.join("swimlanes").join(format!("{}.jsonl", id))
+    }
+
     /// Path to the activity directory
     pub fn activity_dir(&self) -> PathBuf {
         self.root.join("activity")
@@ -119,6 +152,8 @@ impl KanbanContext {
             && self.tasks_dir().exists()
             && self.actors_dir().exists()
             && self.tags_dir().exists()
+            && self.columns_dir().exists()
+            && self.swimlanes_dir().exists()
             && self.activity_dir().exists()
     }
 
@@ -134,6 +169,8 @@ impl KanbanContext {
         fs::create_dir_all(self.tasks_dir()).await?;
         fs::create_dir_all(self.actors_dir()).await?;
         fs::create_dir_all(self.tags_dir()).await?;
+        fs::create_dir_all(self.columns_dir()).await?;
+        fs::create_dir_all(self.swimlanes_dir()).await?;
         fs::create_dir_all(self.activity_dir()).await?;
         Ok(())
     }
@@ -153,7 +190,10 @@ impl KanbanContext {
     // Board I/O
     // =========================================================================
 
-    /// Read the board file
+    /// Read the board file, auto-migrating legacy format if needed.
+    ///
+    /// If the board.json contains embedded columns/swimlanes (old format),
+    /// they are extracted to individual files and board.json is rewritten.
     pub async fn read_board(&self) -> Result<Board> {
         let path = self.board_path();
         if !path.exists() {
@@ -164,6 +204,34 @@ impl KanbanContext {
 
         let content = fs::read_to_string(&path).await?;
         let board: Board = serde_json::from_str(&content)?;
+
+        // Migrate legacy embedded columns/swimlanes to individual files
+        if !board.columns.is_empty() || !board.swimlanes.is_empty() {
+            self.ensure_directories().await?;
+
+            for column in &board.columns {
+                if !self.column_exists(&column.id).await {
+                    self.write_column(column).await?;
+                }
+            }
+            for swimlane in &board.swimlanes {
+                if !self.swimlane_exists(&swimlane.id).await {
+                    self.write_swimlane(swimlane).await?;
+                }
+            }
+
+            // Rewrite board.json without embedded columns/swimlanes
+            let slim_board = Board::new(&board.name);
+            let slim_board = if let Some(ref desc) = board.description {
+                slim_board.with_description(desc)
+            } else {
+                slim_board
+            };
+            self.write_board(&slim_board).await?;
+
+            return Ok(slim_board);
+        }
+
         Ok(board)
     }
 
@@ -172,6 +240,36 @@ impl KanbanContext {
         let path = self.board_path();
         let content = serde_json::to_string_pretty(board)?;
         atomic_write(&path, content.as_bytes()).await
+    }
+
+    /// Get the first column (lowest order) from file-based storage
+    pub async fn first_column(&self) -> Result<Option<Column>> {
+        let columns = self.read_all_columns().await?;
+        Ok(columns.into_iter().min_by_key(|c| c.order))
+    }
+
+    /// Get the terminal/done column (highest order) from file-based storage
+    pub async fn terminal_column(&self) -> Result<Option<Column>> {
+        let columns = self.read_all_columns().await?;
+        Ok(columns.into_iter().max_by_key(|c| c.order))
+    }
+
+    /// Find a column by ID from file-based storage
+    pub async fn find_column(&self, id: &ColumnId) -> Result<Option<Column>> {
+        match self.read_column(id).await {
+            Ok(col) => Ok(Some(col)),
+            Err(KanbanError::ColumnNotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Find a swimlane by ID from file-based storage
+    pub async fn find_swimlane(&self, id: &SwimlaneId) -> Result<Option<Swimlane>> {
+        match self.read_swimlane(id).await {
+            Ok(sl) => Ok(Some(sl)),
+            Err(KanbanError::SwimlaneNotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     // =========================================================================
@@ -393,6 +491,160 @@ impl KanbanContext {
     }
 
     // =========================================================================
+    // Column I/O
+    // =========================================================================
+
+    /// Read a column file
+    pub async fn read_column(&self, id: &ColumnId) -> Result<Column> {
+        let path = self.column_path(id);
+        if !path.exists() {
+            return Err(KanbanError::ColumnNotFound { id: id.to_string() });
+        }
+
+        let content = fs::read_to_string(&path).await?;
+        let column: Column = serde_json::from_str(&content)?;
+        Ok(column)
+    }
+
+    /// Write a column file (atomic write via temp file)
+    pub async fn write_column(&self, column: &Column) -> Result<()> {
+        let path = self.column_path(&column.id);
+        let content = serde_json::to_string_pretty(column)?;
+        atomic_write(&path, content.as_bytes()).await
+    }
+
+    /// Delete a column file and its log
+    pub async fn delete_column_file(&self, id: &ColumnId) -> Result<()> {
+        let col_path = self.column_path(id);
+        let log_path = self.column_log_path(id);
+
+        if col_path.exists() {
+            fs::remove_file(&col_path).await?;
+        }
+        if log_path.exists() {
+            fs::remove_file(&log_path).await?;
+        }
+
+        Ok(())
+    }
+
+    /// List all column IDs by reading the columns directory
+    pub async fn list_column_ids(&self) -> Result<Vec<ColumnId>> {
+        let columns_dir = self.columns_dir();
+        if !columns_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids = Vec::new();
+        let mut entries = fs::read_dir(&columns_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(ColumnId::from_string(stem));
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+
+    /// Read all columns
+    pub async fn read_all_columns(&self) -> Result<Vec<Column>> {
+        let ids = self.list_column_ids().await?;
+        let mut columns = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            columns.push(self.read_column(&id).await?);
+        }
+
+        Ok(columns)
+    }
+
+    /// Check if a column exists
+    pub async fn column_exists(&self, id: &ColumnId) -> bool {
+        self.column_path(id).exists()
+    }
+
+    // =========================================================================
+    // Swimlane I/O
+    // =========================================================================
+
+    /// Read a swimlane file
+    pub async fn read_swimlane(&self, id: &SwimlaneId) -> Result<Swimlane> {
+        let path = self.swimlane_path(id);
+        if !path.exists() {
+            return Err(KanbanError::SwimlaneNotFound { id: id.to_string() });
+        }
+
+        let content = fs::read_to_string(&path).await?;
+        let swimlane: Swimlane = serde_json::from_str(&content)?;
+        Ok(swimlane)
+    }
+
+    /// Write a swimlane file (atomic write via temp file)
+    pub async fn write_swimlane(&self, swimlane: &Swimlane) -> Result<()> {
+        let path = self.swimlane_path(&swimlane.id);
+        let content = serde_json::to_string_pretty(swimlane)?;
+        atomic_write(&path, content.as_bytes()).await
+    }
+
+    /// Delete a swimlane file and its log
+    pub async fn delete_swimlane_file(&self, id: &SwimlaneId) -> Result<()> {
+        let sl_path = self.swimlane_path(id);
+        let log_path = self.swimlane_log_path(id);
+
+        if sl_path.exists() {
+            fs::remove_file(&sl_path).await?;
+        }
+        if log_path.exists() {
+            fs::remove_file(&log_path).await?;
+        }
+
+        Ok(())
+    }
+
+    /// List all swimlane IDs by reading the swimlanes directory
+    pub async fn list_swimlane_ids(&self) -> Result<Vec<SwimlaneId>> {
+        let swimlanes_dir = self.swimlanes_dir();
+        if !swimlanes_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids = Vec::new();
+        let mut entries = fs::read_dir(&swimlanes_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(SwimlaneId::from_string(stem));
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+
+    /// Read all swimlanes
+    pub async fn read_all_swimlanes(&self) -> Result<Vec<Swimlane>> {
+        let ids = self.list_swimlane_ids().await?;
+        let mut swimlanes = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            swimlanes.push(self.read_swimlane(&id).await?);
+        }
+
+        Ok(swimlanes)
+    }
+
+    /// Check if a swimlane exists
+    pub async fn swimlane_exists(&self, id: &SwimlaneId) -> bool {
+        self.swimlane_path(id).exists()
+    }
+
+    // =========================================================================
     // Activity logging
     // =========================================================================
 
@@ -510,6 +762,7 @@ async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{Column, ColumnId, Swimlane, SwimlaneId};
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -650,6 +903,118 @@ mod tests {
 
         // Should work without errors
         assert!(ctx.directories_exist());
+    }
+
+    #[tokio::test]
+    async fn test_column_paths() {
+        let (temp, ctx) = setup().await;
+        let root = temp.path().join(".kanban");
+
+        assert_eq!(ctx.columns_dir(), root.join("columns"));
+        assert_eq!(
+            ctx.column_path(&ColumnId::from_string("todo")),
+            root.join("columns").join("todo.json")
+        );
+        assert_eq!(
+            ctx.column_log_path(&ColumnId::from_string("todo")),
+            root.join("columns").join("todo.jsonl")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_swimlane_paths() {
+        let (temp, ctx) = setup().await;
+        let root = temp.path().join(".kanban");
+
+        assert_eq!(ctx.swimlanes_dir(), root.join("swimlanes"));
+        assert_eq!(
+            ctx.swimlane_path(&SwimlaneId::from_string("backend")),
+            root.join("swimlanes").join("backend.json")
+        );
+        assert_eq!(
+            ctx.swimlane_log_path(&SwimlaneId::from_string("backend")),
+            root.join("swimlanes").join("backend.jsonl")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_column_io() {
+        let (_temp, ctx) = setup().await;
+
+        let column = Column {
+            id: ColumnId::from_string("todo"),
+            name: "To Do".into(),
+            order: 0,
+        };
+
+        // Write
+        ctx.write_column(&column).await.unwrap();
+
+        // Read
+        let loaded = ctx.read_column(&ColumnId::from_string("todo")).await.unwrap();
+        assert_eq!(loaded.name, "To Do");
+        assert_eq!(loaded.order, 0);
+
+        // List
+        let ids = ctx.list_column_ids().await.unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0].as_str(), "todo");
+
+        // Read all
+        let all = ctx.read_all_columns().await.unwrap();
+        assert_eq!(all.len(), 1);
+
+        // Delete
+        ctx.delete_column_file(&ColumnId::from_string("todo")).await.unwrap();
+        let ids = ctx.list_column_ids().await.unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_swimlane_io() {
+        let (_temp, ctx) = setup().await;
+
+        let swimlane = Swimlane {
+            id: SwimlaneId::from_string("backend"),
+            name: "Backend".into(),
+            order: 0,
+        };
+
+        // Write
+        ctx.write_swimlane(&swimlane).await.unwrap();
+
+        // Read
+        let loaded = ctx.read_swimlane(&SwimlaneId::from_string("backend")).await.unwrap();
+        assert_eq!(loaded.name, "Backend");
+
+        // List
+        let ids = ctx.list_swimlane_ids().await.unwrap();
+        assert_eq!(ids.len(), 1);
+
+        // Read all
+        let all = ctx.read_all_swimlanes().await.unwrap();
+        assert_eq!(all.len(), 1);
+
+        // Delete
+        ctx.delete_swimlane_file(&SwimlaneId::from_string("backend")).await.unwrap();
+        let ids = ctx.list_swimlane_ids().await.unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_column_not_found() {
+        let (_temp, ctx) = setup().await;
+
+        let result = ctx.read_column(&ColumnId::from_string("nonexistent")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_swimlane_not_found() {
+        let (_temp, ctx) = setup().await;
+
+        let result = ctx.read_swimlane(&SwimlaneId::from_string("nonexistent")).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

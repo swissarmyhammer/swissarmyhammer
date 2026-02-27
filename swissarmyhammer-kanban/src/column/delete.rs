@@ -34,10 +34,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteColumn {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let mut board = ctx.read_board().await?;
-
             // Check column exists
-            if board.find_column(&self.id).is_none() {
+            if !ctx.column_exists(&self.id).await {
                 return Err(KanbanError::ColumnNotFound {
                     id: self.id.to_string(),
                 });
@@ -57,8 +55,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteColumn {
                 });
             }
 
-            board.columns.retain(|c| c.id != self.id);
-            ctx.write_board(&board).await?;
+            ctx.delete_column_file(&self.id).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,

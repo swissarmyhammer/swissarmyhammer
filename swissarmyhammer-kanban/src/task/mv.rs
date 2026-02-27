@@ -61,12 +61,11 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
 
         let result: Result<Value, KanbanError> = async {
             let mut task = ctx.read_task(&self.id).await?;
-            let mut board = ctx.read_board().await?;
 
             // Auto-create column if it doesn't exist
-            if board.find_column(&self.position.column).is_none() {
-                let order = board
-                    .columns
+            if !ctx.column_exists(&self.position.column).await {
+                let columns = ctx.read_all_columns().await?;
+                let order = columns
                     .iter()
                     .map(|c| c.order)
                     .max()
@@ -86,19 +85,19 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                     })
                     .collect::<Vec<_>>()
                     .join(" ");
-                board.columns.push(Column {
+                ctx.write_column(&Column {
                     id: self.position.column.clone(),
                     name,
                     order,
-                });
-                ctx.write_board(&board).await?;
+                })
+                .await?;
             }
 
             // Auto-create swimlane if it doesn't exist
             if let Some(ref swimlane_id) = self.position.swimlane {
-                if board.find_swimlane(swimlane_id).is_none() {
-                    let order = board
-                        .swimlanes
+                if !ctx.swimlane_exists(swimlane_id).await {
+                    let swimlanes = ctx.read_all_swimlanes().await?;
+                    let order = swimlanes
                         .iter()
                         .map(|s| s.order)
                         .max()
@@ -116,12 +115,12 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                         })
                         .collect::<Vec<_>>()
                         .join(" ");
-                    board.swimlanes.push(Swimlane {
+                    ctx.write_swimlane(&Swimlane {
                         id: swimlane_id.clone(),
                         name,
                         order,
-                    });
-                    ctx.write_board(&board).await?;
+                    })
+                    .await?;
                 }
             }
 
@@ -259,10 +258,10 @@ mod tests {
 
         assert_eq!(result["position"]["column"], "in-review");
 
-        // Verify the column was created on the board
-        let board = ctx.read_board().await.unwrap();
-        let col = board
-            .find_column(&ColumnId::from_string("in-review"))
+        // Verify the column was created as an individual file
+        let col = ctx
+            .read_column(&ColumnId::from_string("in-review"))
+            .await
             .unwrap();
         assert_eq!(col.name, "In Review");
     }

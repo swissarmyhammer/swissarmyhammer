@@ -3,24 +3,28 @@
 use super::ids::{ActorId, ColumnId, SwimlaneId, TagId};
 use serde::{Deserialize, Serialize};
 
-/// The kanban board - defines structure but not task membership
+/// The kanban board - just metadata (name + description).
+/// Columns and swimlanes are stored as individual files for git-friendly merging.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Board {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Legacy: columns stored inline. Used only during migration from old format.
+    #[serde(default, skip_serializing)]
     pub columns: Vec<Column>,
-    #[serde(default)]
+    /// Legacy: swimlanes stored inline. Used only during migration from old format.
+    #[serde(default, skip_serializing)]
     pub swimlanes: Vec<Swimlane>,
 }
 
 impl Board {
-    /// Create a new board with the given name and default columns
+    /// Create a new board with the given name
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             description: None,
-            columns: Self::default_columns(),
+            columns: Vec::new(),
             swimlanes: Vec::new(),
         }
     }
@@ -50,26 +54,6 @@ impl Board {
                 order: 2,
             },
         ]
-    }
-
-    /// Get the first column (lowest order)
-    pub fn first_column(&self) -> Option<&Column> {
-        self.columns.iter().min_by_key(|c| c.order)
-    }
-
-    /// Get the terminal/done column (highest order)
-    pub fn terminal_column(&self) -> Option<&Column> {
-        self.columns.iter().max_by_key(|c| c.order)
-    }
-
-    /// Find a column by ID
-    pub fn find_column(&self, id: &ColumnId) -> Option<&Column> {
-        self.columns.iter().find(|c| &c.id == id)
-    }
-
-    /// Find a swimlane by ID
-    pub fn find_swimlane(&self, id: &SwimlaneId) -> Option<&Swimlane> {
-        self.swimlanes.iter().find(|s| &s.id == id)
     }
 }
 
@@ -178,7 +162,6 @@ mod tests {
     fn test_board_creation() {
         let board = Board::new("Test Board");
         assert_eq!(board.name, "Test Board");
-        assert_eq!(board.columns.len(), 3);
         assert!(board.description.is_none());
     }
 
@@ -189,13 +172,11 @@ mod tests {
     }
 
     #[test]
-    fn test_first_and_terminal_columns() {
-        let board = Board::new("Test");
-        let first = board.first_column().unwrap();
-        let terminal = board.terminal_column().unwrap();
-
-        assert_eq!(first.id.as_str(), "todo");
-        assert_eq!(terminal.id.as_str(), "done");
+    fn test_default_columns() {
+        let cols = Board::default_columns();
+        assert_eq!(cols.len(), 3);
+        assert_eq!(cols[0].id.as_str(), "todo");
+        assert_eq!(cols[2].id.as_str(), "done");
     }
 
     #[test]
@@ -216,12 +197,13 @@ mod tests {
         let json = serde_json::to_string_pretty(&board).unwrap();
         let parsed: Board = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, board.name);
-        assert_eq!(parsed.columns.len(), board.columns.len());
+        // New format: columns are NOT serialized into board.json
+        assert!(parsed.columns.is_empty());
     }
 
     #[test]
-    fn test_board_ignores_unknown_fields() {
-        // Test that old board.json with actors/tags fields can still be read
+    fn test_board_reads_legacy_columns() {
+        // Test that old board.json with embedded columns can still be read (for migration)
         let json_with_old_fields = r#"{
             "name": "Test Board",
             "columns": [
@@ -245,6 +227,7 @@ mod tests {
 
         let board = result.unwrap();
         assert_eq!(board.name, "Test Board");
+        // Legacy columns are readable for migration purposes
         assert_eq!(board.columns.len(), 1);
     }
 }

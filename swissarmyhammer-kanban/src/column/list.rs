@@ -19,9 +19,7 @@ pub struct ListColumns;
 impl Execute<KanbanContext, KanbanError> for ListColumns {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let board = ctx.read_board().await?;
-
-            let mut columns = board.columns.clone();
+            let mut columns = ctx.read_all_columns().await?;
             columns.sort_by_key(|c| c.order);
 
             Ok(serde_json::json!({
