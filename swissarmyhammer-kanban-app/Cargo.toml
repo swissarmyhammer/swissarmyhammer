@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Tauri desktop app for SwissArmyHammer Kanban board"
 
 [[bin]]
-name = "swissarmyhammer-kanban-app"
+name = "kanban"
 path = "src/main.rs"
 
 [dependencies]
