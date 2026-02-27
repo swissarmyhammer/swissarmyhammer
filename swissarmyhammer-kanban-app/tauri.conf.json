@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-utils/schema.json",
+  "productName": "SwissArmyHammer Kanban",
+  "version": "0.1.0",
+  "identifier": "com.swissarmyhammer.kanban",
+  "build": {
+    "frontendDist": "./ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "./ui" },
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "./ui" }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "SwissArmyHammer Kanban",
+        "width": 1200,
+        "height": 800,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}

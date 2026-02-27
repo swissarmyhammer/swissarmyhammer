@@ -200,3 +200,9 @@ mirdan-lock.json
 # Kanban test artifacts
 .kanban/
 swissarmyhammer-config/.swissarmyhammer/
+
+# Agent config scratch
+.agents/
+
+# Frontend build artifacts
+**/ui/dist/

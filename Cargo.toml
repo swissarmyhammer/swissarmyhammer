@@ -43,6 +43,7 @@ members = [
     "swissarmyhammer-agents",
     "swissarmyhammer-web",
     "mirdan-cli",
+    "swissarmyhammer-kanban-app",
 ]
 resolver = "2"
 

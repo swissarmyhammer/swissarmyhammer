@@ -1,0 +1,30 @@
+[package]
+name = "swissarmyhammer-kanban-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tauri desktop app for SwissArmyHammer Kanban board"
+
+[[bin]]
+name = "swissarmyhammer-kanban-app"
+path = "src/main.rs"
+
+[dependencies]
+swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
+tauri = { version = "2", features = ["devtools"] }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+dirs = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
