@@ -2,7 +2,6 @@
 
 use crate::mcp::tool_handlers::ToolHandlers;
 use crate::mcp::tool_registry::ToolContext;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use swissarmyhammer_config::model::ModelConfig;
@@ -23,10 +22,7 @@ pub async fn create_test_context() -> ToolContext {
     let tool_handlers = Arc::new(ToolHandlers::new());
     let agent_config = Arc::new(ModelConfig::default());
 
-    let mut context = ToolContext::new(tool_handlers, git_ops, agent_config);
-
-    // Initialize empty use case agents map
-    context.use_case_agents = Arc::new(HashMap::new());
+    let context = ToolContext::new(tool_handlers, git_ops, agent_config);
 
     // Set a test MCP server port for tests that need it
     *context.mcp_server_port.write().await = Some(8080);

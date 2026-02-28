@@ -91,7 +91,7 @@ fn render_banner(out: &mut dyn Write, use_color: bool) {
 /// the only argument is `--help` / `-h`.
 pub(crate) fn should_show_banner(args: &[String]) -> bool {
     match args.len() {
-        1 => true,
+        1 => io::stdin().is_terminal(),
         2 => args[1] == "--help" || args[1] == "-h",
         _ => false,
     }
@@ -112,9 +112,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn show_banner_bare_invocation() {
+    fn no_banner_bare_invocation_when_not_terminal() {
+        // In tests (and hook mode), stdin is not a terminal — no banner
         let args = vec!["sah".to_string()];
-        assert!(should_show_banner(&args));
+        assert!(!should_show_banner(&args));
     }
 
     #[test]

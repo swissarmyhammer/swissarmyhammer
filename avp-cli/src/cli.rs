@@ -4,8 +4,6 @@
 //! `build.rs` can compile it independently via `#[path = "src/cli.rs"]` to
 //! generate documentation, man pages, and shell completions at build time.
 
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// Target location for install/uninstall operations.
@@ -65,65 +63,6 @@ pub enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
-    /// List all available validators
-    List {
-        /// Show detailed output including descriptions
-        #[arg(short, long)]
-        verbose: bool,
-        /// Show only global (user-level) validators
-        #[arg(long)]
-        global: bool,
-        /// Show only local (project-level) validators
-        #[arg(long)]
-        local: bool,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Authenticate with the AVP registry
-    Login,
-    /// Log out from the AVP registry
-    Logout,
-    /// Show current authenticated user
-    Whoami,
-    /// Search the AVP registry for packages
-    Search {
-        /// Search query
-        query: String,
-        /// Filter by tag
-        #[arg(long)]
-        tag: Option<String>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show detailed information about a package
-    Info {
-        /// Package name
-        name: String,
-    },
-    /// Install a package from the registry
-    Install {
-        /// Package name, optionally with @version (e.g. no-secrets@1.2.3)
-        package: String,
-        /// Install to project (.avp/validators/) [default]
-        #[arg(long, visible_alias = "project")]
-        local: bool,
-        /// Install globally (~/.avp/validators/)
-        #[arg(long, visible_alias = "user")]
-        global: bool,
-    },
-    /// Remove an installed package
-    Uninstall {
-        /// Package name
-        name: String,
-        /// Remove from project (.avp/validators/) [default]
-        #[arg(long, visible_alias = "project")]
-        local: bool,
-        /// Remove from global (~/.avp/validators/)
-        #[arg(long, visible_alias = "user")]
-        global: bool,
-    },
     /// Edit an existing RuleSet in $EDITOR
     Edit {
         /// RuleSet name (kebab-case)
@@ -146,31 +85,23 @@ pub enum Commands {
         #[arg(long, visible_alias = "user")]
         global: bool,
     },
-    /// Publish a package to the registry
-    Publish {
-        /// Path to the RuleSet directory to publish
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        /// Validate and show what would be published without uploading
-        #[arg(long)]
-        dry_run: bool,
+    /// Manage AI model configurations
+    Model {
+        #[command(subcommand)]
+        action: Option<ModelAction>,
     },
-    /// Remove a published package version from the registry
-    Unpublish {
-        /// Package name@version (e.g. no-secrets@1.2.3)
-        name_version: String,
-    },
-    /// Check for available package updates
-    Outdated,
-    /// Update installed packages to latest versions
-    Update {
-        /// Specific package to update (all if omitted)
-        name: Option<String>,
-        /// Update project packages [default]
-        #[arg(long, visible_alias = "project")]
-        local: bool,
-        /// Update global (~/.avp/validators/) packages
-        #[arg(long, visible_alias = "user")]
-        global: bool,
+}
+
+/// Model subcommands
+#[derive(Subcommand, Debug)]
+pub enum ModelAction {
+    /// List all available models
+    List,
+    /// Show the current model configuration
+    Show,
+    /// Apply a specific model to the project
+    Use {
+        /// Model name to apply
+        name: String,
     },
 }

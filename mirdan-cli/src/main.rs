@@ -50,11 +50,12 @@ fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
 
 #[tokio::main]
 async fn main() {
-    // Show branded banner for top-level help (no subcommand or --help/-h).
+    // Show branded banner for interactive help (not when piped).
     {
+        use std::io::IsTerminal;
         let args: Vec<String> = std::env::args().collect();
         let show = match args.len() {
-            1 => true,
+            1 => std::io::stdin().is_terminal(),
             2 => args[1] == "--help" || args[1] == "-h",
             _ => false,
         };

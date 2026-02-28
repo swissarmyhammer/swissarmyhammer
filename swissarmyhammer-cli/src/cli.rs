@@ -388,7 +388,7 @@ models with their sources and descriptions.
 
 Built-in models are embedded in the binary and provide default configurations
 for common workflows. Project models (./models/*.yaml) allow customization for
-specific projects. User models (~/.swissarmyhammer/models/*.yaml) provide
+specific projects. User models (~/.models/*.yaml) provide
 personal configurations that apply across all projects.
 
 Output includes:
@@ -407,20 +407,15 @@ Examples:
         #[arg(long, value_enum, default_value = "table")]
         format: OutputFormat,
     },
-    /// Show current model use case assignments
+    /// Show current model configuration
     #[command(long_about = "
-Display current model use case assignments showing which model is configured
-for each use case in the project.
+Display the current model configured for this project.
 
-SwissArmyHammer supports configuring different models for different use cases:
-• root      - Default model for general operations
-• workflows - Model for workflow execution (plan, review, implement, etc.)
-
-This command shows the current assignment for each use case, including whether
-the assignment comes from explicit configuration or falls back to the root model.
+Shows the model name, source, and description. If no model is explicitly
+configured, the default (claude-code) is used.
 
 Examples:
-  sah model show                           # Show use case assignments
+  sah model show                           # Show current model
   sah model                               # Same as 'show' (default)
 ")]
     Show {
@@ -430,19 +425,15 @@ Examples:
     },
     /// Use a specific model
     #[command(long_about = "
-Apply a specific model configuration to the current project or for a specific use case.
+Apply a specific model configuration to the current project.
 
 This command finds the specified model by name and applies its configuration
 to the project by creating or updating .swissarmyhammer/sah.yaml. The model
 configuration determines how SwissArmyHammer executes AI workflows in your
 project, including which AI model to use and how to execute tools.
 
-SwissArmyHammer supports configuring different models for different use cases:
-• root      - Default model for general operations (default when use case not specified)
-• workflows - Model for workflow execution (plan, review, implement, etc.)
-
 Model precedence (highest to lowest):
-• User models: ~/.swissarmyhammer/models/<name>.yaml
+• User models: ~/.models/<name>.yaml
 • Project models: ./models/<name>.yaml
 • Built-in models: embedded in the binary
 
@@ -456,18 +447,14 @@ Common model types:
 • custom models  - User-defined configurations for specialized workflows
 
 Examples:
-  sah model use claude-code                # Apply Claude Code model to root use case
-  sah model use root claude-code           # Apply Claude Code model to root use case (explicit)
-  sah model use workflows claude-code      # Apply Claude Code to workflows use case
+  sah model use claude-code                # Apply Claude Code model
+  sah model use qwen-coder                # Apply Qwen Coder model
   sah --debug model use claude-code        # Apply with debug output
 ")]
     Use {
-        /// First argument: either model name (sets root) OR use case (root, workflows)
-        #[arg(id = "first")]
-        first: String,
-        /// Second argument: model name (required when first argument is a use case)
-        #[arg(id = "second")]
-        second: Option<String>,
+        /// Model name to apply to the project
+        #[arg(id = "name")]
+        name: String,
     },
 }
 

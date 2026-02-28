@@ -199,9 +199,9 @@ pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;
 pub use error::{ConfigurationError, ConfigurationResult};
 pub use model::{
-    parse_model_config, parse_model_description, AgentUseCase, ClaudeCodeConfig, LlamaAgentConfig,
+    parse_model_config, parse_model_description, ClaudeCodeConfig, LlamaAgentConfig,
     LlmModelConfig, McpServerConfig, ModelConfig, ModelConfigSource, ModelError,
-    ModelExecutorConfig, ModelExecutorType, ModelInfo, ModelManager, ModelSource,
+    ModelExecutorConfig, ModelExecutorType, ModelInfo, ModelManager, ModelPaths, ModelSource,
 };
 pub use provider::ConfigurationProvider;
 pub use template_context::TemplateContext;

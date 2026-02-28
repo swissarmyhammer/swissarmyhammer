@@ -251,7 +251,7 @@ async fn test_model_use_builtin_model() -> Result<()> {
     } else {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("Successfully set") && stdout.contains("use case to model"),
+            stdout.contains("Successfully set model to"),
             "Should show success message. Actual: {}",
             stdout
         );
@@ -322,9 +322,7 @@ async fn test_model_precedence_user_over_builtin() -> Result<()> {
     let temp_home = temp_dir.path();
 
     // Create user models directory with override
-    let user_agents_dir = temp_home
-        .join(SwissarmyhammerDirectory::dir_name())
-        .join("models");
+    let user_agents_dir = temp_home.join(".models");
     create_test_model_files(&user_agents_dir)?;
 
     // Set temporary home directory
@@ -409,9 +407,7 @@ fn setup_hierarchy_test_dirs() -> Result<(TempDir, std::path::PathBuf, std::path
     fs::create_dir_all(&temp_home)?;
     fs::create_dir_all(&project_root)?;
 
-    let user_agents_dir = temp_home
-        .join(SwissarmyhammerDirectory::dir_name())
-        .join("models");
+    let user_agents_dir = temp_home.join(".models");
     create_test_model_files(&user_agents_dir)?;
 
     let project_agents_dir = project_root.join("models");
@@ -546,9 +542,7 @@ async fn test_model_list_with_invalid_model_files() -> Result<()> {
     let temp_home = temp_dir.path();
 
     // Create user models directory with invalid model file
-    let user_agents_dir = temp_home
-        .join(SwissarmyhammerDirectory::dir_name())
-        .join("models");
+    let user_agents_dir = temp_home.join(".models");
     fs::create_dir_all(&user_agents_dir)?;
 
     // Create invalid YAML file
@@ -623,12 +617,12 @@ async fn test_model_use_creates_config_file() -> Result<()> {
 
         let config_content = fs::read_to_string(&config_path)?;
         assert!(
-            config_content.contains("agents:"),
-            "Config should contain agents section. Actual: {}",
+            config_content.contains("model:"),
+            "Config should contain model key. Actual: {}",
             config_content
         );
         assert!(
-            config_content.contains("root:") || config_content.contains("claude-code"),
+            config_content.contains("claude-code"),
             "Config should contain model assignment. Actual: {}",
             config_content
         );
@@ -672,14 +666,14 @@ existing_agent:
             "Should preserve existing values"
         );
 
-        // Should add/update agents section
+        // Should add/update model key
         assert!(
-            updated_config.contains("agents:"),
-            "Should have agents section. Actual: {}",
+            updated_config.contains("model:"),
+            "Should have model key. Actual: {}",
             updated_config
         );
         assert!(
-            updated_config.contains("root:") || updated_config.contains("claude-code"),
+            updated_config.contains("claude-code"),
             "Should have model assignment. Actual: {}",
             updated_config
         );
@@ -717,7 +711,7 @@ async fn test_complete_model_workflow() -> Result<()> {
     if use_output.status.success() {
         let use_stdout = String::from_utf8_lossy(&use_output.stdout);
         assert!(
-            use_stdout.contains("Successfully set") && use_stdout.contains("use case to model"),
+            use_stdout.contains("Successfully set model to"),
             "Should show success. Actual: {}",
             use_stdout
         );
@@ -825,7 +819,7 @@ async fn test_model_use_help() -> Result<()> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("FIRST") || stdout.contains("MODEL_NAME"),
+        stdout.contains("NAME") || stdout.contains("name") || stdout.contains("MODEL_NAME"),
         "Help should show model name parameter. Actual: {}",
         stdout
     );
