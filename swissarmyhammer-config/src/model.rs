@@ -169,9 +169,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use swissarmyhammer_common::{ErrorSeverity, Severity};
 #[cfg(test)]
 use swissarmyhammer_common::SwissarmyhammerDirectory;
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Configurable paths for model config file location.
@@ -1409,7 +1409,11 @@ impl ModelManager {
             })?;
 
             // Security: Audit log directory creation
-            tracing::info!("Created {} directory: {}", paths.dir_name, config_dir.display());
+            tracing::info!(
+                "Created {} directory: {}",
+                paths.dir_name,
+                config_dir.display()
+            );
         }
 
         // Security: Validate the created/existing directory
@@ -1594,10 +1598,7 @@ impl ModelManager {
         // Security: Validate agent name to prevent injection
         Self::validate_agent_name_security(agent_name)?;
 
-        tracing::info!(
-            "Attempting to set model to '{}' (user request)",
-            agent_name
-        );
+        tracing::info!("Attempting to set model to '{}' (user request)", agent_name);
 
         Self::validate_agent(agent_name)?;
         let config_path = Self::ensure_config_structure(paths)?;
@@ -3203,10 +3204,7 @@ other_section:
             updated_config.contains("value: preserved"),
             "Should preserve existing values"
         );
-        assert!(
-            updated_config.contains("model:"),
-            "Should add model key"
-        );
+        assert!(updated_config.contains("model:"), "Should add model key");
         assert!(
             updated_config.contains("claude-code"),
             "Should contain model name"
@@ -3237,10 +3235,7 @@ model: qwen-coder
             updated_config.contains("value: preserved"),
             "Should preserve existing values"
         );
-        assert!(
-            updated_config.contains("model:"),
-            "Should have model key"
-        );
+        assert!(updated_config.contains("model:"), "Should have model key");
         assert!(
             updated_config.contains("claude-code"),
             "Should contain new model name"
@@ -3396,7 +3391,9 @@ model: qwen-coder
             std::fs::write(&config_path, "model: claude-code\n").unwrap();
 
             assert_eq!(
-                ModelManager::get_agent(&ModelPaths::sah()).unwrap().unwrap(),
+                ModelManager::get_agent(&ModelPaths::sah())
+                    .unwrap()
+                    .unwrap(),
                 "claude-code"
             );
         }

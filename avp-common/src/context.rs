@@ -336,18 +336,12 @@ impl AvpContext {
             let start = std::time::Instant::now();
 
             let options = swissarmyhammer_agent::CreateAgentOptions { ephemeral: true };
-            let handle = swissarmyhammer_agent::create_agent_with_options(
-                &self.model_config,
-                None,
-                options,
-            )
-            .await
-            .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
+            let handle =
+                swissarmyhammer_agent::create_agent_with_options(&self.model_config, None, options)
+                    .await
+                    .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
 
-            tracing::debug!(
-                "Agent created in {:.2}s",
-                start.elapsed().as_secs_f64()
-            );
+            tracing::debug!("Agent created in {:.2}s", start.elapsed().as_secs_f64());
 
             // Bridge the broadcast::Receiver into a NotificationSender
             // (NotificationSender provides per-session subscribe semantics)
@@ -991,6 +985,9 @@ mod tests {
 
         // When no config file exists, resolve should return claude-code default
         let config = AvpContext::resolve_model_config();
-        assert!(matches!(config.executor, ModelExecutorConfig::ClaudeCode(_)));
+        assert!(matches!(
+            config.executor,
+            ModelExecutorConfig::ClaudeCode(_)
+        ));
     }
 }

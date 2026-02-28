@@ -537,7 +537,8 @@ fn test_agents_map_structure_creation() {
     let helper = ConfigFileHelper::new(temp_dir);
 
     // Use agent for root use case
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should use claude-code agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah())
+        .expect("Should use claude-code agent");
 
     assert!(helper.config_exists(), "Config file should be created");
 
@@ -574,7 +575,8 @@ fn test_resolve_agent_config() {
 
     ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
 
-    let config = ModelManager::resolve_agent_config(&ModelPaths::sah()).expect("Should resolve config");
+    let config =
+        ModelManager::resolve_agent_config(&ModelPaths::sah()).expect("Should resolve config");
     assert_eq!(
         config.executor_type(),
         swissarmyhammer_config::ModelExecutorType::ClaudeCode
@@ -589,7 +591,8 @@ fn test_resolve_agent_config_default_fallback() {
     let _helper = ConfigFileHelper::new(temp_dir);
 
     // Don't configure any model - should fall back to default claude-code
-    let config = ModelManager::resolve_agent_config(&ModelPaths::sah()).expect("Should resolve to default");
+    let config =
+        ModelManager::resolve_agent_config(&ModelPaths::sah()).expect("Should resolve to default");
     assert_eq!(
         config.executor_type(),
         swissarmyhammer_config::ModelExecutorType::ClaudeCode
@@ -603,7 +606,8 @@ fn test_get_agent_no_config() {
     let temp_dir = _env.temp_dir();
     let _helper = ConfigFileHelper::new(temp_dir);
 
-    let result = ModelManager::get_agent(&ModelPaths::sah()).expect("Should handle no config gracefully");
+    let result =
+        ModelManager::get_agent(&ModelPaths::sah()).expect("Should handle no config gracefully");
     assert_eq!(result, None);
 }
 
@@ -687,7 +691,8 @@ fn test_overwrite_existing_model() {
 
     ModelManager::use_agent("qwen-coder", &ModelPaths::sah()).expect("Should overwrite model");
 
-    let updated_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get updated model");
+    let updated_agent =
+        ModelManager::get_agent(&ModelPaths::sah()).expect("Should get updated model");
     assert_eq!(updated_agent, Some("qwen-coder".to_string()));
 }
 
@@ -703,8 +708,8 @@ fn test_agent_manager_config_file_operations() {
     let helper = ConfigFileHelper::new(temp_dir);
 
     // Test config structure creation
-    let config_path =
-        ModelManager::ensure_config_structure(&ModelPaths::sah()).expect("Should create config structure");
+    let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah())
+        .expect("Should create config structure");
 
     assert!(
         config_path.parent().unwrap().exists(),
@@ -717,7 +722,8 @@ fn test_agent_manager_config_file_operations() {
     );
 
     // Test using an agent (creates config)
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should use claude-code agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah())
+        .expect("Should use claude-code agent");
 
     assert!(helper.config_exists(), "Config file should be created");
 
@@ -815,7 +821,10 @@ fn test_agent_manager_error_handling_comprehensive() {
     let _helper = ConfigFileHelper::new(temp_dir.clone());
 
     // Test agent not found error
-    let result = ModelManager::use_agent("definitely-nonexistent-agent-name-12345", &ModelPaths::sah());
+    let result = ModelManager::use_agent(
+        "definitely-nonexistent-agent-name-12345",
+        &ModelPaths::sah(),
+    );
     assert_not_found_error(result, "definitely-nonexistent-agent-name-12345");
 
     // Test find_agent_by_name with nonexistent
@@ -1182,7 +1191,8 @@ fn test_global_agent_flag_override_concept() {
     ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
 
     // Verify initial state
-    let configured_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get configured agent");
+    let configured_agent =
+        ModelManager::get_agent(&ModelPaths::sah()).expect("Should get configured agent");
     assert_eq!(configured_agent, Some("claude-code".to_string()));
 
     // The runtime override would happen in the CLI layer by:
@@ -1204,8 +1214,8 @@ fn test_global_agent_flag_override_concept() {
 
     // Verify that the config file was NOT modified
     // (the override is runtime-only)
-    let still_claude =
-        ModelManager::get_agent(&ModelPaths::sah()).expect("Should still get configured agent from config");
+    let still_claude = ModelManager::get_agent(&ModelPaths::sah())
+        .expect("Should still get configured agent from config");
     assert_eq!(
         still_claude,
         Some("claude-code".to_string()),
@@ -1265,7 +1275,8 @@ fn test_global_agent_override_preserves_config_file() {
     );
 
     // Verify the stored model assignment is unchanged
-    let configured_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get configured agent");
+    let configured_agent =
+        ModelManager::get_agent(&ModelPaths::sah()).expect("Should get configured agent");
     assert_eq!(
         configured_agent,
         Some("claude-code".to_string()),

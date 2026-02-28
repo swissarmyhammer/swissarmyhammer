@@ -9,10 +9,7 @@ mod test_helpers;
 
 use agent_client_protocol_extras::PlaybackAgent;
 use avp_common::{
-    chain::ChainFactory,
-    context::AvpContext,
-    turn::TurnStateManager,
-    validator::ValidatorLoader,
+    chain::ChainFactory, context::AvpContext, turn::TurnStateManager, validator::ValidatorLoader,
 };
 use std::fs;
 use std::sync::Arc;
@@ -37,9 +34,8 @@ fn create_context_with_model(
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp.path()).unwrap();
 
-    let context =
-        AvpContext::with_agent_and_model(Arc::new(agent), notification_rx, model_config)
-            .expect("Should create context with playback agent and model config");
+    let context = AvpContext::with_agent_and_model(Arc::new(agent), notification_rx, model_config)
+        .expect("Should create context with playback agent and model config");
 
     std::env::set_current_dir(&original_dir).unwrap();
     context
@@ -57,8 +53,7 @@ async fn test_llama_model_config_preserved_in_context() {
     fs::create_dir_all(temp.path().join(".git")).unwrap();
 
     let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
-    let context =
-        create_context_with_model(&temp, "no_secrets_clean_code.json", llama_config);
+    let context = create_context_with_model(&temp, "no_secrets_clean_code.json", llama_config);
 
     assert!(
         matches!(
@@ -78,8 +73,7 @@ async fn test_claude_model_config_preserved_in_context() {
     fs::create_dir_all(temp.path().join(".git")).unwrap();
 
     let claude_config = ModelConfig::claude_code();
-    let context =
-        create_context_with_model(&temp, "no_secrets_clean_code.json", claude_config);
+    let context = create_context_with_model(&temp, "no_secrets_clean_code.json", claude_config);
 
     assert!(
         matches!(
@@ -105,11 +99,8 @@ async fn test_validator_blocks_with_llama_model_config() {
     fs::create_dir_all(temp.path().join(".git")).unwrap();
 
     let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
-    let context = create_context_with_model(
-        &temp,
-        "post_tool_use_no_secrets_fail.json",
-        llama_config,
-    );
+    let context =
+        create_context_with_model(&temp, "post_tool_use_no_secrets_fail.json", llama_config);
 
     // Verify model config survived
     assert!(matches!(
@@ -166,11 +157,7 @@ async fn test_chain_passes_with_llama_model_config_nonmatching_tool() {
     fs::create_dir_all(temp.path().join(".git")).unwrap();
 
     let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
-    let context = create_context_with_model(
-        &temp,
-        "no_secrets_clean_code.json",
-        llama_config,
-    );
+    let context = create_context_with_model(&temp, "no_secrets_clean_code.json", llama_config);
 
     assert!(matches!(
         context.model_config().executor,
@@ -224,8 +211,7 @@ async fn test_agent_accessible_with_llama_model_config() {
     fs::create_dir_all(temp.path().join(".git")).unwrap();
 
     let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
-    let context =
-        create_context_with_model(&temp, "no_secrets_clean_code.json", llama_config);
+    let context = create_context_with_model(&temp, "no_secrets_clean_code.json", llama_config);
 
     let result = context.agent().await;
     assert!(

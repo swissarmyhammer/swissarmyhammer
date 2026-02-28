@@ -300,8 +300,7 @@ fn setup_large_agent_test_environment(
     fs::create_dir_all(temp_home)?;
     fs::create_dir_all(project_root)?;
 
-    let user_agents_dir = temp_home
-        .join(".models");
+    let user_agents_dir = temp_home.join(".models");
     let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 50)?;
@@ -451,10 +450,7 @@ fn verify_config_preservation(config_path: &Path) -> Result<()> {
         updated_config.contains("key_199:"),
         "Should preserve custom data"
     );
-    assert!(
-        updated_config.contains("model:"),
-        "Should add model key"
-    );
+    assert!(updated_config.contains("model:"), "Should add model key");
     Ok(())
 }
 
@@ -638,8 +634,7 @@ async fn test_invalid_yaml_recovery() -> Result<()> {
     let temp_dir = _env.temp_dir();
     let temp_home = &temp_dir.join("home");
 
-    let user_agents_dir = temp_home
-        .join(".models");
+    let user_agents_dir = temp_home.join(".models");
 
     let valid_agents = create_large_agent_set(&user_agents_dir, 10)?;
     let invalid_files = create_invalid_agent_files(&user_agents_dir)?;
@@ -862,8 +857,7 @@ fn setup_large_dataset_environment(
     fs::create_dir_all(temp_home)?;
     fs::create_dir_all(project_root)?;
 
-    let user_agents_dir = temp_home
-        .join(".models");
+    let user_agents_dir = temp_home.join(".models");
     let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 200)?;

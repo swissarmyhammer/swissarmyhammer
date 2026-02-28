@@ -2175,11 +2175,12 @@ impl CliBuilder {
             SubcommandSpec::new("list", "List available models").args(vec![format_arg]),
             SubcommandSpec::new("use", "Use a specific model")
                 .long_about(MODEL_USE_LONG_ABOUT)
-                .args(vec![
-                    ArgSpec::new("name", "Model name to apply to the project")
-                        .value_name("NAME")
-                        .required(true),
-                ]),
+                .args(vec![ArgSpec::new(
+                    "name",
+                    "Model name to apply to the project",
+                )
+                .value_name("NAME")
+                .required(true)]),
         ];
 
         Self::build_command_with_subcommands(

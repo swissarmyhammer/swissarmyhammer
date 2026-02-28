@@ -4,8 +4,7 @@ use crate::AvpCliError;
 use swissarmyhammer_config::model::ModelManager;
 
 pub fn run_list() -> Result<(), AvpCliError> {
-    let models =
-        ModelManager::list_agents().map_err(|e| AvpCliError::Validation(e.to_string()))?;
+    let models = ModelManager::list_agents().map_err(|e| AvpCliError::Validation(e.to_string()))?;
 
     if models.is_empty() {
         println!("No models found.");
@@ -31,7 +30,12 @@ pub fn run_list() -> Result<(), AvpCliError> {
     // Summary counts
     let builtin = models
         .iter()
-        .filter(|m| matches!(m.source, swissarmyhammer_config::model::ModelConfigSource::Builtin))
+        .filter(|m| {
+            matches!(
+                m.source,
+                swissarmyhammer_config::model::ModelConfigSource::Builtin
+            )
+        })
         .count();
     let project = models
         .iter()
@@ -45,7 +49,12 @@ pub fn run_list() -> Result<(), AvpCliError> {
         .count();
     let user = models
         .iter()
-        .filter(|m| matches!(m.source, swissarmyhammer_config::model::ModelConfigSource::User))
+        .filter(|m| {
+            matches!(
+                m.source,
+                swissarmyhammer_config::model::ModelConfigSource::User
+            )
+        })
         .count();
 
     println!(

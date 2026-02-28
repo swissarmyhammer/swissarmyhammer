@@ -277,5 +277,4 @@ mod tests {
             "run_diagnostics_without_output should include workflow checks"
         );
     }
-
 }

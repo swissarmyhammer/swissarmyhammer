@@ -308,15 +308,16 @@ impl McpServer {
                 }
             })?;
 
-            let config = parse_model_config(&info.content).map_err(|e| {
-                SwissArmyHammerError::Other {
+            let config =
+                parse_model_config(&info.content).map_err(|e| SwissArmyHammerError::Other {
                     message: format!("Invalid model override '{}': {}", override_model_name, e),
-                }
-            })?;
+                })?;
 
             Ok(Arc::new(config))
         } else {
-            match ModelManager::resolve_agent_config(&swissarmyhammer_config::model::ModelPaths::sah()) {
+            match ModelManager::resolve_agent_config(
+                &swissarmyhammer_config::model::ModelPaths::sah(),
+            ) {
                 Ok(config) => {
                     tracing::debug!("Resolved model: {:?}", config.executor_type());
                     Ok(Arc::new(config))
