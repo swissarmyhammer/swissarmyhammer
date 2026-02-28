@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { EditableMarkdown } from "@/components/editable-markdown";
+import { SubtaskProgress } from "@/components/subtask-progress";
 import type { Task } from "@/types/kanban";
 
 interface TaskDetailPanelProps {
@@ -66,17 +67,19 @@ export function TaskDetailPanel({ task, onClose, onUpdateTitle, onUpdateDescript
               </button>
             </div>
 
+            <SubtaskProgress description={task.description} className="mx-5 mb-3" />
+
             <div className="mx-3 h-px bg-border" />
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-5">
-              {/* Description */}
-              <section>
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-5 flex flex-col gap-5">
+              {/* Description — fills available space so clicking empty area enters edit */}
+              <section className="flex-1 flex flex-col">
                 <EditableMarkdown
                   value={task.description ?? ""}
                   onCommit={(desc) => onUpdateDescription?.(task.id, desc)}
-                  className="text-sm leading-relaxed cursor-text"
-                  inputClassName="text-sm leading-relaxed bg-transparent w-full"
+                  className="text-sm leading-relaxed cursor-text flex-1"
+                  inputClassName="text-sm leading-relaxed bg-transparent w-full flex-1"
                   multiline
                   placeholder="Add description..."
                 />
@@ -139,25 +142,6 @@ export function TaskDetailPanel({ task, onClose, onUpdateTitle, onUpdateDescript
                 </section>
               )}
 
-              {/* Metadata */}
-              <section className="border-t border-border pt-4">
-                <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
-                  <dt className="text-muted-foreground">ID</dt>
-                  <dd className="font-mono">{task.id}</dd>
-                  <dt className="text-muted-foreground">Column</dt>
-                  <dd>{task.position.column}</dd>
-                  {task.position.swimlane && (
-                    <>
-                      <dt className="text-muted-foreground">Swimlane</dt>
-                      <dd>{task.position.swimlane}</dd>
-                    </>
-                  )}
-                  <dt className="text-muted-foreground">Created</dt>
-                  <dd>{new Date(task.created_at).toLocaleDateString()}</dd>
-                  <dt className="text-muted-foreground">Updated</dt>
-                  <dd>{new Date(task.updated_at).toLocaleDateString()}</dd>
-                </dl>
-              </section>
             </div>
           </>
         )}

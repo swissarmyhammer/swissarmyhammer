@@ -125,7 +125,8 @@ export function EditableMarkdown({
       if (mode === "vim") {
         const cm = getCM(view);
         if (cm?.state?.vim?.insertMode) {
-          Vim.exitInsertMode(cm);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          Vim.exitInsertMode(cm as any);
         }
       }
 
@@ -146,6 +147,23 @@ export function EditableMarkdown({
       }
     },
     [mode]
+  );
+
+  // Display mode refs — must be declared before any early return to
+  // satisfy React's rules of hooks (same number of hooks every render).
+  const displayRef = useRef<HTMLDivElement>(null);
+
+  const handleCheckboxChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!displayRef.current) return;
+      const all = displayRef.current.querySelectorAll('input[type="checkbox"]');
+      const idx = Array.from(all).indexOf(e.target);
+      if (idx >= 0) {
+        const updated = toggleCheckbox(value, idx);
+        if (updated !== null) onCommit(updated);
+      }
+    },
+    [value, onCommit]
   );
 
   const handleClick = useCallback(
@@ -243,62 +261,36 @@ export function EditableMarkdown({
     );
   }
 
-  // Display mode
-  const isEmpty = !value && placeholder;
-  const display = value || placeholder;
-
-  if (!display) {
-    return (
-      <span
-        className={`${className ?? ""} text-muted-foreground italic cursor-text`}
-        onClick={handleClick}
-      >
-        {placeholder}
-      </span>
-    );
-  }
-
-  if (isEmpty) {
-    return (
-      <span
-        className={`${className ?? ""} text-muted-foreground italic cursor-text`}
-        onClick={handleClick}
-      >
-        {placeholder}
-      </span>
-    );
-  }
-
-  // Track checkbox index for interactive toggling
-  let checkboxIndex = 0;
-
   return (
-    <div className={`${className ?? ""} cursor-text`} onClick={handleClick}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          // Make task list checkboxes interactive
-          input: (props) => {
-            if (props.type === "checkbox") {
-              const idx = checkboxIndex++;
-              return (
-                <input
-                  type="checkbox"
-                  checked={props.checked ?? false}
-                  onChange={() => {
-                    const updated = toggleCheckbox(value, idx);
-                    if (updated !== null) onCommit(updated);
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                />
-              );
-            }
-            return <input {...props} />;
-          },
-        }}
-      >
-        {value}
-      </ReactMarkdown>
+    <div
+      ref={displayRef}
+      className={`${className ?? ""} ${value ? "prose prose-sm dark:prose-invert max-w-none" : "text-muted-foreground italic"} cursor-text`}
+      onClick={handleClick}
+    >
+      {value ? (
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            input: (props) => {
+              if (props.type === "checkbox") {
+                return (
+                  <input
+                    type="checkbox"
+                    checked={props.checked ?? false}
+                    onChange={handleCheckboxChange}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                );
+              }
+              return <input {...props} />;
+            },
+          }}
+        >
+          {value}
+        </ReactMarkdown>
+      ) : (
+        placeholder
+      )}
     </div>
   );
 }

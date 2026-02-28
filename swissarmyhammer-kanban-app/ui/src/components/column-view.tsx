@@ -15,13 +15,14 @@ interface ColumnViewProps {
   tasks: Task[];
   blockedIds: Set<string>;
   onTaskClick?: (task: Task) => void;
+  onUpdateTitle?: (taskId: string, title: string) => void;
   onAddTask?: (columnId: string) => void;
   onRenameColumn?: (columnId: string, name: string) => void;
   /** When true, tasks are already in display order (virtual layout during drag) */
   presorted?: boolean;
 }
 
-export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, onRenameColumn, presorted }: ColumnViewProps) {
+export function ColumnView({ column, tasks, blockedIds, onTaskClick, onUpdateTitle, onAddTask, onRenameColumn, presorted }: ColumnViewProps) {
   const sorted = useMemo(
     () =>
       presorted
@@ -56,7 +57,7 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, 
           <Plus className="h-4 w-4" />
         </button>
       </div>
-      <div ref={setNodeRef} className="flex-1 overflow-y-auto px-2 pb-2 space-y-1.5">
+      <div ref={setNodeRef} className="flex-1 overflow-y-auto px-2 pt-1 pb-2 space-y-1.5">
         <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
           {sorted.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground opacity-40">
@@ -70,6 +71,7 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, 
                 task={task}
                 isBlocked={blockedIds.has(task.id)}
                 onClick={onTaskClick}
+                onUpdateTitle={onUpdateTitle}
               />
             ))
           )}

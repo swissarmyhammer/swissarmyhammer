@@ -1,17 +1,20 @@
 import { forwardRef } from "react";
 import { GripVertical } from "lucide-react";
+import { EditableMarkdown } from "@/components/editable-markdown";
+import { SubtaskProgress } from "@/components/subtask-progress";
 import type { Task } from "@/types/kanban";
 
 interface TaskCardProps {
   task: Task;
   isBlocked?: boolean;
   onClick?: (task: Task) => void;
+  onUpdateTitle?: (taskId: string, title: string) => void;
   dragHandleProps?: Record<string, unknown>;
   style?: React.CSSProperties;
 }
 
 export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
-  function TaskCard({ task, isBlocked, onClick, dragHandleProps, style, ...rest }, ref) {
+  function TaskCard({ task, isBlocked, onClick, onUpdateTitle, dragHandleProps, style, ...rest }, ref) {
     return (
       <div
         ref={ref}
@@ -30,13 +33,25 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
         >
           <GripVertical className="h-4 w-4" />
         </button>
-        <div className="flex-1 min-w-0">
-          <p className="leading-snug">{task.title}</p>
-          {task.progress != null && task.progress > 0 && (
-            <p className="text-xs text-muted-foreground mt-1">
-              {Math.round(task.progress * 100)}%
-            </p>
-          )}
+        <div
+          className="flex-1 min-w-0"
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            // Blur the CodeMirror editor so it commits and returns to display mode
+            if (document.activeElement instanceof HTMLElement) {
+              document.activeElement.blur();
+            }
+            onClick?.(task);
+          }}
+        >
+          <EditableMarkdown
+            value={task.title}
+            onCommit={(title) => onUpdateTitle?.(task.id, title)}
+            className="leading-snug"
+            inputClassName="leading-snug bg-transparent border-b border-ring w-full"
+          />
+          <SubtaskProgress description={task.description} className="mt-1.5" />
         </div>
       </div>
     );

@@ -7,9 +7,10 @@ interface SortableTaskCardProps {
   task: Task;
   isBlocked?: boolean;
   onClick?: (task: Task) => void;
+  onUpdateTitle?: (taskId: string, title: string) => void;
 }
 
-export function SortableTaskCard({ task, isBlocked, onClick }: SortableTaskCardProps) {
+export function SortableTaskCard({ task, isBlocked, onClick, onUpdateTitle }: SortableTaskCardProps) {
   const {
     attributes,
     listeners,
@@ -32,6 +33,7 @@ export function SortableTaskCard({ task, isBlocked, onClick }: SortableTaskCardP
       task={task}
       isBlocked={isBlocked}
       onClick={onClick}
+      onUpdateTitle={onUpdateTitle}
       dragHandleProps={{ ...listeners, ...attributes }}
     />
   );

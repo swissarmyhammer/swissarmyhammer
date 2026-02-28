@@ -50,6 +50,24 @@ function App() {
     };
   }, [refresh]);
 
+  const handleUpdateTitle = useCallback(async (taskId: string, title: string) => {
+    try {
+      await invoke("update_task_title", { id: taskId, title });
+      refresh();
+    } catch (e) {
+      console.error("Failed to update task title:", e);
+    }
+  }, [refresh]);
+
+  const handleUpdateDescription = useCallback(async (taskId: string, description: string) => {
+    try {
+      await invoke("update_task_description", { id: taskId, description });
+      refresh();
+    } catch (e) {
+      console.error("Failed to update task description:", e);
+    }
+  }, [refresh]);
+
   return (
     <KeymapProvider>
     <div className="h-screen bg-background text-foreground flex flex-col">
@@ -60,26 +78,18 @@ function App() {
       />
       {board ? (
         <>
-          <BoardView board={board} tasks={tasks} onTaskClick={(t) => setSelectedTaskId(t.id)} onTaskMoved={refresh} />
+          <BoardView
+            board={board}
+            tasks={tasks}
+            onTaskClick={(t) => setSelectedTaskId(t.id)}
+            onUpdateTitle={handleUpdateTitle}
+            onTaskMoved={refresh}
+          />
           <TaskDetailPanel
             task={selectedTask}
             onClose={() => setSelectedTaskId(null)}
-            onUpdateTitle={async (taskId, title) => {
-              try {
-                await invoke("update_task_title", { id: taskId, title });
-                refresh();
-              } catch (e) {
-                console.error("Failed to update task title:", e);
-              }
-            }}
-            onUpdateDescription={async (taskId, description) => {
-              try {
-                await invoke("update_task_description", { id: taskId, description });
-                refresh();
-              } catch (e) {
-                console.error("Failed to update task description:", e);
-              }
-            }}
+            onUpdateTitle={handleUpdateTitle}
+            onUpdateDescription={handleUpdateDescription}
           />
         </>
       ) : (

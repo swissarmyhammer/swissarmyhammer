@@ -149,5 +149,56 @@ describe("EditableMarkdown", () => {
       // Should NOT have entered edit mode (no cm-editor)
       expect(container.querySelector(".cm-editor")).toBeNull();
     });
+
+    it("toggles the correct checkbox among many subtasks", () => {
+      const onCommit = vi.fn();
+      const value =
+        "- [ ] first\n- [ ] second\n- [ ] third\n- [ ] fourth\n- [ ] fifth";
+      renderWithProvider(
+        <EditableMarkdown value={value} onCommit={onCommit} multiline />
+      );
+      const checkboxes = screen.getAllByRole("checkbox");
+      expect(checkboxes).toHaveLength(5);
+
+      // Toggle the third checkbox (index 2)
+      fireEvent.click(checkboxes[2]);
+      expect(onCommit).toHaveBeenCalledWith(
+        "- [ ] first\n- [ ] second\n- [x] third\n- [ ] fourth\n- [ ] fifth"
+      );
+    });
+
+    it("toggles the last checkbox among many subtasks", () => {
+      const onCommit = vi.fn();
+      const value =
+        "- [x] first\n- [ ] second\n- [x] third\n- [ ] fourth\n- [ ] fifth";
+      renderWithProvider(
+        <EditableMarkdown value={value} onCommit={onCommit} multiline />
+      );
+      const checkboxes = screen.getAllByRole("checkbox");
+      expect(checkboxes).toHaveLength(5);
+
+      // Toggle the fifth checkbox (index 4)
+      fireEvent.click(checkboxes[4]);
+      expect(onCommit).toHaveBeenCalledWith(
+        "- [x] first\n- [ ] second\n- [x] third\n- [ ] fourth\n- [x] fifth"
+      );
+    });
+
+    it("toggles the correct checkbox when mixed with other content", () => {
+      const onCommit = vi.fn();
+      const value =
+        "## Subtasks\n\n- [ ] alpha\n- [x] bravo\n- [ ] charlie\n\nSome notes here.";
+      renderWithProvider(
+        <EditableMarkdown value={value} onCommit={onCommit} multiline />
+      );
+      const checkboxes = screen.getAllByRole("checkbox");
+      expect(checkboxes).toHaveLength(3);
+
+      // Toggle the middle checkbox (bravo, index 1) — uncheck it
+      fireEvent.click(checkboxes[1]);
+      expect(onCommit).toHaveBeenCalledWith(
+        "## Subtasks\n\n- [ ] alpha\n- [ ] bravo\n- [ ] charlie\n\nSome notes here."
+      );
+    });
   });
 });

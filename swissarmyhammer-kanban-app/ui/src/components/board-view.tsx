@@ -27,6 +27,7 @@ interface BoardViewProps {
   board: Board;
   tasks: Task[];
   onTaskClick?: (task: Task) => void;
+  onUpdateTitle?: (taskId: string, title: string) => void;
   onTaskMoved?: () => void;
 }
 
@@ -39,7 +40,7 @@ type ColumnLayout = Map<string, string[]>;
 
 type DragType = "task" | "column";
 
-export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewProps) {
+export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMoved }: BoardViewProps) {
   const columns = useMemo(
     () => [...board.columns].sort((a, b) => a.order - b.order),
     [board.columns]
@@ -402,6 +403,7 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
                   tasks={colTasks}
                   blockedIds={blockedIds}
                   onTaskClick={onTaskClick}
+                  onUpdateTitle={onUpdateTitle}
                   onAddTask={handleAddTask}
                   onRenameColumn={handleRenameColumn}
                   presorted
