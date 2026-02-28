@@ -1,25 +1,30 @@
-//! Skill management tool
+//! Unified skill operations tool for MCP
 //!
-//! Replicates Claude Code's skill system for llama-agent using the Operations pattern.
-//! The tool's description dynamically includes `<available_skills>` so the agent
-//! knows about skills without them being in the system prompt.
+//! This module provides a single `skill` tool that dispatches between operations:
+//! - `list skill`: List all available skills with their descriptions
+//! - `use skill`: Activate a skill by loading its full instructions
+//! - `search skill`: Search for skills by name or description
+//!
+//! Follows the Operation pattern from `swissarmyhammer-operations`.
+
+mod list;
+mod search;
+mod use_op;
 
 use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use serde_json::Value;
 use std::sync::Arc;
-use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_operations::Operation;
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_skills::{
-    parse_input, ExecutionResult, ListSkills, Operation, SearchSkill, SkillContext, SkillLibrary,
-    SkillOperation, UseSkill,
+    ExecutionResult, ListSkills, SearchSkill, SkillError, SkillLibrary, UseSkill,
 };
 use tokio::sync::RwLock;
 
-// Static operation instances for metadata access
+// Static operation instances for schema generation
 static LIST_SKILLS: Lazy<ListSkills> = Lazy::new(ListSkills::new);
 static USE_SKILL: Lazy<UseSkill> = Lazy::new(|| UseSkill::new(""));
 static SEARCH_SKILL: Lazy<SearchSkill> = Lazy::new(|| SearchSkill::new(""));
@@ -52,7 +57,6 @@ impl SkillTool {
         library: Arc<RwLock<SkillLibrary>>,
         prompt_library: Arc<RwLock<PromptLibrary>>,
     ) -> Self {
-        // Build the dynamic description with available skills
         let description = build_description(&library);
         Self {
             description,
@@ -87,6 +91,24 @@ fn build_description(library: &Arc<RwLock<SkillLibrary>>) -> String {
     };
 
     format!("{}{}", DESCRIPTION_PREFIX, skills_xml)
+}
+
+/// Convert a skill ExecutionResult into an MCP CallToolResult
+fn convert_result(
+    result: ExecutionResult<serde_json::Value, SkillError>,
+) -> Result<CallToolResult, McpError> {
+    match result {
+        ExecutionResult::Unlogged { value } => Ok(BaseToolImpl::create_success_response(
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
+        )),
+        ExecutionResult::Logged { value, .. } => Ok(BaseToolImpl::create_success_response(
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
+        )),
+        ExecutionResult::Failed { error, .. } => Err(McpError::internal_error(
+            format!("skill operation failed: {}", error),
+            None,
+        )),
+    }
 }
 
 impl swissarmyhammer_common::health::Doctorable for SkillTool {
@@ -186,7 +208,7 @@ impl McpTool for SkillTool {
         swissarmyhammer_skills::generate_skill_mcp_schema(&SKILL_OPERATIONS)
     }
 
-    fn operations(&self) -> &'static [&'static dyn Operation] {
+    fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
         let ops: &[&'static dyn Operation] = &SKILL_OPERATIONS;
         // SAFETY: SKILL_OPERATIONS is a static Lazy<Vec<...>> initialized once
         unsafe {
@@ -202,79 +224,38 @@ impl McpTool for SkillTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let ctx = SkillContext::new(self.library.clone());
+        let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Parse the input to determine operation
-        let input = Value::Object(arguments);
-        let operation = parse_input(input).map_err(|e| {
-            McpError::invalid_params(format!("Failed to parse skill operation: {}", e), None)
-        })?;
+        // Strip the "op" key from arguments before passing to handlers
+        let mut args = arguments.clone();
+        args.remove("op");
 
-        // Track whether this is a Use operation (needs template rendering)
-        let is_use_op = matches!(&operation, SkillOperation::Use(_));
-
-        // Execute the operation
-        let result = match operation {
-            SkillOperation::List(op) => {
-                use swissarmyhammer_skills::Execute;
-                op.execute(&ctx).await
+        match op_str {
+            "list skill" => list::execute_list(args, &self.library).await,
+            "use skill" | "get skill" | "load skill" | "activate skill" | "invoke skill" => {
+                use_op::execute_use(args, &self.library, &self.prompt_library).await
             }
-            SkillOperation::Use(op) => {
-                use swissarmyhammer_skills::Execute;
-                op.execute(&ctx).await
+            "search skill" | "find skill" | "lookup skill" => {
+                search::execute_search(args, &self.library).await
             }
-            SkillOperation::Search(op) => {
-                use swissarmyhammer_skills::Execute;
-                op.execute(&ctx).await
-            }
-        };
-
-        // Convert result to CallToolResult
-        match result {
-            ExecutionResult::Unlogged { value } => {
-                // For Use operations, render instructions through the prompt library's
-                // Liquid template engine so {% include %} partials are resolved
-                let value = if is_use_op {
-                    self.render_skill_instructions(value).await
+            "" => {
+                // Infer operation from present keys
+                if args.contains_key("name") {
+                    use_op::execute_use(args, &self.library, &self.prompt_library).await
+                } else if args.contains_key("query") {
+                    search::execute_search(args, &self.library).await
                 } else {
-                    value
-                };
-                Ok(BaseToolImpl::create_success_response(
-                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
-                ))
+                    list::execute_list(args, &self.library).await
+                }
             }
-            ExecutionResult::Logged { value, .. } => Ok(BaseToolImpl::create_success_response(
-                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
-            )),
-            ExecutionResult::Failed { error, .. } => Err(McpError::internal_error(
-                format!("skill operation failed: {}", error),
+            other => Err(McpError::invalid_params(
+                format!(
+                    "Unknown operation '{}'. Valid operations: 'list skill', 'use skill', 'search skill'",
+                    other
+                ),
                 None,
             )),
         }
-    }
-}
-
-impl SkillTool {
-    /// Render skill instructions through the prompt library's Liquid template engine.
-    ///
-    /// This enables skills to use `{% include %}` partials from the prompt library
-    /// (e.g., `{% include "_partials/detected-projects" %}`), rendering them as if
-    /// they were prompts — the only difference being the frontmatter format.
-    async fn render_skill_instructions(&self, mut value: Value) -> Value {
-        if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
-            let template_context = TemplateContext::new();
-            let prompt_lib = self.prompt_library.read().await;
-            match prompt_lib.render_text(instructions, &template_context) {
-                Ok(rendered) => {
-                    value["instructions"] = Value::String(rendered);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to render skill template: {e}");
-                    // Fall through with raw instructions on render failure
-                }
-            }
-        }
-        value
     }
 }
 
@@ -425,5 +406,103 @@ mod tests {
             !content.contains("{% include"),
             "Rendered output should not contain raw Liquid include tags"
         );
+    }
+
+    #[tokio::test]
+    async fn test_skill_tool_schema_has_op_field() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        let tool = SkillTool::new(library, default_prompt_library());
+        let schema = tool.schema();
+
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["op"].is_object());
+
+        let op_enum = schema["properties"]["op"]["enum"]
+            .as_array()
+            .expect("op should have enum");
+        assert!(op_enum.contains(&serde_json::json!("list skill")));
+        assert!(op_enum.contains(&serde_json::json!("use skill")));
+        assert!(op_enum.contains(&serde_json::json!("search skill")));
+    }
+
+    #[tokio::test]
+    async fn test_skill_tool_unknown_op() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        let tool = SkillTool::new(library, default_prompt_library());
+        let ctx = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "op".to_string(),
+            serde_json::Value::String("invalid op".to_string()),
+        );
+
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown operation"));
+    }
+
+    #[tokio::test]
+    async fn test_skill_tool_infer_use_from_name_key() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+
+        let tool = SkillTool::new(library, default_prompt_library());
+        let ctx = crate::test_utils::create_test_context().await;
+
+        // When "name" key is present but no "op", should infer use
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("plan".to_string()),
+        );
+
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_skill_tool_infer_search_from_query_key() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+
+        let tool = SkillTool::new(library, default_prompt_library());
+        let ctx = crate::test_utils::create_test_context().await;
+
+        // When "query" key is present but no "op", should infer search
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "query".to_string(),
+            serde_json::Value::String("plan".to_string()),
+        );
+
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_skill_tool_infer_list_from_empty() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+
+        let tool = SkillTool::new(library, default_prompt_library());
+        let ctx = crate::test_utils::create_test_context().await;
+
+        // Empty args should infer list
+        let args = serde_json::Map::new();
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_ok());
     }
 }

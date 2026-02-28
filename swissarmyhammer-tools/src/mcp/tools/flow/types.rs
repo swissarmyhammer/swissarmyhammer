@@ -524,7 +524,10 @@ mod tests {
     fn test_flow_tool_request_validation_empty_name_for_run() {
         let request = FlowToolRequest::new("");
         assert!(request.validate().is_err());
-        assert!(request.validate().unwrap_err().contains("flow_name is required"));
+        assert!(request
+            .validate()
+            .unwrap_err()
+            .contains("flow_name is required"));
     }
 
     #[test]

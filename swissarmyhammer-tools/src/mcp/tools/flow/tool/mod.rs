@@ -442,9 +442,12 @@ impl FlowTool {
     /// cleanly (status: Completed) instead of continuing to the next state.
     async fn exit_workflow(&self) -> std::result::Result<CallToolResult, McpError> {
         let js_state = swissarmyhammer_js::JsState::global();
-        js_state.set("__workflow_exit__", "true").await.map_err(|e| {
-            McpError::internal_error(format!("Failed to set workflow exit flag: {}", e), None)
-        })?;
+        js_state
+            .set("__workflow_exit__", "true")
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to set workflow exit flag: {}", e), None)
+            })?;
 
         tracing::info!("🚪 Workflow exit signal set");
 
