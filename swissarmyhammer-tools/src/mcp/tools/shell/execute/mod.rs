@@ -1535,7 +1535,7 @@ impl AgentTool for ShellExecuteTool {}
 #[async_trait]
 impl McpTool for ShellExecuteTool {
     fn name(&self) -> &'static str {
-        "shell_execute"
+        "shell"
     }
 
     fn description(&self) -> &'static str {
@@ -1547,6 +1547,11 @@ impl McpTool for ShellExecuteTool {
         serde_json::json!({
             "type": "object",
             "properties": {
+                "op": {
+                    "type": "string",
+                    "description": "Operation to perform",
+                    "enum": ["execute command"]
+                },
                 "command": {
                     "type": "string",
                     "description": "The shell command to execute",
@@ -1562,7 +1567,24 @@ impl McpTool for ShellExecuteTool {
                     "description": "Additional environment variables as JSON string (optional, e.g., '{\"KEY1\":\"value1\",\"KEY2\":\"value2\"}')"
                 }
             },
-            "required": ["command"]
+            "required": ["command"],
+            "x-operation-schemas": [
+                {
+                    "title": "execute command",
+                    "description": "Execute a shell command with timeout and environment control",
+                    "type": "object",
+                    "properties": {
+                        "op": { "const": "execute command" },
+                        "command": { "type": "string", "description": "The shell command to execute" },
+                        "working_directory": { "type": "string", "description": "Working directory for command execution" },
+                        "environment": { "type": "string", "description": "Additional environment variables as JSON string" }
+                    },
+                    "required": ["op", "command"]
+                }
+            ],
+            "x-operation-groups": {
+                "command": ["execute command"]
+            }
         })
     }
 
@@ -1571,7 +1593,28 @@ impl McpTool for ShellExecuteTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(arguments)?;
+        let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Strip op from arguments before parsing
+        let mut args = arguments.clone();
+        args.remove("op");
+
+        match op_str {
+            "execute command" | "" => {
+                // Default: execute command (only operation)
+            }
+            other => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Unknown operation '{}'. Valid operations: 'execute command'",
+                        other
+                    ),
+                    None,
+                ));
+            }
+        }
+
+        let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(args)?;
         tracing::debug!("Executing shell command: {}", Pretty(&request.command));
 
         validate_shell_request(&request)?;
@@ -1842,7 +1885,7 @@ mod tests {
     #[test]
     fn test_tool_properties() {
         let tool = ShellExecuteTool::new();
-        assert_eq!(tool.name(), "shell_execute");
+        assert_eq!(tool.name(), "shell");
         assert!(!tool.description().is_empty());
 
         let schema = tool.schema();

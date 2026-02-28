@@ -2135,7 +2135,7 @@ mod tests {
     );
     test_tool!(
         ShellExecuteTool,
-        "shell_execute",
+        "shell",
         "Execute shell commands with timeout controls"
     );
     test_tool!(GitStatusTool, "git_status", "Show the working tree status");
@@ -2176,7 +2176,7 @@ mod tests {
         // Test action extraction
         assert_eq!(FilesTool.cli_name(), "files");
         assert_eq!(WebTool.cli_name(), "search_and_fetch");
-        assert_eq!(ShellExecuteTool.cli_name(), "execute");
+        assert_eq!(ShellExecuteTool.cli_name(), "shell");
         assert_eq!(OutlineGenerateTool.cli_name(), "generate");
 
         // Test unknown category still extracts action

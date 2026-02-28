@@ -84,7 +84,7 @@ crate::impl_empty_doctorable!(GitChangesTool);
 #[async_trait]
 impl McpTool for GitChangesTool {
     fn name(&self) -> &'static str {
-        "git_changes"
+        "git"
     }
 
     fn description(&self) -> &'static str {
@@ -95,10 +95,30 @@ impl McpTool for GitChangesTool {
         serde_json::json!({
             "type": "object",
             "properties": {
+                "op": {
+                    "type": "string",
+                    "description": "Operation to perform",
+                    "enum": ["get changes"]
+                },
                 "branch": {
                     "type": "string",
                     "description": "Branch name to analyze (optional, defaults to current branch)"
                 }
+            },
+            "x-operation-schemas": [
+                {
+                    "title": "get changes",
+                    "description": "List files changed on a branch relative to its parent",
+                    "type": "object",
+                    "properties": {
+                        "op": { "const": "get changes" },
+                        "branch": { "type": "string", "description": "Branch name to analyze (optional, defaults to current branch)" }
+                    },
+                    "required": ["op"]
+                }
+            ],
+            "x-operation-groups": {
+                "changes": ["get changes"]
             }
         })
     }
@@ -108,9 +128,30 @@ impl McpTool for GitChangesTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
+        let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Strip op from arguments before parsing
+        let mut args = arguments.clone();
+        args.remove("op");
+
+        match op_str {
+            "get changes" | "" => {
+                // Default: get changes (only operation)
+            }
+            other => {
+                return Err(rmcp::ErrorData::invalid_params(
+                    format!(
+                        "Unknown operation '{}'. Valid operations: 'get changes'",
+                        other
+                    ),
+                    None,
+                ));
+            }
+        }
+
         // Parse request
         let request: GitChangesRequest =
-            serde_json::from_value(serde_json::Value::Object(arguments))
+            serde_json::from_value(serde_json::Value::Object(args))
                 .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
         // Get git operations from context
@@ -300,7 +341,7 @@ mod tests {
     #[test]
     fn test_git_changes_tool_name() {
         let tool = GitChangesTool::new();
-        assert_eq!(tool.name(), "git_changes");
+        assert_eq!(tool.name(), "git");
     }
 
     #[test]
