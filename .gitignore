@@ -200,3 +200,6 @@ mirdan-lock.json
 # Kanban test artifacts
 .kanban/
 swissarmyhammer-config/.swissarmyhammer/
+
+# Installed agents (generated from builtin/agents/ during install)
+.agents/
