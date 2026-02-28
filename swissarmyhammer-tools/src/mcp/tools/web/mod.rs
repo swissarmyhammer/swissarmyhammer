@@ -60,6 +60,17 @@ impl McpTool for WebTool {
         Some("web")
     }
 
+    fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
+        let ops: &[&'static dyn Operation] = &WEB_OPERATIONS;
+        // SAFETY: WEB_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
+        unsafe {
+            std::mem::transmute::<
+                &[&dyn Operation],
+                &'static [&'static dyn swissarmyhammer_operations::Operation],
+            >(ops)
+        }
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -152,6 +163,15 @@ pub fn register_web_tools(registry: &mut ToolRegistry) {
 mod tests {
     use super::*;
     use crate::mcp::tool_registry::ToolRegistry;
+
+    #[test]
+    fn test_web_tool_has_operations() {
+        let tool = WebTool::new();
+        let ops = tool.operations();
+        assert_eq!(ops.len(), 2);
+        assert!(ops.iter().any(|o| o.op_string() == "search url"));
+        assert!(ops.iter().any(|o| o.op_string() == "fetch url"));
+    }
 
     #[test]
     fn test_register_web_tools() {

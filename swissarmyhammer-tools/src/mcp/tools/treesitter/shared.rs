@@ -1,48 +1,10 @@
 //! Shared utilities for tree-sitter MCP tools
 
 use rmcp::ErrorData as McpError;
-use serde_json::{json, Value};
 use std::path::PathBuf;
 use swissarmyhammer_treesitter::{DuplicateCluster, QueryMatch, SimilarChunkResult, Workspace};
 
 use crate::mcp::tool_registry::ToolContext;
-
-/// Returns a JSON schema property definition for the workspace path parameter.
-///
-/// This is a common property used across all tree-sitter tools to specify
-/// the workspace directory to operate on.
-pub fn schema_workspace_path_property() -> Value {
-    json!({
-        "type": "string",
-        "description": "Workspace path (default: current directory)"
-    })
-}
-
-/// Builds a JSON schema object for MCP tool parameters.
-///
-/// Creates a standard JSON schema with "type": "object" and the provided
-/// properties. Optionally includes a "required" array for mandatory fields.
-///
-/// # Arguments
-/// * `properties` - Vector of (name, schema_value) tuples for each property
-/// * `required` - Optional vector of property names that are required
-pub fn build_tool_schema(properties: Vec<(&str, Value)>, required: Option<Vec<&str>>) -> Value {
-    let mut props = serde_json::Map::new();
-    for (name, value) in properties {
-        props.insert(name.to_string(), value);
-    }
-
-    let mut schema = json!({
-        "type": "object",
-        "properties": props
-    });
-
-    if let Some(req) = required {
-        schema["required"] = json!(req);
-    }
-
-    schema
-}
 
 /// Resolve the workspace path from an optional path parameter and tool context.
 ///

@@ -5,6 +5,7 @@
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{send_mcp_log, AgentTool, BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use rmcp::model::{
     CallToolResult, LoggingLevel, LoggingMessageNotification, LoggingMessageNotificationParam,
 };
@@ -15,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
+use swissarmyhammer_operations::{generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig};
 // Replaced sah_config with local defaults for shell configuration
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -1515,6 +1517,45 @@ fn format_error_result(shell_error: ShellError) -> Result<CallToolResult, McpErr
     })
 }
 
+/// Operation metadata for executing shell commands
+#[derive(Debug, Default)]
+pub struct ExecuteCommand;
+
+static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("command")
+        .description("The shell command to execute")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("working_directory")
+        .description("Working directory for command execution (optional, defaults to current directory)")
+        .param_type(ParamType::String),
+    ParamMeta::new("environment")
+        .description("Additional environment variables as JSON string (optional, e.g., '{\"KEY1\":\"value1\",\"KEY2\":\"value2\"}')")
+        .param_type(ParamType::String),
+];
+
+impl Operation for ExecuteCommand {
+    fn verb(&self) -> &'static str {
+        "execute"
+    }
+    fn noun(&self) -> &'static str {
+        "command"
+    }
+    fn description(&self) -> &'static str {
+        "Execute a shell command with timeout and environment control"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        EXECUTE_COMMAND_PARAMS
+    }
+}
+
+// Static operation instances for schema generation
+static EXECUTE_CMD: Lazy<ExecuteCommand> = Lazy::new(ExecuteCommand::default);
+
+pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
+    vec![&*EXECUTE_CMD as &dyn Operation]
+});
+
 /// Tool for executing shell commands
 #[derive(Default, Clone)]
 pub struct ShellExecuteTool;
@@ -1544,48 +1585,21 @@ impl McpTool for ShellExecuteTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "op": {
-                    "type": "string",
-                    "description": "Operation to perform",
-                    "enum": ["execute command"]
-                },
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to execute",
-                    "minLength": 1
-                },
-                "working_directory": {
-                    "type": "string",
-                    "description": "Working directory for command execution (optional, defaults to current directory)"
-                },
+        let config = SchemaConfig::new(
+            "Shell command execution with timeout and environment control. Execute commands in isolated processes with output capture.",
+        );
+        generate_mcp_schema(&SHELL_OPERATIONS, config)
+    }
 
-                "environment": {
-                    "type": "string",
-                    "description": "Additional environment variables as JSON string (optional, e.g., '{\"KEY1\":\"value1\",\"KEY2\":\"value2\"}')"
-                }
-            },
-            "required": ["command"],
-            "x-operation-schemas": [
-                {
-                    "title": "execute command",
-                    "description": "Execute a shell command with timeout and environment control",
-                    "type": "object",
-                    "properties": {
-                        "op": { "const": "execute command" },
-                        "command": { "type": "string", "description": "The shell command to execute" },
-                        "working_directory": { "type": "string", "description": "Working directory for command execution" },
-                        "environment": { "type": "string", "description": "Additional environment variables as JSON string" }
-                    },
-                    "required": ["op", "command"]
-                }
-            ],
-            "x-operation-groups": {
-                "command": ["execute command"]
-            }
-        })
+    fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
+        let ops: &[&'static dyn Operation] = &SHELL_OPERATIONS;
+        // SAFETY: SHELL_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
+        unsafe {
+            std::mem::transmute::<
+                &[&dyn Operation],
+                &'static [&'static dyn swissarmyhammer_operations::Operation],
+            >(ops)
+        }
     }
 
     async fn execute(
@@ -1883,6 +1897,14 @@ mod tests {
     }
 
     #[test]
+    fn test_shell_tool_has_operations() {
+        let tool = ShellExecuteTool::new();
+        let ops = tool.operations();
+        assert_eq!(ops.len(), 1);
+        assert!(ops.iter().any(|o| o.op_string() == "execute command"));
+    }
+
+    #[test]
     fn test_tool_properties() {
         let tool = ShellExecuteTool::new();
         assert_eq!(tool.name(), "shell");
@@ -1890,11 +1912,10 @@ mod tests {
 
         let schema = tool.schema();
         assert!(schema.is_object());
-        assert!(schema["properties"]["command"]["type"].as_str() == Some("string"));
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::Value::String("command".to_string())));
+        assert!(schema["properties"]["command"].is_object());
+        assert!(schema["properties"]["op"].is_object());
+        assert!(schema["x-operation-schemas"].is_array());
+        assert!(schema["x-operation-groups"].is_object());
     }
 
     #[tokio::test]
