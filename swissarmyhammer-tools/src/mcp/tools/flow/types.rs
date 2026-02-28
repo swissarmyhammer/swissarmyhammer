@@ -34,7 +34,12 @@ use serde_json::Value as JsonValue;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FlowToolRequest {
+    /// Operation to perform: "run" (execute workflow), "exit" (terminate current workflow), or "list" (show workflows)
+    #[serde(default)]
+    pub op: Option<String>,
+
     /// Name of the workflow to execute, or "list" to show all workflows
+    #[serde(default)]
     pub flow_name: String,
 
     /// Workflow-specific parameters as key-value pairs (ignored when flow_name='list')
@@ -66,6 +71,7 @@ impl FlowToolRequest {
     /// Create a new FlowToolRequest for workflow execution
     pub fn new(flow_name: impl Into<String>) -> Self {
         Self {
+            op: None,
             flow_name: flow_name.into(),
             parameters: Default::default(),
             format: None,
@@ -79,9 +85,24 @@ impl FlowToolRequest {
     /// Create a new FlowToolRequest for listing workflows
     pub fn list() -> Self {
         Self {
-            flow_name: "list".to_string(),
+            op: Some("list".to_string()),
+            flow_name: String::new(),
             parameters: Default::default(),
             format: Some("json".to_string()),
+            verbose: false,
+            interactive: false,
+            dry_run: false,
+            quiet: false,
+        }
+    }
+
+    /// Create a new FlowToolRequest for exiting the current workflow
+    pub fn exit() -> Self {
+        Self {
+            op: Some("exit".to_string()),
+            flow_name: String::new(),
+            parameters: Default::default(),
+            format: None,
             verbose: false,
             interactive: false,
             dry_run: false,
@@ -127,13 +148,49 @@ impl FlowToolRequest {
 
     /// Check if this is a list request
     pub fn is_list(&self) -> bool {
-        self.flow_name == "list"
+        self.op.as_deref() == Some("list") || self.flow_name == "list"
+    }
+
+    /// Check if this is an exit request
+    pub fn is_exit(&self) -> bool {
+        self.op.as_deref() == Some("exit")
+    }
+
+    /// Resolve the effective operation based on op field and flow_name fallback
+    pub fn effective_op(&self) -> &str {
+        if let Some(op) = &self.op {
+            op.as_str()
+        } else if self.flow_name == "list" {
+            "list"
+        } else {
+            "run"
+        }
     }
 
     /// Validate the request
     pub fn validate(&self) -> Result<(), String> {
-        if self.flow_name.trim().is_empty() {
-            return Err("flow_name cannot be empty".to_string());
+        // Validate op if provided
+        if let Some(op) = &self.op {
+            match op.as_str() {
+                "run" | "exit" | "list" => {}
+                _ => {
+                    return Err(format!(
+                        "Invalid op: '{}'. Must be 'run', 'exit', or 'list'",
+                        op
+                    ))
+                }
+            }
+        }
+
+        // flow_name is required for run, but not for exit or list
+        match self.effective_op() {
+            "run" => {
+                if self.flow_name.trim().is_empty() {
+                    return Err("flow_name is required when op is 'run'".to_string());
+                }
+            }
+            "exit" | "list" => {}
+            _ => {} // already validated above
         }
 
         if let Some(format) = &self.format {
@@ -317,14 +374,19 @@ pub fn generate_flow_tool_schema(workflow_names: Vec<String>) -> JsonValue {
     serde_json::json!({
         "type": "object",
         "properties": {
+            "op": {
+                "type": "string",
+                "description": "Operation to perform: 'run' (execute workflow), 'exit' (terminate current workflow), or 'list' (show workflows). If omitted, inferred from flow_name.",
+                "enum": ["run", "exit", "list"]
+            },
             "flow_name": {
                 "type": "string",
-                "description": "Name of the workflow to execute, or 'list' to show all workflows",
+                "description": "Name of the workflow to execute (required for 'run' op)",
                 "enum": flow_names
             },
             "parameters": {
                 "type": "object",
-                "description": "Workflow-specific parameters as key-value pairs (ignored when flow_name='list')",
+                "description": "Workflow-specific parameters as key-value pairs (only used with 'run' op)",
                 "additionalProperties": {
                     "type": ["string", "boolean", "number", "object", "array", "null"]
                 },
@@ -332,13 +394,13 @@ pub fn generate_flow_tool_schema(workflow_names: Vec<String>) -> JsonValue {
             },
             "format": {
                 "type": "string",
-                "description": "Output format when flow_name='list'",
+                "description": "Output format when op='list'",
                 "enum": ["json", "yaml", "table"],
                 "default": "json"
             },
             "verbose": {
                 "type": "boolean",
-                "description": "Include detailed parameter information when flow_name='list'",
+                "description": "Include detailed parameter information when op='list'",
                 "default": false
             },
             "interactive": {
@@ -357,7 +419,7 @@ pub fn generate_flow_tool_schema(workflow_names: Vec<String>) -> JsonValue {
                 "default": false
             }
         },
-        "required": ["flow_name"]
+        "required": ["op"]
     })
 }
 
@@ -373,6 +435,7 @@ mod tests {
     #[test]
     fn test_flow_tool_request_new() {
         let request = FlowToolRequest::new("plan");
+        assert_eq!(request.op, None);
         assert_eq!(request.flow_name, "plan");
         assert!(request.parameters.is_empty());
         assert_eq!(request.format, None);
@@ -385,9 +448,18 @@ mod tests {
     #[test]
     fn test_flow_tool_request_list() {
         let request = FlowToolRequest::list();
-        assert_eq!(request.flow_name, "list");
+        assert_eq!(request.op, Some("list".to_string()));
         assert!(request.is_list());
         assert_eq!(request.format, Some("json".to_string()));
+    }
+
+    #[test]
+    fn test_flow_tool_request_exit() {
+        let request = FlowToolRequest::exit();
+        assert_eq!(request.op, Some("exit".to_string()));
+        assert!(request.is_exit());
+        assert!(!request.is_list());
+        assert_eq!(request.effective_op(), "exit");
     }
 
     #[test]
@@ -415,6 +487,28 @@ mod tests {
 
         let exec_request = FlowToolRequest::new("plan");
         assert!(!exec_request.is_list());
+
+        // Backward compat: flow_name="list" still works
+        let legacy_list = FlowToolRequest::new("list");
+        assert!(legacy_list.is_list());
+    }
+
+    #[test]
+    fn test_flow_tool_request_effective_op() {
+        // Explicit op takes priority
+        let request = FlowToolRequest::exit();
+        assert_eq!(request.effective_op(), "exit");
+
+        let request = FlowToolRequest::list();
+        assert_eq!(request.effective_op(), "list");
+
+        // No op: infer from flow_name
+        let request = FlowToolRequest::new("plan");
+        assert_eq!(request.effective_op(), "run");
+
+        // flow_name="list" infers list op
+        let request = FlowToolRequest::new("list");
+        assert_eq!(request.effective_op(), "list");
     }
 
     #[test]
@@ -427,10 +521,27 @@ mod tests {
     }
 
     #[test]
-    fn test_flow_tool_request_validation_empty_name() {
+    fn test_flow_tool_request_validation_empty_name_for_run() {
         let request = FlowToolRequest::new("");
         assert!(request.validate().is_err());
-        assert!(request.validate().unwrap_err().contains("empty"));
+        assert!(request
+            .validate()
+            .unwrap_err()
+            .contains("flow_name is required"));
+    }
+
+    #[test]
+    fn test_flow_tool_request_validation_empty_name_ok_for_exit() {
+        let request = FlowToolRequest::exit();
+        assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn test_flow_tool_request_validation_invalid_op() {
+        let mut request = FlowToolRequest::new("plan");
+        request.op = Some("bogus".to_string());
+        assert!(request.validate().is_err());
+        assert!(request.validate().unwrap_err().contains("Invalid op"));
     }
 
     #[test]
@@ -480,6 +591,7 @@ mod tests {
         let json = r#"{"flow_name": "plan"}"#;
         let deserialized: FlowToolRequest = serde_json::from_str(json).unwrap();
 
+        assert_eq!(deserialized.op, None);
         assert_eq!(deserialized.flow_name, "plan");
         assert!(deserialized.parameters.is_empty());
         assert_eq!(deserialized.format, None);
@@ -487,6 +599,15 @@ mod tests {
         assert!(!deserialized.interactive);
         assert!(!deserialized.dry_run);
         assert!(!deserialized.quiet);
+    }
+
+    #[test]
+    fn test_flow_tool_request_deserialization_with_op() {
+        let json = r#"{"op": "exit"}"#;
+        let deserialized: FlowToolRequest = serde_json::from_str(json).unwrap();
+
+        assert_eq!(deserialized.op, Some("exit".to_string()));
+        assert!(deserialized.is_exit());
     }
 
     // ============================================================================
@@ -639,6 +760,7 @@ mod tests {
         assert_eq!(schema["type"], "object");
 
         let properties = schema["properties"].as_object().unwrap();
+        assert!(properties.contains_key("op"));
         assert!(properties.contains_key("flow_name"));
         assert!(properties.contains_key("parameters"));
         assert!(properties.contains_key("format"));
@@ -649,7 +771,14 @@ mod tests {
 
         let required = schema["required"].as_array().unwrap();
         assert_eq!(required.len(), 1);
-        assert_eq!(required[0], "flow_name");
+        assert_eq!(required[0], "op");
+
+        // Verify op enum
+        let op_enum = schema["properties"]["op"]["enum"].as_array().unwrap();
+        assert_eq!(op_enum.len(), 3);
+        assert!(op_enum.contains(&json!("run")));
+        assert!(op_enum.contains(&json!("exit")));
+        assert!(op_enum.contains(&json!("list")));
     }
 
     #[test]
@@ -673,6 +802,16 @@ mod tests {
         assert_eq!(schema["properties"]["interactive"]["default"], false);
         assert_eq!(schema["properties"]["dry_run"]["default"], false);
         assert_eq!(schema["properties"]["quiet"]["default"], false);
+    }
+
+    #[test]
+    fn test_generate_flow_tool_schema_op_enum() {
+        let schema = generate_flow_tool_schema(vec![]);
+
+        let op_enum = schema["properties"]["op"]["enum"].as_array().unwrap();
+        assert!(op_enum.contains(&json!("run")));
+        assert!(op_enum.contains(&json!("exit")));
+        assert!(op_enum.contains(&json!("list")));
     }
 
     #[test]

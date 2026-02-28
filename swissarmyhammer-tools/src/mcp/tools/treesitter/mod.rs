@@ -85,6 +85,17 @@ impl McpTool for TreesitterTool {
         Some("treesitter")
     }
 
+    fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
+        let ops: &[&'static dyn Operation] = &TREESITTER_OPERATIONS;
+        // SAFETY: TREESITTER_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
+        unsafe {
+            std::mem::transmute::<
+                &[&dyn Operation],
+                &'static [&'static dyn swissarmyhammer_operations::Operation],
+            >(ops)
+        }
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -176,6 +187,17 @@ mod tests {
     fn test_treesitter_tool_has_description() {
         let tool = TreesitterTool::new();
         assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_treesitter_tool_has_operations() {
+        let tool = TreesitterTool::new();
+        let ops = tool.operations();
+        assert_eq!(ops.len(), 4);
+        assert!(ops.iter().any(|o| o.op_string() == "search code"));
+        assert!(ops.iter().any(|o| o.op_string() == "query ast"));
+        assert!(ops.iter().any(|o| o.op_string() == "find duplicates"));
+        assert!(ops.iter().any(|o| o.op_string() == "get status"));
     }
 
     #[test]

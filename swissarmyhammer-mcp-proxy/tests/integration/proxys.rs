@@ -6,7 +6,7 @@ fn test_filter_logic() {
 
     // Test the filter logic directly
     assert!(filter.is_allowed("files"));
-    assert!(!filter.is_allowed("shell_execute"));
+    assert!(!filter.is_allowed("shell"));
     assert!(!filter.is_allowed("web"));
     assert!(!filter.is_allowed("kanban"));
 }
@@ -23,12 +23,12 @@ fn test_filter_allow_precedence() {
 fn test_filter_deny_blocks_tools() {
     let filter = ToolFilter::new(
         vec![], // Empty allow list = allow all
-        vec!["^shell_.*".to_string()],
+        vec!["^shell".to_string()],
     )
     .unwrap();
 
     assert!(filter.is_allowed("files"));
-    assert!(!filter.is_allowed("shell_execute"));
+    assert!(!filter.is_allowed("shell"));
     assert!(!filter.is_allowed("shell_kill"));
 }
 
@@ -43,5 +43,5 @@ fn test_filter_whitelist_mode() {
     assert!(filter.is_allowed("files"));
     assert!(filter.is_allowed("treesitter_search"));
     assert!(!filter.is_allowed("kanban")); // Not in whitelist
-    assert!(!filter.is_allowed("shell_execute")); // Not in whitelist
+    assert!(!filter.is_allowed("shell")); // Not in whitelist
 }

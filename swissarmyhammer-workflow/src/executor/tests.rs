@@ -1791,3 +1791,307 @@ async fn test_global_boolean_true_and_false_in_workflows() {
         "workflow_should_continue should be false and block transition"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_workflow_exit_at_root_level() {
+    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+
+    // Ensure the exit flag is clean before we start
+    let js_state = swissarmyhammer_js::JsState::global();
+    let _ = js_state.set("__workflow_exit__", "false").await;
+
+    // Create a workflow: start -> exit_state -> after_exit (terminal)
+    // The exit_state sets __workflow_exit__ = true, so the workflow should
+    // complete at exit_state without reaching after_exit.
+    use crate::state::State;
+    use crate::storage::WorkflowStorage;
+    use std::sync::Arc;
+
+    let start_state = State {
+        id: StateId::new("start"),
+        description: r#"Log "Starting root exit test""#.to_string(),
+        state_type: StateType::Normal,
+        is_terminal: false,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let exit_state = State {
+        id: StateId::new("exit_state"),
+        description: "js_set __workflow_exit__ true".to_string(),
+        state_type: StateType::Normal,
+        is_terminal: false,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let after_exit = State {
+        id: StateId::new("after_exit"),
+        description: r#"Log "Should not reach here""#.to_string(),
+        state_type: StateType::Normal,
+        is_terminal: true,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let mut workflow = Workflow::new(
+        WorkflowName::new("root-exit-test"),
+        "Test workflow exit at root level".to_string(),
+        StateId::new("start"),
+    );
+
+    workflow.add_state(start_state);
+    workflow.add_state(exit_state);
+    workflow.add_state(after_exit);
+
+    workflow.add_transition(Transition {
+        from_state: StateId::new("start"),
+        to_state: StateId::new("exit_state"),
+        condition: TransitionCondition {
+            condition_type: ConditionType::Always,
+            expression: None,
+        },
+        action: None,
+        metadata: HashMap::new(),
+    });
+
+    workflow.add_transition(Transition {
+        from_state: StateId::new("exit_state"),
+        to_state: StateId::new("after_exit"),
+        condition: TransitionCondition {
+            condition_type: ConditionType::Always,
+            expression: None,
+        },
+        action: None,
+        metadata: HashMap::new(),
+    });
+
+    let mut storage = WorkflowStorage::memory();
+    storage.store_workflow(workflow.clone()).unwrap();
+    let arc_storage = Arc::new(storage);
+    crate::actions::set_test_storage(arc_storage);
+
+    let mut executor = WorkflowExecutor::new();
+    let run = executor.start_and_execute_workflow(workflow).await.unwrap();
+
+    crate::actions::clear_test_storage();
+
+    // Workflow should have exited cleanly at exit_state (Completed status)
+    assert_eq!(
+        run.status,
+        WorkflowRunStatus::Completed,
+        "Workflow should complete cleanly when exit flag is set"
+    );
+    // It should NOT have reached after_exit — it stopped at exit_state
+    assert_eq!(
+        run.current_state,
+        StateId::new("exit_state"),
+        "Workflow should stop at exit_state, not continue to after_exit"
+    );
+
+    // Verify the exit flag was cleared
+    let exit_val = js_state.get("__workflow_exit__").await.unwrap();
+    let is_still_set = matches!(&exit_val, serde_json::Value::String(s) if s == "true")
+        || matches!(&exit_val, serde_json::Value::Bool(true));
+    assert!(
+        !is_still_set,
+        "Exit flag should be cleared after workflow completes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_workflow_exit_does_not_cascade_from_child_to_parent() {
+    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+
+    // Ensure the exit flag is clean before we start
+    let js_state = swissarmyhammer_js::JsState::global();
+    let _ = js_state.set("__workflow_exit__", "false").await;
+
+    // Child workflow: start -> set_exit (sets __workflow_exit__ = true) -> child_done (terminal)
+    // The child should exit at set_exit due to the flag, never reaching child_done.
+    //
+    // Parent workflow: start -> call_child (runs child) -> after_child -> done (terminal)
+    // After child exits, parent should continue to after_child and done, NOT cascade exit.
+    use crate::state::State;
+    use crate::storage::WorkflowStorage;
+    use std::sync::Arc;
+
+    // --- Build the child workflow ---
+    let child_start = State {
+        id: StateId::new("start"),
+        description: r#"Log "Child starting""#.to_string(),
+        state_type: StateType::Normal,
+        is_terminal: false,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let child_set_exit = State {
+        id: StateId::new("set_exit"),
+        description: "js_set __workflow_exit__ true".to_string(),
+        state_type: StateType::Normal,
+        is_terminal: false,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let child_done = State {
+        id: StateId::new("child_done"),
+        description: r#"Log "Child done - should not reach""#.to_string(),
+        state_type: StateType::Normal,
+        is_terminal: true,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let mut child_workflow = Workflow::new(
+        WorkflowName::new("child-exit-test"),
+        "Child workflow that exits via flag".to_string(),
+        StateId::new("start"),
+    );
+
+    child_workflow.add_state(child_start);
+    child_workflow.add_state(child_set_exit);
+    child_workflow.add_state(child_done);
+
+    child_workflow.add_transition(Transition {
+        from_state: StateId::new("start"),
+        to_state: StateId::new("set_exit"),
+        condition: TransitionCondition {
+            condition_type: ConditionType::Always,
+            expression: None,
+        },
+        action: None,
+        metadata: HashMap::new(),
+    });
+
+    child_workflow.add_transition(Transition {
+        from_state: StateId::new("set_exit"),
+        to_state: StateId::new("child_done"),
+        condition: TransitionCondition {
+            condition_type: ConditionType::Always,
+            expression: None,
+        },
+        action: None,
+        metadata: HashMap::new(),
+    });
+
+    // --- Build the parent workflow ---
+    let parent_start = State {
+        id: StateId::new("start"),
+        description: r#"Log "Parent starting""#.to_string(),
+        state_type: StateType::Normal,
+        is_terminal: false,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let parent_call_child = State {
+        id: StateId::new("call_child"),
+        description: r#"Run workflow "child-exit-test""#.to_string(),
+        state_type: StateType::Normal,
+        is_terminal: false,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let parent_after_child = State {
+        id: StateId::new("after_child"),
+        description: r#"Log "Parent continuing after child""#.to_string(),
+        state_type: StateType::Normal,
+        is_terminal: false,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let parent_done = State {
+        id: StateId::new("done"),
+        description: r#"Log "Parent done""#.to_string(),
+        state_type: StateType::Normal,
+        is_terminal: true,
+        allows_parallel: false,
+        metadata: HashMap::new(),
+    };
+
+    let mut parent_workflow = Workflow::new(
+        WorkflowName::new("parent-exit-test"),
+        "Parent workflow that calls a child which exits".to_string(),
+        StateId::new("start"),
+    );
+
+    parent_workflow.add_state(parent_start);
+    parent_workflow.add_state(parent_call_child);
+    parent_workflow.add_state(parent_after_child);
+    parent_workflow.add_state(parent_done);
+
+    parent_workflow.add_transition(Transition {
+        from_state: StateId::new("start"),
+        to_state: StateId::new("call_child"),
+        condition: TransitionCondition {
+            condition_type: ConditionType::Always,
+            expression: None,
+        },
+        action: None,
+        metadata: HashMap::new(),
+    });
+
+    parent_workflow.add_transition(Transition {
+        from_state: StateId::new("call_child"),
+        to_state: StateId::new("after_child"),
+        condition: TransitionCondition {
+            condition_type: ConditionType::OnSuccess,
+            expression: None,
+        },
+        action: None,
+        metadata: HashMap::new(),
+    });
+
+    parent_workflow.add_transition(Transition {
+        from_state: StateId::new("after_child"),
+        to_state: StateId::new("done"),
+        condition: TransitionCondition {
+            condition_type: ConditionType::Always,
+            expression: None,
+        },
+        action: None,
+        metadata: HashMap::new(),
+    });
+
+    // Store both workflows in test storage
+    let mut storage = WorkflowStorage::memory();
+    storage.store_workflow(child_workflow).unwrap();
+    storage.store_workflow(parent_workflow.clone()).unwrap();
+    let arc_storage = Arc::new(storage);
+    crate::actions::set_test_storage(arc_storage);
+
+    // Execute the parent workflow
+    let mut executor = WorkflowExecutor::new();
+    let run = executor
+        .start_and_execute_workflow(parent_workflow)
+        .await
+        .unwrap();
+
+    crate::actions::clear_test_storage();
+
+    // The parent workflow should have completed fully — the child's exit
+    // should NOT have cascaded to the parent.
+    assert_eq!(
+        run.status,
+        WorkflowRunStatus::Completed,
+        "Parent workflow should complete successfully"
+    );
+    assert_eq!(
+        run.current_state,
+        StateId::new("done"),
+        "Parent should reach 'done' state — exit must not cascade from child"
+    );
+
+    // Verify the exit flag is clean
+    let exit_val = js_state.get("__workflow_exit__").await.unwrap();
+    let is_still_set = matches!(&exit_val, serde_json::Value::String(s) if s == "true")
+        || matches!(&exit_val, serde_json::Value::Bool(true));
+    assert!(
+        !is_still_set,
+        "Exit flag should be cleared after all workflows complete"
+    );
+}

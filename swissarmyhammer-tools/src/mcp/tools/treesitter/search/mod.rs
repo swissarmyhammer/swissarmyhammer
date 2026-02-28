@@ -1,15 +1,12 @@
 //! Semantic search tool for finding similar code chunks
 
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use crate::mcp::tools::treesitter::shared::{
-    build_tool_schema, format_similar_chunks, open_workspace, resolve_workspace_path,
-    schema_workspace_path_property,
+    format_similar_chunks, open_workspace, resolve_workspace_path,
 };
-use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
-use serde_json::json;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
 /// Default number of results to return
@@ -53,20 +50,6 @@ impl Operation for SearchCode {
     }
 }
 
-/// MCP tool for semantic code search
-#[derive(Default)]
-pub struct TreesitterSearchTool;
-
-impl TreesitterSearchTool {
-    /// Creates a new instance of the TreesitterSearchTool
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-// No health checks needed
-crate::impl_empty_doctorable!(TreesitterSearchTool);
-
 #[derive(Deserialize)]
 struct SearchRequest {
     /// The text/code to search for similar chunks
@@ -87,46 +70,6 @@ fn default_top_k() -> usize {
 
 fn default_min_similarity() -> f32 {
     DEFAULT_MIN_SIMILARITY
-}
-
-#[async_trait]
-impl McpTool for TreesitterSearchTool {
-    fn name(&self) -> &'static str {
-        "treesitter_search"
-    }
-
-    fn description(&self) -> &'static str {
-        include_str!("description.md")
-    }
-
-    fn schema(&self) -> serde_json::Value {
-        build_tool_schema(
-            vec![
-                (
-                    "query",
-                    json!({"type": "string", "description": "The text or code snippet to search for similar chunks"}),
-                ),
-                (
-                    "top_k",
-                    json!({"type": "integer", "description": "Maximum number of results to return (default: 10)", "default": 10}),
-                ),
-                (
-                    "min_similarity",
-                    json!({"type": "number", "description": "Minimum cosine similarity threshold 0.0-1.0 (default: 0.9)", "default": 0.9}),
-                ),
-                ("path", schema_workspace_path_property()),
-            ],
-            Some(vec!["query"]),
-        )
-    }
-
-    async fn execute(
-        &self,
-        arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        execute_search(arguments, context).await
-    }
 }
 
 /// Execute a semantic code search operation
@@ -158,30 +101,7 @@ pub async fn execute_search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::tools::treesitter::shared::test_helpers::{
-        assert_schema_has_properties, assert_schema_has_required, assert_schema_is_object,
-        assert_tool_basics, execute_tool_with_temp_path,
-    };
-
-    #[test]
-    fn test_tool_basics() {
-        let tool = TreesitterSearchTool::new();
-        assert_tool_basics(&tool, "treesitter_search", "semantic");
-    }
-
-    #[test]
-    fn test_tool_default_creates_valid_instance() {
-        let tool = TreesitterSearchTool;
-        assert_tool_basics(&tool, "treesitter_search", "semantic");
-    }
-
-    #[test]
-    fn test_schema_structure() {
-        let tool = TreesitterSearchTool::new();
-        assert_schema_is_object(&tool);
-        assert_schema_has_properties(&tool, &["query", "top_k", "min_similarity", "path"]);
-        assert_schema_has_required(&tool, &["query"]);
-    }
+    use serde_json::json;
 
     #[test]
     fn test_default_values() {
@@ -212,20 +132,5 @@ mod tests {
         assert_eq!(request.top_k, 5);
         assert!((request.min_similarity - 0.9).abs() < 0.001);
         assert_eq!(request.path, Some("/some/path".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_execute_no_leader_running() {
-        let tool = TreesitterSearchTool::new();
-        let mut extra_args = serde_json::Map::new();
-        extra_args.insert("query".to_string(), json!("fn main()"));
-
-        // With background indexing, Reader mode doesn't have embedding model
-        // Semantic search requires Leader mode to embed query text
-        let (result, _temp_dir) = execute_tool_with_temp_path(&tool, Some(extra_args)).await;
-        assert!(
-            result.is_err(),
-            "Semantic search should fail in Reader mode (no embedding model)"
-        );
     }
 }

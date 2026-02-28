@@ -33,7 +33,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         register_git_tools(&mut registry);
 
-        assert!(registry.get_tool("git_changes").is_some());
+        assert!(registry.get_tool("git").is_some());
         assert_eq!(registry.len(), 1);
     }
 
@@ -47,10 +47,10 @@ mod tests {
 
         let git_changes_tool = tools
             .iter()
-            .find(|tool| tool.name == "git_changes")
+            .find(|tool| tool.name == "git")
             .expect("git_changes tool should be registered");
 
-        assert_eq!(git_changes_tool.name, "git_changes");
+        assert_eq!(git_changes_tool.name, "git");
         assert!(git_changes_tool.description.is_some());
         assert!(!git_changes_tool.input_schema.is_empty());
     }
@@ -63,7 +63,7 @@ mod tests {
         register_git_tools(&mut registry);
 
         assert_eq!(registry.len(), 1);
-        assert!(registry.get_tool("git_changes").is_some());
+        assert!(registry.get_tool("git").is_some());
     }
 
     #[test]
