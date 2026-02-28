@@ -21,7 +21,10 @@ impl FileWriterGuard {
 
 impl std::io::Write for FileWriterGuard {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut file = self.file.lock().expect("FileWriterGuard mutex was poisoned");
+        let mut file = self
+            .file
+            .lock()
+            .expect("FileWriterGuard mutex was poisoned");
         let result = file.write(buf)?;
         file.flush()?;
         file.sync_all()?;
@@ -29,7 +32,10 @@ impl std::io::Write for FileWriterGuard {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let mut file = self.file.lock().expect("FileWriterGuard flush mutex was poisoned");
+        let mut file = self
+            .file
+            .lock()
+            .expect("FileWriterGuard flush mutex was poisoned");
         file.flush()?;
         file.sync_all()?;
         Ok(())
