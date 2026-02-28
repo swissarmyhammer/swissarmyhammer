@@ -22,7 +22,7 @@ export function EditableText({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
-  const clickPosRef = useRef<{ x: number; y: number } | null>(null);
+  const caretOffsetRef = useRef<number | null>(null);
 
   const autoSize = useCallback(() => {
     const el = ref.current;
@@ -38,32 +38,12 @@ export function EditableText({
       el.focus();
       autoSize();
 
-      const pos = clickPosRef.current;
-      clickPosRef.current = null;
+      const offset = caretOffsetRef.current;
+      caretOffsetRef.current = null;
 
-      if (pos) {
-        // Place caret where the user clicked by dispatching a synthetic
-        // mousedown at the same coordinates. The input/textarea occupies
-        // the same space as the span it replaced, so coordinates map
-        // to the correct character position.
-        requestAnimationFrame(() => {
-          el.dispatchEvent(
-            new MouseEvent("mousedown", {
-              clientX: pos.x,
-              clientY: pos.y,
-              bubbles: true,
-            })
-          );
-          el.dispatchEvent(
-            new MouseEvent("mouseup", {
-              clientX: pos.x,
-              clientY: pos.y,
-              bubbles: true,
-            })
-          );
-        });
+      if (offset !== null) {
+        el.setSelectionRange(offset, offset);
       } else {
-        // Fallback: place cursor at end
         const len = el.value.length;
         el.setSelectionRange(len, len);
       }
@@ -123,7 +103,17 @@ export function EditableText({
     <span
       className={`${className ?? ""}${isEmpty ? " text-muted-foreground italic" : ""}`}
       onClick={(e) => {
-        clickPosRef.current = { x: e.clientX, y: e.clientY };
+        // Resolve click position to a character offset while the span's
+        // text node is still in the DOM. caretRangeFromPoint gives us
+        // the offset into the text node under the cursor.
+        let offset: number | null = null;
+        if (document.caretRangeFromPoint) {
+          const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+          if (range) {
+            offset = range.startOffset;
+          }
+        }
+        caretOffsetRef.current = offset;
         setDraft(value);
         setEditing(true);
       }}
