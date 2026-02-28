@@ -93,11 +93,12 @@ Group tasks by phase:
 
 If there are unresolved questions, add a kanban card for each one so they are tracked and visible.
 
-## Phase 5: Present and Gate
+## Phase 5: Present and Discuss
 
-1. Present the plan to the user for review using the `question` tool with `op: "ask question"`. Summarize the kanban cards you created.
-2. Accept edits, rejections, or approvals. Update the board accordingly.
-3. The board is ready for execution — no separate "capture" step needed.
+1. Present a summary of the kanban cards you created — list each card's title, a one-line description, and dependencies.
+2. Stay conversational. Invite the user to discuss, iterate, and refine the cards. They may want to add detail, split or merge cards, rearrange dependencies, or ask clarifying questions.
+3. Update the kanban cards based on feedback. Continue the discussion until the user is satisfied.
+4. Let the user decide when the plan is ready — do not exit plan mode yourself. The board is ready for execution when the user says so.
 
 ## What Makes a Good Plan
 

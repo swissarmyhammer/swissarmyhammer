@@ -108,7 +108,7 @@ pub fn load_agent_from_dir(dir: &Path, source: AgentSource) -> Result<Agent, Str
 pub fn load_agent_from_builtin(_agent_name: &str, files: &[(&str, &str)]) -> Result<Agent, String> {
     let agent_md_content = files
         .iter()
-        .find(|(name, _)| name.ends_with("/AGENT") || *name == "AGENT")
+        .find(|(name, _)| name.ends_with("/AGENT.md") || *name == "AGENT.md")
         .map(|(_, content)| *content)
         .ok_or_else(|| "no AGENT.md found in builtin files".to_string())?;
 
@@ -116,7 +116,7 @@ pub fn load_agent_from_builtin(_agent_name: &str, files: &[(&str, &str)]) -> Res
 
     // Add any additional resource files
     for (name, content) in files {
-        if !name.ends_with("/AGENT") && *name != "AGENT" {
+        if !name.ends_with("/AGENT.md") && *name != "AGENT.md" {
             let filename = name.rsplit('/').next().unwrap_or(name);
             agent
                 .resources
