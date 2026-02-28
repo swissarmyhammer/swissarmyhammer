@@ -5,5 +5,6 @@ fn main() {
         .source_dir("../builtin/agents")
         .extensions(&["md"])
         .function_name("get_builtin_agents")
+        .preserve_extensions()
         .generate();
 }

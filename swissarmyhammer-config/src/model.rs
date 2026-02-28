@@ -27,7 +27,7 @@
 //!
 //! 1. **Built-in agents** (lowest precedence) - Embedded in binary
 //! 2. **Project agents** (medium precedence) - `./agents/*.yaml`
-//! 3. **User agents** (highest precedence) - `~/.swissarmyhammer/agents/*.yaml`
+//! 3. **User agents** (highest precedence) - `~/.models/*.yaml`
 //!
 //! Higher precedence agents override lower ones by name, enabling customization
 //! while preserving defaults.
@@ -70,7 +70,8 @@
 //! println!("Found: {}", claude_agent.name);
 //!
 //! // Apply agent to project
-//! ModelManager::use_agent("claude-code")?;
+//! use swissarmyhammer_config::model::ModelPaths;
+//! ModelManager::use_agent("claude-code", &ModelPaths::sah())?;
 //! # Ok::<(), swissarmyhammer_config::model::ModelError>(())
 //! ```
 //!
@@ -167,10 +168,41 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_common::{ErrorSeverity, Severity, SwissarmyhammerDirectory};
+#[cfg(test)]
+use swissarmyhammer_common::SwissarmyhammerDirectory;
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
+
+/// Configurable paths for model config file location.
+///
+/// Different CLIs (SAH vs AVP) write to different directories and filenames.
+/// Pass this to `ModelManager` methods that read/write config.
+#[derive(Debug, Clone)]
+pub struct ModelPaths {
+    /// Directory name relative to project root (e.g. ".swissarmyhammer" or ".avp")
+    pub dir_name: &'static str,
+    /// Config filename within the directory (e.g. "sah.yaml" or "avp.yaml")
+    pub config_filename: &'static str,
+}
+
+impl ModelPaths {
+    /// Paths for SwissArmyHammer CLI: `.swissarmyhammer/sah.yaml`
+    pub fn sah() -> Self {
+        Self {
+            dir_name: ".swissarmyhammer",
+            config_filename: "sah.yaml",
+        }
+    }
+
+    /// Paths for AVP CLI: `.avp/avp.yaml`
+    pub fn avp() -> Self {
+        Self {
+            dir_name: ".avp",
+            config_filename: "avp.yaml",
+        }
+    }
+}
 
 /// Model executor type enumeration
 ///
@@ -184,43 +216,6 @@ pub enum ModelExecutorType {
     ClaudeCode,
     /// Use local LlamaAgent with in-process execution
     LlamaAgent,
-}
-
-/// Agent use case enumeration
-///
-/// Defines the different contexts where agents can be used, allowing
-/// different operations to use different agents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AgentUseCase {
-    /// Default/fallback agent for general operations
-    Root,
-    /// Agent for workflow execution (plan, review, implement, etc.)
-    Workflows,
-}
-
-impl fmt::Display for AgentUseCase {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AgentUseCase::Root => write!(f, "root"),
-            AgentUseCase::Workflows => write!(f, "workflows"),
-        }
-    }
-}
-
-impl std::str::FromStr for AgentUseCase {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "root" => Ok(AgentUseCase::Root),
-            "workflows" => Ok(AgentUseCase::Workflows),
-            _ => Err(format!(
-                "Invalid use case: '{}'. Valid options: root, workflows",
-                s
-            )),
-        }
-    }
 }
 
 /// Complete model configuration with executor-specific settings
@@ -483,9 +478,9 @@ pub enum ModelConfigSource {
     Builtin,
     /// Project-specific models from models/ directory
     Project,
-    /// Git root models from .swissarmyhammer/models/ in git repository root
+    /// Git root models from {git-root}/models/ in git repository root
     GitRoot,
-    /// User-defined models from ~/.swissarmyhammer/models/
+    /// User-defined models from ~/.models/
     User,
 }
 
@@ -494,8 +489,8 @@ impl ModelConfigSource {
     ///
     /// - 📦 Built-in: System-provided built-in models
     /// - 📁 Project: Project-specific models from models/ directory
-    /// - 🔧 GitRoot: Git repository models from .swissarmyhammer/models/
-    /// - 👤 User: User-defined models from ~/.swissarmyhammer/models/
+    /// - 🔧 GitRoot: Git repository models from {git-root}/models/
+    /// - 👤 User: User-defined models from ~/.models/
     ///
     /// # Examples
     ///
@@ -1194,9 +1189,9 @@ impl ModelManager {
         })
     }
 
-    /// Load user-defined models from ~/.swissarmyhammer/models/
+    /// Load user-defined models from ~/.models/
     ///
-    /// Scans the user's home directory `.swissarmyhammer/models/` for model configuration
+    /// Scans the user's home directory `.models/` for model configuration
     /// files. Missing directory is handled gracefully by returning an empty vector.
     ///
     /// # Returns
@@ -1214,9 +1209,7 @@ impl ModelManager {
     /// ```
     pub fn load_user_models() -> Result<Vec<ModelInfo>, ModelError> {
         if let Some(home_dir) = dirs::home_dir() {
-            let user_models_dir = home_dir
-                .join(SwissarmyhammerDirectory::dir_name())
-                .join("models");
+            let user_models_dir = home_dir.join(".models");
             Self::load_models_from_dir(&user_models_dir, ModelConfigSource::User)
         } else {
             // No home directory available (rare case)
@@ -1249,9 +1242,9 @@ impl ModelManager {
         Self::load_models_from_dir(&project_models_dir, ModelConfigSource::Project)
     }
 
-    /// Load git root models from .swissarmyhammer/models/
+    /// Load git root models from {git-root}/models/
     ///
-    /// Scans the git repository root's `.swissarmyhammer/models/` directory for model
+    /// Scans the git repository root's `models/` directory for model
     /// configuration files. Missing directory is handled gracefully by returning an empty vector.
     ///
     /// # Returns
@@ -1271,9 +1264,7 @@ impl ModelManager {
         use swissarmyhammer_common::utils::directory_utils::find_git_repository_root;
 
         if let Some(git_root) = find_git_repository_root() {
-            let gitroot_models_dir = git_root
-                .join(SwissarmyhammerDirectory::dir_name())
-                .join("models");
+            let gitroot_models_dir = git_root.join("models");
             Self::load_models_from_dir(&gitroot_models_dir, ModelConfigSource::GitRoot)
         } else {
             // Not in a git repository
@@ -1327,23 +1318,25 @@ impl ModelManager {
     /// ```no_run
     /// use swissarmyhammer_config::model::ModelManager;
     ///
-    /// match ModelManager::detect_config_file() {
+    /// use swissarmyhammer_config::model::ModelPaths;
+    /// match ModelManager::detect_config_file(&ModelPaths::sah()) {
     ///     Some(config_path) => println!("Found config: {}", config_path.display()),
     ///     None => println!("No existing config found"),
     /// }
     /// ```
-    pub fn detect_config_file() -> Option<PathBuf> {
+    pub fn detect_config_file(paths: &ModelPaths) -> Option<PathBuf> {
         let current_dir = std::env::current_dir().ok()?;
-        let sah_dir = current_dir.join(SwissarmyhammerDirectory::dir_name());
+        let config_dir = current_dir.join(paths.dir_name);
 
         // Check for YAML config first (preferred)
-        let yaml_config = sah_dir.join("sah.yaml");
+        let yaml_config = config_dir.join(paths.config_filename);
         if yaml_config.exists() && yaml_config.is_file() {
             return Some(yaml_config);
         }
 
-        // Fall back to TOML config
-        let toml_config = sah_dir.join("sah.toml");
+        // Fall back to TOML config (replace .yaml with .toml)
+        let toml_filename = paths.config_filename.replace(".yaml", ".toml");
+        let toml_config = config_dir.join(&toml_filename);
         if toml_config.exists() && toml_config.is_file() {
             return Some(toml_config);
         }
@@ -1372,11 +1365,12 @@ impl ModelManager {
     /// ```no_run
     /// use swissarmyhammer_config::model::ModelManager;
     ///
-    /// let config_path = ModelManager::ensure_config_structure()?;
+    /// use swissarmyhammer_config::model::ModelPaths;
+    /// let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah())?;
     /// println!("Config file path: {}", config_path.display());
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
-    pub fn ensure_config_structure() -> Result<PathBuf, ModelError> {
+    pub fn ensure_config_structure(paths: &ModelPaths) -> Result<PathBuf, ModelError> {
         // Security: Get and validate current directory
         let current_dir = std::env::current_dir().map_err(ModelError::IoError)?;
 
@@ -1391,37 +1385,42 @@ impl ModelManager {
         })?;
 
         // Security: Audit log the directory we're working in
-        tracing::info!(
+        tracing::debug!(
             "Ensuring config structure in directory: {} (canonical: {})",
             current_dir.display(),
             canonical_current.display()
         );
 
-        let sah_dir = canonical_current.join(SwissarmyhammerDirectory::dir_name());
+        let config_dir = canonical_current.join(paths.dir_name);
 
-        // Create .swissarmyhammer directory if it doesn't exist
-        if !sah_dir.exists() {
+        // Create config directory if it doesn't exist
+        if !config_dir.exists() {
             // Security: Check parent directory permissions before creating
             Self::check_directory_writable(&canonical_current)?;
 
-            std::fs::create_dir_all(&sah_dir).map_err(|e| {
+            std::fs::create_dir_all(&config_dir).map_err(|e| {
                 tracing::error!(
-                    "Failed to create .swissarmyhammer directory {}: {}",
-                    sah_dir.display(),
+                    "Failed to create {} directory {}: {}",
+                    paths.dir_name,
+                    config_dir.display(),
                     e
                 );
                 ModelError::IoError(e)
             })?;
 
             // Security: Audit log directory creation
-            tracing::info!("Created .swissarmyhammer directory: {}", sah_dir.display());
+            tracing::info!(
+                "Created {} directory: {}",
+                paths.dir_name,
+                config_dir.display()
+            );
         }
 
         // Security: Validate the created/existing directory
-        Self::check_directory_permissions(&sah_dir)?;
+        Self::check_directory_permissions(&config_dir)?;
 
         // Check for existing config file first
-        if let Some(existing_config) = Self::detect_config_file() {
+        if let Some(existing_config) = Self::detect_config_file(paths) {
             // Security: Validate existing config path
             let validated_config = Self::validate_config_file_path(&existing_config)?;
             tracing::debug!("Found existing config file: {}", validated_config.display());
@@ -1429,7 +1428,7 @@ impl ModelManager {
         }
 
         // Return path for new YAML config (don't create the file yet)
-        let new_config = sah_dir.join("sah.yaml");
+        let new_config = config_dir.join(paths.config_filename);
 
         // Security: Validate the new config path before returning
         let validated_new_config = Self::validate_config_file_path(&new_config)?;
@@ -1518,20 +1517,15 @@ impl ModelManager {
         }
     }
 
-    /// Get agent name for a specific use case from config
+    /// Get configured model name from config
     ///
-    /// Reads the config file and returns the agent name configured for the use case.
-    /// Falls back to Root use case if specific use case not configured.
-    ///
-    /// Returns None if no agent configured at all.
-    ///
-    /// # Arguments
-    /// * `use_case` - The agent use case to look up
+    /// Reads the config file and returns the model name configured.
+    /// Returns None if no model configured.
     ///
     /// # Returns
-    /// * `Result<Option<String>, ModelError>` - Agent name if configured, None otherwise
-    pub fn get_agent_for_use_case(use_case: AgentUseCase) -> Result<Option<String>, ModelError> {
-        let config_path = Self::ensure_config_structure()?;
+    /// * `Result<Option<String>, ModelError>` - Model name if configured, None otherwise
+    pub fn get_agent(paths: &ModelPaths) -> Result<Option<String>, ModelError> {
+        let config_path = Self::ensure_config_structure(paths)?;
 
         if !config_path.exists() {
             return Ok(None);
@@ -1540,77 +1534,53 @@ impl ModelManager {
         let config_content = std::fs::read_to_string(&config_path).map_err(ModelError::IoError)?;
         let config_value: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
 
-        // Try new format: agents.{use_case}
-        if let Some(agents_map) = config_value.get("agents") {
-            let use_case_str = use_case.to_string();
-            if let Some(agent_name) = agents_map.get(&use_case_str) {
-                if let Some(name_str) = agent_name.as_str() {
-                    return Ok(Some(name_str.to_string()));
-                }
-            }
-
-            // Fall back to root if use case not configured
-            if use_case != AgentUseCase::Root {
-                if let Some(root_agent) = agents_map.get("root") {
-                    if let Some(name_str) = root_agent.as_str() {
-                        return Ok(Some(name_str.to_string()));
-                    }
-                }
+        // Read model key
+        if let Some(model_name) = config_value.get("model") {
+            if let Some(name_str) = model_name.as_str() {
+                return Ok(Some(name_str.to_string()));
             }
         }
 
         Ok(None)
     }
 
-    /// Resolve complete agent configuration for a use case
+    /// Resolve complete agent configuration
     ///
-    /// Returns the ModelConfig for the specified use case, with fallback chain:
-    /// 1. Use case-specific agent (if configured)
-    /// 2. Root agent (if configured)
-    /// 3. Default claude-code agent
-    ///
-    /// # Arguments
-    /// * `use_case` - The agent use case to resolve
+    /// Returns the ModelConfig with fallback:
+    /// 1. Configured model (if set)
+    /// 2. Default claude-code agent
     ///
     /// # Returns
     /// * `Result<ModelConfig, ModelError>` - Resolved agent configuration
     ///
     /// # Examples
     /// ```no_run
-    /// use swissarmyhammer_config::model::{ModelManager, AgentUseCase};
+    /// use swissarmyhammer_config::model::ModelManager;
     ///
-    /// let config = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows)?;
+    /// use swissarmyhammer_config::model::ModelPaths;
+    /// let config = ModelManager::resolve_agent_config(&ModelPaths::sah())?;
     /// println!("Using agent: {:?}", config.executor_type());
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
-    pub fn resolve_agent_config_for_use_case(
-        use_case: AgentUseCase,
-    ) -> Result<ModelConfig, ModelError> {
-        // Try to get agent name for this use case
-        let agent_name = Self::get_agent_for_use_case(use_case)?;
+    pub fn resolve_agent_config(paths: &ModelPaths) -> Result<ModelConfig, ModelError> {
+        let agent_name = Self::get_agent(paths)?;
 
         if let Some(name) = agent_name {
-            // Found configured agent - load it
             let agent_info = Self::find_agent_by_name(&name)?;
             return Ok(parse_model_config(&agent_info.content)?);
         }
 
-        // No agent configured - use default (claude-code)
-        tracing::debug!(
-            "No agent configured for use case {}, using default (claude-code)",
-            use_case
-        );
+        tracing::debug!("No model configured, using default (claude-code)");
         Ok(ModelConfig::claude_code())
     }
 
-    /// Apply an agent configuration to the project
+    /// Apply a model configuration to the project
     ///
-    /// Finds the specified agent by name, loads or creates the project configuration file,
-    /// and updates the agent section with the selected agent's configuration. Preserves
-    /// all other sections in existing configuration files.
+    /// Finds the specified model by name, loads or creates the project configuration file,
+    /// and sets the model key. Preserves all other sections in existing configuration files.
     ///
     /// # Arguments
-    /// * `agent_name` - Name of the agent to apply
+    /// * `agent_name` - Name of the model to apply
     ///
     /// # Returns
     /// * `Result<(), ModelError>` - Success or error details
@@ -1619,92 +1589,29 @@ impl ModelManager {
     /// ```no_run
     /// use swissarmyhammer_config::model::ModelManager;
     ///
-    /// // Apply built-in claude-code agent to project
-    /// ModelManager::use_agent("claude-code")?;
-    ///
-    /// // Apply a custom user agent
-    /// ModelManager::use_agent("my-custom-agent")?;
+    /// use swissarmyhammer_config::model::ModelPaths;
+    /// ModelManager::use_agent("claude-code", &ModelPaths::sah())?;
+    /// ModelManager::use_agent("qwen-coder", &ModelPaths::sah())?;
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
-    pub fn use_agent(agent_name: &str) -> Result<(), ModelError> {
-        Self::use_agent_for_use_case(agent_name, AgentUseCase::Root)
-    }
-
-    /// Ensure agents map exists in config
-    ///
-    /// Creates the agents map if it doesn't exist in the configuration.
-    fn ensure_agents_map(config: &mut serde_yaml::Value) -> Result<(), ModelError> {
-        if config.get("agents").is_none() {
-            let agents_map = serde_yaml::Value::Mapping(Default::default());
-            if let Some(map) = config.as_mapping_mut() {
-                map.insert(serde_yaml::Value::String("agents".to_string()), agents_map);
-            }
-        }
-        Ok(())
-    }
-
-    /// Set use case agent in agents map
-    ///
-    /// Updates the agents map with the agent name for the given use case.
-    fn set_use_case_agent(
-        agents_map: &mut serde_yaml::Mapping,
-        use_case: AgentUseCase,
-        agent_name: &str,
-    ) {
-        agents_map.insert(
-            serde_yaml::Value::String(use_case.to_string()),
-            serde_yaml::Value::String(agent_name.to_string()),
-        );
-    }
-
-    /// Apply an agent configuration to the project for a specific use case
-    ///
-    /// Finds the specified agent by name, loads or creates the project configuration file,
-    /// and updates the agents map with the selected agent for the given use case.
-    ///
-    /// # Security
-    ///
-    /// This function implements comprehensive security measures:
-    /// - Validates agent name to prevent injection attacks
-    /// - Path validation and canonicalization for config file
-    /// - Permission checks before reading/writing config
-    /// - Audit logging of all configuration changes
-    ///
-    /// # Arguments
-    /// * `agent_name` - Name of the agent to apply
-    /// * `use_case` - The use case to configure this agent for
-    ///
-    /// # Returns
-    /// * `Result<(), ModelError>` - Success or error details
-    pub fn use_agent_for_use_case(
-        agent_name: &str,
-        use_case: AgentUseCase,
-    ) -> Result<(), ModelError> {
+    pub fn use_agent(agent_name: &str, paths: &ModelPaths) -> Result<(), ModelError> {
         // Security: Validate agent name to prevent injection
         Self::validate_agent_name_security(agent_name)?;
 
-        // Security: Audit log the configuration change attempt
-        tracing::info!(
-            "Attempting to set {} use case to model '{}' (user request)",
-            use_case,
-            agent_name
-        );
+        tracing::info!("Attempting to set model to '{}' (user request)", agent_name);
 
         Self::validate_agent(agent_name)?;
-        let config_path = Self::ensure_config_structure()?;
+        let config_path = Self::ensure_config_structure(paths)?;
 
-        // Security: Validate config path before operations
         let validated_config_path = Self::validate_config_file_path(&config_path)?;
 
         let mut config_value = Self::load_or_create_config(&validated_config_path)?;
 
-        Self::update_config_with_agent(&mut config_value, use_case, agent_name)?;
+        Self::update_config_with_agent(&mut config_value, agent_name)?;
         Self::save_config(&validated_config_path, &config_value)?;
 
-        // Security: Audit log successful configuration change
         tracing::info!(
-            "Successfully set {} use case to model '{}' in {}",
-            use_case,
+            "Successfully set model to '{}' in {}",
             agent_name,
             validated_config_path.display()
         );
@@ -1866,13 +1773,13 @@ impl ModelManager {
     /// Update config with agent for use case
     fn update_config_with_agent(
         config: &mut serde_yaml::Value,
-        use_case: AgentUseCase,
         agent_name: &str,
     ) -> Result<(), ModelError> {
-        Self::ensure_agents_map(config)?;
-
-        if let Some(agents_map) = config.get_mut("agents").and_then(|v| v.as_mapping_mut()) {
-            Self::set_use_case_agent(agents_map, use_case, agent_name);
+        if let Some(map) = config.as_mapping_mut() {
+            map.insert(
+                serde_yaml::Value::String("model".to_string()),
+                serde_yaml::Value::String(agent_name.to_string()),
+            );
         }
 
         Ok(())
@@ -3043,7 +2950,7 @@ quiet: false"#;
         fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
         let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
-        let result = ModelManager::detect_config_file();
+        let result = ModelManager::detect_config_file(&ModelPaths::sah());
         assert!(
             result.is_none(),
             "Should return None when no config files exist"
@@ -3066,7 +2973,7 @@ quiet: false"#;
         let yaml_path = sah_dir.join("sah.yaml");
         fs::write(&yaml_path, "agent: {}\n").expect("Failed to write yaml config");
 
-        let result = ModelManager::detect_config_file();
+        let result = ModelManager::detect_config_file(&ModelPaths::sah());
         assert!(result.is_some(), "Should find yaml config file");
 
         let found_path = result.unwrap();
@@ -3097,7 +3004,7 @@ quiet: false"#;
         let toml_path = sah_dir.join("sah.toml");
         fs::write(&toml_path, "[agent]\n").expect("Failed to write toml config");
 
-        let result = ModelManager::detect_config_file();
+        let result = ModelManager::detect_config_file(&ModelPaths::sah());
         assert!(result.is_some(), "Should find toml config file");
 
         let found_path = result.unwrap();
@@ -3131,7 +3038,7 @@ quiet: false"#;
         fs::write(&yaml_path, "agent: {}\n").expect("Failed to write yaml config");
         fs::write(&toml_path, "[agent]\n").expect("Failed to write toml config");
 
-        let result = ModelManager::detect_config_file();
+        let result = ModelManager::detect_config_file(&ModelPaths::sah());
         assert!(result.is_some(), "Should find config file");
 
         let found_path = result.unwrap();
@@ -3157,7 +3064,7 @@ quiet: false"#;
         fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
         let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
-        let result = ModelManager::ensure_config_structure();
+        let result = ModelManager::ensure_config_structure(&ModelPaths::sah());
         assert!(
             result.is_ok(),
             "Should successfully create config structure"
@@ -3194,7 +3101,7 @@ quiet: false"#;
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&sah_dir).expect("Failed to pre-create directory");
 
-        let result = ModelManager::ensure_config_structure();
+        let result = ModelManager::ensure_config_structure(&ModelPaths::sah());
         assert!(
             result.is_ok(),
             "Should handle existing directory gracefully"
@@ -3229,7 +3136,7 @@ quiet: false"#;
         fs::write(&existing_config, "[existing]\nvalue = true\n")
             .expect("Failed to write existing config");
 
-        let result = ModelManager::ensure_config_structure();
+        let result = ModelManager::ensure_config_structure(&ModelPaths::sah());
         assert!(result.is_ok(), "Should handle existing config gracefully");
 
         let config_path = result.unwrap();
@@ -3250,7 +3157,7 @@ quiet: false"#;
         use std::fs;
         let (temp_dir, _config_path, _guard) = setup_config_test_env("sah.yaml", None);
 
-        let result = ModelManager::use_agent("claude-code");
+        let result = ModelManager::use_agent("claude-code", &ModelPaths::sah());
         assert!(result.is_ok(), "Should successfully use claude-code agent");
 
         let config_path = temp_dir
@@ -3261,12 +3168,12 @@ quiet: false"#;
 
         let config_content = fs::read_to_string(&config_path).expect("Failed to read config");
         assert!(
-            config_content.contains("agents:"),
-            "Should contain agents section"
+            config_content.contains("model:"),
+            "Should contain model key"
         );
         assert!(
-            config_content.contains("root:"),
-            "Should contain root use case"
+            config_content.contains("claude-code"),
+            "Should contain model name"
         );
     }
 
@@ -3281,7 +3188,7 @@ other_section:
         let (_temp_dir, config_path, _guard) =
             setup_config_test_env("sah.yaml", Some(existing_config));
 
-        let result = ModelManager::use_agent("claude-code");
+        let result = ModelManager::use_agent("claude-code", &ModelPaths::sah());
         if let Err(e) = &result {
             panic!("Failed to use claude-code agent: {:?}", e);
         }
@@ -3297,30 +3204,26 @@ other_section:
             updated_config.contains("value: preserved"),
             "Should preserve existing values"
         );
+        assert!(updated_config.contains("model:"), "Should add model key");
         assert!(
-            updated_config.contains("agents:"),
-            "Should add agents section"
-        );
-        assert!(
-            updated_config.contains("root:"),
-            "Should contain root use case"
+            updated_config.contains("claude-code"),
+            "Should contain model name"
         );
     }
 
     #[test]
     fn test_agent_manager_use_agent_replaces_existing_agent() {
         use std::fs;
-        let existing_config = r#"# Config with existing agents
+        let existing_config = r#"# Config with existing model
 other_section:
   value: "preserved"
-agents:
-  root: "qwen-coder"
+model: qwen-coder
 "#;
         let (_temp_dir, config_path, _guard) =
             setup_config_test_env("sah.yaml", Some(existing_config));
 
-        let result = ModelManager::use_agent("claude-code");
-        assert!(result.is_ok(), "Should successfully replace existing agent");
+        let result = ModelManager::use_agent("claude-code", &ModelPaths::sah());
+        assert!(result.is_ok(), "Should successfully replace existing model");
 
         let updated_config =
             fs::read_to_string(&config_path).expect("Failed to read updated config");
@@ -3332,17 +3235,14 @@ agents:
             updated_config.contains("value: preserved"),
             "Should preserve existing values"
         );
-        assert!(
-            updated_config.contains("agents:"),
-            "Should have agents section"
-        );
+        assert!(updated_config.contains("model:"), "Should have model key");
         assert!(
             updated_config.contains("claude-code"),
-            "Should contain new agent config"
+            "Should contain new model name"
         );
         assert!(
             !updated_config.contains("qwen-coder"),
-            "Should replace old agent config"
+            "Should replace old model"
         );
     }
 
@@ -3356,7 +3256,7 @@ agents:
         fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
         let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
-        let result = ModelManager::use_agent("non-existent-agent");
+        let result = ModelManager::use_agent("non-existent-agent", &ModelPaths::sah());
         assert!(result.is_err(), "Should fail for non-existent agent");
 
         match result {
@@ -3404,16 +3304,15 @@ agents:
 
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_resolve_agent_fallback_chain() {
+    fn test_resolve_agent_fallback() {
         use std::fs;
 
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        // Create a .git directory to prevent config discovery from walking up to the real repo
         fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
         let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         // Test 1: No config - should return default claude-code
-        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows);
+        let result = ModelManager::resolve_agent_config(&ModelPaths::sah());
         assert!(
             result.is_ok(),
             "Should resolve to default agent when no config exists"
@@ -3421,50 +3320,24 @@ agents:
         let config = result.unwrap();
         assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
-        // Test 2: Config with root agent only - workflows should fall back to root
+        // Test 2: Config with model set
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
         let config_path = sah_dir.join("sah.yaml");
-        let config_with_root = r#"agents:
-  root: "claude-code"
-"#;
-        fs::write(&config_path, config_with_root).expect("Failed to write config");
+        fs::write(&config_path, "model: claude-code\n").expect("Failed to write config");
 
-        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows);
-        assert!(
-            result.is_ok(),
-            "Should resolve to root agent when use case not configured"
-        );
-        let config = result.unwrap();
-        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-
-        // Test 3: Config with specific workflows agent - should use workflows agent
-        let config_with_workflows = r#"agents:
-  root: "claude-code"
-  workflows: "qwen-coder"
-"#;
-        fs::write(&config_path, config_with_workflows)
-            .expect("Failed to write config with workflows");
-
-        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows);
-        assert!(result.is_ok(), "Should resolve to workflows-specific agent");
-        let config = result.unwrap();
-        assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
-
-        // Test 4: Root use case should use root agent directly
-        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Root);
-        assert!(result.is_ok(), "Should resolve root use case");
+        let result = ModelManager::resolve_agent_config(&ModelPaths::sah());
+        assert!(result.is_ok(), "Should resolve configured model");
         let config = result.unwrap();
         assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
     }
 
-    // Use Case Resolution Tests
-    mod use_case_resolution_tests {
+    // Model Resolution Tests
+    mod model_resolution_tests {
         use super::*;
 
         fn setup_test_env() -> tempfile::TempDir {
             let temp_dir = tempfile::TempDir::new().unwrap();
-            // Create a .git directory to prevent config discovery from walking up to the real repo
             std::fs::create_dir(temp_dir.path().join(".git"))
                 .expect("Failed to create .git marker");
             temp_dir
@@ -3472,34 +3345,13 @@ agents:
 
         #[test]
         #[serial_test::serial(cwd)]
-        fn test_resolve_use_case_with_specific_agent() {
+        fn test_resolve_with_configured_model() {
             let temp_dir = setup_test_env();
             let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
-            // Set Workflows to specific agent
-            ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Workflows).unwrap();
+            ModelManager::use_agent("claude-code", &ModelPaths::sah()).unwrap();
 
-            // Verify it resolves correctly
-            let agent =
-                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows).unwrap();
-            assert!(matches!(
-                agent.executor_type(),
-                ModelExecutorType::ClaudeCode
-            ));
-        }
-
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_fallback_to_root_when_use_case_not_configured() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            // Set only Root
-            ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Root).unwrap();
-
-            // Workflows should fall back to Root
-            let agent =
-                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows).unwrap();
+            let agent = ModelManager::resolve_agent_config(&ModelPaths::sah()).unwrap();
             assert!(matches!(
                 agent.executor_type(),
                 ModelExecutorType::ClaudeCode
@@ -3512,10 +3364,7 @@ agents:
             let temp_dir = setup_test_env();
             let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
-            // Don't configure anything
-            // Should fall back to default (claude-code)
-            let agent =
-                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows).unwrap();
+            let agent = ModelManager::resolve_agent_config(&ModelPaths::sah()).unwrap();
             assert!(matches!(
                 agent.executor_type(),
                 ModelExecutorType::ClaudeCode
@@ -3523,63 +3372,29 @@ agents:
         }
 
         #[test]
-        fn test_use_case_from_str() {
-            assert_eq!("root".parse::<AgentUseCase>().unwrap(), AgentUseCase::Root);
-            assert_eq!(
-                "workflows".parse::<AgentUseCase>().unwrap(),
-                AgentUseCase::Workflows
-            );
-
-            assert!("invalid".parse::<AgentUseCase>().is_err());
-        }
-
-        #[test]
-        fn test_use_case_display() {
-            assert_eq!(AgentUseCase::Root.to_string(), "root");
-            assert_eq!(AgentUseCase::Workflows.to_string(), "workflows");
-        }
-
-        #[test]
         #[serial_test::serial(cwd)]
-        fn test_backward_compatibility_with_old_config() {
+        fn test_get_agent_no_config() {
             let temp_dir = setup_test_env();
             let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
-            // Create old-style config
-            let config_path = ModelManager::ensure_config_structure().unwrap();
-            std::fs::write(&config_path, "agent: claude-code\n").unwrap();
-
-            // Should be able to read it (returns None since old format not supported)
-            let agent = ModelManager::get_agent_for_use_case(AgentUseCase::Root).unwrap();
+            let agent = ModelManager::get_agent(&ModelPaths::sah()).unwrap();
             assert_eq!(agent, None);
         }
 
         #[test]
         #[serial_test::serial(cwd)]
-        fn test_new_config_format() {
+        fn test_model_config_format() {
             let temp_dir = setup_test_env();
             let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
-            // Create new-style config
-            let config_path = ModelManager::ensure_config_structure().unwrap();
-            std::fs::write(
-                &config_path,
-                "agents:\n  root: claude-code\n  workflows: qwen-coder\n",
-            )
-            .unwrap();
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(&config_path, "model: claude-code\n").unwrap();
 
-            // Should read both use cases
             assert_eq!(
-                ModelManager::get_agent_for_use_case(AgentUseCase::Root)
+                ModelManager::get_agent(&ModelPaths::sah())
                     .unwrap()
                     .unwrap(),
                 "claude-code"
-            );
-            assert_eq!(
-                ModelManager::get_agent_for_use_case(AgentUseCase::Workflows)
-                    .unwrap()
-                    .unwrap(),
-                "qwen-coder"
             );
         }
     }

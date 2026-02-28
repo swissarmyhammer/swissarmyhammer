@@ -201,7 +201,7 @@ mirdan-lock.json
 .kanban/
 swissarmyhammer-config/.swissarmyhammer/
 
-# Agent config scratch
+# Installed agents (generated from builtin/agents/ during install)
 .agents/
 
 # Frontend build artifacts

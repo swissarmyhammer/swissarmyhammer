@@ -142,9 +142,6 @@ const CLAUDE_CLI_ARGS: &[&str] = &[
     // NOTE: This causes Claude to send a duplicate final combined message and empty terminator
     // We filter these out in the streaming loop (skip large chunks and empty chunks)
     "--replay-user-messages", // Re-emit user messages for transcript recording
-    // We only use our own MCP tools for consistency -- no built-in tools
-    "--tools",
-    "",
 ];
 
 /// Manages multiple persistent claude CLI processes, one per session

@@ -2,7 +2,6 @@
 
 mod agent_config_file_loadings;
 mod agent_hierarchical_configs;
-mod agent_use_case_resolution;
 mod builtin_agents_generation;
 mod environment_variables;
 mod environment_variables_fixed;

@@ -14,9 +14,6 @@ serde_yaml = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
-# Time
-chrono = { workspace = true }
-
 # Pattern matching
 glob = { workspace = true }
 regex = { workspace = true }
@@ -41,7 +38,8 @@ swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 
-# Claude agent for validator execution
+# Agent creation (unified: claude-agent + llama-agent)
+swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
 claude-agent = { path = "../claude-agent" }
 agent-client-protocol = { workspace = true }
 uuid = { workspace = true }

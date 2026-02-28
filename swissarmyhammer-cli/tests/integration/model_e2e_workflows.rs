@@ -41,10 +41,7 @@ async fn run_sah_command(
 
 /// Create user models directory and configurations
 fn create_user_models(temp_dir: &Path) -> Result<()> {
-    let user_agents_dir = temp_dir
-        .join("home")
-        .join(SwissarmyhammerDirectory::dir_name())
-        .join("models");
+    let user_agents_dir = temp_dir.join("home").join(".models");
     fs::create_dir_all(&user_agents_dir)?;
 
     let user_claude = r#"---
@@ -146,16 +143,11 @@ fn verify_model_config(config_path: &Path, expected_agent: &str) -> Result<bool>
     // Parse YAML to verify structure
     let config: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
 
-    // Check for agents map structure
-    if let Some(agents_section) = config.get("agents") {
-        if let Some(agents_map) = agents_section.as_mapping() {
-            // Check if any use case is assigned to the expected model
-            for (_use_case, model_name) in agents_map {
-                if let Some(name_str) = model_name.as_str() {
-                    if name_str == expected_agent {
-                        return Ok(true);
-                    }
-                }
+    // Check for model key
+    if let Some(model_value) = config.get("model") {
+        if let Some(name_str) = model_value.as_str() {
+            if name_str == expected_agent {
+                return Ok(true);
             }
         }
     }
@@ -278,7 +270,7 @@ fn verify_config_preserves_sections(config_content: &str) -> Result<()> {
         ("default_timeout", "workflow settings"),
         ("other_settings:", "other settings"),
         ("deep_setting", "deeply nested settings"),
-        ("agents:", "agents section"),
+        ("model:", "model key"),
     ];
 
     for (pattern, description) in &sections {
@@ -310,16 +302,16 @@ async fn verify_model_switch_preserves_yaml(
         .map_err(|e| anyhow::anyhow!("Invalid YAML after using {}: {}", model_name, e))?;
 
     anyhow::ensure!(
-        parsed.get("agents").is_some(),
-        "Should have agents section after using {}. Actual: {:?}",
+        parsed.get("model").is_some(),
+        "Should have model key after using {}. Actual: {:?}",
         model_name,
         parsed
     );
 
-    if let Some(agents_map) = parsed.get("agents").and_then(|v| v.as_mapping()) {
+    if let Some(model_str) = parsed.get("model").and_then(|v| v.as_str()) {
         anyhow::ensure!(
-            !agents_map.is_empty(),
-            "Agents map should not be empty after using {}",
+            !model_str.is_empty(),
+            "Model value should not be empty after using {}",
             model_name
         );
     }
@@ -610,12 +602,12 @@ async fn test_initial_config_update(project_root: &Path, config_path: &Path) -> 
 
     let updated_config = fs::read_to_string(config_path)?;
     anyhow::ensure!(
-        updated_config.contains("agents:"),
-        "Should have agents section. Actual: {}",
+        updated_config.contains("model:"),
+        "Should have model key. Actual: {}",
         updated_config
     );
     anyhow::ensure!(
-        updated_config.contains("claude-code") || updated_config.contains("root:"),
+        updated_config.contains("claude-code"),
         "Should have model assignment. Actual: {}",
         updated_config
     );
@@ -687,8 +679,8 @@ async fn test_config_file_format_consistency() -> Result<()> {
         serde_yaml::from_str(&config_content).expect("Config should be valid YAML after first use");
 
     anyhow::ensure!(
-        parsed.get("agents").is_some(),
-        "Should have agents section. Actual: {:?}",
+        parsed.get("model").is_some(),
+        "Should have model key. Actual: {:?}",
         parsed
     );
 

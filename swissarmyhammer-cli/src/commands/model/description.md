@@ -9,7 +9,7 @@ MODEL DISCOVERY AND PRECEDENCE
 Models are loaded from multiple sources with hierarchical precedence:
 • Built-in models (lowest precedence) - Embedded in the binary
 • Project models (medium precedence) - ./models/*.yaml in your project
-• User models (highest precedence) - ~/.swissarmyhammer/models/*.yaml
+• User models (highest precedence) - ~/.models/*.yaml
 
 Higher precedence models override lower ones by name. This allows you to
 customize built-in models or create project-specific variants.
@@ -62,7 +62,7 @@ CUSTOMIZATION
 
 Create custom models by adding .yaml files to:
 • ./models/ (project-specific models)
-• ~/.swissarmyhammer/models/ (user-wide models)
+• ~/.models/ (user-wide models)
 
 Custom models can override built-in models by using the same name, or
 provide entirely new configurations for specialized workflows.

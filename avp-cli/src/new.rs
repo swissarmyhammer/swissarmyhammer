@@ -3,16 +3,16 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::registry::RegistryError;
+use crate::AvpCliError;
 
 /// Run the new command.
 ///
 /// Creates a new RuleSet directory structure with template files.
 /// When `global` is true, creates under `~/.avp/validators/`; otherwise `.avp/validators/`.
-pub fn run_new(name: &str, global: bool) -> Result<(), RegistryError> {
+pub fn run_new(name: &str, global: bool) -> Result<(), AvpCliError> {
     // Validate name: kebab-case, alphanumeric + hyphens
     if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
+        return Err(AvpCliError::Validation(format!(
             "Invalid package name '{}'. Must be lowercase, alphanumeric with hyphens, 1-64 chars.",
             name
         )));
@@ -20,7 +20,7 @@ pub fn run_new(name: &str, global: bool) -> Result<(), RegistryError> {
 
     let base_dir = if global {
         dirs::home_dir()
-            .ok_or_else(|| RegistryError::Validation("Could not find home directory".to_string()))?
+            .ok_or_else(|| AvpCliError::Validation("Could not find home directory".to_string()))?
             .join(".avp")
             .join("validators")
             .join(name)
@@ -28,7 +28,7 @@ pub fn run_new(name: &str, global: bool) -> Result<(), RegistryError> {
         PathBuf::from(".avp").join("validators").join(name)
     };
     if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
+        return Err(AvpCliError::Validation(format!(
             "Directory already exists: {}",
             base_dir.display()
         )));

@@ -16,7 +16,7 @@ Do NOT write a plan as a markdown document. Do NOT use built-in task tools (Todo
 
 When asking the user to review or approve the plan, present the kanban cards as the plan summary. Each card's title and description should clearly communicate the work to be done. Use markdown checklists (`- [ ]` items) in the description to break work into actionable steps. Expect the user to provide feedback on the cards themselves — they might ask you to add more detail to a card, split a card into two, or rearrange dependencies. This is how the plan evolves.
 
-When you exit Plan Mode, there is no need for a plan markdown file -- we have the kanban cards. Instead, summarize the plan by listing the cards and their descriptions for the user to review.
+There is no need for a plan markdown file — the kanban cards ARE the plan.
 
 ## How to Execute in Claude Code Plan Mode
 
@@ -38,11 +38,18 @@ For each work item: use `kanban` with `op: "add task"`, `title: "<what to implem
 
 Set dependencies between cards: use `kanban` with `op: "update task"`, `id: "<task-id>"`, `depends_on: ["<blocker-task-id>"]`
 
-### 4. Present the plan
+### 4. Present the plan and discuss
 
-When you believe the plan is ready, summarize the tasks you created on the board for the user. List each card with its title, a one-line description of what it covers, and any dependencies. This gives the user a clear picture of the planned work before they approve it.
+When you believe the initial plan is complete, present a summary to the user. List each card with its title, a one-line description of what it covers, and any dependencies. This gives the user a clear picture of the planned work.
 
-When calling ExitPlanMode, the plan file should be this summary — not a separate document. The kanban cards contain the detail; the summary just enumerates what's on the board.
+**Stay conversational.** After presenting the summary, invite the user to discuss, ask questions, and iterate. They might want to:
+- Add more detail to a card or split it into multiple cards
+- Merge cards that feel too granular
+- Rearrange dependencies or reorder work
+- Add cards you missed or remove ones that aren't needed
+- Ask clarifying questions about your approach
+
+Update the kanban cards based on their feedback. The planning conversation continues until the user is satisfied — do NOT call ExitPlanMode yourself. Let the user decide when the plan is ready. If they ask to proceed, approve the plan, or start implementation, then you can exit plan mode.
 
 ## How to Execute as an Autonomous Agent
 

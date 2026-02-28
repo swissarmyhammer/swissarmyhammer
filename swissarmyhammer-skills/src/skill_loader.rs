@@ -93,14 +93,10 @@ pub fn load_skill_from_dir(dir: &Path, source: SkillSource) -> Result<Skill, Str
 
 /// Parse a skill from embedded builtin content (name, list of (filename, content) pairs)
 pub fn load_skill_from_builtin(_skill_name: &str, files: &[(&str, &str)]) -> Result<Skill, String> {
-    // Find the SKILL.md content — the builtin generator uses "SKILL" as the name
-    // (it strips the .md extension) and prefixes with the directory name
+    // Find the SKILL.md content — names include the .md extension
     let skill_md_content = files
         .iter()
-        .find(|(name, _)| {
-            // The builtin generator creates names like "plan/SKILL" from "plan/SKILL.md"
-            name.ends_with("/SKILL") || *name == "SKILL"
-        })
+        .find(|(name, _)| name.ends_with("/SKILL.md") || *name == "SKILL.md")
         .map(|(_, content)| *content)
         .ok_or_else(|| format!("no SKILL.md found in builtin files"))?;
 
@@ -108,7 +104,7 @@ pub fn load_skill_from_builtin(_skill_name: &str, files: &[(&str, &str)]) -> Res
 
     // Add any additional resource files
     for (name, content) in files {
-        if !name.ends_with("/SKILL") && *name != "SKILL" {
+        if !name.ends_with("/SKILL.md") && *name != "SKILL.md" {
             let filename = name.rsplit('/').next().unwrap_or(name);
             skill
                 .resources

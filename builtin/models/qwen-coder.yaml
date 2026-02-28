@@ -1,5 +1,5 @@
 ---
-description: "480B MoE: Premier coding"
+description: "Qwen3 Coder Next: Premier coding"
 ---
 quiet: false
 executor:
@@ -7,5 +7,5 @@ executor:
   config:
     model:
       source: !HuggingFace
-        repo: "unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF"
-        folder: "IQ4_NL"
+        repo: "unsloth/Qwen3-Coder-Next-GGUF"
+        filename: "Qwen3-Coder-Next-IQ4_NL.gguf"

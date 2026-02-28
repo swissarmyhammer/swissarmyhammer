@@ -5,5 +5,6 @@ fn main() {
         .source_dir("../builtin/skills")
         .extensions(&["md"])
         .function_name("get_builtin_skills")
+        .preserve_extensions()
         .generate();
 }

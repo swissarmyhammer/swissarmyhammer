@@ -2,16 +2,16 @@
 
 use std::path::PathBuf;
 
-use crate::registry::RegistryError;
+use crate::AvpCliError;
 
 /// Run the edit command.
 ///
 /// Opens the VALIDATOR.md file for the named RuleSet in `$VISUAL` or `$EDITOR`.
 /// When `global` is true, looks in `~/.avp/validators/`; otherwise `.avp/validators/`.
-pub fn run_edit(name: &str, global: bool) -> Result<(), RegistryError> {
+pub fn run_edit(name: &str, global: bool) -> Result<(), AvpCliError> {
     let base_dir = if global {
         dirs::home_dir()
-            .ok_or_else(|| RegistryError::Validation("Could not find home directory".to_string()))?
+            .ok_or_else(|| AvpCliError::Validation("Could not find home directory".to_string()))?
             .join(".avp")
             .join("validators")
             .join(name)
@@ -23,7 +23,7 @@ pub fn run_edit(name: &str, global: bool) -> Result<(), RegistryError> {
 
     if !validator_path.exists() {
         let scope = if global { "global" } else { "project" };
-        return Err(RegistryError::Validation(format!(
+        return Err(AvpCliError::Validation(format!(
             "RuleSet '{}' not found in {} scope ({}).\nCreate it with: avp new {}{}",
             name,
             scope,
@@ -34,7 +34,7 @@ pub fn run_edit(name: &str, global: bool) -> Result<(), RegistryError> {
     }
 
     swissarmyhammer_common::open_in_editor(&validator_path)
-        .map_err(|e| RegistryError::Validation(e.to_string()))?;
+        .map_err(|e| AvpCliError::Validation(e.to_string()))?;
 
     Ok(())
 }

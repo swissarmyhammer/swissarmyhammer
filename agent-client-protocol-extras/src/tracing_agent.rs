@@ -184,11 +184,24 @@ fn log_notification(
             if let Some(buffer) = buffers.get_mut(&session_key) {
                 buffer.flush(agent_name);
             }
+            let input = tool_call
+                .raw_input
+                .as_ref()
+                .map(|v| {
+                    let s = v.to_string();
+                    if s.len() > 200 {
+                        format!("{}...", &s[..200])
+                    } else {
+                        s
+                    }
+                })
+                .unwrap_or_else(|| "(no input)".to_string());
             tracing::info!(
-                "[{}] session={}, ToolCall: {}",
+                "[{}] session={}, ToolCall: {} | input: {}",
                 agent_name,
                 session_id,
-                tool_call.title
+                tool_call.title,
+                input
             );
             false
         }
