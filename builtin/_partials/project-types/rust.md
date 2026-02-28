@@ -23,8 +23,6 @@ partial: true
 - Lint: `cargo clippy` (catch common mistakes)
 - Documentation: `cargo doc --open`
 - Test: `cargo nextest run`, you might need to install it first with `cargo install cargo-nextest --locked`
-end
-
 
 **Best Practices:**
 - Run `cargo clippy` before committing to catch common issues

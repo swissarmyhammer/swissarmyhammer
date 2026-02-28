@@ -38,6 +38,9 @@ pub struct BuiltinGenerator {
     extensions: Vec<String>,
     /// Directories to skip
     skip_dirs: Vec<String>,
+    /// When true, preserve file extensions in generated names.
+    /// When false (default), extensions are stripped so names serve as identifiers.
+    preserve_extensions: bool,
 }
 
 impl BuiltinGenerator {
@@ -54,6 +57,7 @@ impl BuiltinGenerator {
             resource_type,
             extensions: vec!["md".to_string()],
             skip_dirs: vec![],
+            preserve_extensions: false,
         }
     }
 
@@ -84,6 +88,17 @@ impl BuiltinGenerator {
     /// Set directories to skip during collection.
     pub fn skip_dirs(mut self, dirs: &[&str]) -> Self {
         self.skip_dirs = dirs.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    /// Preserve file extensions in generated resource names.
+    ///
+    /// By default, extensions are stripped so names act as identifiers
+    /// (e.g., `plan/SKILL` from `plan/SKILL.md`). When enabled, the full
+    /// filename is kept (e.g., `plan/SKILL.md`), which is needed for
+    /// multi-file resources where filenames are written to disk.
+    pub fn preserve_extensions(mut self) -> Self {
+        self.preserve_extensions = true;
         self
     }
 
@@ -199,18 +214,24 @@ impl BuiltinGenerator {
     }
 
     /// Extract the resource name from a file path.
+    ///
+    /// When `preserve_extensions` is false (default), strips known extensions
+    /// so names serve as identifiers. When true, keeps the full filename.
     fn extract_name(&self, path: &Path, prefix: &str) -> String {
         let name = path.file_name().unwrap().to_string_lossy();
 
-        // Strip known extensions
-        let base_name = self
-            .extensions
-            .iter()
-            .find_map(|ext| name.strip_suffix(&format!(".{}", ext)))
-            .unwrap_or(&name);
+        let base_name = if self.preserve_extensions {
+            name.to_string()
+        } else {
+            self.extensions
+                .iter()
+                .find_map(|ext| name.strip_suffix(&format!(".{}", ext)))
+                .unwrap_or(&name)
+                .to_string()
+        };
 
         if prefix.is_empty() {
-            base_name.to_string()
+            base_name
         } else {
             format!("{}/{}", prefix, base_name)
         }

@@ -1334,11 +1334,25 @@ fn uninstall_agent(
         )));
     }
 
-    // 2. Remove store entry
+    // 2. Remove store entry if no remaining symlinks reference it
     let store_path = store::agent_store_dir(global).join(&sanitized);
     if store_path.exists() {
-        std::fs::remove_dir_all(&store_path)?;
-        println!("  Removed store entry {}", store_path.display());
+        let all_agents = agents::get_detected_agents(&config);
+        let all_agent_dirs: Vec<PathBuf> = all_agents
+            .iter()
+            .filter_map(|a| {
+                if global {
+                    agent_global_agent_dir(&a.def)
+                } else {
+                    agent_project_agent_dir(&a.def)
+                }
+            })
+            .collect();
+
+        if !store::store_entry_still_referenced(&store_path, &all_agent_dirs) {
+            std::fs::remove_dir_all(&store_path)?;
+            println!("  Removed store entry {}", store_path.display());
+        }
     }
 
     Ok(())

@@ -399,4 +399,174 @@ mod tests {
         std::fs::remove_file(&link).unwrap();
         assert!(!store_entry_still_referenced(&store, &[agent_dir]));
     }
+
+    /// Simulate deploy_skill_to_agents twice without deinit.
+    ///
+    /// This is the idempotency contract: running init again should overwrite
+    /// the store and recreate symlinks, leaving the same result as a fresh install.
+    #[cfg(unix)]
+    #[test]
+    fn test_deploy_idempotent_without_deinit() {
+        let root = tempfile::tempdir().unwrap();
+        let store_path = root.path().join(".skills/my-skill");
+        let agent_dirs = vec![
+            root.path().join(".claude/skills"),
+            root.path().join(".github/copilot/skills"),
+        ];
+
+        // --- first deploy ---
+        deploy_to_store_and_agents(
+            &store_path,
+            &agent_dirs,
+            "my-skill",
+            "# V1\nOriginal content",
+        );
+
+        for agent_dir in &agent_dirs {
+            let link = agent_dir.join("my-skill");
+            assert!(link.exists(), "symlink should exist after first deploy");
+            let content = std::fs::read_to_string(link.join("SKILL.md")).unwrap();
+            assert_eq!(content, "# V1\nOriginal content");
+        }
+
+        // --- second deploy (no deinit, updated content) ---
+        deploy_to_store_and_agents(
+            &store_path,
+            &agent_dirs,
+            "my-skill",
+            "# V2\nUpdated content",
+        );
+
+        // Store should have new content
+        let store_content = std::fs::read_to_string(store_path.join("SKILL.md")).unwrap();
+        assert_eq!(store_content, "# V2\nUpdated content");
+
+        // Every agent symlink should resolve to updated content
+        for agent_dir in &agent_dirs {
+            let link = agent_dir.join("my-skill");
+            assert!(link.exists(), "symlink should survive re-deploy");
+
+            let meta = std::fs::symlink_metadata(&link).unwrap();
+            assert!(meta.file_type().is_symlink(), "should still be a symlink");
+
+            let content = std::fs::read_to_string(link.join("SKILL.md")).unwrap();
+            assert_eq!(
+                content, "# V2\nUpdated content",
+                "agent should see updated content through symlink"
+            );
+        }
+    }
+
+    /// Deploy → delete some agent symlinks → deploy again → verify recreated.
+    ///
+    /// This is the scenario where a user deletes .claude/skills/<skill> and
+    /// expects `sah init` to recreate it without needing `sah deinit` first.
+    #[cfg(unix)]
+    #[test]
+    fn test_deploy_recreates_deleted_agent_links() {
+        let root = tempfile::tempdir().unwrap();
+        let skills = vec!["commit", "plan", "review"];
+        let agent_dirs = vec![
+            root.path().join(".claude/skills"),
+            root.path().join(".github/copilot/skills"),
+        ];
+
+        // --- first deploy: all skills to all agents ---
+        for skill in &skills {
+            let store_path = root.path().join(format!(".skills/{}", skill));
+            deploy_to_store_and_agents(
+                &store_path,
+                &agent_dirs,
+                skill,
+                &format!("# {}\nContent", skill),
+            );
+        }
+
+        // Verify all links exist
+        for agent_dir in &agent_dirs {
+            for skill in &skills {
+                let link = agent_dir.join(skill);
+                assert!(
+                    link.exists(),
+                    "{} should exist in {}",
+                    skill,
+                    agent_dir.display()
+                );
+            }
+        }
+
+        // --- delete some agent links (simulating user cleanup / breakage) ---
+        // Delete "commit" from .claude/skills/ and "review" from both agents
+        std::fs::remove_file(root.path().join(".claude/skills/commit")).unwrap();
+        std::fs::remove_file(root.path().join(".claude/skills/review")).unwrap();
+        std::fs::remove_file(root.path().join(".github/copilot/skills/review")).unwrap();
+
+        // Verify they're gone
+        assert!(!root.path().join(".claude/skills/commit").exists());
+        assert!(!root.path().join(".claude/skills/review").exists());
+        assert!(!root.path().join(".github/copilot/skills/review").exists());
+        // "plan" should still be there
+        assert!(root.path().join(".claude/skills/plan").exists());
+
+        // --- second deploy (no deinit) ---
+        for skill in &skills {
+            let store_path = root.path().join(format!(".skills/{}", skill));
+            deploy_to_store_and_agents(
+                &store_path,
+                &agent_dirs,
+                skill,
+                &format!("# {} v2\nUpdated", skill),
+            );
+        }
+
+        // --- verify ALL links recreated with updated content ---
+        for agent_dir in &agent_dirs {
+            for skill in &skills {
+                let link = agent_dir.join(skill);
+                assert!(
+                    link.exists(),
+                    "{} should be recreated in {}",
+                    skill,
+                    agent_dir.display()
+                );
+
+                let meta = std::fs::symlink_metadata(&link).unwrap();
+                assert!(
+                    meta.file_type().is_symlink(),
+                    "{} should be a symlink",
+                    skill
+                );
+
+                let content = std::fs::read_to_string(link.join("SKILL.md")).unwrap();
+                assert_eq!(
+                    content,
+                    format!("# {} v2\nUpdated", skill),
+                    "{} should have updated content",
+                    skill
+                );
+            }
+        }
+    }
+
+    /// Reproduce the exact sequence from deploy_skill_to_agents:
+    /// remove store → copy → remove each link → create each link.
+    #[cfg(unix)]
+    fn deploy_to_store_and_agents(
+        store_path: &Path,
+        agent_dirs: &[PathBuf],
+        skill_name: &str,
+        skill_content: &str,
+    ) {
+        // 1. Remove existing store entry + copy new content
+        remove_if_exists(store_path).unwrap();
+        std::fs::create_dir_all(store_path).unwrap();
+        std::fs::write(store_path.join("SKILL.md"), skill_content).unwrap();
+
+        // 2. Remove existing symlinks + create new ones
+        for agent_dir in agent_dirs {
+            let link_path = agent_dir.join(skill_name);
+            remove_if_exists(&link_path).unwrap();
+            create_skill_link(store_path, &link_path).unwrap();
+        }
+    }
 }
