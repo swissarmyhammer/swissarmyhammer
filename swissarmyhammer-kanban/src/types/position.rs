@@ -119,6 +119,11 @@ impl Ordinal {
         Self(String::from_utf8(result).unwrap_or_else(|_| format!("{}V", before.0)))
     }
 
+    /// Create an ordinal from a string value
+    pub fn from_string(s: &str) -> Self {
+        Self(s.to_string())
+    }
+
     /// Get the inner string value
     pub fn as_str(&self) -> &str {
         &self.0

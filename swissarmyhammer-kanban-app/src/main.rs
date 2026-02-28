@@ -28,6 +28,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_board,
             commands::list_tasks,
+            commands::move_task,
             commands::open_board,
             commands::list_open_boards,
             commands::set_active_board,

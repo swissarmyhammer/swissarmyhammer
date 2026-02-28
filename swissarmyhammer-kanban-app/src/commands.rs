@@ -3,7 +3,12 @@
 use crate::state::AppState;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use swissarmyhammer_kanban::{board::GetBoard, task::ListTasks, OperationProcessor};
+use swissarmyhammer_kanban::{
+    board::GetBoard,
+    task::{ListTasks, MoveTask},
+    types::{Ordinal, Position},
+    OperationProcessor,
+};
 use tauri::State;
 
 /// Get the board metadata for the active (or specified) board.
@@ -126,6 +131,37 @@ pub async fn set_active_board(
         "path": canonical.display().to_string(),
         "active": true,
     }))
+}
+
+/// Move a task to a new position (column and/or ordinal).
+#[tauri::command]
+pub async fn move_task(
+    state: State<'_, AppState>,
+    id: String,
+    column: String,
+    ordinal: String,
+    swimlane: Option<String>,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+
+    let position = Position::new(
+        column.into(),
+        swimlane.map(|s| s.into()),
+        if ordinal.is_empty() {
+            Ordinal::first()
+        } else {
+            Ordinal::from_string(&ordinal)
+        },
+    );
+
+    let cmd = MoveTask::new(id, position);
+    let result = handle
+        .processor
+        .process(&cmd, &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
 }
 
 /// Get the MRU list of recently opened boards.

@@ -54,7 +54,7 @@ function App() {
       />
       {board ? (
         <>
-          <BoardView board={board} tasks={tasks} onTaskClick={setSelectedTask} />
+          <BoardView board={board} tasks={tasks} onTaskClick={setSelectedTask} onTaskMoved={refresh} />
           <TaskDetailPanel
             task={selectedTask}
             onClose={() => setSelectedTask(null)}
