@@ -29,7 +29,9 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, presorted }
 
   const taskIds = useMemo(() => sorted.map((t) => t.id), [sorted]);
 
-  const { setNodeRef } = useDroppable({ id: column.id });
+  // Use a prefixed ID so the task drop zone doesn't collide with
+  // the column's sortable ID registered by SortableColumn.
+  const { setNodeRef } = useDroppable({ id: `drop:${column.id}` });
 
   return (
     <div className="flex flex-col min-h-0 flex-1">

@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use swissarmyhammer_kanban::{
     board::GetBoard,
+    column::UpdateColumn,
     task::{ListTasks, MoveTask},
     types::{Ordinal, Position},
     OperationProcessor,
@@ -162,6 +163,33 @@ pub async fn move_task(
         .map_err(|e| e.to_string())?;
 
     Ok(result)
+}
+
+/// Reorder columns by updating their order fields.
+/// Takes a list of {id, order} pairs and applies them.
+#[tauri::command]
+pub async fn reorder_columns(
+    state: State<'_, AppState>,
+    columns: Vec<ColumnOrder>,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+
+    for col in &columns {
+        let cmd = UpdateColumn::new(col.id.clone()).with_order(col.order);
+        handle
+            .processor
+            .process(&cmd, &handle.ctx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(json!({ "updated": columns.len() }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ColumnOrder {
+    pub id: String,
+    pub order: usize,
 }
 
 /// Get the MRU list of recently opened boards.

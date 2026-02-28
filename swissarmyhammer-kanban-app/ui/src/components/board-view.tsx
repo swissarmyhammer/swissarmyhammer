@@ -10,11 +10,17 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { invoke } from "@tauri-apps/api/core";
 import { ColumnView } from "@/components/column-view";
+import { SortableColumn } from "@/components/sortable-column";
 import { TaskCard } from "@/components/task-card";
-import type { Board, Task } from "@/types/kanban";
+import { reorderColumns } from "@/lib/column-reorder";
+import type { Board, Column, Task } from "@/types/kanban";
 
 interface BoardViewProps {
   board: Board;
@@ -30,6 +36,8 @@ interface BoardViewProps {
  */
 type ColumnLayout = Map<string, string[]>;
 
+type DragType = "task" | "column";
+
 export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewProps) {
   const columns = useMemo(
     () => [...board.columns].sort((a, b) => a.order - b.order),
@@ -37,12 +45,19 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
   );
 
   const columnIds = useMemo(() => new Set(columns.map((c) => c.id)), [columns]);
+  const columnIdList = useMemo(() => columns.map((c) => c.id), [columns]);
 
   const taskMap = useMemo(() => {
     const map = new Map<string, Task>();
     for (const task of tasks) map.set(task.id, task);
     return map;
   }, [tasks]);
+
+  const columnMap = useMemo(() => {
+    const map = new Map<string, Column>();
+    for (const col of columns) map.set(col.id, col);
+    return map;
+  }, [columns]);
 
   // The "real" column layout from persisted state
   const baseLayout = useMemo<ColumnLayout>(() => {
@@ -67,9 +82,13 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
   // Virtual layout tracks live arrangement during drag
   const [virtualLayout, setVirtualLayout] = useState<ColumnLayout | null>(null);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [activeColumn, setActiveColumn] = useState<Column | null>(null);
+  const [virtualColumnOrder, setVirtualColumnOrder] = useState<string[] | null>(null);
   const activeColumnRef = useRef<string | null>(null);
+  const dragTypeRef = useRef<DragType | null>(null);
 
   const currentLayout = virtualLayout ?? baseLayout;
+  const currentColumnOrder = virtualColumnOrder ?? columnIdList;
 
   // Collect blocked task IDs
   const blockedIds = useMemo(() => {
@@ -98,6 +117,11 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
     (id: string, layout: ColumnLayout): string | undefined => {
       // Could be a column id itself
       if (columnIds.has(id)) return id;
+      // Could be a column drop zone (prefixed with "drop:")
+      if (id.startsWith("drop:")) {
+        const colId = id.slice(5);
+        if (columnIds.has(colId)) return colId;
+      }
       // Otherwise search for the task
       for (const [colId, ids] of layout) {
         if (ids.includes(id)) return colId;
@@ -109,19 +133,67 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
-      const task = taskMap.get(event.active.id as string);
-      setActiveTask(task ?? null);
-      // Clone the base layout as starting point for virtual layout
-      const clone: ColumnLayout = new Map();
-      for (const [k, v] of baseLayout) clone.set(k, [...v]);
-      setVirtualLayout(clone);
-      activeColumnRef.current = task?.position.column ?? null;
+      const id = event.active.id as string;
+      const data = event.active.data.current;
+
+      if (data?.type === "column") {
+        // Column drag
+        dragTypeRef.current = "column";
+        setActiveColumn(columnMap.get(id) ?? null);
+        setVirtualColumnOrder([...columnIdList]);
+      } else {
+        // Task drag
+        dragTypeRef.current = "task";
+        const task = taskMap.get(id);
+        setActiveTask(task ?? null);
+        const clone: ColumnLayout = new Map();
+        for (const [k, v] of baseLayout) clone.set(k, [...v]);
+        setVirtualLayout(clone);
+        activeColumnRef.current = task?.position.column ?? null;
+      }
     },
-    [taskMap, baseLayout]
+    [taskMap, baseLayout, columnMap, columnIdList]
+  );
+
+  /** Resolve any ID (task, drop zone, or column) to a column ID */
+  const resolveToColumnId = useCallback(
+    (id: string, layout: ColumnLayout): string | undefined => {
+      if (columnIds.has(id)) return id;
+      if (id.startsWith("drop:")) {
+        const colId = id.slice(5);
+        if (columnIds.has(colId)) return colId;
+      }
+      // Could be a task — find its column
+      for (const [colId, ids] of layout) {
+        if (ids.includes(id)) return colId;
+      }
+      return undefined;
+    },
+    [columnIds]
   );
 
   const handleDragOver = useCallback(
     (event: DragOverEvent) => {
+      if (dragTypeRef.current === "column") {
+        // Column reorder during drag
+        const { active, over } = event;
+        if (!over || !virtualColumnOrder) return;
+        const activeId = active.id as string;
+        const rawOverId = over.id as string;
+
+        // Resolve the over target to a column ID (it might be a task or drop zone)
+        const overId = resolveToColumnId(rawOverId, currentLayout);
+        if (!overId || activeId === overId) return;
+
+        const oldIndex = virtualColumnOrder.indexOf(activeId);
+        const newIndex = virtualColumnOrder.indexOf(overId);
+        if (oldIndex === -1 || newIndex === -1) return;
+
+        setVirtualColumnOrder(arrayMove(virtualColumnOrder, oldIndex, newIndex));
+        return;
+      }
+
+      // Task drag over
       const { active, over } = event;
       if (!over || !virtualLayout) return;
 
@@ -146,7 +218,8 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
         if (idx !== -1) fromList.splice(idx, 1);
 
         // Insert into target
-        if (columnIds.has(overId)) {
+        const isColumnDrop = columnIds.has(overId) || overId.startsWith("drop:");
+        if (isColumnDrop) {
           // Dropped over the column droppable — append at end
           toList.push(activeId);
         } else {
@@ -162,16 +235,57 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
         return clone;
       });
     },
-    [virtualLayout, findColumn, columnIds]
+    [virtualLayout, virtualColumnOrder, findColumn, columnIds, resolveToColumnId, currentLayout]
   );
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
+      if (dragTypeRef.current === "column") {
+        const colOrder = virtualColumnOrder ?? columnIdList;
+        setActiveColumn(null);
+        dragTypeRef.current = null;
+
+        const { active, over } = event;
+        if (!over) {
+          setVirtualColumnOrder(null);
+          return;
+        }
+
+        const activeId = active.id as string;
+
+        // Use the virtual column order — it was maintained during dragOver
+        const oldIndex = columnIdList.indexOf(activeId);
+        const newIndex = colOrder.indexOf(activeId);
+
+        if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) {
+          setVirtualColumnOrder(null);
+          return;
+        }
+
+        const updates = reorderColumns(columnIdList, oldIndex, newIndex);
+        if (updates.length === 0) {
+          setVirtualColumnOrder(null);
+          return;
+        }
+
+        try {
+          await invoke("reorder_columns", { columns: updates });
+          onTaskMoved?.();
+        } catch (e) {
+          console.error("Failed to reorder columns:", e);
+        } finally {
+          setVirtualColumnOrder(null);
+        }
+        return;
+      }
+
+      // Task drag end
       const { active, over } = event;
       const layout = virtualLayout ?? baseLayout;
 
       setActiveTask(null);
       setVirtualLayout(null);
+      dragTypeRef.current = null;
 
       if (!over) return;
 
@@ -182,7 +296,7 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
       if (!draggedTask) return;
 
       // Find which column the task ended up in
-      let targetColumn = findColumn(activeId, layout);
+      const targetColumn = findColumn(activeId, layout);
       if (!targetColumn) return;
 
       // Handle same-position drop (no-op)
@@ -193,7 +307,8 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
       if (activeId === overId && targetColumn === draggedTask.position.column) return;
 
       // Handle same-column reorder via arrayMove for correct index
-      if (targetColumn === draggedTask.position.column && !columnIds.has(overId)) {
+      const isColumnDrop = columnIds.has(overId) || overId.startsWith("drop:");
+      if (targetColumn === draggedTask.position.column && !isColumnDrop) {
         const oldIndex = targetList.indexOf(activeId);
         const newIndex = targetList.indexOf(overId);
         if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
@@ -211,7 +326,7 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
       const ordinal = computeOrdinal(targetList, finalIndex, taskMap);
       await persistMove(activeId, targetColumn, ordinal, draggedTask);
     },
-    [virtualLayout, baseLayout, taskMap, findColumn, columnIds]
+    [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList]
   );
 
   async function persistMove(
@@ -242,27 +357,38 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
       onDragEnd={handleDragEnd}
     >
       <div className="flex flex-1 min-h-0 overflow-x-auto">
-        {columns.map((col, i) => {
-          const taskIds = currentLayout.get(col.id) ?? [];
-          const colTasks = taskIds
-            .map((id) => taskMap.get(id))
-            .filter((t): t is Task => t !== undefined);
-          return (
-            <div key={col.id} className="flex flex-1 min-w-[20em] max-w-[60em]">
-              {i > 0 && <div className="w-px bg-border shrink-0 my-3" />}
-              <ColumnView
-                column={col}
-                tasks={colTasks}
-                blockedIds={blockedIds}
-                onTaskClick={onTaskClick}
-                presorted
-              />
-            </div>
-          );
-        })}
+        <SortableContext
+          items={currentColumnOrder}
+          strategy={horizontalListSortingStrategy}
+        >
+          {currentColumnOrder.map((colId, i) => {
+            const col = columnMap.get(colId);
+            if (!col) return null;
+            const taskIds = currentLayout.get(col.id) ?? [];
+            const colTasks = taskIds
+              .map((id) => taskMap.get(id))
+              .filter((t): t is Task => t !== undefined);
+            return (
+              <SortableColumn key={col.id} id={col.id} showSeparator={i > 0}>
+                <ColumnView
+                  column={col}
+                  tasks={colTasks}
+                  blockedIds={blockedIds}
+                  onTaskClick={onTaskClick}
+                  presorted
+                />
+              </SortableColumn>
+            );
+          })}
+        </SortableContext>
       </div>
       <DragOverlay dropAnimation={null}>
         {activeTask ? <TaskCard task={activeTask} /> : null}
+        {activeColumn ? (
+          <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
+            {activeColumn.name}
+          </div>
+        ) : null}
       </DragOverlay>
     </DndContext>
   );

@@ -17,7 +17,7 @@ export function SortableTaskCard({ task, isBlocked, onClick }: SortableTaskCardP
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id });
+  } = useSortable({ id: task.id, data: { type: "task" } });
 
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),

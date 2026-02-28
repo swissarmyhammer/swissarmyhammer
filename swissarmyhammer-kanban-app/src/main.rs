@@ -29,6 +29,7 @@ fn main() {
             commands::get_board,
             commands::list_tasks,
             commands::move_task,
+            commands::reorder_columns,
             commands::open_board,
             commands::list_open_boards,
             commands::set_active_board,
