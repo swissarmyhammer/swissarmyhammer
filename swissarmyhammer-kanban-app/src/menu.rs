@@ -3,35 +3,22 @@
 use crate::state::{resolve_kanban_path, AppConfig, AppState, RecentBoard};
 use std::path::PathBuf;
 use swissarmyhammer_kanban::{board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, IconMenuItem, Menu, MenuItem, NativeIcon, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
-/// Build the native menu bar with app, File, and Edit submenus.
+/// Build the native menu bar with app, File, Edit, and Settings submenus.
 ///
 /// On macOS the first submenu is always the application menu, so we
 /// prepend a proper app menu to keep File in the right position.
-pub fn build_menu(app: &AppHandle, recent: &[RecentBoard]) -> tauri::Result<Menu<tauri::Wry>> {
-    // macOS app menu (first submenu = app name menu)
-    let app_menu = Submenu::with_items(
-        app,
-        app.package_info().name.clone(),
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::show_all(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
+pub fn build_menu(app: &AppHandle, recent: &[RecentBoard], keymap_mode: &str) -> tauri::Result<Menu<tauri::Wry>> {
+    // File menu items — standard macOS labels with native icons
+    let new_board = IconMenuItem::with_id_and_native_icon(
+        app, "new_board", "New", true, Some(NativeIcon::Add), Some("CmdOrCtrl+N"),
     )?;
-
-    // File menu items — standard macOS labels, routed to our command logic
-    let new_board = MenuItem::with_id(app, "new_board", "New", true, Some("CmdOrCtrl+N"))?;
-    let open_board =
-        MenuItem::with_id(app, "open_board", "Open...", true, Some("CmdOrCtrl+O"))?;
+    let open_board = IconMenuItem::with_id_and_native_icon(
+        app, "open_board", "Open...", true, Some(NativeIcon::Folder), Some("CmdOrCtrl+O"),
+    )?;
 
     // Open Recent submenu (disabled when empty)
     let recent_submenu = Submenu::new(app, "Open Recent", !recent.is_empty())?;
@@ -70,13 +57,54 @@ pub fn build_menu(app: &AppHandle, recent: &[RecentBoard]) -> tauri::Result<Menu
         ],
     )?;
 
+    // Settings menu with Editor Keymap radio items
+    let keymap_cua = CheckMenuItem::with_id(
+        app, "keymap_cua", "CUA (Standard)", true, keymap_mode == "cua", None::<&str>,
+    )?;
+    let keymap_vim = CheckMenuItem::with_id(
+        app, "keymap_vim", "Vim", true, keymap_mode == "vim", None::<&str>,
+    )?;
+    let keymap_emacs = CheckMenuItem::with_id(
+        app, "keymap_emacs", "Emacs", true, keymap_mode == "emacs", None::<&str>,
+    )?;
+
+    let settings_submenu = Submenu::with_items(
+        app,
+        "Settings",
+        true,
+        &[
+            &keymap_cua,
+            &keymap_vim,
+            &keymap_emacs,
+            &PredefinedMenuItem::separator(app)?,
+        ],
+    )?;
+
+    // macOS app menu — insert Settings before the separator/quit group
+    let app_menu = Submenu::with_items(
+        app,
+        app.package_info().name.clone(),
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &settings_submenu,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+
     Menu::with_items(app, &[&app_menu, &file_submenu, &edit_submenu])
 }
 
 /// Rebuild the menu from current config and set it on the app.
 pub fn rebuild_menu(handle: &AppHandle) {
     let config = AppConfig::load();
-    match build_menu(handle, &config.recent_boards) {
+    match build_menu(handle, &config.recent_boards, &config.keymap_mode) {
         Ok(menu) => {
             if let Err(e) = handle.set_menu(menu) {
                 tracing::error!("Failed to set menu: {}", e);
@@ -98,7 +126,25 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         handle_open_board(app);
     } else if let Some(path_str) = id.strip_prefix("open_recent:") {
         handle_open_recent(app, PathBuf::from(path_str));
+    } else if let Some(mode) = id.strip_prefix("keymap_") {
+        handle_keymap_change(app, mode);
     }
+}
+
+/// Settings > Editor Keymap > [mode]: update config, rebuild menu, notify frontend.
+fn handle_keymap_change(app: &AppHandle, mode: &str) {
+    let handle = app.clone();
+    let mode = mode.to_string();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        {
+            let mut config = state.config.write().await;
+            config.keymap_mode = mode.clone();
+            let _ = config.save();
+        }
+        rebuild_menu(&handle);
+        let _ = handle.emit("keymap-changed", &mode);
+    });
 }
 
 /// File > New Board: pick a folder, init the board, then open it.

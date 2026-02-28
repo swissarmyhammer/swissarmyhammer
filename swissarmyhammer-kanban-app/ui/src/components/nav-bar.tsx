@@ -61,7 +61,6 @@ export function NavBar({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <div className="ml-auto" />
     </header>
   );
 }

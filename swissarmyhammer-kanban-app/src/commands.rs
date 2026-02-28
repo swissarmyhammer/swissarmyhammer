@@ -1,5 +1,6 @@
 //! Tauri commands for board operations.
 
+use crate::menu;
 use crate::state::AppState;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use swissarmyhammer_kanban::{
     types::{Ordinal, Position},
     OperationProcessor,
 };
-use tauri::State;
+use tauri::{AppHandle, State};
 
 /// Get the board metadata for the active (or specified) board.
 #[tauri::command]
@@ -276,4 +277,29 @@ pub async fn get_recent_boards(
 ) -> Result<Value, String> {
     let config = state.config.read().await;
     serde_json::to_value(&config.recent_boards).map_err(|e| e.to_string())
+}
+
+/// Get the current editor keymap mode.
+#[tauri::command]
+pub async fn get_keymap_mode(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let config = state.config.read().await;
+    Ok(config.keymap_mode.clone())
+}
+
+/// Set the editor keymap mode, persist to config, and rebuild the menu.
+#[tauri::command]
+pub async fn set_keymap_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<Value, String> {
+    {
+        let mut config = state.config.write().await;
+        config.keymap_mode = mode.clone();
+        config.save().map_err(|e| e.to_string())?;
+    }
+    menu::rebuild_menu(&app);
+    Ok(json!({ "keymap_mode": mode }))
 }

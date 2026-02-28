@@ -5,7 +5,7 @@ import {
 } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
 import { Inbox, Plus } from "lucide-react";
-import { EditableText } from "@/components/editable-text";
+import { EditableMarkdown } from "@/components/editable-markdown";
 import { SortableTaskCard } from "@/components/sortable-task-card";
 import { Badge } from "@/components/ui/badge";
 import type { Column, Task } from "@/types/kanban";
@@ -39,11 +39,11 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, 
   return (
     <div className="flex flex-col min-h-0 flex-1">
       <div className="px-3 py-2 flex items-center gap-2">
-        <EditableText
+        <EditableMarkdown
           value={column.name}
           onCommit={(name) => onRenameColumn?.(column.id, name)}
           className="text-sm font-semibold text-foreground cursor-text"
-          inputClassName="text-sm font-semibold text-foreground bg-transparent border-b border-ring outline-none w-full"
+          inputClassName="text-sm font-semibold text-foreground bg-transparent border-b border-ring w-full"
         />
         <Badge variant="secondary">{tasks.length}</Badge>
         <div className="flex-1" />

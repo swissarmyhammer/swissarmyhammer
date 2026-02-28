@@ -38,6 +38,8 @@ fn main() {
             commands::list_open_boards,
             commands::set_active_board,
             commands::get_recent_boards,
+            commands::get_keymap_mode,
+            commands::set_keymap_mode,
         ])
         .setup(|app| {
             menu::rebuild_menu(app.handle());

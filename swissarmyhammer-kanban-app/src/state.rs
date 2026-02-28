@@ -39,6 +39,12 @@ pub struct RecentBoard {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     pub recent_boards: Vec<RecentBoard>,
+    #[serde(default = "default_keymap_mode")]
+    pub keymap_mode: String,
+}
+
+fn default_keymap_mode() -> String {
+    "cua".to_string()
 }
 
 impl AppConfig {

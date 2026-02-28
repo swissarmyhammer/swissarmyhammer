@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { KeymapProvider } from "@/lib/keymap-context";
 import { NavBar } from "@/components/nav-bar";
 import { BoardView } from "@/components/board-view";
 import { TaskDetailPanel } from "@/components/task-detail-panel";
@@ -50,6 +51,7 @@ function App() {
   }, [refresh]);
 
   return (
+    <KeymapProvider>
     <div className="h-screen bg-background text-foreground flex flex-col">
       <NavBar
         board={board}
@@ -88,6 +90,7 @@ function App() {
         </main>
       )}
     </div>
+    </KeymapProvider>
   );
 }
 

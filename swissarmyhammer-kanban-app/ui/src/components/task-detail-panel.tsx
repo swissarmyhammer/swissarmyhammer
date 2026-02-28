@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
-import { EditableText } from "@/components/editable-text";
+import { EditableMarkdown } from "@/components/editable-markdown";
 import type { Task } from "@/types/kanban";
 
 interface TaskDetailPanelProps {
@@ -20,6 +20,8 @@ export function TaskDetailPanel({ task, onClose, onUpdateTitle, onUpdateDescript
         // Don't close the panel if an editable field is focused
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
+        // Don't close if a CodeMirror editor is focused
+        if ((e.target as HTMLElement)?.closest?.(".cm-editor")) return;
         onClose();
       }
     }
@@ -50,11 +52,11 @@ export function TaskDetailPanel({ task, onClose, onUpdateTitle, onUpdateDescript
           <>
             {/* Header */}
             <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3">
-              <EditableText
+              <EditableMarkdown
                 value={task.title}
                 onCommit={(title) => onUpdateTitle?.(task.id, title)}
                 className="text-lg font-semibold leading-snug flex-1 cursor-text"
-                inputClassName="text-lg font-semibold leading-snug flex-1 bg-transparent border-b border-ring outline-none w-full"
+                inputClassName="text-lg font-semibold leading-snug flex-1 bg-transparent border-b border-ring w-full"
               />
               <button
                 onClick={onClose}
@@ -70,11 +72,11 @@ export function TaskDetailPanel({ task, onClose, onUpdateTitle, onUpdateDescript
             <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-5">
               {/* Description */}
               <section>
-                <EditableText
+                <EditableMarkdown
                   value={task.description ?? ""}
                   onCommit={(desc) => onUpdateDescription?.(task.id, desc)}
-                  className="text-sm leading-relaxed whitespace-pre-wrap cursor-text"
-                  inputClassName="text-sm leading-relaxed bg-transparent outline-none w-full resize-none"
+                  className="text-sm leading-relaxed cursor-text"
+                  inputClassName="text-sm leading-relaxed bg-transparent w-full"
                   multiline
                   placeholder="Add description..."
                 />
