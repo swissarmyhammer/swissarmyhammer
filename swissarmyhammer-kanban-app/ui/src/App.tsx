@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { NavBar } from "@/components/nav-bar";
@@ -15,7 +15,11 @@ function App() {
   const [board, setBoard] = useState<Board | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const selectedTask = useMemo(
+    () => (selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null),
+    [selectedTaskId, tasks]
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -54,10 +58,10 @@ function App() {
       />
       {board ? (
         <>
-          <BoardView board={board} tasks={tasks} onTaskClick={setSelectedTask} onTaskMoved={refresh} />
+          <BoardView board={board} tasks={tasks} onTaskClick={(t) => setSelectedTaskId(t.id)} onTaskMoved={refresh} />
           <TaskDetailPanel
             task={selectedTask}
-            onClose={() => setSelectedTask(null)}
+            onClose={() => setSelectedTaskId(null)}
             onUpdateTitle={async (taskId, title) => {
               try {
                 await invoke("update_task_title", { id: taskId, title });
