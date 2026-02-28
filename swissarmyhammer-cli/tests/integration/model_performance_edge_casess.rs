@@ -301,8 +301,7 @@ fn setup_large_agent_test_environment(
     fs::create_dir_all(project_root)?;
 
     let user_agents_dir = temp_home
-        .join(SwissarmyhammerDirectory::dir_name())
-        .join("models");
+        .join(".models");
     let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 50)?;
@@ -453,8 +452,8 @@ fn verify_config_preservation(config_path: &Path) -> Result<()> {
         "Should preserve custom data"
     );
     assert!(
-        updated_config.contains("agents:"),
-        "Should add agents section"
+        updated_config.contains("model:"),
+        "Should add model key"
     );
     Ok(())
 }
@@ -640,8 +639,7 @@ async fn test_invalid_yaml_recovery() -> Result<()> {
     let temp_home = &temp_dir.join("home");
 
     let user_agents_dir = temp_home
-        .join(SwissarmyhammerDirectory::dir_name())
-        .join("models");
+        .join(".models");
 
     let valid_agents = create_large_agent_set(&user_agents_dir, 10)?;
     let invalid_files = create_invalid_agent_files(&user_agents_dir)?;
@@ -723,8 +721,8 @@ other_section:
         let fixed_config = fs::read_to_string(&config_path)?;
         let parsed: serde_yaml::Value = serde_yaml::from_str(&fixed_config)?;
         assert!(
-            parsed.get("agents").is_some(),
-            "Should have valid agents section. Actual: {:?}",
+            parsed.get("model").is_some(),
+            "Should have valid model key. Actual: {:?}",
             parsed
         );
     }
@@ -865,8 +863,7 @@ fn setup_large_dataset_environment(
     fs::create_dir_all(project_root)?;
 
     let user_agents_dir = temp_home
-        .join(SwissarmyhammerDirectory::dir_name())
-        .join("models");
+        .join(".models");
     let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 200)?;

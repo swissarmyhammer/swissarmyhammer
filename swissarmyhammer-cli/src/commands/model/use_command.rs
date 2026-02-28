@@ -1,41 +1,15 @@
-//! Agent use command implementation
+//! Model use command implementation
 //! sah rule ignore test_rule_with_allow
 
 use crate::context::CliContext;
 use colored::Colorize;
-use swissarmyhammer_config::model::{ModelError as AgentError, ModelManager};
-use swissarmyhammer_config::AgentUseCase;
+use swissarmyhammer_config::model::{ModelError as AgentError, ModelManager, ModelPaths};
 
 /// Maximum number of agent name suggestions to display when an agent is not found
 const MAX_SUGGESTIONS: usize = 3;
 
 /// Maximum number of available models to display in error messages
 const MAX_MODELS_TO_DISPLAY: usize = 5;
-
-/// Parse use command arguments into use case and agent name
-fn parse_use_command_args(
-    first: String,
-    second: Option<String>,
-) -> Result<(AgentUseCase, String), String> {
-    let (use_case, agent_name) = if let Some(agent) = second {
-        // Two arguments: use_case agent_name
-        let use_case = first
-            .trim()
-            .parse::<AgentUseCase>()
-            .map_err(|e| format!("Invalid use case: {}", e))?;
-        (use_case, agent.trim().to_string())
-    } else {
-        // One argument: just agent name (root use case)
-        (AgentUseCase::Root, first.trim().to_string())
-    };
-
-    // Input validation
-    if agent_name.is_empty() {
-        return Err("Model name cannot be empty".into());
-    }
-
-    Ok((use_case, agent_name))
-}
 
 /// Format agent source as colored string
 fn format_agent_source(
@@ -49,12 +23,11 @@ fn format_agent_source(
     }
 }
 
-/// Display success message after setting agent for use case
-fn display_success_message(agent_name: &str, use_case: AgentUseCase) {
+/// Display success message after setting model
+fn display_success_message(agent_name: &str) {
     println!(
-        "{} Successfully set {} use case to model: {}",
+        "{} Successfully set model to: {}",
         "✓".green(),
-        use_case.to_string().cyan(),
         agent_name.green().bold()
     );
 
@@ -85,7 +58,7 @@ fn handle_error(
 
 /// Handle agent not found error with suggestions
 fn handle_agent_not_found(name: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let primary_message = format!("Agent '{}' not found", name);
+    let primary_message = format!("Model '{}' not found", name);
 
     let additional_context = match ModelManager::list_agents() {
         Ok(available_agents) => {
@@ -165,20 +138,22 @@ fn handle_invalid_path_error(
     )
 }
 
-/// Execute the agent use command
+/// Execute the model use command
 pub async fn execute_use_command(
-    first: String,
-    second: Option<String>,
+    name: String,
     _context: &CliContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (use_case, agent_name) = parse_use_command_args(first, second)?;
+    let agent_name = name.trim().to_string();
 
-    tracing::info!("Setting {} use case to model: {}", use_case, agent_name);
+    if agent_name.is_empty() {
+        return Err("Model name cannot be empty".into());
+    }
 
-    // Use ModelManager with use case support
-    match ModelManager::use_agent_for_use_case(&agent_name, use_case) {
+    tracing::info!("Setting model to: {}", agent_name);
+
+    match ModelManager::use_agent(&agent_name, &ModelPaths::sah()) {
         Ok(()) => {
-            display_success_message(&agent_name, use_case);
+            display_success_message(&agent_name);
             Ok(())
         }
         Err(AgentError::NotFound(name)) => handle_agent_not_found(name),
@@ -219,42 +194,17 @@ mod tests {
             .unwrap()
     }
 
-    /// Helper to validate that command execution succeeds or fails due to config issues, not logic errors
-    async fn assert_use_command_config_only_failure(
-        first: &str,
-        second: Option<&str>,
-        context: &CliContext,
-    ) {
-        let result =
-            execute_use_command(first.to_string(), second.map(|s| s.to_string()), context).await;
-
-        match result {
-            Ok(()) => {
-                // Success case - command completed successfully
-            }
-            Err(e) => {
-                // Should only fail due to config issues, not parsing or logic errors
-                let error_msg = e.to_string();
-                assert!(
-                    !error_msg.contains("Invalid use case"),
-                    "Should not fail parsing valid use case, got: {}",
-                    error_msg
-                );
-            }
-        }
-    }
-
     #[tokio::test]
     async fn test_execute_use_command_empty_agent_name() {
         let context = create_test_context().await;
 
         // Test empty string
-        let result = execute_use_command("".to_string(), None, &context).await;
+        let result = execute_use_command("".to_string(), &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
 
         // Test whitespace-only string
-        let result = execute_use_command("   ".to_string(), None, &context).await;
+        let result = execute_use_command("   ".to_string(), &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
     }
@@ -263,7 +213,7 @@ mod tests {
     async fn test_execute_use_command_nonexistent_agent() {
         let context = create_test_context().await;
 
-        let result = execute_use_command("nonexistent-agent-xyz".to_string(), None, &context).await;
+        let result = execute_use_command("nonexistent-agent-xyz".to_string(), &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -282,7 +232,7 @@ mod tests {
 
         let agent_name = &builtin_agents[0].name;
 
-        let result = execute_use_command(agent_name.clone(), None, &context).await;
+        let result = execute_use_command(agent_name.clone(), &context).await;
         // This might fail if no config directory exists, but we test the logic
         match result {
             Ok(()) => {
@@ -315,7 +265,7 @@ mod tests {
         let agent_name = &builtin_agents[0].name;
 
         // Test that agent names get properly trimmed
-        let result = execute_use_command(format!("  {}  ", agent_name), None, &context).await;
+        let result = execute_use_command(format!("  {}  ", agent_name), &context).await;
 
         match result {
             Ok(()) => {
@@ -355,7 +305,7 @@ mod tests {
 
         let agent_name = &builtin_agents[0].name;
 
-        let result = execute_use_command(agent_name.clone(), None, &context).await;
+        let result = execute_use_command(agent_name.clone(), &context).await;
 
         // This should succeed or fail only due to permission/config issues
         match result {
@@ -371,8 +321,8 @@ mod tests {
                 );
                 let config_content = fs::read_to_string(&config_path).unwrap();
                 assert!(
-                    config_content.contains("agents:"),
-                    "Config should contain agents map structure, got: {}",
+                    config_content.contains("model:"),
+                    "Config should contain model key, got: {}",
                     config_content
                 );
             }
@@ -416,75 +366,11 @@ mod tests {
 
         // Test that error messages are properly formatted
         let result =
-            execute_use_command("definitely-not-an-agent-12345".to_string(), None, &context).await;
+            execute_use_command("definitely-not-an-agent-12345".to_string(), &context).await;
         assert!(result.is_err());
 
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("not found"));
         assert!(error_msg.contains("definitely-not-an-agent-12345"));
-    }
-
-    // Test use case parsing with parameterized approach
-    #[tokio::test]
-    async fn test_execute_use_command_with_valid_use_cases() {
-        let context = create_test_context().await;
-
-        // Get the first available builtin agent dynamically
-        let builtin_agents =
-            ModelManager::load_builtin_models().expect("Should be able to load builtin agents");
-        assert!(
-            !builtin_agents.is_empty(),
-            "Should have at least one builtin agent"
-        );
-
-        let agent_name = &builtin_agents[0].name;
-
-        // Test all valid use cases dynamically from the enum
-        // Note: AgentUseCase::Rules was removed as part of swissarmyhammer-rules crate removal
-        let valid_use_cases = [AgentUseCase::Root, AgentUseCase::Workflows];
-
-        for use_case in valid_use_cases {
-            assert_use_command_config_only_failure(
-                &use_case.to_string(),
-                Some(agent_name),
-                &context,
-            )
-            .await;
-        }
-    }
-
-    #[tokio::test]
-    async fn test_execute_use_command_invalid_use_case() {
-        let context = create_test_context().await;
-
-        // Test with invalid use case
-        let result = execute_use_command(
-            "invalid".to_string(),
-            Some("claude-code".to_string()),
-            &context,
-        )
-        .await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid use case"));
-    }
-
-    #[tokio::test]
-    async fn test_use_nonexistent_agent_for_use_case() {
-        let context = create_test_context().await;
-
-        // Test setting a nonexistent agent for a use case
-        let result = execute_use_command(
-            AgentUseCase::Workflows.to_string(),
-            Some("nonexistent".to_string()),
-            &context,
-        )
-        .await;
-
-        assert!(result.is_err(), "Should fail for nonexistent agent");
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("not found"),
-            "Error should indicate agent was not found"
-        );
     }
 }

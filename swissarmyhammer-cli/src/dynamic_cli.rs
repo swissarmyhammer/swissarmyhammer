@@ -1007,13 +1007,12 @@ Examples:
 
 const MODEL_COMMAND_LONG_ABOUT: &str = "
 Manage and interact with models in the SwissArmyHammer system.
-Models provide specialized functionality through dedicated workflows
-and tools for specific use cases.
+Models provide AI model configurations for project workflows.
 
 The model system provides three main commands:
-• show - Display current model use case assignments (default)
+• show - Display current model configuration (default)
 • list - Display all available models from all sources
-• use - Apply or execute a specific model
+• use - Apply a specific model to the project
 
 Use global arguments to control output:
   --verbose         Show detailed information
@@ -1022,29 +1021,29 @@ Use global arguments to control output:
   --quiet           Suppress output except errors
 
 Examples:
-  sah model                                # Show use case assignments
+  sah model                                # Show current model
   sah model show                           # Same as above
   sah model list                           # List all models
   sah --verbose model list                 # Show detailed information
   sah --format=json model list             # Output as JSON
-  sah model use code-reviewer              # Apply code-reviewer model
-  sah --debug model use planner            # Use model with debug output
+  sah model use claude-code                # Apply claude-code model
+  sah --debug model use qwen-coder         # Use model with debug output
 ";
 
 const MODEL_USE_LONG_ABOUT: &str = "
-Apply a specific model configuration to the project for a use case.
+Apply a specific model configuration to the current project.
 
-Usage patterns:
-  sah model use <MODEL>              # Set root model (backward compatible)
-  sah model use <USE_CASE> <MODEL>   # Set model for specific use case
+This command finds the specified model by name and applies its configuration
+to the project by creating or updating .swissarmyhammer/sah.yaml.
 
-Use cases:
-  root      - Default model for general operations
-  workflows - Model for workflow execution
+Model precedence (highest to lowest):
+• User models: ~/.models/<name>.yaml
+• Project models: ./models/<name>.yaml
+• Built-in models: embedded in the binary
 
 Examples:
-  sah model use claude-code               # Set root model
-  sah model use workflows claude-code     # Use Claude for workflows
+  sah model use claude-code                # Apply Claude Code model
+  sah model use qwen-coder                # Apply Qwen Coder model
 ";
 
 /// Statistics about CLI tool validation results
@@ -1474,7 +1473,7 @@ impl CliBuilder {
         .arg(
             Arg::new("model")
                 .long("model")
-                .help("Override model for all use cases (runtime only, doesn't modify config)")
+                .help("Override model (runtime only, doesn't modify config)")
                 .value_name("MODEL")
                 .global(true),
         )
@@ -2171,20 +2170,15 @@ impl CliBuilder {
             .default_value("table".to_string());
 
         let subcommand_specs = vec![
-            SubcommandSpec::new("show", "Show current model use case assignments")
+            SubcommandSpec::new("show", "Show current model configuration")
                 .args(vec![format_arg.clone()]),
             SubcommandSpec::new("list", "List available models").args(vec![format_arg]),
-            SubcommandSpec::new("use", "Use a specific model for a use case")
+            SubcommandSpec::new("use", "Use a specific model")
                 .long_about(MODEL_USE_LONG_ABOUT)
                 .args(vec![
-                    ArgSpec::new("first", "Model name OR use case (root, workflows)")
-                        .value_name("FIRST")
+                    ArgSpec::new("name", "Model name to apply to the project")
+                        .value_name("NAME")
                         .required(true),
-                    ArgSpec::new(
-                        "second",
-                        "Model name (required when first argument is a use case)",
-                    )
-                    .value_name("SECOND"),
                 ]),
         ];
 

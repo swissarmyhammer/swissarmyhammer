@@ -40,10 +40,12 @@
 use std::fmt;
 
 mod cli;
-pub use cli::{Cli, Commands};
+pub use cli::{Cli, Commands, ModelAction};
 pub mod doctor;
 pub mod edit;
 pub mod install;
+pub mod logging;
+pub mod model;
 pub mod new;
 
 /// Error type for AVP CLI operations.

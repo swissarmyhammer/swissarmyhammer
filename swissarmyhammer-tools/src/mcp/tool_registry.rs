@@ -234,7 +234,6 @@ use std::sync::Arc;
 use swissarmyhammer_common::health::Doctorable;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::model::ModelConfig;
-use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_git::GitOperations;
 use tokio::sync::{Mutex, RwLock};
 
@@ -276,13 +275,6 @@ pub struct ToolContext {
     /// and associated settings. Tools that need to execute agent operations should
     /// use this configuration to create appropriate executor instances.
     pub agent_config: Arc<ModelConfig>,
-
-    /// Agent configurations mapped by use case (Arc-wrapped for memory efficiency)
-    ///
-    /// Falls back to agent_config if use case not present. This allows different
-    /// operations to use different agents (e.g., a specialized agent for rule checking).
-    /// Agents are Arc-wrapped to avoid cloning the entire configuration.
-    pub use_case_agents: Arc<HashMap<AgentUseCase, Arc<ModelConfig>>>,
 
     /// Optional notification sender for long-running operations (workflow state transitions)
     ///
@@ -394,7 +386,6 @@ impl ToolContext {
             tool_handlers,
             git_ops,
             agent_config,
-            use_case_agents: Arc::new(HashMap::new()),
             notification_sender: None,
             plan_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
@@ -403,26 +394,6 @@ impl ToolContext {
             working_dir: None,
             mcp_server: Arc::new(RwLock::new(None)),
         }
-    }
-
-    /// Get agent configuration for a specific use case
-    ///
-    /// Resolution chain:
-    /// 1. Use case-specific agent (if configured in use_case_agents)
-    /// 2. Root agent (agent_config)
-    ///
-    /// # Arguments
-    ///
-    /// * `use_case` - The agent use case to resolve
-    ///
-    /// # Returns
-    ///
-    /// An Arc to the appropriate ModelConfig
-    pub fn get_agent_for_use_case(&self, use_case: AgentUseCase) -> Arc<ModelConfig> {
-        self.use_case_agents
-            .get(&use_case)
-            .cloned()
-            .unwrap_or_else(|| self.agent_config.clone())
     }
 
     /// Create a new tool context with workflow notification support
@@ -2513,65 +2484,5 @@ mod tests {
             field: "type".to_string(),
         };
         assert_error_severity(missing_field, ErrorSeverity::Error, "Missing schema field");
-    }
-
-    /// Helper function to create a test context with basic setup
-    fn create_test_context() -> ToolContext {
-        use swissarmyhammer_git::GitOperations;
-        use tokio::sync::Mutex;
-
-        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        let tool_handlers = Arc::new(ToolHandlers::new());
-        let agent_config = Arc::new(ModelConfig::default());
-        ToolContext::new(tool_handlers, git_ops, agent_config)
-    }
-
-    /// Helper function to create a test context with use case specific agents
-    fn create_test_context_with_use_case_agents(
-        use_case_agents: HashMap<AgentUseCase, Arc<ModelConfig>>,
-    ) -> ToolContext {
-        let mut context = create_test_context();
-        context.use_case_agents = Arc::new(use_case_agents);
-        context
-    }
-
-    #[test]
-    fn test_get_agent_for_use_case_fallback() {
-        use swissarmyhammer_config::AgentUseCase;
-
-        // Create context with only root agent
-        let context = create_test_context();
-        let agent_config = context.agent_config.clone();
-
-        // Test that all use cases fall back to root agent when not configured
-        let workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
-        let root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
-
-        // All should return the same agent config (root)
-        assert!(Arc::ptr_eq(&workflows_agent, &agent_config));
-        assert!(Arc::ptr_eq(&root_agent, &agent_config));
-    }
-
-    #[test]
-    fn test_get_agent_for_use_case_specific() {
-        use swissarmyhammer_config::AgentUseCase;
-
-        // Create context with use case specific agents
-        let root_agent = Arc::new(ModelConfig::default());
-        let workflows_agent = Arc::new(ModelConfig::default());
-
-        let mut use_case_agents = HashMap::new();
-        use_case_agents.insert(AgentUseCase::Workflows, workflows_agent.clone());
-
-        let mut context = create_test_context_with_use_case_agents(use_case_agents);
-        context.agent_config = root_agent.clone();
-
-        // Test that Workflows use case gets its specific agent
-        let resolved_workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
-        assert!(Arc::ptr_eq(&resolved_workflows_agent, &workflows_agent));
-
-        // Test that Root falls back to root agent
-        let resolved_root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
-        assert!(Arc::ptr_eq(&resolved_root_agent, &root_agent));
     }
 }

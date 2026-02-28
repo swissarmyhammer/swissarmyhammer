@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_common::{is_prompt_visible, Pretty, Result, SwissArmyHammerError};
 use swissarmyhammer_config::model::{parse_model_config, ModelManager};
-use swissarmyhammer_config::{AgentUseCase, TemplateContext};
+use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
@@ -218,8 +218,7 @@ impl McpServer {
     ) -> Result<Self> {
         let git_ops_arc = Self::initialize_git_operations(work_dir.clone());
         let tool_handlers = ToolHandlers::new();
-        let agent_config = Self::load_template_context()?;
-        let use_case_agents = Self::initialize_use_case_agents(model_override)?;
+        let agent_config = Self::resolve_agent_config(model_override)?;
 
         // Initialize skill library
         let skill_library = Arc::new(RwLock::new(SkillLibrary::new()));
@@ -244,7 +243,6 @@ impl McpServer {
             tool_handlers,
             git_ops_arc,
             agent_config,
-            use_case_agents,
             Some(work_dir),
             skill_library.clone(),
             agent_library.clone(),
@@ -285,116 +283,53 @@ impl McpServer {
         Arc::new(Mutex::new(git_ops))
     }
 
-    /// Load template context and agent configuration.
+    /// Resolve agent configuration, with optional model override.
+    ///
+    /// If a model override is provided, that model is loaded directly.
+    /// Otherwise, resolves the configured model from the project config,
+    /// falling back to claude-code as default.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_override` - Optional model name to override configured model
     ///
     /// # Returns
     ///
     /// * `Result<Arc<swissarmyhammer_config::model::ModelConfig>>` - Agent configuration
-    fn load_template_context() -> Result<Arc<swissarmyhammer_config::model::ModelConfig>> {
-        let template_context = TemplateContext::load_for_cli().map_err(|e| {
-            tracing::warn!("Failed to load configuration, using default: {}", e);
-            SwissArmyHammerError::Other {
-                message: format!("Failed to load configuration: {}", e),
-            }
-        })?;
-        Ok(Arc::new(template_context.get_agent_config(None)))
-    }
-
-    /// Initialize agent configurations for all use cases.
-    ///
-    /// # Arguments
-    ///
-    /// * `model_override` - Optional model name to override all use case assignments
-    ///
-    /// # Returns
-    ///
-    /// * `Result<HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>>` - Use case agent map
-    fn initialize_use_case_agents(
+    fn resolve_agent_config(
         model_override: Option<String>,
-    ) -> Result<HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>> {
-        let mut use_case_agents = HashMap::new();
-
+    ) -> Result<Arc<swissarmyhammer_config::model::ModelConfig>> {
         if let Some(override_model_name) = model_override {
-            Self::apply_model_override(&mut use_case_agents, override_model_name)?;
-        } else {
-            Self::resolve_use_case_agents(&mut use_case_agents);
-        }
+            tracing::info!("Using model override '{}'", override_model_name);
 
-        Ok(use_case_agents)
-    }
-
-    /// Apply model override to all use cases.
-    ///
-    /// # Arguments
-    ///
-    /// * `use_case_agents` - Map to populate with agent configurations
-    /// * `override_model_name` - Model name to use for all use cases
-    ///
-    /// # Returns
-    ///
-    /// * `Result<()>` - Ok if override is successfully applied
-    fn apply_model_override(
-        use_case_agents: &mut HashMap<
-            AgentUseCase,
-            Arc<swissarmyhammer_config::model::ModelConfig>,
-        >,
-        override_model_name: String,
-    ) -> Result<()> {
-        tracing::info!(
-            "Using global model override '{}' for all use cases",
-            override_model_name
-        );
-
-        let override_agent = match ModelManager::find_agent_by_name(&override_model_name) {
-            Ok(info) => match parse_model_config(&info.content) {
-                Ok(config) => config,
-                Err(e) => {
-                    return Err(SwissArmyHammerError::Other {
-                        message: format!("Invalid model override '{}': {}", override_model_name, e),
-                    });
-                }
-            },
-            Err(e) => {
-                return Err(SwissArmyHammerError::Other {
+            let info = ModelManager::find_agent_by_name(&override_model_name).map_err(|e| {
+                SwissArmyHammerError::Other {
                     message: format!("Invalid model override '{}': {}", override_model_name, e),
-                });
-            }
-        };
+                }
+            })?;
 
-        for use_case in [AgentUseCase::Root, AgentUseCase::Workflows] {
-            use_case_agents.insert(use_case, Arc::new(override_agent.clone()));
-        }
+            let config = parse_model_config(&info.content).map_err(|e| {
+                SwissArmyHammerError::Other {
+                    message: format!("Invalid model override '{}': {}", override_model_name, e),
+                }
+            })?;
 
-        Ok(())
-    }
-
-    /// Resolve agent configurations for all use cases from configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `use_case_agents` - Map to populate with agent configurations
-    fn resolve_use_case_agents(
-        use_case_agents: &mut HashMap<
-            AgentUseCase,
-            Arc<swissarmyhammer_config::model::ModelConfig>,
-        >,
-    ) {
-        for use_case in [AgentUseCase::Root, AgentUseCase::Workflows] {
-            match ModelManager::resolve_agent_config_for_use_case(use_case) {
+            Ok(Arc::new(config))
+        } else {
+            match ModelManager::resolve_agent_config(&swissarmyhammer_config::model::ModelPaths::sah()) {
                 Ok(config) => {
-                    tracing::debug!(
-                        "Resolved {} use case to agent: {:?}",
-                        use_case,
-                        config.executor_type()
-                    );
-                    use_case_agents.insert(use_case, Arc::new(config));
+                    tracing::debug!("Resolved model: {:?}", config.executor_type());
+                    Ok(Arc::new(config))
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to resolve agent for {} use case: {}, using root",
-                        use_case,
-                        e
-                    );
+                    tracing::warn!("Failed to resolve model config: {}, using default", e);
+                    // Fall back to loading from template context
+                    let template_context = TemplateContext::load_for_cli().map_err(|e| {
+                        SwissArmyHammerError::Other {
+                            message: format!("Failed to load configuration: {}", e),
+                        }
+                    })?;
+                    Ok(Arc::new(template_context.get_agent_config(None)))
                 }
             }
         }
@@ -407,7 +342,6 @@ impl McpServer {
     /// * `tool_handlers` - Tool handlers instance
     /// * `git_ops_arc` - Git operations wrapped in Arc<Mutex>
     /// * `agent_config` - Agent configuration
-    /// * `use_case_agents` - Use case to agent configuration map
     /// * `working_dir` - Working directory for tool operations
     /// * `skill_library` - Shared skill library
     /// * `agent_mode` - Whether to register agent tools
@@ -420,7 +354,6 @@ impl McpServer {
         tool_handlers: ToolHandlers,
         git_ops_arc: Arc<Mutex<Option<GitOperations>>>,
         agent_config: Arc<swissarmyhammer_config::model::ModelConfig>,
-        use_case_agents: HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
         working_dir: Option<PathBuf>,
         skill_library: Arc<RwLock<SkillLibrary>>,
         agent_library: Arc<RwLock<AgentLibrary>>,
@@ -438,7 +371,6 @@ impl McpServer {
         .await;
 
         let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
-        tool_context.use_case_agents = Arc::new(use_case_agents);
         tool_context.working_dir = working_dir;
 
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));

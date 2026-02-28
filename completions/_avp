@@ -88,6 +88,83 @@ _arguments "${_arguments_options[@]}" : \
 ':name -- RuleSet name (kebab-case):_default' \
 && ret=0
 ;;
+(model)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_avp__model_commands" \
+"*::: :->model" \
+&& ret=0
+
+    case $state in
+    (model)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:avp-model-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(use)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name -- Model name to apply:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_avp__model__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:avp-model-help-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(use)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_avp__help_commands" \
@@ -120,6 +197,34 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(model)
+_arguments "${_arguments_options[@]}" : \
+":: :_avp__help__model_commands" \
+"*::: :->model" \
+&& ret=0
+
+    case $state in
+    (model)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:avp-help-model-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(use)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -141,6 +246,7 @@ _avp_commands() {
 'doctor:Diagnose AVP configuration and setup' \
 'edit:Edit an existing RuleSet in \$EDITOR' \
 'new:Create a new RuleSet from template' \
+'model:Manage AI model configurations' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'avp commands' commands "$@"
@@ -168,6 +274,7 @@ _avp__help_commands() {
 'doctor:Diagnose AVP configuration and setup' \
 'edit:Edit an existing RuleSet in \$EDITOR' \
 'new:Create a new RuleSet from template' \
+'model:Manage AI model configurations' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'avp help commands' commands "$@"
@@ -197,6 +304,30 @@ _avp__help__init_commands() {
     local commands; commands=()
     _describe -t commands 'avp help init commands' commands "$@"
 }
+(( $+functions[_avp__help__model_commands] )) ||
+_avp__help__model_commands() {
+    local commands; commands=(
+'list:List all available models' \
+'show:Show the current model configuration' \
+'use:Apply a specific model to the project' \
+    )
+    _describe -t commands 'avp help model commands' commands "$@"
+}
+(( $+functions[_avp__help__model__list_commands] )) ||
+_avp__help__model__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp help model list commands' commands "$@"
+}
+(( $+functions[_avp__help__model__show_commands] )) ||
+_avp__help__model__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp help model show commands' commands "$@"
+}
+(( $+functions[_avp__help__model__use_commands] )) ||
+_avp__help__model__use_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp help model use commands' commands "$@"
+}
 (( $+functions[_avp__help__new_commands] )) ||
 _avp__help__new_commands() {
     local commands; commands=()
@@ -206,6 +337,61 @@ _avp__help__new_commands() {
 _avp__init_commands() {
     local commands; commands=()
     _describe -t commands 'avp init commands' commands "$@"
+}
+(( $+functions[_avp__model_commands] )) ||
+_avp__model_commands() {
+    local commands; commands=(
+'list:List all available models' \
+'show:Show the current model configuration' \
+'use:Apply a specific model to the project' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'avp model commands' commands "$@"
+}
+(( $+functions[_avp__model__help_commands] )) ||
+_avp__model__help_commands() {
+    local commands; commands=(
+'list:List all available models' \
+'show:Show the current model configuration' \
+'use:Apply a specific model to the project' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'avp model help commands' commands "$@"
+}
+(( $+functions[_avp__model__help__help_commands] )) ||
+_avp__model__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp model help help commands' commands "$@"
+}
+(( $+functions[_avp__model__help__list_commands] )) ||
+_avp__model__help__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp model help list commands' commands "$@"
+}
+(( $+functions[_avp__model__help__show_commands] )) ||
+_avp__model__help__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp model help show commands' commands "$@"
+}
+(( $+functions[_avp__model__help__use_commands] )) ||
+_avp__model__help__use_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp model help use commands' commands "$@"
+}
+(( $+functions[_avp__model__list_commands] )) ||
+_avp__model__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp model list commands' commands "$@"
+}
+(( $+functions[_avp__model__show_commands] )) ||
+_avp__model__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp model show commands' commands "$@"
+}
+(( $+functions[_avp__model__use_commands] )) ||
+_avp__model__use_commands() {
+    local commands; commands=()
+    _describe -t commands 'avp model use commands' commands "$@"
 }
 (( $+functions[_avp__new_commands] )) ||
 _avp__new_commands() {

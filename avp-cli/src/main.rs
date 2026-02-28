@@ -15,29 +15,34 @@
 //! - 1: Error
 //! - 2: Blocking error (hook rejected the action)
 
+use std::fs::OpenOptions;
 use std::io::{self, IsTerminal, Read, Write};
+use std::sync::{Arc, Mutex};
 
 use clap::{CommandFactory, Parser};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 mod banner;
 
 /// Exit code returned when a hook blocks the action.
 const BLOCKING_ERROR_EXIT_CODE: i32 = 2;
 
-use avp::{doctor, edit, install, new};
-use avp::{Cli, Commands};
+use avp::logging::FileWriterGuard;
+use avp::{doctor, edit, install, model, new};
+use avp::{Cli, Commands, ModelAction};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
 use avp_common::AvpError;
 
 #[tokio::main]
 async fn main() {
-    // Show branded banner for top-level help (no subcommand or --help/-h).
+    // Show branded banner for interactive help (not when piped as a hook).
     {
         let args: Vec<String> = std::env::args().collect();
         let show = match args.len() {
-            1 => true,
+            1 => io::stdin().is_terminal(),
             2 => args[1] == "--help" || args[1] == "-h",
             _ => false,
         };
@@ -48,17 +53,30 @@ async fn main() {
 
     let cli = Cli::parse();
 
-    // Initialize tracing with appropriate level
-    let filter = if cli.debug {
+    // Stderr layer: warn by default, debug with --debug
+    let stderr_filter = if cli.debug {
         EnvFilter::new("avp=debug,avp_common=debug")
     } else {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let stderr_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
         .with_ansi(false)
         .with_writer(std::io::stderr)
+        .with_filter(stderr_filter);
+
+    // File layer: info level, writes to .avp/avp.log (if in a git repo)
+    let file_layer = open_avp_log().map(|log_file| {
+        tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_ansi(false)
+            .with_writer(move || FileWriterGuard::new(log_file.clone()))
+            .with_filter(EnvFilter::new("info"))
+    });
+
+    tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(file_layer)
         .init();
 
     let exit_code = dispatch_command(cli).await;
@@ -82,6 +100,16 @@ async fn dispatch_subcommand(cmd: Commands, _debug: bool) -> i32 {
         Commands::Doctor { verbose } => doctor::run_doctor(verbose),
         Commands::Edit { name, global, .. } => result_to_exit(edit::run_edit(&name, global)),
         Commands::New { name, global, .. } => result_to_exit(new::run_new(&name, global)),
+        Commands::Model { action } => dispatch_model_action(action),
+    }
+}
+
+/// Handle model subcommands.
+fn dispatch_model_action(action: Option<ModelAction>) -> i32 {
+    match action {
+        Some(ModelAction::List) => result_to_exit(model::run_list()),
+        Some(ModelAction::Use { name }) => result_to_exit(model::run_use(&name)),
+        Some(ModelAction::Show) | None => result_to_exit(model::run_show()),
     }
 }
 
@@ -166,6 +194,24 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
     io::stdout().write_all(b"\n")?;
 
     Ok(exit_code)
+}
+
+/// Try to open `.avp/avp.log` for appending.
+///
+/// Returns `None` if we're not in a git repo or the file can't be opened.
+fn open_avp_log() -> Option<Arc<Mutex<std::fs::File>>> {
+    let git_root = swissarmyhammer_common::utils::find_git_repository_root()?;
+    let log_path = git_root.join(".avp").join("avp.log");
+    // Only open if the .avp directory already exists (avp init creates it)
+    if !log_path.parent()?.exists() {
+        return None;
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .ok()
+        .map(|f| Arc::new(Mutex::new(f)))
 }
 
 #[cfg(test)]
@@ -376,6 +422,56 @@ mod tests {
             }
             _ => panic!("Expected New command"),
         }
+    }
+
+    #[test]
+    fn test_cli_parsing_model_default() {
+        let cli = Cli::parse_from(["avp", "model"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Model { action: None })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_model_list() {
+        let cli = Cli::parse_from(["avp", "model", "list"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Model {
+                action: Some(ModelAction::List)
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_model_show() {
+        let cli = Cli::parse_from(["avp", "model", "show"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Model {
+                action: Some(ModelAction::Show)
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_model_use() {
+        let cli = Cli::parse_from(["avp", "model", "use", "claude-code"]);
+        match cli.command {
+            Some(Commands::Model {
+                action: Some(ModelAction::Use { name }),
+            }) => {
+                assert_eq!(name, "claude-code");
+            }
+            _ => panic!("Expected Model Use command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_model_use_requires_name() {
+        let result = Cli::try_parse_from(["avp", "model", "use"]);
+        assert!(result.is_err(), "model use without name should fail");
     }
 
     #[test]

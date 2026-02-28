@@ -1,10 +1,13 @@
-//! AVP Context - Manages the AVP directory, logging, and agent access.
+//! AVP Context - Manages the AVP directory and agent access.
 //!
 //! The AVP directory (configured via `AvpConfig::DIR_NAME`) is created at the
 //! git repository root and contains:
-//! - `avp.log` - Append-only log of hook events
 //! - `validators/` - Project-specific validators
 //! - `.gitignore` - Excludes log files from version control
+//!
+//! Logging is handled by `tracing` — the CLI sets up a file layer that writes
+//! to `.avp/avp.log` at info level so all tracing output from every crate
+//! (agents, validators, hooks) flows into the log automatically.
 //!
 //! User-level validators can be placed in `~/<AVP_DIR>/validators/`.
 //!
@@ -12,16 +15,14 @@
 //! In production, this is a ClaudeAgent created lazily. In tests, a PlaybackAgent
 //! can be injected via `with_agent()`.
 
-use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 
 use agent_client_protocol::{Agent, SessionNotification};
-use chrono::Utc;
-use claude_agent::CreateAgentConfig;
 use swissarmyhammer_directory::{AvpConfig, DirectoryConfig, ManagedDirectory};
 use tokio::sync::{broadcast, Mutex};
+
+use swissarmyhammer_config::model::{ModelConfig, ModelManager, ModelPaths};
 
 use crate::error::AvpError;
 use crate::turn::TurnStateManager;
@@ -36,14 +37,10 @@ use crate::validator::{ExecutedRuleSet, ExecutedValidator, RuleSet, Validator, V
 /// generate thousands of content deltas.
 pub const NOTIFICATION_CHANNEL_CAPACITY: usize = 4096;
 
-/// Log file name within the AVP directory.
-const LOG_FILE_NAME: &str = "avp.log";
-
 /// Result type for directory initialization
 type InitDirectoriesResult = (
     ManagedDirectory<AvpConfig>,
     Option<ManagedDirectory<AvpConfig>>,
-    Option<Arc<StdMutex<File>>>,
 );
 
 /// Decision outcome for a hook.
@@ -117,8 +114,8 @@ pub struct AvpContext {
     /// Managed directory at user home (~/<AVP_DIR>), if available
     home_dir: Option<ManagedDirectory<AvpConfig>>,
 
-    /// Shared log file handle (None if logging failed to initialize).
-    log_file: Option<Arc<StdMutex<File>>>,
+    /// Resolved model configuration (defaults to claude-code)
+    model_config: ModelConfig,
 
     /// Agent handle (lazily created or injected)
     agent_handle: Arc<Mutex<Option<AgentHandle>>>,
@@ -135,7 +132,7 @@ impl std::fmt::Debug for AvpContext {
         f.debug_struct("AvpContext")
             .field("project_dir", &self.project_dir.root())
             .field("home_dir", &self.home_dir.as_ref().map(|d| d.root()))
-            .field("has_log_file", &self.log_file.is_some())
+            .field("model_config", &self.model_config)
             .field("has_agent", &"<async>")
             .field("turn_state", &"<manager>")
             .field("runner_cache", &"<cached>")
@@ -156,7 +153,10 @@ impl AvpContext {
     ///
     /// Returns Err if not in a git repository.
     pub fn init() -> Result<Self, AvpError> {
-        let (project_dir, home_dir, log_file) = Self::init_directories()?;
+        let (project_dir, home_dir) = Self::init_directories()?;
+
+        // Resolve model configuration (defaults to claude-code if not configured)
+        let model_config = Self::resolve_model_config();
 
         // Create turn state manager - uses parent of avp_dir (project root)
         let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
@@ -165,7 +165,7 @@ impl AvpContext {
         Ok(Self {
             project_dir,
             home_dir,
-            log_file,
+            model_config,
             agent_handle: Arc::new(Mutex::new(None)),
             turn_state,
             runner_cache: Mutex::new(None),
@@ -193,7 +193,7 @@ impl AvpContext {
         agent: Arc<dyn Agent + Send + Sync>,
         notifications: broadcast::Receiver<SessionNotification>,
     ) -> Result<Self, AvpError> {
-        let (project_dir, home_dir, log_file) = Self::init_directories()?;
+        let (project_dir, home_dir) = Self::init_directories()?;
 
         // Create a NotificationSender and forward from the injected receiver
         // This is for test/playback agents that provide a Receiver
@@ -215,6 +215,9 @@ impl AvpContext {
             }
         });
 
+        // Resolve model configuration
+        let model_config = Self::resolve_model_config();
+
         // Create turn state manager
         let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
         let turn_state = Arc::new(TurnStateManager::new(project_root));
@@ -222,14 +225,57 @@ impl AvpContext {
         Ok(Self {
             project_dir,
             home_dir,
-            log_file,
+            model_config,
             agent_handle: Arc::new(Mutex::new(Some(AgentHandle { agent, notifier }))),
             turn_state,
             runner_cache: Mutex::new(None),
         })
     }
 
-    /// Initialize directories and log file (shared by init and with_agent).
+    /// Create an AVP context with an injected agent and explicit model configuration.
+    ///
+    /// Like `with_agent()`, but allows specifying the model config directly
+    /// instead of resolving it from the project config file. This is useful
+    /// for testing the full pipeline with a specific model configuration.
+    pub fn with_agent_and_model(
+        agent: Arc<dyn Agent + Send + Sync>,
+        notifications: broadcast::Receiver<SessionNotification>,
+        model_config: ModelConfig,
+    ) -> Result<Self, AvpError> {
+        let (project_dir, home_dir) = Self::init_directories()?;
+
+        let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
+        let notifier = Arc::new(notifier);
+        let notifier_clone = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = notifications;
+            loop {
+                match rx.recv().await {
+                    Ok(notification) => {
+                        let _ = notifier_clone.send_update(notification).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "notification forwarder lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
+        let turn_state = Arc::new(TurnStateManager::new(project_root));
+
+        Ok(Self {
+            project_dir,
+            home_dir,
+            model_config,
+            agent_handle: Arc::new(Mutex::new(Some(AgentHandle { agent, notifier }))),
+            turn_state,
+            runner_cache: Mutex::new(None),
+        })
+    }
+
+    /// Initialize directories (shared by init and with_agent).
     fn init_directories() -> Result<InitDirectoriesResult, AvpError> {
         let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
             AvpError::Context(format!(
@@ -239,13 +285,37 @@ impl AvpContext {
             ))
         })?;
         let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
-        let log_file = open_log_file(project_dir.root());
-        Ok((project_dir, home_dir, log_file))
+        Ok((project_dir, home_dir))
+    }
+
+    /// Resolve model configuration from project config.
+    ///
+    /// Uses `ModelManager::resolve_agent_config()` to read the configured model
+    /// from the project config file. Falls back to the default claude-code config
+    /// if resolution fails (e.g., no config file, invalid model name).
+    fn resolve_model_config() -> ModelConfig {
+        match ModelManager::resolve_agent_config(&ModelPaths::avp()) {
+            Ok(config) => {
+                tracing::debug!("Resolved model config: {:?}", config.executor);
+                config
+            }
+            Err(e) => {
+                tracing::debug!("Using default model config (claude-code): {}", e);
+                ModelConfig::claude_code()
+            }
+        }
+    }
+
+    /// Get the resolved model configuration.
+    pub fn model_config(&self) -> &ModelConfig {
+        &self.model_config
     }
 
     /// Get the agent for validator execution.
     ///
-    /// Creates an ephemeral ClaudeAgent on first access if not already created.
+    /// Creates an agent on first access based on the resolved model configuration.
+    /// For ClaudeCode models, creates an ephemeral ClaudeAgent.
+    /// For LlamaAgent models, creates a local LlamaAgent.
     /// Returns a reference to the agent and the notification sender (for per-session subscribing).
     pub async fn agent(
         &self,
@@ -259,21 +329,49 @@ impl AvpContext {
         let mut guard = self.agent_handle.lock().await;
 
         if guard.is_none() {
-            tracing::debug!("Creating ephemeral ClaudeAgent for validator execution...");
+            tracing::debug!(
+                "Creating {:?} agent for validator execution...",
+                self.model_config.executor
+            );
             let start = std::time::Instant::now();
 
-            let config = CreateAgentConfig::builder().ephemeral(true).build();
-            let (agent, notifier) = claude_agent::create_agent(config)
-                .await
-                .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
+            let options = swissarmyhammer_agent::CreateAgentOptions { ephemeral: true };
+            let handle = swissarmyhammer_agent::create_agent_with_options(
+                &self.model_config,
+                None,
+                options,
+            )
+            .await
+            .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
 
             tracing::debug!(
-                "Ephemeral ClaudeAgent created in {:.2}s",
+                "Agent created in {:.2}s",
                 start.elapsed().as_secs_f64()
             );
 
+            // Bridge the broadcast::Receiver into a NotificationSender
+            // (NotificationSender provides per-session subscribe semantics)
+            let (notifier, _) =
+                claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
+            let notifier = Arc::new(notifier);
+            let notifier_clone = Arc::clone(&notifier);
+            tokio::spawn(async move {
+                let mut rx = handle.notification_rx;
+                loop {
+                    match rx.recv().await {
+                        Ok(notification) => {
+                            let _ = notifier_clone.send_update(notification).await;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(skipped = n, "agent notification forwarder lagged");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+
             *guard = Some(AgentHandle {
-                agent: Arc::new(agent),
+                agent: handle.agent,
                 notifier,
             });
         }
@@ -349,51 +447,25 @@ impl AvpContext {
         dirs
     }
 
-    /// Write a line to the log file with timestamp.
-    fn write_log_line(&self, content: &str) {
-        let Some(log_file) = &self.log_file else {
-            return;
-        };
-
-        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
-        let line = format!("{} {}\n", timestamp, content);
-
-        if let Ok(mut file) = log_file.lock() {
-            let _ = file.write_all(line.as_bytes());
-            let _ = file.flush();
-        }
-    }
-
-    /// Log a hook event.
-    ///
-    /// Format: `2024-01-23T10:15:32.123Z PreToolUse decision=allow tool=Bash`
+    /// Log a hook event via tracing.
     pub fn log_event(&self, event: &HookEvent) {
-        let details_str = event
-            .details
-            .as_ref()
-            .map(|d| format!(" {}", d))
-            .unwrap_or_default();
-
-        let content = format!(
-            "{} decision={}{}",
-            event.hook_type, event.decision, details_str
+        tracing::info!(
+            hook_type = event.hook_type,
+            decision = %event.decision,
+            details = ?event.details,
+            "hook event"
         );
-
-        self.write_log_line(&content);
     }
 
-    /// Log a validator execution event.
-    ///
-    /// Format: `2024-01-23T10:15:32.123Z VALIDATOR rust-coding passed hook=PostToolUse "No issues found"`
+    /// Log a validator execution event via tracing.
     pub fn log_validator(&self, event: &ValidatorEvent) {
-        let status = if event.passed { "passed" } else { "FAILED" };
-
-        let content = format!(
-            "VALIDATOR {} {} hook={} \"{}\"",
-            event.name, status, event.hook_type, event.message
+        tracing::info!(
+            validator = event.name,
+            passed = event.passed,
+            hook_type = event.hook_type,
+            message = event.message,
+            "validator result"
         );
-
-        self.write_log_line(&content);
     }
 
     // =========================================================================
@@ -667,17 +739,6 @@ impl AvpContext {
     }
 }
 
-/// Open log file for appending.
-fn open_log_file(avp_dir: &Path) -> Option<Arc<StdMutex<File>>> {
-    let log_path = avp_dir.join(LOG_FILE_NAME);
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .ok()
-        .map(|f| Arc::new(StdMutex::new(f)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,7 +815,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_log_event_writes_to_file() {
+    fn test_log_event_does_not_panic() {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join(".git")).unwrap();
 
@@ -763,7 +824,7 @@ mod tests {
 
         let ctx = AvpContext::init().unwrap();
 
-        // Log an event
+        // log_event emits tracing::info! — should not panic
         let event = HookEvent {
             hook_type: "PreToolUse",
             decision: Decision::Allow,
@@ -772,18 +833,11 @@ mod tests {
         ctx.log_event(&event);
 
         std::env::set_current_dir(&original_dir).unwrap();
-
-        // Read log file and verify content
-        let log_path = ctx.avp_dir().join("avp.log");
-        let log_content = fs::read_to_string(&log_path).unwrap();
-        assert!(log_content.contains("PreToolUse"));
-        assert!(log_content.contains("decision=allow"));
-        assert!(log_content.contains("tool=Bash"));
     }
 
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_log_validator_writes_to_file() {
+    fn test_log_validator_does_not_panic() {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join(".git")).unwrap();
 
@@ -792,7 +846,7 @@ mod tests {
 
         let ctx = AvpContext::init().unwrap();
 
-        // Log a validator event
+        // log_validator emits tracing::info! — should not panic
         let event = ValidatorEvent {
             name: "test-validator",
             hook_type: "PostToolUse",
@@ -802,15 +856,6 @@ mod tests {
         ctx.log_validator(&event);
 
         std::env::set_current_dir(&original_dir).unwrap();
-
-        // Read log file and verify content
-        let log_path = ctx.avp_dir().join("avp.log");
-        let log_content = fs::read_to_string(&log_path).unwrap();
-        assert!(log_content.contains("VALIDATOR"));
-        assert!(log_content.contains("test-validator"));
-        assert!(log_content.contains("passed"));
-        assert!(log_content.contains("PostToolUse"));
-        assert!(log_content.contains("All checks passed"));
     }
 
     #[tokio::test]
@@ -914,5 +959,38 @@ mod tests {
         let _cloned = Arc::clone(&turn_state);
 
         std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_model_config_defaults_to_claude_code() {
+        use swissarmyhammer_config::model::ModelExecutorConfig;
+
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+        let config = ctx.model_config();
+
+        // Default should be claude-code
+        assert!(
+            matches!(config.executor, ModelExecutorConfig::ClaudeCode(_)),
+            "Default model config should be ClaudeCode, got {:?}",
+            config.executor
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_model_config_returns_default_without_config() {
+        use swissarmyhammer_config::model::ModelExecutorConfig;
+
+        // When no config file exists, resolve should return claude-code default
+        let config = AvpContext::resolve_model_config();
+        assert!(matches!(config.executor, ModelExecutorConfig::ClaudeCode(_)));
     }
 }

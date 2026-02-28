@@ -48,12 +48,11 @@ fn assert_list_subcommand(cli: &Cli, expected_format: OutputFormat) {
 }
 
 /// Assert that CLI parsed to a Model command with a Use subcommand
-fn assert_use_subcommand(cli: &Cli, expected_first: &str, expected_second: Option<&str>) {
+fn assert_use_subcommand(cli: &Cli, expected_name: &str) {
     match &cli.command {
         Some(Commands::Model { subcommand }) => match subcommand {
-            Some(ModelSubcommand::Use { first, second }) => {
-                assert_eq!(first, expected_first);
-                assert_eq!(second.as_deref(), expected_second);
+            Some(ModelSubcommand::Use { name }) => {
+                assert_eq!(name, expected_name);
             }
             _ => panic!("Should parse as Use subcommand"),
         },
@@ -68,11 +67,11 @@ fn assert_parsed_list_format(args: &[&str], expected: OutputFormat) {
     assert_list_subcommand(&result.unwrap(), expected);
 }
 
-/// Parse CLI args and assert the result is a Use command with expected arguments
-fn assert_parsed_use_args(args: &[&str], expected_first: &str, expected_second: Option<&str>) {
+/// Parse CLI args and assert the result is a Use command with expected model name
+fn assert_parsed_use_args(args: &[&str], expected_name: &str) {
     let result = try_parse_cli(args);
     assert!(result.is_ok(), "Should parse successfully");
-    assert_use_subcommand(&result.unwrap(), expected_first, expected_second);
+    assert_use_subcommand(&result.unwrap(), expected_name);
 }
 
 /// Assert that the CLI has verbose or debug flag set
@@ -141,7 +140,7 @@ fn test_model_command_basic_parsing() {
     assert_parsed_list_format(&["model", "list"], OutputFormat::Table);
 
     // Test valid model use command
-    assert_parsed_use_args(&["model", "use", "test-model"], "test-model", None);
+    assert_parsed_use_args(&["model", "use", "test-model"], "test-model");
 }
 
 #[test]
@@ -163,10 +162,10 @@ fn test_model_list_format_parsing() {
 #[test]
 fn test_model_use_with_valid_name() {
     // Test with valid model name
-    assert_parsed_use_args(&["model", "use", "claude-code"], "claude-code", None);
+    assert_parsed_use_args(&["model", "use", "claude-code"], "claude-code");
 
     // Test with single valid model name
-    assert_parsed_use_args(&["model", "use", "test-model"], "test-model", None);
+    assert_parsed_use_args(&["model", "use", "test-model"], "test-model");
 }
 
 #[test]
@@ -192,11 +191,11 @@ fn test_model_use_without_name() {
 
 #[test]
 fn test_model_use_with_two_arguments() {
-    // Test with two arguments (should succeed - first is use case or agent, second is model name)
-    assert_parsed_use_args(
-        &["model", "use", "first-agent", "second-agent"],
-        "first-agent",
-        Some("second-agent"),
+    // With single model selection, two positional arguments should fail
+    let result = try_parse_cli(&["model", "use", "first-agent", "second-agent"]);
+    assert!(
+        result.is_err(),
+        "Model use with two arguments should fail (only one model name expected)"
     );
 }
 
@@ -300,15 +299,7 @@ fn test_model_use_help_text_content() {
     // Should contain model name parameter
     assert_help_text_contains_any(
         &help_text,
-        &[
-            "FIRST",
-            "first",
-            "<FIRST>",
-            "AGENT_NAME",
-            "agent-name",
-            "<AGENT_NAME>",
-            "agent_name",
-        ],
+        &["NAME", "name", "<NAME>", "<name>"],
         "Model use help should show model name parameter",
     );
 
@@ -400,7 +391,8 @@ fn test_argument_validation_error_messages() {
 
     let error_msg = result.unwrap_err().to_string();
     assert!(
-        error_msg.contains("AGENT_NAME")
+        error_msg.contains("name")
+            || error_msg.contains("NAME")
             || error_msg.contains("required")
             || error_msg.contains("missing"),
         "Error should mention missing model name: {}",
@@ -507,7 +499,7 @@ fn test_command_hierarchy_structure() {
 
     if let Ok(cli) = result {
         assert_is_model_command(&cli);
-        assert_use_subcommand(&cli, "test", None);
+        assert_use_subcommand(&cli, "test");
     }
 }
 
@@ -602,7 +594,7 @@ fn test_model_name_edge_cases() {
     ];
 
     for name in &valid_names {
-        assert_parsed_use_args(&["model", "use", name], name, None);
+        assert_parsed_use_args(&["model", "use", name], name);
     }
 }
 

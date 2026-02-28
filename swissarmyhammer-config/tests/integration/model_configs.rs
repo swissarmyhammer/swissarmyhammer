@@ -3,6 +3,7 @@ use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironmen
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::{
     parse_model_config, parse_model_description, ModelConfigSource, ModelError, ModelManager,
+    ModelPaths,
 };
 use swissarmyhammer_config::{LlamaAgentConfig, ModelConfig, ModelExecutorType};
 
@@ -107,7 +108,7 @@ impl TestEnvironment {
     }
 
     fn user_agents_dir(&self) -> std::path::PathBuf {
-        self._env.swissarmyhammer_dir().join("models")
+        self._env.home_path().join(".models")
     }
 
     fn project_agents_dir(&self) -> std::path::PathBuf {
@@ -115,9 +116,7 @@ impl TestEnvironment {
     }
 
     fn gitroot_agents_dir(&self) -> std::path::PathBuf {
-        self.project_root
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join("models")
+        self.project_root.join("models")
     }
 
     fn create_agent(&self, name: &str, content: &str, dir: &std::path::Path) {
@@ -386,7 +385,9 @@ fn test_project_agent_overrides_user() {
 
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
-    assert_agent_has_source(&agents, "qwen-coder", ModelConfigSource::Project);
+    // When cwd == git root, both Project and GitRoot scan the same models/ dir;
+    // GitRoot runs after Project in the merge order and overwrites, so source is GitRoot.
+    assert_agent_has_source(&agents, "qwen-coder", ModelConfigSource::GitRoot);
     assert_agent_description_contains(&agents, "qwen-coder", "Project override");
 }
 
@@ -422,7 +423,9 @@ fn test_custom_agents_from_each_source() {
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
     assert_agent_has_source(&agents, "user-custom", ModelConfigSource::User);
-    assert_agent_has_source(&agents, "project-specific", ModelConfigSource::Project);
+    // When cwd == git root, both Project and GitRoot scan the same models/ dir;
+    // GitRoot runs after Project in the merge order and overwrites, so source is GitRoot.
+    assert_agent_has_source(&agents, "project-specific", ModelConfigSource::GitRoot);
 }
 
 #[serial_test::serial(cwd)]
@@ -534,149 +537,47 @@ fn test_agents_map_structure_creation() {
     let helper = ConfigFileHelper::new(temp_dir);
 
     // Use agent for root use case
-    ModelManager::use_agent("claude-code").expect("Should use claude-code agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should use claude-code agent");
 
     assert!(helper.config_exists(), "Config file should be created");
 
     let config_content = helper.read_config();
     assert!(
-        config_content.contains("agents:"),
-        "Config should contain agents map"
-    );
-    assert!(
-        config_content.contains("root:"),
-        "Config should contain root use case"
+        config_content.contains("model:"),
+        "Config should contain model key"
     );
     assert!(
         config_content.contains("claude-code"),
-        "Config should contain agent name"
+        "Config should contain model name"
     );
 }
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_use_case_to_agent_name_mapping() {
+fn test_model_config_set_and_get() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let _helper = ConfigFileHelper::new(temp_dir);
 
-    // Configure different agents for different use cases
-    ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case(
-        "qwen-coder",
-        swissarmyhammer_config::AgentUseCase::Workflows,
-    )
-    .expect("Should configure workflows agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
 
-    // Verify each use case resolves to correct agent
-    let root_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should get root agent");
-    assert_eq!(root_agent, Some("claude-code".to_string()));
-
-    let workflows_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
-            .expect("Should get workflows agent");
-    assert_eq!(workflows_agent, Some("qwen-coder".to_string()));
+    let agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get model");
+    assert_eq!(agent, Some("claude-code".to_string()));
 }
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_use_case_fallback_to_root() {
+fn test_resolve_agent_config() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let _helper = ConfigFileHelper::new(temp_dir);
 
-    // Configure only root agent
-    ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should configure root agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
 
-    // Verify workflows use case falls back to root
-    let workflows_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
-            .expect("Should get agent for workflows");
+    let config = ModelManager::resolve_agent_config(&ModelPaths::sah()).expect("Should resolve config");
     assert_eq!(
-        workflows_agent,
-        Some("claude-code".to_string()),
-        "Rules should fall back to root agent"
-    );
-
-    // Verify workflows use case falls back to root
-    let workflows_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
-            .expect("Should get agent for workflows");
-    assert_eq!(
-        workflows_agent,
-        Some("claude-code".to_string()),
-        "Workflows should fall back to root agent"
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_model_use_case_enum_variants() {
-    use swissarmyhammer_config::AgentUseCase;
-
-    // Test all variants exist and convert to strings correctly
-    assert_eq!(AgentUseCase::Root.to_string(), "root");
-    assert_eq!(AgentUseCase::Workflows.to_string(), "workflows");
-
-    // Test parsing from strings
-    assert_eq!("root".parse::<AgentUseCase>().unwrap(), AgentUseCase::Root);
-    assert_eq!(
-        "workflows".parse::<AgentUseCase>().unwrap(),
-        AgentUseCase::Workflows
-    );
-
-    // Test case insensitivity
-    assert_eq!("ROOT".parse::<AgentUseCase>().unwrap(), AgentUseCase::Root);
-    assert_eq!(
-        "WORKFLOWS".parse::<AgentUseCase>().unwrap(),
-        AgentUseCase::Workflows
-    );
-
-    // Test invalid variant
-    let invalid_result = "invalid".parse::<AgentUseCase>();
-    assert!(invalid_result.is_err());
-    assert!(invalid_result
-        .unwrap_err()
-        .contains("Invalid use case: 'invalid'"));
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_resolve_agent_config_for_use_case() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let _helper = ConfigFileHelper::new(temp_dir);
-
-    // Configure different agents for different use cases
-    ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case(
-        "qwen-coder",
-        swissarmyhammer_config::AgentUseCase::Workflows,
-    )
-    .expect("Should configure workflows agent");
-
-    // Resolve root use case
-    let root_config =
-        ModelManager::resolve_agent_config_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should resolve root config");
-    assert_eq!(
-        root_config.executor_type(),
+        config.executor_type(),
         swissarmyhammer_config::ModelExecutorType::ClaudeCode
-    );
-
-    // Resolve workflows use case
-    let workflows_config = ModelManager::resolve_agent_config_for_use_case(
-        swissarmyhammer_config::AgentUseCase::Workflows,
-    )
-    .expect("Should resolve workflows config");
-    assert_eq!(
-        workflows_config.executor_type(),
-        swissarmyhammer_config::ModelExecutorType::LlamaAgent
     );
 }
 
@@ -687,10 +588,8 @@ fn test_resolve_agent_config_default_fallback() {
     let temp_dir = _env.temp_dir();
     let _helper = ConfigFileHelper::new(temp_dir);
 
-    // Don't configure any agents - should fall back to default claude-code
-    let config =
-        ModelManager::resolve_agent_config_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should resolve to default");
+    // Don't configure any model - should fall back to default claude-code
+    let config = ModelManager::resolve_agent_config(&ModelPaths::sah()).expect("Should resolve to default");
     assert_eq!(
         config.executor_type(),
         swissarmyhammer_config::ModelExecutorType::ClaudeCode
@@ -699,62 +598,38 @@ fn test_resolve_agent_config_default_fallback() {
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_get_agent_for_use_case_no_config() {
+fn test_get_agent_no_config() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let _helper = ConfigFileHelper::new(temp_dir);
 
-    // Should return None when no config exists
-    let result = ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should handle no config gracefully");
+    let result = ModelManager::get_agent(&ModelPaths::sah()).expect("Should handle no config gracefully");
     assert_eq!(result, None);
 }
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_agents_map_in_config_file_operations() {
+fn test_model_key_in_config_file() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let helper = ConfigFileHelper::new(temp_dir);
 
-    // Create initial config with root agent
-    ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should configure root agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
 
-    let initial_config = helper.read_config();
-    assert!(initial_config.contains("agents:"), "Should have agents map");
-    assert!(initial_config.contains("root: claude-code"));
-
-    // Add workflows agent to existing config
-    ModelManager::use_agent_for_use_case(
-        "qwen-coder",
-        swissarmyhammer_config::AgentUseCase::Workflows,
-    )
-    .expect("Should add workflows agent");
-
-    let updated_config = helper.read_config();
+    let config_content = helper.read_config();
     assert!(
-        updated_config.contains("agents:"),
-        "Should preserve agents map"
-    );
-    assert!(
-        updated_config.contains("root: claude-code"),
-        "Should preserve root agent"
-    );
-    assert!(
-        updated_config.contains("workflows: qwen-coder"),
-        "Should add workflows agent"
+        config_content.contains("model: claude-code"),
+        "Should have model key"
     );
 }
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_agents_map_preserved_with_other_config_sections() {
+fn test_model_preserved_with_other_config_sections() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let helper = ConfigFileHelper::new(temp_dir);
 
-    // Create config with other sections
     let existing_config = r#"# Existing configuration
 prompt:
   default_template: "greeting"
@@ -763,88 +638,56 @@ workflows:
   - name: "test-workflow"
     description: "Test workflow"
 
-agents:
-  root: claude-code
+model: claude-code
 "#;
 
     helper.write_config(existing_config);
 
-    // Update agents map with new use case
-    ModelManager::use_agent_for_use_case(
-        "qwen-coder",
-        swissarmyhammer_config::AgentUseCase::Workflows,
-    )
-    .expect("Should add workflows agent");
+    ModelManager::use_agent("qwen-coder", &ModelPaths::sah()).expect("Should update model");
 
     let updated_config = helper.read_config();
-
-    // Verify all sections are preserved
     assert!(
         updated_config.contains("prompt:"),
         "Should preserve prompt section"
     );
     assert!(
-        updated_config.contains("workflows:"),
-        "Should preserve workflows section"
-    );
-    assert!(
-        updated_config.contains("agents:"),
-        "Should preserve agents section"
-    );
-    assert!(
-        updated_config.contains("root: claude-code"),
-        "Should preserve root agent"
-    );
-    assert!(
-        updated_config.contains("workflows: qwen-coder"),
-        "Should add workflows agent"
+        updated_config.contains("model: qwen-coder"),
+        "Should update model"
     );
 }
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_use_agent_updates_root_use_case() {
+fn test_use_agent_writes_model_key() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let helper = ConfigFileHelper::new(temp_dir);
 
-    // use_agent should update root use case
-    ModelManager::use_agent("claude-code").expect("Should use claude-code");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should use claude-code");
 
     let config_content = helper.read_config();
-    assert!(config_content.contains("agents:"));
-    assert!(config_content.contains("root: claude-code"));
+    assert!(config_content.contains("model:"));
+    assert!(config_content.contains("claude-code"));
 
-    // Verify via get_agent_for_use_case
-    let root_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should get root agent");
-    assert_eq!(root_agent, Some("claude-code".to_string()));
+    let agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get model");
+    assert_eq!(agent, Some("claude-code".to_string()));
 }
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_overwrite_existing_use_case_agent() {
+fn test_overwrite_existing_model() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let _helper = ConfigFileHelper::new(temp_dir);
 
-    // Set initial root agent
-    ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should configure root agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
 
-    let initial_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should get root agent");
+    let initial_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get model");
     assert_eq!(initial_agent, Some("claude-code".to_string()));
 
-    // Overwrite with different agent
-    ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should overwrite root agent");
+    ModelManager::use_agent("qwen-coder", &ModelPaths::sah()).expect("Should overwrite model");
 
-    let updated_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should get updated root agent");
+    let updated_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get updated model");
     assert_eq!(updated_agent, Some("qwen-coder".to_string()));
 }
 
@@ -861,7 +704,7 @@ fn test_agent_manager_config_file_operations() {
 
     // Test config structure creation
     let config_path =
-        ModelManager::ensure_config_structure().expect("Should create config structure");
+        ModelManager::ensure_config_structure(&ModelPaths::sah()).expect("Should create config structure");
 
     assert!(
         config_path.parent().unwrap().exists(),
@@ -874,20 +717,20 @@ fn test_agent_manager_config_file_operations() {
     );
 
     // Test using an agent (creates config)
-    ModelManager::use_agent("claude-code").expect("Should use claude-code agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should use claude-code agent");
 
     assert!(helper.config_exists(), "Config file should be created");
 
     let config_content = helper.read_config();
-    assert_config_contains_sections(&config_content, &["agents:", "root:", "claude-code"]);
+    assert_config_contains_sections(&config_content, &["model:", "claude-code"]);
 
     // Test updating existing config
     let original_size = helper.config_size();
 
-    ModelManager::use_agent("qwen-coder").expect("Should update to qwen-coder");
+    ModelManager::use_agent("qwen-coder", &ModelPaths::sah()).expect("Should update to qwen-coder");
 
     let updated_content = helper.read_config();
-    assert_config_contains_sections(&updated_content, &["agents:", "qwen-coder"]);
+    assert_config_contains_sections(&updated_content, &["model:", "qwen-coder"]);
 
     let updated_size = helper.config_size();
     assert_ne!(
@@ -922,7 +765,7 @@ other_section:
 
     helper.write_config(&existing_config);
 
-    ModelManager::use_agent("claude-code").expect("Should update agent config");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should update agent config");
 
     let updated_config = helper.read_config();
 
@@ -953,11 +796,11 @@ fn test_config_models_section_updated() {
 
     helper.write_config(existing_config);
 
-    ModelManager::use_agent("claude-code").expect("Should update agent config");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should update agent config");
 
     let updated_config = helper.read_config();
 
-    assert_config_contains_sections(&updated_config, &["agents:", "root:"]);
+    assert_config_contains_sections(&updated_config, &["model:"]);
 }
 
 // =============================================================================
@@ -972,7 +815,7 @@ fn test_agent_manager_error_handling_comprehensive() {
     let _helper = ConfigFileHelper::new(temp_dir.clone());
 
     // Test agent not found error
-    let result = ModelManager::use_agent("definitely-nonexistent-agent-name-12345");
+    let result = ModelManager::use_agent("definitely-nonexistent-agent-name-12345", &ModelPaths::sah());
     assert_not_found_error(result, "definitely-nonexistent-agent-name-12345");
 
     // Test find_agent_by_name with nonexistent
@@ -1326,7 +1169,7 @@ fn test_agent_manager_directory_loading_edge_cases() {
 #[test]
 fn test_global_agent_flag_override_concept() {
     // This test verifies the concept that a runtime --agent flag can override
-    // all use case assignments without modifying the config file.
+    // the configured model without modifying the config file.
     //
     // The actual override happens in the CLI/MCP integration layer, but we test
     // the model config system's ability to support this pattern.
@@ -1335,30 +1178,17 @@ fn test_global_agent_flag_override_concept() {
     let temp_dir = _env.temp_dir();
     let _helper = ConfigFileHelper::new(temp_dir);
 
-    // Setup: Configure different agents for different use cases
-    ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case(
-        "qwen-coder",
-        swissarmyhammer_config::AgentUseCase::Workflows,
-    )
-    .expect("Should configure workflows agent");
+    // Setup: Configure model
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
 
-    // Verify initial state - each use case has its own agent
-    let root_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should get root agent");
-    assert_eq!(root_agent, Some("claude-code".to_string()));
-
-    let workflows_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
-            .expect("Should get workflows agent");
-    assert_eq!(workflows_agent, Some("qwen-coder".to_string()));
+    // Verify initial state
+    let configured_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get configured agent");
+    assert_eq!(configured_agent, Some("claude-code".to_string()));
 
     // The runtime override would happen in the CLI layer by:
     // 1. Reading the --agent flag value
     // 2. Loading that agent's ModelConfig once
-    // 3. Using that same config for all use cases without writing to config file
+    // 3. Using that config without writing to config file
     //
     // This test verifies that we can load any agent's config for runtime override
     let override_agent_info =
@@ -1374,11 +1204,10 @@ fn test_global_agent_flag_override_concept() {
 
     // Verify that the config file was NOT modified
     // (the override is runtime-only)
-    let root_still_claude =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should still get root agent from config");
+    let still_claude =
+        ModelManager::get_agent(&ModelPaths::sah()).expect("Should still get configured agent from config");
     assert_eq!(
-        root_still_claude,
+        still_claude,
         Some("claude-code".to_string()),
         "Config file should remain unchanged"
     );
@@ -1408,13 +1237,7 @@ fn test_global_agent_override_preserves_config_file() {
     let helper = ConfigFileHelper::new(temp_dir);
 
     // Setup initial config
-    ModelManager::use_agent_for_use_case("claude-code", swissarmyhammer_config::AgentUseCase::Root)
-        .expect("Should configure root agent");
-    ModelManager::use_agent_for_use_case(
-        "qwen-coder",
-        swissarmyhammer_config::AgentUseCase::Workflows,
-    )
-    .expect("Should configure workflows agent");
+    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
 
     let initial_config = helper.read_config();
     let initial_size = helper.config_size();
@@ -1441,23 +1264,12 @@ fn test_global_agent_override_preserves_config_file() {
         "Config file content should not change"
     );
 
-    // Verify the stored use case assignments are unchanged
-    let root_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Root)
-            .expect("Should get root agent");
+    // Verify the stored model assignment is unchanged
+    let configured_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get configured agent");
     assert_eq!(
-        root_agent,
+        configured_agent,
         Some("claude-code".to_string()),
-        "Root agent should still be claude-code"
-    );
-
-    let workflows_agent =
-        ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
-            .expect("Should get workflows agent");
-    assert_eq!(
-        workflows_agent,
-        Some("qwen-coder".to_string()),
-        "Rules agent should still be qwen-coder"
+        "Model should still be claude-code"
     );
 }
 
@@ -1557,14 +1369,14 @@ fn test_load_gitroot_models_in_git_repo_without_models_dir() {
     let env = TestEnvironment::new();
     env.activate();
 
-    // Don't create .swissarmyhammer/models directory
+    // Don't create models directory
     let gitroot_models = ModelManager::load_gitroot_models()
         .expect("Should return empty vec when models dir doesn't exist");
 
     assert_eq!(
         gitroot_models.len(),
         0,
-        "Should return empty vec when .swissarmyhammer/models doesn't exist"
+        "Should return empty vec when models dir doesn't exist"
     );
 }
 
@@ -1574,7 +1386,7 @@ fn test_load_gitroot_models_in_git_repo_with_empty_models_dir() {
     let env = TestEnvironment::new();
     env.activate();
 
-    // Create empty .swissarmyhammer/models directory
+    // Create empty models directory
     let gitroot_dir = env.gitroot_agents_dir();
     fs::create_dir_all(&gitroot_dir).expect("Failed to create gitroot models dir");
 

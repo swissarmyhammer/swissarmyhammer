@@ -16,6 +16,10 @@ brew install swissarmyhammer/tap/avp-cli
 * [`avp doctor`↴](#avp-doctor)
 * [`avp edit`↴](#avp-edit)
 * [`avp new`↴](#avp-new)
+* [`avp model`↴](#avp-model)
+* [`avp model list`↴](#avp-model-list)
+* [`avp model show`↴](#avp-model-show)
+* [`avp model use`↴](#avp-model-use)
 
 ## `avp`
 
@@ -32,6 +36,7 @@ Claude Code hook processor that validates tool calls, file changes, and more.
 * `doctor` — Diagnose AVP configuration and setup
 * `edit` — Edit an existing RuleSet in $EDITOR
 * `new` — Create a new RuleSet from template
+* `model` — Manage AI model configurations
 
 ###### **Options:**
 
@@ -128,6 +133,48 @@ Create a new RuleSet from template
 
 * `--local` [alias: `project`] — Create in project (.avp/validators/) [default]
 * `--global` [alias: `user`] — Create in user-level directory (~/.avp/validators/)
+
+
+
+## `avp model`
+
+Manage AI model configurations
+
+**Usage:** `avp model [COMMAND]`
+
+###### **Subcommands:**
+
+* `list` — List all available models
+* `show` — Show the current model configuration
+* `use` — Apply a specific model to the project
+
+
+
+## `avp model list`
+
+List all available models
+
+**Usage:** `avp model list`
+
+
+
+## `avp model show`
+
+Show the current model configuration
+
+**Usage:** `avp model show`
+
+
+
+## `avp model use`
+
+Apply a specific model to the project
+
+**Usage:** `avp model use <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Model name to apply
 
 
 

@@ -1336,9 +1336,8 @@ async fn handle_model_command(matches: &clap::ArgMatches, context: &CliContext) 
             Some(ModelSubcommand::Show { format })
         }
         Some(("use", sub_matches)) => {
-            let first = sub_matches.get_one::<String>("first").cloned().unwrap();
-            let second = sub_matches.get_one::<String>("second").cloned();
-            Some(ModelSubcommand::Use { first, second })
+            let name = sub_matches.get_one::<String>("name").cloned().unwrap();
+            Some(ModelSubcommand::Use { name })
         }
         // Default to show when no subcommand is provided
         None => None,

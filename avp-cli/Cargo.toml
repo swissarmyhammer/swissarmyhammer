@@ -41,6 +41,15 @@ dirs = { workspace = true }
 # Git detection
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
+# Model management
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+
+# Table output
+comfy-table = { workspace = true }
+
+# Colored output
+colored = { workspace = true }
+
 [build-dependencies]
 clap = { workspace = true }
 clap-markdown = { workspace = true }

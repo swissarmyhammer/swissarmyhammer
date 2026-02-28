@@ -85,4 +85,23 @@ pub enum Commands {
         #[arg(long, visible_alias = "user")]
         global: bool,
     },
+    /// Manage AI model configurations
+    Model {
+        #[command(subcommand)]
+        action: Option<ModelAction>,
+    },
+}
+
+/// Model subcommands
+#[derive(Subcommand, Debug)]
+pub enum ModelAction {
+    /// List all available models
+    List,
+    /// Show the current model configuration
+    Show,
+    /// Apply a specific model to the project
+    Use {
+        /// Model name to apply
+        name: String,
+    },
 }
