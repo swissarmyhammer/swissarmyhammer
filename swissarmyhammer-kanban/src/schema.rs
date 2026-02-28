@@ -64,10 +64,6 @@ fn generate_kanban_examples() -> Vec<Value> {
             "value": {"op": "list tasks", "assignee": "assistant", "exclude_done": true}
         }),
         json!({
-            "description": "Add subtask to a task",
-            "value": {"op": "add subtask", "task_id": "01ABC...", "title": "Review code"}
-        }),
-        json!({
             "description": "Add attachment to a task",
             "value": {"op": "add attachment", "task_id": "01ABC...", "name": "screenshot.png", "path": "/path/to/screenshot.png"}
         }),

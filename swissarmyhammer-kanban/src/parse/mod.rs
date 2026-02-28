@@ -130,7 +130,6 @@ fn infer_operation(obj: &Map<String, Value>) -> Option<(Verb, Noun)> {
             "tags",
             "assignees",
             "depends_on",
-            "subtasks",
         ];
         if !update_keys.iter().any(|k| obj.contains_key(*k)) {
             return Some((Verb::Move, Noun::Task));

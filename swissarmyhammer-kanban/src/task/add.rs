@@ -123,18 +123,11 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
                 }
             };
 
-            let task = Task {
-                id: TaskId::new(),
-                title: self.title.clone(),
-                description: self.description.clone().unwrap_or_default(),
-                tags: self.tags.clone(),
-                position,
-                depends_on: self.depends_on.clone(),
-                assignees: self.assignees.clone(),
-                comments: Vec::new(),
-                subtasks: Vec::new(),
-                attachments: Vec::new(),
-            };
+            let task = Task::new(&self.title, position)
+                .with_description(self.description.clone().unwrap_or_default())
+                .with_tags(self.tags.clone())
+                .with_depends_on(self.depends_on.clone())
+                .with_assignees(self.assignees.clone());
 
             ctx.write_task(&task).await?;
             Ok(serde_json::to_value(&task)?)

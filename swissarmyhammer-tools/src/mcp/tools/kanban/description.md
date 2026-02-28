@@ -88,7 +88,7 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 
 - `update task` - Update task properties
   - Required: `id`
-  - Optional: `title`, `description`, `assignees`, `tags`, `depends_on`, `subtasks`, `attachments`
+  - Optional: `title`, `description`, `assignees`, `tags`, `depends_on`, `attachments`
 
 - `move task` - Move task to a different column
   - Required: `id`, `column`
@@ -152,21 +152,6 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 
 - `list comments` - List all comments on a task
   - Required: `task_id`
-
-### Subtask Operations
-
-- `add subtask` - Add a checklist item to a task
-  - Required: `task_id`, `title`
-
-- `update subtask` - Update subtask properties
-  - Required: `task_id`, `id`
-  - Optional: `title`, `completed`
-
-- `complete subtask` - Mark a subtask as complete
-  - Required: `task_id`, `id`
-
-- `delete subtask` - Delete a subtask
-  - Required: `task_id`, `id`
 
 ### Attachment Operations
 
@@ -308,25 +293,6 @@ Tag a task:
 }
 ```
 
-### Add subtasks for checklists
-
-```json
-{
-  "op": "add subtask",
-  "task_id": "01ABC123...",
-  "title": "Write tests"
-}
-```
-
-Complete a subtask:
-```json
-{
-  "op": "complete subtask",
-  "task_id": "01ABC123...",
-  "id": "01DEF456..."
-}
-```
-
 ### Add comments
 
 ```json
@@ -436,19 +402,13 @@ The blocked task won't appear in ready tasks until the blocker is completed:
 // 5. Assign to yourself
 {"op": "assign task", "id": "<task-id>", "assignee": "assistant"}
 
-// 6. Add a subtask
-{"op": "add subtask", "task_id": "<task-id>", "title": "Write tests"}
-
-// 7. Move to doing
+// 6. Move to doing
 {"op": "move task", "id": "<task-id>", "column": "doing"}
 
-// 8. Complete subtask
-{"op": "complete subtask", "task_id": "<task-id>", "id": "<subtask-id>"}
-
-// 9. Add a comment
+// 7. Add a comment
 {"op": "add comment", "task_id": "<task-id>", "body": "Implementation complete", "author": "assistant"}
 
-// 10. Complete the task
+// 8. Complete the task
 {"op": "complete task", "id": "<task-id>"}
 ```
 

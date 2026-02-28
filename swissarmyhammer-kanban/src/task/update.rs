@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, Attachment, Subtask, SwimlaneId, TagId, TaskId};
+use crate::types::{ActorId, Attachment, SwimlaneId, TagId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
@@ -27,8 +27,6 @@ pub struct UpdateTask {
     pub assignees: Option<Vec<ActorId>>,
     /// Replace all dependencies
     pub depends_on: Option<Vec<TaskId>>,
-    /// Replace all subtasks
-    pub subtasks: Option<Vec<Subtask>>,
     /// Replace all attachments
     pub attachments: Option<Vec<Attachment>>,
 }
@@ -44,7 +42,6 @@ impl UpdateTask {
             tags: None,
             assignees: None,
             depends_on: None,
-            subtasks: None,
             attachments: None,
         }
     }
@@ -85,12 +82,6 @@ impl UpdateTask {
         self
     }
 
-    /// Set the subtasks (replaces all existing subtasks)
-    pub fn with_subtasks(mut self, subtasks: Vec<Subtask>) -> Self {
-        self.subtasks = Some(subtasks);
-        self
-    }
-
     /// Set the attachments (replaces all existing attachments)
     pub fn with_attachments(mut self, attachments: Vec<Attachment>) -> Self {
         self.attachments = Some(attachments);
@@ -125,9 +116,6 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
             }
             if let Some(deps) = &self.depends_on {
                 task.depends_on = deps.clone();
-            }
-            if let Some(subtasks) = &self.subtasks {
-                task.subtasks = subtasks.clone();
             }
             if let Some(attachments) = &self.attachments {
                 task.attachments = attachments.clone();

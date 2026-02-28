@@ -60,7 +60,6 @@ pub mod board;
 pub mod column;
 pub mod comment;
 pub mod schema;
-pub mod subtask;
 pub mod swimlane;
 pub mod tag;
 pub mod task;
@@ -77,6 +76,6 @@ pub use processor::KanbanOperationProcessor;
 // Re-export commonly used types
 pub use types::{
     Actor, ActorId, Attachment, Board, Column, ColumnId, Comment, CommentId, LogEntry, Noun,
-    Operation as KanbanOperation, OperationResult, Ordinal, Position, Subtask, Swimlane,
-    SwimlaneId, Tag, TagId, Task, TaskId, Verb,
+    Operation as KanbanOperation, OperationResult, Ordinal, Position, Swimlane, SwimlaneId, Tag,
+    TagId, Task, TaskId, Verb,
 };

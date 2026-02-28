@@ -8,13 +8,13 @@ metadata:
 
 # Plan
 
-Use this skill whenever you enter Plan Mode or the user asks you to plan work. The output of planning is a kanban board with cards and subtasks — NOT a markdown plan file.
+Use this skill whenever you enter Plan Mode or the user asks you to plan work. The output of planning is a kanban board with cards — NOT a markdown plan file.
 
 ## The Rule: Plans Are Kanban Cards
 
-Do NOT write a plan as a markdown document. Do NOT use built-in task tools (TodoWrite, TaskCreate, TaskUpdate). Every planned work item becomes a kanban card with subtasks. The kanban board IS the plan.
+Do NOT write a plan as a markdown document. Do NOT use built-in task tools (TodoWrite, TaskCreate, TaskUpdate). Every planned work item becomes a kanban card. The kanban board IS the plan.
 
-When asking the user to review or approve the plan, present the kanban cards as the plan summary. Each card's title and description should clearly communicate the work to be done, and the subtasks should break it down into actionable steps. Expect the user to provide feedback on the cards themselves — they might ask you to add more detail to a card, split a card into two, or rearrange dependencies. This is how the plan evolves.
+When asking the user to review or approve the plan, present the kanban cards as the plan summary. Each card's title and description should clearly communicate the work to be done. Use markdown checklists (`- [ ]` items) in the description to break work into actionable steps. Expect the user to provide feedback on the cards themselves — they might ask you to add more detail to a card, split a card into two, or rearrange dependencies. This is how the plan evolves.
 
 When you exit Plan Mode, there is no need for a plan markdown file -- we have the kanban cards. Instead, summarize the plan by listing the cards and their descriptions for the user to review.
 
@@ -34,9 +34,7 @@ Explore thoroughly — read relevant files, understand the architecture, identif
 
 As you identify each work item, create a kanban card immediately. Don't wait until you have a complete picture — each discovery becomes a card.
 
-For each work item: use `kanban` with `op: "add task"`, `title: "<what to implement>"`, `description: "<detailed context, affected files, approach>"`
-
-Then add subtasks: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`
+For each work item: use `kanban` with `op: "add task"`, `title: "<what to implement>"`, `description: "<detailed context, affected files, approach>"`. Include a markdown checklist in the description to break the work into steps (e.g., `- [ ] step one\n- [ ] step two`).
 
 Set dependencies between cards: use `kanban` with `op: "update task"`, `id: "<task-id>"`, `depends_on: ["<blocker-task-id>"]`
 
@@ -61,8 +59,8 @@ If the user asks to revise or extend the plan, update the kanban cards directly:
 ## Guidelines
 
 - Tasks should be sized so each one can be completed in a single session
-- Subtasks should be concrete and verifiable — "add error handling to parse_config" not "improve code"
+- Checklist items in descriptions should be concrete and verifiable — "add error handling to parse_config" not "improve code"
 - Include enough context in task descriptions that someone (or the kanban skill) can execute without re-reading the spec
 - Order tasks so foundational changes come first (data models, types) and dependent work follows
-- Each task's subtasks should include running tests as the final step
+- Each task's checklist should include running tests as the final step
 - It's fine to rearrange, split, or merge cards as the plan evolves — the board is a living document

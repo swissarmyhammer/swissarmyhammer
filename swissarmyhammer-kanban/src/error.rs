@@ -41,7 +41,7 @@ pub enum KanbanError {
     #[error("comment not found: {id}")]
     CommentNotFound { id: String },
 
-    /// Generic resource not found (for subtasks, attachments, etc.)
+    /// Generic resource not found (for attachments, etc.)
     #[error("{resource} not found: {id}")]
     NotFound { resource: String, id: String },
 

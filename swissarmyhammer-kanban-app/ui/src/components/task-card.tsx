@@ -32,9 +32,9 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
         </button>
         <div className="flex-1 min-w-0">
           <p className="leading-snug">{task.title}</p>
-          {task.subtasks.length > 0 && (
+          {task.progress != null && task.progress > 0 && (
             <p className="text-xs text-muted-foreground mt-1">
-              {task.subtasks.filter((s) => s.completed).length}/{task.subtasks.length}
+              {Math.round(task.progress * 100)}%
             </p>
           )}
         </div>

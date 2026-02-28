@@ -51,15 +51,9 @@ export interface Task {
   tags: string[];
   assignees: string[];
   depends_on: string[];
-  subtasks: Subtask[];
+  progress?: number;
   created_at: string;
   updated_at: string;
-}
-
-export interface Subtask {
-  id: string;
-  title: string;
-  completed: boolean;
 }
 
 export interface OpenBoard {

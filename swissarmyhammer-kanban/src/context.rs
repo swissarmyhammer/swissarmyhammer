@@ -276,7 +276,7 @@ impl KanbanContext {
     // Task I/O
     // =========================================================================
 
-    /// Read a task file
+    /// Read a task file, auto-migrating legacy subtasks to markdown checklists.
     pub async fn read_task(&self, id: &TaskId) -> Result<Task> {
         let path = self.task_path(id);
         if !path.exists() {
@@ -284,7 +284,13 @@ impl KanbanContext {
         }
 
         let content = fs::read_to_string(&path).await?;
-        let task: Task = serde_json::from_str(&content)?;
+        let mut task: Task = serde_json::from_str(&content)?;
+
+        // Migrate legacy subtasks to markdown checklists in description
+        if task.migrate_legacy_subtasks() {
+            self.write_task(&task).await?;
+        }
+
         Ok(task)
     }
 

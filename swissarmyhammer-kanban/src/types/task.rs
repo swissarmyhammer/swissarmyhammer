@@ -1,6 +1,6 @@
-//! Task types: Task, Subtask, Attachment, Comment
+//! Task types: Task, Attachment, Comment
 
-use super::ids::{ActorId, AttachmentId, CommentId, SubtaskId, TagId, TaskId};
+use super::ids::{ActorId, AttachmentId, CommentId, TagId, TaskId};
 use super::position::Position;
 use serde::{Deserialize, Serialize};
 
@@ -29,9 +29,10 @@ pub struct Task {
     #[serde(default)]
     pub comments: Vec<Comment>,
 
-    /// Subtasks/checklist items
-    #[serde(default)]
-    pub subtasks: Vec<Subtask>,
+    /// Legacy subtasks field - ignored on read, never written.
+    /// Kept for backward compatibility with existing task JSON files.
+    #[serde(default, skip_serializing, rename = "subtasks")]
+    _legacy_subtasks: Vec<serde_json::Value>,
 
     /// Attachments
     #[serde(default)]
@@ -50,7 +51,7 @@ impl Task {
             depends_on: Vec::new(),
             assignees: Vec::new(),
             comments: Vec::new(),
-            subtasks: Vec::new(),
+            _legacy_subtasks: Vec::new(),
             attachments: Vec::new(),
         }
     }
@@ -79,13 +80,79 @@ impl Task {
         self
     }
 
-    /// Calculate progress as fraction of completed subtasks
+    /// Check if this task has legacy subtask data that needs migration.
+    pub fn has_legacy_subtasks(&self) -> bool {
+        !self._legacy_subtasks.is_empty()
+    }
+
+    /// Migrate legacy subtasks into markdown checklist lines in the description.
+    /// Returns true if migration occurred.
+    pub fn migrate_legacy_subtasks(&mut self) -> bool {
+        if self._legacy_subtasks.is_empty() {
+            return false;
+        }
+
+        let mut checklist_lines = Vec::new();
+        for subtask in &self._legacy_subtasks {
+            let title = subtask
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("untitled");
+            let completed = subtask
+                .get("completed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if completed {
+                checklist_lines.push(format!("- [x] {}", title));
+            } else {
+                checklist_lines.push(format!("- [ ] {}", title));
+            }
+        }
+
+        if !checklist_lines.is_empty() {
+            if !self.description.is_empty() && !self.description.ends_with('\n') {
+                self.description.push('\n');
+            }
+            if !self.description.is_empty() {
+                self.description.push('\n');
+            }
+            self.description.push_str(&checklist_lines.join("\n"));
+        }
+
+        self._legacy_subtasks.clear();
+        true
+    }
+
+    /// Calculate progress as fraction of completed markdown checklist items.
+    ///
+    /// Parses `- [ ]` (incomplete) and `- [x]`/`- [X]` (complete) from the description.
+    /// Returns 0.0 if no checklist items are found.
     pub fn progress(&self) -> f64 {
-        if self.subtasks.is_empty() {
+        let (total, completed) = Self::parse_checklist_counts(&self.description);
+        if total == 0 {
             return 0.0;
         }
-        let completed = self.subtasks.iter().filter(|s| s.completed).count();
-        completed as f64 / self.subtasks.len() as f64
+        completed as f64 / total as f64
+    }
+
+    /// Parse markdown checklist items from text, returning (total, completed) counts.
+    pub fn parse_checklist_counts(text: &str) -> (usize, usize) {
+        let mut total = 0usize;
+        let mut completed = 0usize;
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("- [ ] ") || trimmed == "- [ ]" {
+                total += 1;
+            } else if trimmed.starts_with("- [x] ")
+                || trimmed.starts_with("- [X] ")
+                || trimmed == "- [x]"
+                || trimmed == "- [X]"
+            {
+                total += 1;
+                completed += 1;
+            }
+        }
+        (total, completed)
     }
 
     /// Check if all dependencies are complete (in the given terminal column)
@@ -133,16 +200,6 @@ impl Task {
         self.comments.iter_mut().find(|c| &c.id == id)
     }
 
-    /// Find a subtask by ID
-    pub fn find_subtask(&self, id: &SubtaskId) -> Option<&Subtask> {
-        self.subtasks.iter().find(|s| &s.id == id)
-    }
-
-    /// Find a subtask by ID (mutable)
-    pub fn find_subtask_mut(&mut self, id: &SubtaskId) -> Option<&mut Subtask> {
-        self.subtasks.iter_mut().find(|s| &s.id == id)
-    }
-
     /// Find an attachment by ID
     pub fn find_attachment(&self, id: &AttachmentId) -> Option<&Attachment> {
         self.attachments.iter().find(|a| &a.id == id)
@@ -170,36 +227,6 @@ impl Comment {
             id: CommentId::new(),
             body: body.into(),
             author,
-        }
-    }
-}
-
-/// A subtask/checklist item within a task
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Subtask {
-    pub id: SubtaskId,
-    pub title: String,
-    #[serde(default)]
-    pub completed: bool,
-    // completed_at is derived from the per-task operation log
-}
-
-impl Subtask {
-    /// Create a new subtask
-    pub fn new(title: impl Into<String>) -> Self {
-        Self {
-            id: SubtaskId::new(),
-            title: title.into(),
-            completed: false,
-        }
-    }
-
-    /// Create a completed subtask
-    pub fn completed(title: impl Into<String>) -> Self {
-        Self {
-            id: SubtaskId::new(),
-            title: title.into(),
-            completed: true,
         }
     }
 }
@@ -261,13 +288,32 @@ mod tests {
     }
 
     #[test]
-    fn test_task_progress() {
-        let mut task = Task::new("Test", test_position());
+    fn test_task_progress_from_markdown() {
+        let task = Task::new("Test", test_position());
         assert_eq!(task.progress(), 0.0);
 
-        task.subtasks.push(Subtask::new("Sub 1"));
-        task.subtasks.push(Subtask::completed("Sub 2"));
+        let task = Task::new("Test", test_position())
+            .with_description("## Checklist\n- [ ] Sub 1\n- [x] Sub 2");
         assert_eq!(task.progress(), 0.5);
+    }
+
+    #[test]
+    fn test_parse_checklist_counts() {
+        let (total, completed) = Task::parse_checklist_counts("");
+        assert_eq!((total, completed), (0, 0));
+
+        let (total, completed) =
+            Task::parse_checklist_counts("- [ ] one\n- [x] two\n- [X] three\n- [ ] four");
+        assert_eq!((total, completed), (4, 2));
+
+        // Indented checklists
+        let (total, completed) = Task::parse_checklist_counts("  - [ ] indented\n  - [x] done");
+        assert_eq!((total, completed), (2, 1));
+
+        // Non-checklist lines ignored
+        let (total, completed) =
+            Task::parse_checklist_counts("plain text\n- regular bullet\n- [ ] real item");
+        assert_eq!((total, completed), (1, 0));
     }
 
     #[test]
@@ -299,5 +345,49 @@ mod tests {
         let parsed: Task = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.title, task.title);
         assert_eq!(parsed.description, task.description);
+    }
+
+    #[test]
+    fn test_legacy_subtask_migration() {
+        // Simulate reading a task JSON with old-style subtasks
+        let json = r#"{
+            "id": "test",
+            "title": "Test",
+            "description": "Some work",
+            "tags": [],
+            "position": {"column": "todo", "ordinal": "a0"},
+            "depends_on": [],
+            "assignees": [],
+            "comments": [],
+            "subtasks": [
+                {"id": "s1", "title": "Write tests", "completed": false},
+                {"id": "s2", "title": "Implement feature", "completed": true}
+            ],
+            "attachments": []
+        }"#;
+
+        let mut task: Task = serde_json::from_str(json).unwrap();
+        assert!(task.has_legacy_subtasks());
+        assert!(task.migrate_legacy_subtasks());
+        assert!(!task.has_legacy_subtasks());
+
+        // Description should now contain checklist
+        assert!(task.description.contains("- [ ] Write tests"));
+        assert!(task.description.contains("- [x] Implement feature"));
+        assert!(task.description.starts_with("Some work"));
+
+        // Progress should work from the migrated checklist
+        assert_eq!(task.progress(), 0.5);
+
+        // Serialized output should NOT contain subtasks
+        let serialized = serde_json::to_string_pretty(&task).unwrap();
+        assert!(!serialized.contains("\"subtasks\""));
+    }
+
+    #[test]
+    fn test_no_migration_without_subtasks() {
+        let mut task = Task::new("Test", test_position());
+        assert!(!task.has_legacy_subtasks());
+        assert!(!task.migrate_legacy_subtasks());
     }
 }

@@ -74,7 +74,7 @@ Each card's description should include:
 - Full paths of files to create or modify
 - How to verify the task is done (test command, expected behavior)
 
-Then add subtasks for individual steps: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`.
+Include a markdown checklist in the description to break the work into individual steps (e.g., `- [ ] step one\n- [ ] step two`).
 
 ### Set dependencies between cards
 

@@ -31,7 +31,6 @@ use swissarmyhammer_kanban::{
     column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn},
     comment::{AddComment, DeleteComment, GetComment, ListComments, UpdateComment},
     parse::parse_input,
-    subtask::{AddSubtask, CompleteSubtask, DeleteSubtask, UpdateSubtask},
     swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
     tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
     task::{
@@ -94,10 +93,6 @@ static LIST_COMMENTS: Lazy<ListComments> = Lazy::new(|| ListComments::new(""));
 
 static LIST_ACTIVITY: Lazy<ListActivity> = Lazy::new(ListActivity::default);
 
-static ADD_SUBTASK: Lazy<AddSubtask> = Lazy::new(|| AddSubtask::new("", ""));
-static COMPLETE_SUBTASK: Lazy<CompleteSubtask> = Lazy::new(|| CompleteSubtask::new("", ""));
-static DELETE_SUBTASK: Lazy<DeleteSubtask> = Lazy::new(|| DeleteSubtask::new("", ""));
-static UPDATE_SUBTASK: Lazy<UpdateSubtask> = Lazy::new(|| UpdateSubtask::new("", ""));
 
 static ADD_ATTACHMENT: Lazy<AddAttachment> = Lazy::new(|| AddAttachment::new("", "", ""));
 static GET_ATTACHMENT: Lazy<GetAttachment> = Lazy::new(|| GetAttachment::new("", ""));
@@ -155,11 +150,6 @@ static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*UPDATE_COMMENT as &dyn Operation,
         &*DELETE_COMMENT as &dyn Operation,
         &*LIST_COMMENTS as &dyn Operation,
-        // Subtask operations
-        &*ADD_SUBTASK as &dyn Operation,
-        &*COMPLETE_SUBTASK as &dyn Operation,
-        &*DELETE_SUBTASK as &dyn Operation,
-        &*UPDATE_SUBTASK as &dyn Operation,
         // Attachment operations
         &*ADD_ATTACHMENT as &dyn Operation,
         &*GET_ATTACHMENT as &dyn Operation,
@@ -297,10 +287,6 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
             | (Verb::Complete, Noun::Task)
             | (Verb::Assign, Noun::Task)
             | (Verb::Unassign, Noun::Task)
-            | (Verb::Add, Noun::Subtask)
-            | (Verb::Update, Noun::Subtask)
-            | (Verb::Complete, Noun::Subtask)
-            | (Verb::Delete, Noun::Subtask)
     )
 }
 
@@ -819,57 +805,6 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 cmd = cmd.with_limit(limit as usize);
             }
             processor.process(&cmd, ctx).await
-        }
-
-        // Subtask operations
-        (Verb::Add, Noun::Subtask) => {
-            let task_id = op
-                .get_string("task_id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let title = op
-                .get_string("title")
-                .ok_or_else(|| McpError::invalid_params("missing required field: title", None))?;
-            processor
-                .process(&AddSubtask::new(task_id, title), ctx)
-                .await
-        }
-        (Verb::Complete, Noun::Subtask) => {
-            let task_id = op
-                .get_string("task_id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor
-                .process(&CompleteSubtask::new(task_id, id), ctx)
-                .await
-        }
-        (Verb::Update, Noun::Subtask) => {
-            let task_id = op
-                .get_string("task_id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let mut cmd = UpdateSubtask::new(task_id, id);
-            if let Some(title) = op.get_string("title") {
-                cmd = cmd.with_title(title);
-            }
-            if let Some(completed) = op.get_param("completed").and_then(|v| v.as_bool()) {
-                cmd = cmd.with_completed(completed);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Subtask) => {
-            let task_id = op
-                .get_string("task_id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor
-                .process(&DeleteSubtask::new(task_id, id), ctx)
-                .await
         }
 
         // Unsupported operations

@@ -12,7 +12,7 @@ Pick up and execute the next task from the kanban board.
 
 ## Important: Use Kanban for All Task Tracking
 
-The kanban board is your todo list. Do NOT use any built-in task or todo tools (like TodoWrite or TaskCreate) — always use the `kanban` tool instead. Every task, subtask, and work item belongs on the kanban board as cards with subtasks. This is how work is tracked across both Claude Code and llama-agent sessions, so it must be the single source of truth.
+The kanban board is your todo list. Do NOT use any built-in task or todo tools (like TodoWrite or TaskCreate) — always use the `kanban` tool instead. Every task and work item belongs on the kanban board as cards. Use markdown checklists (`- [ ]` items) in card descriptions to break work into steps. This is how work is tracked across both Claude Code and llama-agent sessions, so it must be the single source of truth.
 
 When the user asks you to track work, create a todo list, or remember tasks — use kanban cards, not any other mechanism.
 
@@ -20,11 +20,11 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 
 1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable card
 2. Move it to doing: use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
-3. Read the task details: use `kanban` with `op: "get task"`, `id: "<task-id>"` to see description and subtasks
-4. Work through each subtask:
-   - Implement what the subtask describes
-   - Mark it complete: use `kanban` with `op: "complete subtask"`, `task_id: "<task-id>"`, `id: "<subtask-id>"`
-5. **Complete the card**: when ALL subtasks are done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
+3. Read the task details: use `kanban` with `op: "get task"`, `id: "<task-id>"` to see the description and checklist
+4. Work through each checklist item in the description (lines starting with `- [ ]`):
+   - Implement what the item describes
+   - Update the description to mark it done (change `- [ ]` to `- [x]`) using `op: "update task"` with the updated description
+5. **Complete the card**: when all work is done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
 
 ## Tagging
 
@@ -81,9 +81,9 @@ Deleting a tag automatically removes it from all tasks.
 
 ## Guidelines
 
-- Each kanban card can have subtasks — you need to do all of these subtasks to complete the card
-- Do not skip subtasks or mark them complete without actually doing the work
-- If a subtask is blocked or unclear, add a comment to the task explaining the issue
-- Run tests after completing each subtask to catch problems early
-- Only mark the card as complete when every subtask is done and tests pass
+- Each kanban card may have a checklist in its description — work through all items to complete the card
+- Do not skip checklist items without actually doing the work
+- If an item is blocked or unclear, add a comment to the task explaining the issue
+- Run tests after completing each checklist item to catch problems early
+- Only mark the card as complete when all work is done and tests pass
 - If you discover new work while executing a task, add it as a new kanban card — don't hold it in your head

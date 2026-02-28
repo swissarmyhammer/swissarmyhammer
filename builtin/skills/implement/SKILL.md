@@ -24,17 +24,17 @@ Use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
 
 ### 3. Read the task details
 
-Use `kanban` with `op: "get task"`, `id: "<task-id>"` to see the description and subtasks.
+Use `kanban` with `op: "get task"`, `id: "<task-id>"` to see the description and checklist.
 
-### 4. Work through each subtask
+### 4. Work through the checklist
 
-For each subtask:
-- Implement what the subtask describes
-- Mark it complete: use `kanban` with `op: "complete subtask"`, `task_id: "<task-id>"`, `id: "<subtask-id>"`
+For each checklist item (`- [ ]` line in the description):
+- Implement what the item describes
+- Update the description to mark it done (change `- [ ]` to `- [x]`) using `op: "update task"` with the updated description
 
 ### 5. Complete the card
 
-**You MUST complete the card before moving on.** When ALL subtasks are done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. Do NOT skip this step. A card left in "doing" is not finished — it must be explicitly completed.
+**You MUST complete the card before moving on.** When all work is done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. Do NOT skip this step. A card left in "doing" is not finished — it must be explicitly completed.
 
 ### 6. Loop back
 
@@ -46,9 +46,9 @@ Use the `js` tool to record the overall result
 
 ## Guidelines
 
-- Do not skip subtasks or mark them complete without doing the work
-- Run tests after completing each subtask to catch problems early
-- If a subtask is blocked or unclear, add a comment to the task and move on to the next card
+- Do not skip checklist items without doing the work
+- Run tests after completing each checklist item to catch problems early
+- If an item is blocked or unclear, add a comment to the task and move on to the next card
 - If you discover new work while executing a task, add it as a new kanban card
-- Only mark a card complete when every subtask is done and tests pass
+- Only mark a card complete when all work is done and tests pass
 - Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth

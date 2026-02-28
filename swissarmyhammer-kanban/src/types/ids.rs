@@ -63,7 +63,6 @@ macro_rules! define_id {
 // Define all ID types
 define_id!(TaskId, "ULID-based identifier for tasks");
 define_id!(ColumnId, "Identifier for columns (slug-style)");
-define_id!(SubtaskId, "ULID-based identifier for subtasks");
 define_id!(AttachmentId, "ULID-based identifier for attachments");
 define_id!(LogEntryId, "ULID-based identifier for log entries");
 define_id!(SwimlaneId, "Identifier for swimlanes (slug-style)");

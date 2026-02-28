@@ -80,60 +80,6 @@ export function TaskDetailPanel({ task, onClose, onUpdateTitle, onUpdateDescript
                 />
               </section>
 
-              {/* Subtasks */}
-              {task.subtasks.length > 0 && (
-                <section>
-                  <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                    Subtasks
-                    <span className="ml-2 text-muted-foreground">
-                      {task.subtasks.filter((s) => s.completed).length}/
-                      {task.subtasks.length}
-                    </span>
-                  </h3>
-                  <ul className="space-y-1">
-                    {task.subtasks.map((sub) => (
-                      <li
-                        key={sub.id}
-                        className="flex items-center gap-2 text-sm"
-                      >
-                        <span
-                          className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${
-                            sub.completed
-                              ? "bg-primary border-primary text-primary-foreground"
-                              : "border-input"
-                          }`}
-                        >
-                          {sub.completed && (
-                            <svg
-                              className="h-3 w-3"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={3}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M5 13l4 4L19 7"
-                              />
-                            </svg>
-                          )}
-                        </span>
-                        <span
-                          className={
-                            sub.completed
-                              ? "line-through text-muted-foreground"
-                              : ""
-                          }
-                        >
-                          {sub.title}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
-
               {/* Tags */}
               {task.tags.length > 0 && (
                 <section>
