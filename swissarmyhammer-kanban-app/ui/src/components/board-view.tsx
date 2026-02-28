@@ -20,6 +20,7 @@ import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { TaskCard } from "@/components/task-card";
 import { reorderColumns } from "@/lib/column-reorder";
+import { defaultTaskTitle } from "@/lib/task-defaults";
 import type { Board, Column, Task } from "@/types/kanban";
 
 interface BoardViewProps {
@@ -329,6 +330,20 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
     [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList]
   );
 
+  const handleAddTask = useCallback(
+    async (columnId: string) => {
+      const col = columnMap.get(columnId);
+      const title = defaultTaskTitle(col?.name ?? "");
+      try {
+        await invoke("add_task", { title, column: columnId });
+        onTaskMoved?.();
+      } catch (e) {
+        console.error("Failed to add task:", e);
+      }
+    },
+    [columnMap, onTaskMoved]
+  );
+
   async function persistMove(
     taskId: string,
     column: string,
@@ -375,6 +390,7 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
                   tasks={colTasks}
                   blockedIds={blockedIds}
                   onTaskClick={onTaskClick}
+                  onAddTask={handleAddTask}
                   presorted
                 />
               </SortableColumn>

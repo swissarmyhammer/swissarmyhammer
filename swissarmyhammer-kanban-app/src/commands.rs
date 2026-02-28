@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use swissarmyhammer_kanban::{
     board::GetBoard,
     column::UpdateColumn,
-    task::{ListTasks, MoveTask},
+    task::{AddTask, ListTasks, MoveTask},
     types::{Ordinal, Position},
     OperationProcessor,
 };
@@ -156,6 +156,26 @@ pub async fn move_task(
     );
 
     let cmd = MoveTask::new(id, position);
+    let result = handle
+        .processor
+        .process(&cmd, &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+/// Add a new task to the active board.
+#[tauri::command]
+pub async fn add_task(
+    state: State<'_, AppState>,
+    title: String,
+    column: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+
+    let position = Position::new(column.into(), None, Ordinal::first());
+    let cmd = AddTask::new(title).with_position(position);
     let result = handle
         .processor
         .process(&cmd, &handle.ctx)

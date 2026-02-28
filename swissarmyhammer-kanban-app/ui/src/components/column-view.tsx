@@ -4,7 +4,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
-import { Inbox } from "lucide-react";
+import { Inbox, Plus } from "lucide-react";
 import { SortableTaskCard } from "@/components/sortable-task-card";
 import { Badge } from "@/components/ui/badge";
 import type { Column, Task } from "@/types/kanban";
@@ -14,11 +14,12 @@ interface ColumnViewProps {
   tasks: Task[];
   blockedIds: Set<string>;
   onTaskClick?: (task: Task) => void;
+  onAddTask?: (columnId: string) => void;
   /** When true, tasks are already in display order (virtual layout during drag) */
   presorted?: boolean;
 }
 
-export function ColumnView({ column, tasks, blockedIds, onTaskClick, presorted }: ColumnViewProps) {
+export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, presorted }: ColumnViewProps) {
   const sorted = useMemo(
     () =>
       presorted
@@ -35,11 +36,20 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, presorted }
 
   return (
     <div className="flex flex-col min-h-0 flex-1">
-      <div className="px-3 py-2 flex items-center justify-center gap-2">
+      <div className="px-3 py-2 flex items-center gap-2">
         <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
           {column.name}
         </h2>
         <Badge variant="secondary">{tasks.length}</Badge>
+        <div className="flex-1" />
+        <button
+          type="button"
+          className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+          onClick={() => onAddTask?.(column.id)}
+          title={`Add task to ${column.name}`}
+        >
+          <Plus className="h-4 w-4" />
+        </button>
       </div>
       <div ref={setNodeRef} className="flex-1 overflow-y-auto px-2 pb-2 space-y-1.5">
         <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
