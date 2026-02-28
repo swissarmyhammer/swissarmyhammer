@@ -67,7 +67,7 @@ export function EditableText({
   return (
     <span
       className={className}
-      onDoubleClick={() => {
+      onClick={() => {
         setDraft(value);
         setEditing(true);
       }}

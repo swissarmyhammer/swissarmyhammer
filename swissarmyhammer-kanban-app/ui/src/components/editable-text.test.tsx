@@ -8,9 +8,9 @@ describe("EditableText", () => {
     expect(screen.getByText("Hello")).toBeTruthy();
   });
 
-  it("switches to an input on double-click", () => {
+  it("switches to an input on click", () => {
     render(<EditableText value="Hello" onCommit={() => {}} />);
-    fireEvent.doubleClick(screen.getByText("Hello"));
+    fireEvent.click(screen.getByText("Hello"));
     const input = screen.getByRole("textbox");
     expect(input).toBeTruthy();
     expect((input as HTMLInputElement).value).toBe("Hello");
@@ -19,7 +19,7 @@ describe("EditableText", () => {
   it("calls onCommit with new value on blur", () => {
     const onCommit = vi.fn();
     render(<EditableText value="Hello" onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByText("Hello"));
+    fireEvent.click(screen.getByText("Hello"));
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "World" } });
     fireEvent.blur(input);
@@ -29,7 +29,7 @@ describe("EditableText", () => {
   it("does not call onCommit if value is unchanged", () => {
     const onCommit = vi.fn();
     render(<EditableText value="Hello" onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByText("Hello"));
+    fireEvent.click(screen.getByText("Hello"));
     fireEvent.blur(screen.getByRole("textbox"));
     expect(onCommit).not.toHaveBeenCalled();
   });
@@ -37,7 +37,7 @@ describe("EditableText", () => {
   it("commits on Enter key", () => {
     const onCommit = vi.fn();
     render(<EditableText value="Hello" onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByText("Hello"));
+    fireEvent.click(screen.getByText("Hello"));
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "World" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -47,7 +47,7 @@ describe("EditableText", () => {
   it("cancels on Escape key without committing", () => {
     const onCommit = vi.fn();
     render(<EditableText value="Hello" onCommit={onCommit} />);
-    fireEvent.doubleClick(screen.getByText("Hello"));
+    fireEvent.click(screen.getByText("Hello"));
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "World" } });
     fireEvent.keyDown(input, { key: "Escape" });
