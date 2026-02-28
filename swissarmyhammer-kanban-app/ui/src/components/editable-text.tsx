@@ -23,12 +23,21 @@ export function EditableText({
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
 
+  const autoSize = useCallback(() => {
+    const el = ref.current;
+    if (el && multiline) {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    }
+  }, [multiline]);
+
   useEffect(() => {
     if (editing && ref.current) {
       ref.current.focus();
       ref.current.select();
+      autoSize();
     }
-  }, [editing]);
+  }, [editing, autoSize]);
 
   const commit = useCallback(() => {
     setEditing(false);
@@ -60,15 +69,17 @@ export function EditableText({
     const shared = {
       ref: ref as React.RefObject<never>,
       value: draft,
-      onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-        setDraft(e.target.value),
+      onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        setDraft(e.target.value);
+        autoSize();
+      },
       onBlur: commit,
       onKeyDown: handleKeyDown,
       className: inputClassName ?? className,
     };
 
     return multiline ? (
-      <textarea {...shared} rows={4} />
+      <textarea {...shared} rows={1} style={{ overflow: "hidden" }} />
     ) : (
       <input {...shared} type="text" />
     );

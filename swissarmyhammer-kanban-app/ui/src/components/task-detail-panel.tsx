@@ -74,7 +74,7 @@ export function TaskDetailPanel({ task, onClose, onUpdateTitle, onUpdateDescript
                   value={task.description ?? ""}
                   onCommit={(desc) => onUpdateDescription?.(task.id, desc)}
                   className="text-sm leading-relaxed whitespace-pre-wrap cursor-text"
-                  inputClassName="text-sm leading-relaxed bg-transparent outline-none w-full resize-y"
+                  inputClassName="text-sm leading-relaxed bg-transparent outline-none w-full resize-none"
                   multiline
                   placeholder="Add description..."
                 />
