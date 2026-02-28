@@ -1,13 +1,15 @@
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
+import { EditableText } from "@/components/editable-text";
 import type { Task } from "@/types/kanban";
 
 interface TaskDetailPanelProps {
   task: Task | null;
   onClose: () => void;
+  onUpdateTitle?: (taskId: string, title: string) => void;
 }
 
-export function TaskDetailPanel({ task, onClose }: TaskDetailPanelProps) {
+export function TaskDetailPanel({ task, onClose, onUpdateTitle }: TaskDetailPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape key
@@ -42,9 +44,12 @@ export function TaskDetailPanel({ task, onClose }: TaskDetailPanelProps) {
           <>
             {/* Header */}
             <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3">
-              <h2 className="text-lg font-semibold leading-snug flex-1">
-                {task.title}
-              </h2>
+              <EditableText
+                value={task.title}
+                onCommit={(title) => onUpdateTitle?.(task.id, title)}
+                className="text-lg font-semibold leading-snug flex-1 cursor-text"
+                inputClassName="text-lg font-semibold leading-snug flex-1 bg-transparent border-b border-ring outline-none w-full"
+              />
               <button
                 onClick={onClose}
                 className="shrink-0 mt-0.5 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"

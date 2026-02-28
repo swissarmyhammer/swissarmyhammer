@@ -58,6 +58,14 @@ function App() {
           <TaskDetailPanel
             task={selectedTask}
             onClose={() => setSelectedTask(null)}
+            onUpdateTitle={async (taskId, title) => {
+              try {
+                await invoke("update_task_title", { id: taskId, title });
+                refresh();
+              } catch (e) {
+                console.error("Failed to update task title:", e);
+              }
+            }}
           />
         </>
       ) : (

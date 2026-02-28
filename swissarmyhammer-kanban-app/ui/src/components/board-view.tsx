@@ -330,6 +330,18 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
     [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList]
   );
 
+  const handleRenameColumn = useCallback(
+    async (columnId: string, name: string) => {
+      try {
+        await invoke("rename_column", { id: columnId, name });
+        onTaskMoved?.();
+      } catch (e) {
+        console.error("Failed to rename column:", e);
+      }
+    },
+    [onTaskMoved]
+  );
+
   const handleAddTask = useCallback(
     async (columnId: string) => {
       const col = columnMap.get(columnId);
@@ -391,6 +403,7 @@ export function BoardView({ board, tasks, onTaskClick, onTaskMoved }: BoardViewP
                   blockedIds={blockedIds}
                   onTaskClick={onTaskClick}
                   onAddTask={handleAddTask}
+                  onRenameColumn={handleRenameColumn}
                   presorted
                 />
               </SortableColumn>

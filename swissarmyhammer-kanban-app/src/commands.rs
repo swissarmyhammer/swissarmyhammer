@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use swissarmyhammer_kanban::{
     board::GetBoard,
     column::UpdateColumn,
-    task::{AddTask, ListTasks, MoveTask},
+    task::{AddTask, ListTasks, MoveTask, UpdateTask},
     types::{Ordinal, Position},
     OperationProcessor,
 };
@@ -176,6 +176,44 @@ pub async fn add_task(
 
     let position = Position::new(column.into(), None, Ordinal::first());
     let cmd = AddTask::new(title).with_position(position);
+    let result = handle
+        .processor
+        .process(&cmd, &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+/// Rename a column.
+#[tauri::command]
+pub async fn rename_column(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+
+    let cmd = UpdateColumn::new(id).with_name(name);
+    let result = handle
+        .processor
+        .process(&cmd, &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+/// Update a task's title.
+#[tauri::command]
+pub async fn update_task_title(
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+
+    let cmd = UpdateTask::new(id).with_title(title);
     let result = handle
         .processor
         .process(&cmd, &handle.ctx)
