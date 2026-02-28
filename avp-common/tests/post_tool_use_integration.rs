@@ -113,6 +113,12 @@ async fn execute_blocking_post_tool_use_chain(temp: &TempDir) -> (HookOutput, i3
     use avp_common::types::HookType;
     use test_helpers::transform_chain_to_claude_output;
 
+    // Clear CLAUDE_ACP so ValidatorContextStarter doesn't short-circuit.
+    // This env var is set when running inside a Claude Code session but
+    // tests need validators to actually execute.
+    let saved_claude_acp = std::env::var("CLAUDE_ACP").ok();
+    std::env::remove_var("CLAUDE_ACP");
+
     let context = create_context_with_playback(temp, "post_tool_use_no_secrets_fail.json");
     let turn_state = Arc::new(TurnStateManager::new(temp.path()));
 
@@ -125,6 +131,12 @@ async fn execute_blocking_post_tool_use_chain(temp: &TempDir) -> (HookOutput, i3
     let input = build_post_tool_use_input(temp, "test-session");
 
     let (chain_output, _) = chain.execute(&input).await.unwrap();
+
+    // Restore CLAUDE_ACP if it was previously set
+    if let Some(val) = saved_claude_acp {
+        std::env::set_var("CLAUDE_ACP", val);
+    }
+
     // Transform chain output to Claude-specific format for testing
     transform_chain_to_claude_output(chain_output, HookType::PostToolUse)
 }

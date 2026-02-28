@@ -1692,7 +1692,16 @@ impl Action for SubWorkflowAction {
             &substituted_inputs,
             new_stack,
         )?;
-        self.execute_workflow(&mut run).await?;
+        let exec_result = self.execute_workflow(&mut run).await;
+
+        // Always clear the workflow exit flag when popping back from a sub-workflow.
+        // This prevents a nested exit from cascading to the parent workflow.
+        // In the happy path, check_for_exit already cleared it, so this is a no-op.
+        // In error paths, this ensures the flag doesn't leak upward.
+        let js_state = swissarmyhammer_js::JsState::global();
+        let _ = js_state.set("__workflow_exit__", "false").await;
+
+        exec_result?;
 
         self.handle_workflow_completion(&run, context)
     }

@@ -31,8 +31,6 @@ struct StreamContext {
     process: Arc<Mutex<ClaudeProcess>>,
     /// ACP session ID for correlating responses with the protocol translator.
     acp_session_id: agent_client_protocol::SessionId,
-    /// Optional sender for forwarding session notifications to ACP clients.
-    notification_sender: Option<Arc<crate::agent::NotificationSender>>,
     /// Optional manager for recording raw JSON-RPC messages for debugging.
     raw_message_manager: Option<crate::agent::RawMessageManager>,
     /// Translator for converting Claude CLI output to ACP protocol messages.
@@ -51,6 +49,8 @@ struct StreamState {
     saw_stream_events: bool,
     /// Accumulated text for detecting duplicate final messages.
     accumulated_text: String,
+    /// Tool call IDs already seen (for deduplicating partial vs final assistant messages).
+    seen_tool_call_ids: std::collections::HashSet<String>,
     /// Count of lines read from the process (for debugging/metrics).
     lines_read: u32,
     /// Count of chunks sent to the consumer (for debugging/metrics).
@@ -695,7 +695,6 @@ impl ClaudeClient {
         let ctx = StreamContext {
             process: process.clone(),
             acp_session_id: Self::to_acp_session_id(session_id),
-            notification_sender: self.notification_sender.clone(),
             raw_message_manager: self.raw_message_manager.clone(),
             protocol_translator: self.protocol_translator.clone(),
             tx,
@@ -741,7 +740,10 @@ impl ClaudeClient {
                 }
             };
 
-            Self::forward_notification(&ctx.notification_sender, &notification).await;
+            // Don't forward notifications here — process_stream_chunks in
+            // agent_prompt_handling.rs sends its own richer notifications (with tool
+            // kind, raw_input, session storage) for each MessageChunk it consumes.
+            // Forwarding here would cause every notification to appear twice.
 
             if !Self::process_notification(&ctx, notification, &mut state) {
                 break;
@@ -812,16 +814,6 @@ impl ClaudeClient {
         }
     }
 
-    /// Forward notification to sender.
-    async fn forward_notification(
-        sender: &Option<Arc<crate::agent::NotificationSender>>,
-        notification: &agent_client_protocol::SessionNotification,
-    ) {
-        if let Some(ref s) = sender {
-            let _ = s.send_update(notification.clone()).await;
-        }
-    }
-
     /// Process notification and send chunks. Returns false if loop should break.
     fn process_notification(
         ctx: &StreamContext,
@@ -871,6 +863,14 @@ impl ClaudeClient {
         tool_call: agent_client_protocol::ToolCall,
         state: &mut StreamState,
     ) -> bool {
+        // Deduplicate: --include-partial-messages causes Claude to emit the same
+        // tool_use in both partial and final assistant messages.
+        let tool_id = tool_call.tool_call_id.0.to_string();
+        if !state.seen_tool_call_ids.insert(tool_id) {
+            tracing::debug!("Filtered duplicate tool call: {}", tool_call.title);
+            return true;
+        }
+
         let chunk = MessageChunk {
             content: String::new(),
             chunk_type: ChunkType::ToolCall,

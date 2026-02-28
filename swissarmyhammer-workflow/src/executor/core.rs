@@ -217,6 +217,34 @@ impl WorkflowExecutor {
         Ok(())
     }
 
+    /// Check if workflow exit was requested via JS global state.
+    ///
+    /// When an inline prompt action calls `flow` with `op: "exit"`, it sets
+    /// `__workflow_exit__` in the process-global JS state. This method checks
+    /// for that flag and, if found, cleanly completes the workflow.
+    async fn check_for_exit(&self, run: &mut WorkflowRun) -> bool {
+        let js_state = swissarmyhammer_js::JsState::global();
+        match js_state.get("__workflow_exit__").await {
+            Ok(value) => {
+                let should_exit = match &value {
+                    serde_json::Value::Bool(true) => true,
+                    serde_json::Value::String(s) if s == "true" => true,
+                    _ => false,
+                };
+                if should_exit {
+                    tracing::info!("🚪 Workflow exit requested via __workflow_exit__ flag");
+                    run.status = crate::run::WorkflowRunStatus::Completed;
+                    // Clear the flag so it doesn't affect subsequent workflows
+                    let _ = js_state.set("__workflow_exit__", "false").await;
+                    true
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Execute a single execution cycle: state execution and potential transition
     pub async fn execute_single_cycle(&mut self, run: &mut WorkflowRun) -> ExecutorResult<bool> {
         tracing::debug!("Execute single cycle for state: {}", run.current_state);
@@ -226,6 +254,11 @@ impl WorkflowExecutor {
 
         // Check if abort was requested via context variable (after state execution)
         self.check_for_abort(run)?;
+
+        // Check if exit was requested via JS global state (after state execution)
+        if self.check_for_exit(run).await {
+            return Ok(false); // No transition needed, workflow cleanly exiting
+        }
 
         // Check if workflow is complete after state execution
         if self.is_workflow_finished(run) {

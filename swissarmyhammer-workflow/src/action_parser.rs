@@ -37,7 +37,7 @@ impl ActionParser {
     /// Parse a case-insensitive word
     fn case_insensitive<'a>(word: &'static str) -> impl Parser<'a, &'a str, (), ParserError<'a>> {
         any()
-            .filter(move |c: &char| c.is_alphabetic())
+            .filter(move |c: &char| c.is_alphanumeric() || *c == '_')
             .repeated()
             .exactly(word.len())
             .collect::<String>()

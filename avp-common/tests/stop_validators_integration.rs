@@ -382,6 +382,12 @@ async fn execute_blocking_stop_chain(temp: &TempDir) -> (avp_common::types::Hook
     use avp_common::validator::ValidatorSource;
     use test_helpers::transform_chain_to_claude_output;
 
+    // Clear CLAUDE_ACP so ValidatorContextStarter doesn't short-circuit.
+    // This env var is set when running inside a Claude Code session but
+    // tests need validators to actually execute.
+    let saved_claude_acp = std::env::var("CLAUDE_ACP").ok();
+    std::env::remove_var("CLAUDE_ACP");
+
     create_test_stop_ruleset(temp);
 
     let context = create_context_with_playback(temp, "stop_cognitive_complexity_fail.json");
@@ -413,6 +419,12 @@ async fn execute_blocking_stop_chain(temp: &TempDir) -> (avp_common::types::Hook
     .unwrap();
 
     let (chain_output, _) = chain.execute(&input).await.unwrap();
+
+    // Restore CLAUDE_ACP if it was previously set
+    if let Some(val) = saved_claude_acp {
+        std::env::set_var("CLAUDE_ACP", val);
+    }
+
     transform_chain_to_claude_output(chain_output, HookType::Stop)
 }
 

@@ -148,7 +148,7 @@ mod tests {
         let content = r#"---
 name: plan
 description: Turn specs into plans
-allowed-tools: mcp__sah__flow mcp__sah__files_read
+allowed-tools: mcp__sah__flow mcp__sah__files
 metadata:
   author: swissarmyhammer
   version: "1.0"

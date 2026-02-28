@@ -16,7 +16,7 @@ Repeat this loop until there are no more cards to pick up:
 
 ### 1. Get the next card
 
-Use `kanban` with `op: "next task"` to find the next actionable card. If there are no remaining cards, you're done — stop and tell the user.
+Use `kanban` with `op: "next task"` to find the next actionable card. If you were instructed to work on a specific tag (e.g. "test-failure"), pass `tag: "<tag-id>"` to filter to only those cards. If there are no remaining cards, you're done — stop and tell the user.
 
 ### 2. Move the card to doing
 

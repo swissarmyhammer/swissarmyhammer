@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
+use swissarmyhammer_common::validation::{Validatable, ValidationIssue, ValidationLevel};
 use swissarmyhammer_common::{Result, SwissArmyHammerError, SwissarmyhammerDirectory};
 use swissarmyhammer_templating::partials::{LibraryPartialAdapter, TemplateContentProvider};
 
@@ -116,6 +117,127 @@ impl WorkflowResolver {
         }
 
         Ok(())
+    }
+
+    /// Validate all workflow sources, catching parse failures that `load_all_workflows` silently skips.
+    ///
+    /// This is the validation counterpart to `load_all_workflows`. It walks the same
+    /// builtin/user/local tiers but converts parse errors into `ValidationIssue`s
+    /// instead of silently discarding them. Successfully-parsed workflows are also
+    /// structurally validated via the `Validatable` trait.
+    pub fn validate_all_sources(&mut self) -> Vec<ValidationIssue> {
+        let mut issues = Vec::new();
+
+        // Load builtins into VFS (same as load_all_workflows)
+        if let Err(e) = self.load_builtin_workflows() {
+            issues.push(ValidationIssue {
+                level: ValidationLevel::Error,
+                file_path: PathBuf::from("builtin-workflows"),
+                content_title: None,
+                line: None,
+                column: None,
+                message: format!("Failed to load builtin workflows: {e}"),
+                suggestion: None,
+            });
+            return issues;
+        }
+
+        // Load all files from directories using VFS (same as load_all_workflows)
+        if let Err(e) = self.vfs.load_all() {
+            issues.push(ValidationIssue {
+                level: ValidationLevel::Error,
+                file_path: PathBuf::from("workflow-directories"),
+                content_title: None,
+                line: None,
+                column: None,
+                message: format!("Failed to load workflow directories: {e}"),
+                suggestion: None,
+            });
+            return issues;
+        }
+
+        // Process all loaded files — same iteration as load_all_workflows
+        for file in self.vfs.list() {
+            let ext = file.path.extension().and_then(|s| s.to_str());
+            if !matches!(ext, Some("md") | Some("mermaid")) {
+                continue;
+            }
+
+            let workflow_name = file
+                .name
+                .strip_suffix(".md")
+                .or_else(|| file.name.strip_suffix(".mermaid"))
+                .unwrap_or(&file.name);
+
+            // Build a descriptive path for error reporting
+            let source_label = match &file.source {
+                FileSource::Builtin => "builtin",
+                FileSource::User => "user",
+                FileSource::Local => "local",
+                FileSource::Dynamic => "dynamic",
+            };
+            let workflow_path =
+                PathBuf::from(format!("workflow:{source_label}:{workflow_name}"));
+
+            // Parse frontmatter (same as load_all_workflows)
+            let (metadata, _) = match self.parse_front_matter(&file.content) {
+                Ok(result) => result,
+                Err(e) => {
+                    issues.push(ValidationIssue {
+                        level: ValidationLevel::Error,
+                        file_path: workflow_path,
+                        content_title: Some(workflow_name.to_string()),
+                        line: None,
+                        column: None,
+                        message: format!("Failed to parse workflow frontmatter: {e}"),
+                        suggestion: Some(
+                            "Check YAML front matter syntax".to_string(),
+                        ),
+                    });
+                    continue;
+                }
+            };
+
+            let title = metadata
+                .as_ref()
+                .and_then(|m| m.get("title"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let description = metadata
+                .as_ref()
+                .and_then(|m| m.get("description"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            // Attempt to parse — this is where load_all_workflows silently discards errors
+            match MermaidParser::parse_with_metadata(
+                &file.content,
+                workflow_name,
+                title,
+                description,
+            ) {
+                Ok(workflow) => {
+                    // Structurally validate the successfully-parsed workflow
+                    issues.extend(workflow.validate(Some(&workflow_path)));
+                }
+                Err(e) => {
+                    issues.push(ValidationIssue {
+                        level: ValidationLevel::Error,
+                        file_path: workflow_path,
+                        content_title: Some(workflow_name.to_string()),
+                        line: None,
+                        column: None,
+                        message: format!("Failed to parse workflow: {e}"),
+                        suggestion: Some(
+                            "Check your Mermaid state diagram syntax".to_string(),
+                        ),
+                    });
+                }
+            }
+        }
+
+        issues
     }
 
     /// Parse YAML front matter from workflow content
@@ -1063,5 +1185,64 @@ swissarmyhammer flow run hello-world
                 panic!("Failed to parse hello-world workflow: {e:?}");
             }
         }
+    }
+
+    #[test]
+    fn test_validate_all_sources_catches_missing_terminal_state() {
+        use swissarmyhammer_common::validation::ValidationLevel;
+
+        let mut resolver = WorkflowResolver::new();
+
+        // Inject a workflow that has no terminal state ([*]) directly into the VFS.
+        // This simulates a broken workflow file that load_all_workflows would silently skip.
+        let broken_content = r#"---
+title: Broken Workflow
+description: A workflow without a terminal state
+---
+
+```mermaid
+stateDiagram-v2
+    [*] --> Processing
+    Processing --> MoreProcessing
+    MoreProcessing --> Processing
+```
+"#;
+        resolver.vfs.add_builtin("broken-no-terminal.md", broken_content);
+
+        let issues = resolver.validate_all_sources();
+
+        // Should contain at least one error for the broken workflow
+        let broken_issues: Vec<_> = issues
+            .iter()
+            .filter(|issue| {
+                issue.level == ValidationLevel::Error
+                    && issue
+                        .file_path
+                        .to_string_lossy()
+                        .contains("broken-no-terminal")
+            })
+            .collect();
+
+        assert!(
+            !broken_issues.is_empty(),
+            "Expected error for workflow without terminal state, got issues: {:?}",
+            issues
+                .iter()
+                .map(|i| format!("{}: {}", i.file_path.display(), i.message))
+                .collect::<Vec<_>>()
+        );
+
+        // The error should mention terminal state or a parse failure
+        assert!(
+            broken_issues.iter().any(|issue| issue
+                .message
+                .contains("terminal")
+                || issue.message.contains("Failed to parse")),
+            "Expected terminal state or parse error, got: {:?}",
+            broken_issues
+                .iter()
+                .map(|i| &i.message)
+                .collect::<Vec<_>>()
+        );
     }
 }
