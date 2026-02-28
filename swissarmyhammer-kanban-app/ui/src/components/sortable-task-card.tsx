@@ -22,7 +22,7 @@ export function SortableTaskCard({ task, isBlocked, onClick }: SortableTaskCardP
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
     transition,
-    opacity: isDragging ? 0.4 : undefined,
+    opacity: isDragging ? 0.3 : undefined,
   };
 
   return (
