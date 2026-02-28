@@ -70,6 +70,14 @@ function App() {
                 console.error("Failed to update task title:", e);
               }
             }}
+            onUpdateDescription={async (taskId, description) => {
+              try {
+                await invoke("update_task_description", { id: taskId, description });
+                refresh();
+              } catch (e) {
+                console.error("Failed to update task description:", e);
+              }
+            }}
           />
         </>
       ) : (

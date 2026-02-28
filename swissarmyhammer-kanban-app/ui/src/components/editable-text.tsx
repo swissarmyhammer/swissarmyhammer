@@ -5,6 +5,10 @@ interface EditableTextProps {
   onCommit: (value: string) => void;
   className?: string;
   inputClassName?: string;
+  /** Render a textarea instead of a single-line input */
+  multiline?: boolean;
+  /** Placeholder shown when value is empty */
+  placeholder?: string;
 }
 
 export function EditableText({
@@ -12,22 +16,24 @@ export function EditableText({
   onCommit,
   className,
   inputClassName,
+  multiline,
+  placeholder,
 }: EditableTextProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (editing) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
+    if (editing && ref.current) {
+      ref.current.focus();
+      ref.current.select();
     }
   }, [editing]);
 
   const commit = useCallback(() => {
     setEditing(false);
     const trimmed = draft.trim();
-    if (trimmed && trimmed !== value) {
+    if (trimmed !== value) {
       onCommit(trimmed);
     }
   }, [draft, value, onCommit]);
@@ -39,7 +45,7 @@ export function EditableText({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && !multiline) {
         e.preventDefault();
         commit();
       } else if (e.key === "Escape") {
@@ -47,32 +53,39 @@ export function EditableText({
         cancel();
       }
     },
-    [commit, cancel]
+    [commit, cancel, multiline]
   );
 
   if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        type="text"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={handleKeyDown}
-        className={inputClassName ?? className}
-      />
+    const shared = {
+      ref: ref as React.RefObject<never>,
+      value: draft,
+      onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+        setDraft(e.target.value),
+      onBlur: commit,
+      onKeyDown: handleKeyDown,
+      className: inputClassName ?? className,
+    };
+
+    return multiline ? (
+      <textarea {...shared} rows={4} />
+    ) : (
+      <input {...shared} type="text" />
     );
   }
 
+  const display = value || placeholder;
+  const isEmpty = !value && placeholder;
+
   return (
     <span
-      className={className}
+      className={`${className ?? ""}${isEmpty ? " text-muted-foreground italic" : ""}`}
       onClick={() => {
         setDraft(value);
         setEditing(true);
       }}
     >
-      {value}
+      {display}
     </span>
   );
 }

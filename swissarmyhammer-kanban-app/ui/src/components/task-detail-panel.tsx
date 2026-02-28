@@ -7,15 +7,21 @@ interface TaskDetailPanelProps {
   task: Task | null;
   onClose: () => void;
   onUpdateTitle?: (taskId: string, title: string) => void;
+  onUpdateDescription?: (taskId: string, description: string) => void;
 }
 
-export function TaskDetailPanel({ task, onClose, onUpdateTitle }: TaskDetailPanelProps) {
+export function TaskDetailPanel({ task, onClose, onUpdateTitle, onUpdateDescription }: TaskDetailPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape key
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        // Don't close the panel if an editable field is focused
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        onClose();
+      }
     }
     if (task) {
       document.addEventListener("keydown", handleKeyDown);
@@ -64,15 +70,14 @@ export function TaskDetailPanel({ task, onClose, onUpdateTitle }: TaskDetailPane
             <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-5">
               {/* Description */}
               <section>
-                {task.description ? (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                    {task.description}
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground italic">
-                    No description
-                  </p>
-                )}
+                <EditableText
+                  value={task.description ?? ""}
+                  onCommit={(desc) => onUpdateDescription?.(task.id, desc)}
+                  className="text-sm leading-relaxed whitespace-pre-wrap cursor-text"
+                  inputClassName="text-sm leading-relaxed bg-transparent border border-ring rounded-md outline-none w-full p-2 resize-y"
+                  multiline
+                  placeholder="Add description..."
+                />
               </section>
 
               {/* Subtasks */}

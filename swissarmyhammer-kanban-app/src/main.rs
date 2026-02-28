@@ -32,6 +32,7 @@ fn main() {
             commands::add_task,
             commands::rename_column,
             commands::update_task_title,
+            commands::update_task_description,
             commands::reorder_columns,
             commands::open_board,
             commands::list_open_boards,

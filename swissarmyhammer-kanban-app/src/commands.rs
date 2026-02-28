@@ -223,6 +223,25 @@ pub async fn update_task_title(
     Ok(result)
 }
 
+/// Update a task's description.
+#[tauri::command]
+pub async fn update_task_description(
+    state: State<'_, AppState>,
+    id: String,
+    description: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+
+    let cmd = UpdateTask::new(id).with_description(description);
+    let result = handle
+        .processor
+        .process(&cmd, &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
 /// Reorder columns by updating their order fields.
 /// Takes a list of {id, order} pairs and applies them.
 #[tauri::command]

@@ -55,4 +55,49 @@ describe("EditableText", () => {
     // Should be back to text display
     expect(screen.getByText("Hello")).toBeTruthy();
   });
+
+  describe("multiline", () => {
+    it("renders a textarea when multiline and clicked", () => {
+      render(<EditableText value="some text" multiline onCommit={() => {}} />);
+      fireEvent.click(screen.getByText("some text"));
+      const textarea = screen.getByRole("textbox");
+      expect(textarea.tagName).toBe("TEXTAREA");
+    });
+
+    it("commits multiline on blur", () => {
+      const onCommit = vi.fn();
+      render(<EditableText value="old" multiline onCommit={onCommit} />);
+      fireEvent.click(screen.getByText("old"));
+      const textarea = screen.getByRole("textbox");
+      fireEvent.change(textarea, { target: { value: "new\nlines" } });
+      fireEvent.blur(textarea);
+      expect(onCommit).toHaveBeenCalledWith("new\nlines");
+    });
+
+    it("allows Enter without committing in multiline mode", () => {
+      const onCommit = vi.fn();
+      render(<EditableText value="old" multiline onCommit={onCommit} />);
+      fireEvent.click(screen.getByText("old"));
+      const textarea = screen.getByRole("textbox");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(onCommit).not.toHaveBeenCalled();
+      // Should still be editing
+      expect(screen.getByRole("textbox")).toBeTruthy();
+    });
+
+    it("cancels multiline on Escape", () => {
+      const onCommit = vi.fn();
+      render(<EditableText value="old" multiline onCommit={onCommit} />);
+      fireEvent.click(screen.getByText("old"));
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "changed" } });
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(screen.getByText("old")).toBeTruthy();
+    });
+
+    it("shows placeholder when value is empty", () => {
+      render(<EditableText value="" placeholder="Add description..." onCommit={() => {}} />);
+      expect(screen.getByText("Add description...")).toBeTruthy();
+    });
+  });
 });
