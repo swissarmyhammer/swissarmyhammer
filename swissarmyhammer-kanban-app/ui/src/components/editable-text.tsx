@@ -22,6 +22,7 @@ export function EditableText({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
+  const clickPosRef = useRef<{ x: number; y: number } | null>(null);
 
   const autoSize = useCallback(() => {
     const el = ref.current;
@@ -33,9 +34,39 @@ export function EditableText({
 
   useEffect(() => {
     if (editing && ref.current) {
-      ref.current.focus();
-      ref.current.select();
+      const el = ref.current;
+      el.focus();
       autoSize();
+
+      const pos = clickPosRef.current;
+      clickPosRef.current = null;
+
+      if (pos) {
+        // Place caret where the user clicked by dispatching a synthetic
+        // mousedown at the same coordinates. The input/textarea occupies
+        // the same space as the span it replaced, so coordinates map
+        // to the correct character position.
+        requestAnimationFrame(() => {
+          el.dispatchEvent(
+            new MouseEvent("mousedown", {
+              clientX: pos.x,
+              clientY: pos.y,
+              bubbles: true,
+            })
+          );
+          el.dispatchEvent(
+            new MouseEvent("mouseup", {
+              clientX: pos.x,
+              clientY: pos.y,
+              bubbles: true,
+            })
+          );
+        });
+      } else {
+        // Fallback: place cursor at end
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      }
     }
   }, [editing, autoSize]);
 
@@ -91,7 +122,8 @@ export function EditableText({
   return (
     <span
       className={`${className ?? ""}${isEmpty ? " text-muted-foreground italic" : ""}`}
-      onClick={() => {
+      onClick={(e) => {
+        clickPosRef.current = { x: e.clientX, y: e.clientY };
         setDraft(value);
         setEditing(true);
       }}
