@@ -176,8 +176,7 @@ impl WorkflowResolver {
                 FileSource::Local => "local",
                 FileSource::Dynamic => "dynamic",
             };
-            let workflow_path =
-                PathBuf::from(format!("workflow:{source_label}:{workflow_name}"));
+            let workflow_path = PathBuf::from(format!("workflow:{source_label}:{workflow_name}"));
 
             // Parse frontmatter (same as load_all_workflows)
             let (metadata, _) = match self.parse_front_matter(&file.content) {
@@ -190,9 +189,7 @@ impl WorkflowResolver {
                         line: None,
                         column: None,
                         message: format!("Failed to parse workflow frontmatter: {e}"),
-                        suggestion: Some(
-                            "Check YAML front matter syntax".to_string(),
-                        ),
+                        suggestion: Some("Check YAML front matter syntax".to_string()),
                     });
                     continue;
                 }
@@ -229,9 +226,7 @@ impl WorkflowResolver {
                         line: None,
                         column: None,
                         message: format!("Failed to parse workflow: {e}"),
-                        suggestion: Some(
-                            "Check your Mermaid state diagram syntax".to_string(),
-                        ),
+                        suggestion: Some("Check your Mermaid state diagram syntax".to_string()),
                     });
                 }
             }
@@ -1207,7 +1202,9 @@ stateDiagram-v2
     MoreProcessing --> Processing
 ```
 "#;
-        resolver.vfs.add_builtin("broken-no-terminal.md", broken_content);
+        resolver
+            .vfs
+            .add_builtin("broken-no-terminal.md", broken_content);
 
         let issues = resolver.validate_all_sources();
 
@@ -1234,15 +1231,12 @@ stateDiagram-v2
 
         // The error should mention terminal state or a parse failure
         assert!(
-            broken_issues.iter().any(|issue| issue
-                .message
-                .contains("terminal")
-                || issue.message.contains("Failed to parse")),
-            "Expected terminal state or parse error, got: {:?}",
             broken_issues
                 .iter()
-                .map(|i| &i.message)
-                .collect::<Vec<_>>()
+                .any(|issue| issue.message.contains("terminal")
+                    || issue.message.contains("Failed to parse")),
+            "Expected terminal state or parse error, got: {:?}",
+            broken_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
 }

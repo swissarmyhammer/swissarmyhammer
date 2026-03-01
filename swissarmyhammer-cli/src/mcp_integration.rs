@@ -85,8 +85,8 @@ impl CliToolContext {
         // Claude Code has native tools (Bash, Read, Write, Edit, skills) so it
         // does NOT need MCP agent tools (shell, files, skill).
         // LlamaAgent has no native tools and relies entirely on MCP.
-        use swissarmyhammer_config::model::{AgentUseCase, ModelExecutorType, ModelManager};
-        let agent_mode = match ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Workflows) {
+        use swissarmyhammer_config::model::{ModelExecutorType, ModelManager, ModelPaths};
+        let agent_mode = match ModelManager::resolve_agent_config(&ModelPaths::sah()) {
             Ok(config) => config.executor_type() != ModelExecutorType::ClaudeCode,
             Err(_) => false, // Default is ClaudeCode, so no agent tools needed
         };

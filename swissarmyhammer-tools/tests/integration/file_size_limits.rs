@@ -427,6 +427,7 @@ async fn test_shell_execute_handles_large_output() {
         "command".to_string(),
         json!("for i in {1..1000}; do echo \"Line $i with some content\"; done"),
     );
+    arguments.insert("max_lines".to_string(), json!(-1));
 
     let result = tool.execute(arguments, &context).await;
     assert!(

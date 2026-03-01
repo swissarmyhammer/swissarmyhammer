@@ -16,7 +16,9 @@ use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_git::{GitOperations, GitResult};
-use swissarmyhammer_operations::{generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig};
+use swissarmyhammer_operations::{
+    generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
+};
 
 use crate::mcp::tool_registry::{McpTool, ToolContext};
 
@@ -74,11 +76,9 @@ pub fn get_uncommitted_changes(git_ops: &GitOperations) -> GitResult<Vec<String>
 #[derive(Debug, Default)]
 pub struct GetChanges;
 
-static GET_CHANGES_PARAMS: &[ParamMeta] = &[
-    ParamMeta::new("branch")
-        .description("Branch name to analyze (optional, defaults to current branch)")
-        .param_type(ParamType::String),
-];
+static GET_CHANGES_PARAMS: &[ParamMeta] = &[ParamMeta::new("branch")
+    .description("Branch name to analyze (optional, defaults to current branch)")
+    .param_type(ParamType::String)];
 
 impl Operation for GetChanges {
     fn verb(&self) -> &'static str {
@@ -98,9 +98,8 @@ impl Operation for GetChanges {
 // Static operation instances for schema generation
 static GET_CHANGES: Lazy<GetChanges> = Lazy::new(GetChanges::default);
 
-pub static GIT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
-    vec![&*GET_CHANGES as &dyn Operation]
-});
+pub static GIT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> =
+    Lazy::new(|| vec![&*GET_CHANGES as &dyn Operation]);
 
 /// Tool for listing changed files on a git branch
 #[derive(Default)]
@@ -170,9 +169,8 @@ impl McpTool for GitChangesTool {
         }
 
         // Parse request
-        let request: GitChangesRequest =
-            serde_json::from_value(serde_json::Value::Object(args))
-                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+        let request: GitChangesRequest = serde_json::from_value(serde_json::Value::Object(args))
+            .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
         // Get git operations from context
         let git_ops_guard = context.git_ops.lock().await;

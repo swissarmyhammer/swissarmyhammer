@@ -149,6 +149,7 @@
 //! - Cross-platform compatibility tests
 
 pub mod execute;
+pub mod state;
 
 use crate::mcp::tool_registry::ToolRegistry;
 

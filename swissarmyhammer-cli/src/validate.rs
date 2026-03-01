@@ -231,14 +231,14 @@ impl Validator {
         if count_resolver.load_all_workflows(&mut storage).is_ok() {
             if let Ok(workflows) = storage.list_workflows() {
                 for workflow in &workflows {
-                    let source_location =
-                        match count_resolver.workflow_sources.get(&workflow.name) {
-                            Some(swissarmyhammer::FileSource::Builtin) => "builtin",
-                            Some(swissarmyhammer::FileSource::User) => "user",
-                            Some(swissarmyhammer::FileSource::Local) => "local",
-                            Some(swissarmyhammer::FileSource::Dynamic) => "dynamic",
-                            None => "unknown",
-                        };
+                    let source_location = match count_resolver.workflow_sources.get(&workflow.name)
+                    {
+                        Some(swissarmyhammer::FileSource::Builtin) => "builtin",
+                        Some(swissarmyhammer::FileSource::User) => "user",
+                        Some(swissarmyhammer::FileSource::Local) => "local",
+                        Some(swissarmyhammer::FileSource::Dynamic) => "dynamic",
+                        None => "unknown",
+                    };
                     seen_files.insert(PathBuf::from(format!(
                         "workflow:{source_location}:{}",
                         workflow.name.as_str()

@@ -123,6 +123,54 @@ pub fn ensure_project_entry<'a>(root: &'a mut Value, key: &str) -> &'a mut Value
     root.get_mut("projects").unwrap().get_mut(key).unwrap()
 }
 
+/// Path to the project-level Claude Code settings file.
+pub fn claude_settings_path() -> PathBuf {
+    PathBuf::from(".claude/settings.json")
+}
+
+/// Add "Bash" to permissions.deny in settings, idempotent.
+/// Returns true if a change was made.
+pub fn merge_deny_bash(settings: &mut Value) -> bool {
+    // Ensure permissions.deny exists as an array
+    if settings.get("permissions").is_none() {
+        settings
+            .as_object_mut()
+            .unwrap()
+            .insert("permissions".to_string(), json!({}));
+    }
+    let permissions = settings.get_mut("permissions").unwrap();
+    if permissions.get("deny").is_none() {
+        permissions
+            .as_object_mut()
+            .unwrap()
+            .insert("deny".to_string(), json!([]));
+    }
+
+    let deny = permissions.get_mut("deny").unwrap().as_array_mut().unwrap();
+
+    // Check if "Bash" is already present
+    if deny.iter().any(|v| v.as_str() == Some("Bash")) {
+        return false;
+    }
+
+    deny.push(json!("Bash"));
+    true
+}
+
+/// Remove "Bash" from permissions.deny in settings.
+/// Returns true if a change was made.
+pub fn remove_deny_bash(settings: &mut Value) -> bool {
+    if let Some(deny) = settings
+        .pointer_mut("/permissions/deny")
+        .and_then(|v| v.as_array_mut())
+    {
+        let before = deny.len();
+        deny.retain(|v| v.as_str() != Some("Bash"));
+        return deny.len() != before;
+    }
+    false
+}
+
 /// Read settings from file, returning empty object if file doesn't exist.
 pub fn read_settings(path: &Path) -> Result<Value, String> {
     if path.exists() {

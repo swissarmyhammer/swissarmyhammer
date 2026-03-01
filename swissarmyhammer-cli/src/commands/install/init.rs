@@ -22,6 +22,11 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
         install_claude_local_scope()?;
     }
 
+    // Deny built-in Bash tool in Claude Code settings (project-level)
+    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
+        install_deny_bash()?;
+    }
+
     // Create sah-specific project structure
     if matches!(target, InstallTarget::Project | InstallTarget::Local) {
         create_project_structure()?;
@@ -87,6 +92,23 @@ fn install_mcp_all_agents(global: bool) -> Result<(), String> {
         install_project_legacy()?;
     }
 
+    Ok(())
+}
+
+/// Add "Bash" to permissions.deny in .claude/settings.json.
+/// This ensures the agent uses our shell tool instead of the built-in Bash tool.
+fn install_deny_bash() -> Result<(), String> {
+    let path = settings::claude_settings_path();
+    let mut claude_settings = settings::read_settings(&path)?;
+    let changed = settings::merge_deny_bash(&mut claude_settings);
+    settings::write_settings(&path, &claude_settings)?;
+
+    if changed {
+        println!(
+            "Bash tool denied in {} (use shell tool instead)",
+            path.display()
+        );
+    }
     Ok(())
 }
 

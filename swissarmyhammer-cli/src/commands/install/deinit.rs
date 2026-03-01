@@ -18,6 +18,11 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
         uninstall_claude_local_scope()?;
     }
 
+    // Remove Bash deny rule from Claude Code settings
+    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
+        uninstall_deny_bash()?;
+    }
+
     // Always remove builtin skills from .skills/ store and agent dirs
     // (init always installs them, so deinit should always remove them)
     uninstall_builtin_skills(global)?;
@@ -91,6 +96,23 @@ fn uninstall_mcp_all_agents(global: bool) -> Result<(), String> {
         uninstall_project_legacy()?;
     }
 
+    Ok(())
+}
+
+/// Remove "Bash" from permissions.deny in .claude/settings.json.
+fn uninstall_deny_bash() -> Result<(), String> {
+    let path = settings::claude_settings_path();
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut claude_settings = settings::read_settings(&path)?;
+    let changed = settings::remove_deny_bash(&mut claude_settings);
+
+    if changed {
+        settings::write_settings(&path, &claude_settings)?;
+        println!("Bash tool deny rule removed from {}", path.display());
+    }
     Ok(())
 }
 
