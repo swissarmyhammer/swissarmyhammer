@@ -8086,6 +8086,7 @@ dependencies = [
  "fs2",
  "serde",
  "serde_json",
+ "serde_yaml",
  "swissarmyhammer-common",
  "swissarmyhammer-operations",
  "tempfile",

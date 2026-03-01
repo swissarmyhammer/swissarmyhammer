@@ -1,18 +1,22 @@
 //! Task types: Task, Attachment, Comment
 
-use super::ids::{ActorId, AttachmentId, CommentId, TagId, TaskId};
+use super::ids::{ActorId, AttachmentId, CommentId, TaskId};
 use super::position::Position;
 use serde::{Deserialize, Serialize};
 
 /// A task/card on the kanban board
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(skip)]
     pub id: TaskId,
     pub title: String,
     #[serde(default)]
     pub description: String,
-    #[serde(default)]
-    pub tags: Vec<TagId>,
+
+    /// Legacy tags field — accepted on read for backward compat, never written.
+    /// Tags are now computed from `#tag` patterns in the description.
+    #[serde(default, skip_serializing)]
+    _legacy_tags: Vec<String>,
 
     /// Position = column + swimlane + ordinal
     pub position: Position,
@@ -46,7 +50,7 @@ impl Task {
             id: TaskId::new(),
             title: title.into(),
             description: String::new(),
-            tags: Vec::new(),
+            _legacy_tags: Vec::new(),
             position,
             depends_on: Vec::new(),
             assignees: Vec::new(),
@@ -56,15 +60,38 @@ impl Task {
         }
     }
 
+    /// Reconstruct a task from parsed frontmatter parts (used by markdown reader)
+    pub fn from_parts(
+        title: String,
+        description: String,
+        position: Position,
+        depends_on: Vec<TaskId>,
+        assignees: Vec<ActorId>,
+        comments: Vec<Comment>,
+        attachments: Vec<Attachment>,
+    ) -> Self {
+        Self {
+            id: TaskId::new(),
+            title,
+            description,
+            _legacy_tags: Vec::new(),
+            position,
+            depends_on,
+            assignees,
+            comments,
+            _legacy_subtasks: Vec::new(),
+            attachments,
+        }
+    }
+
+    /// Compute tag names from `#tag` patterns in the description.
+    pub fn tags(&self) -> Vec<String> {
+        crate::tag_parser::parse_tags(&self.description)
+    }
+
     /// Set the description
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
-        self
-    }
-
-    /// Add tags
-    pub fn with_tags(mut self, tags: Vec<TagId>) -> Self {
-        self.tags = tags;
         self
     }
 
@@ -284,7 +311,17 @@ mod tests {
         let task = Task::new("Test task", test_position());
         assert_eq!(task.title, "Test task");
         assert!(task.description.is_empty());
-        assert!(task.tags.is_empty());
+        assert!(task.tags().is_empty());
+    }
+
+    #[test]
+    fn test_task_tags_computed_from_description() {
+        let task = Task::new("Test", test_position())
+            .with_description("Fix the #bug in #login");
+        let tags = task.tags();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.iter().any(|t| t == "bug"));
+        assert!(tags.iter().any(|t| t == "login"));
     }
 
     #[test]
@@ -349,12 +386,12 @@ mod tests {
 
     #[test]
     fn test_legacy_subtask_migration() {
-        // Simulate reading a task JSON with old-style subtasks
+        // Simulate reading a task JSON with old-style subtasks and tags
         let json = r#"{
             "id": "test",
             "title": "Test",
             "description": "Some work",
-            "tags": [],
+            "tags": ["bug"],
             "position": {"column": "todo", "ordinal": "a0"},
             "depends_on": [],
             "assignees": [],

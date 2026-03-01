@@ -21,10 +21,18 @@ impl Execute<KanbanContext, KanbanError> for ListColumns {
         match async {
             let mut columns = ctx.read_all_columns().await?;
             columns.sort_by_key(|c| c.order);
+            let columns_json: Vec<Value> = columns
+                .iter()
+                .map(|c| {
+                    let mut v = serde_json::to_value(c).unwrap_or(Value::Null);
+                    v["id"] = serde_json::json!(&c.id);
+                    v
+                })
+                .collect();
 
             Ok(serde_json::json!({
-                "columns": columns,
-                "count": columns.len()
+                "columns": columns_json,
+                "count": columns_json.len()
             }))
         }
         .await

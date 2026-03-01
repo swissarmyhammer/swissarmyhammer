@@ -44,7 +44,7 @@ impl Execute<KanbanContext, KanbanError> for ListActors {
         match async {
             let all_actors = ctx.read_all_actors().await?;
 
-            let actors: Vec<&Actor> = all_actors
+            let actors_json: Vec<Value> = all_actors
                 .iter()
                 .filter(|a| match &self.actor_type {
                     None => true,
@@ -52,11 +52,16 @@ impl Execute<KanbanContext, KanbanError> for ListActors {
                     Some(t) if t == "agent" => matches!(a, Actor::Agent { .. }),
                     Some(_) => true, // Unknown type, include all
                 })
+                .map(|a| {
+                    let mut v = serde_json::to_value(a).unwrap_or(Value::Null);
+                    v["id"] = serde_json::json!(a.id());
+                    v
+                })
                 .collect();
 
             Ok(serde_json::json!({
-                "actors": actors,
-                "count": actors.len()
+                "actors": actors_json,
+                "count": actors_json.len()
             }))
         }
         .await

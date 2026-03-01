@@ -26,7 +26,9 @@ impl Execute<KanbanContext, KanbanError> for GetActor {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let actor = ctx.read_actor(&self.id).await?;
-            Ok(serde_json::to_value(actor)?)
+            let mut result = serde_json::to_value(&actor)?;
+            result["id"] = serde_json::json!(actor.id());
+            Ok(result)
         }
         .await
         {

@@ -62,7 +62,9 @@ impl Execute<KanbanContext, KanbanError> for UpdateSwimlane {
             }
 
             ctx.write_swimlane(&swimlane).await?;
-            Ok(serde_json::to_value(&swimlane)?)
+            let mut result = serde_json::to_value(&swimlane)?;
+            result["id"] = serde_json::json!(&swimlane.id);
+            Ok(result)
         }
         .await;
 

@@ -128,7 +128,26 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         handle_open_recent(app, PathBuf::from(path_str));
     } else if let Some(mode) = id.strip_prefix("keymap_") {
         handle_keymap_change(app, mode);
+    } else if id == "tag_edit" || id == "tag_delete" {
+        handle_tag_menu(app, &id);
     }
+}
+
+/// Tag context menu actions: read the stored context tag and emit to frontend.
+fn handle_tag_menu(app: &AppHandle, action: &str) {
+    let handle = app.clone();
+    let action = action.to_string();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        let context = state.context_tag.read().await.clone();
+        if let Some((tag_id, task_id)) = context {
+            let _ = handle.emit("tag-context-menu", serde_json::json!({
+                "action": action,
+                "tag_id": tag_id,
+                "task_id": task_id,
+            }));
+        }
+    });
 }
 
 /// Settings > Editor Keymap > [mode]: update config, rebuild menu, notify frontend.

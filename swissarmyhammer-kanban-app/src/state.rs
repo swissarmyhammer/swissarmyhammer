@@ -92,6 +92,8 @@ pub struct AppState {
     pub boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
     pub active_board: RwLock<Option<PathBuf>>,
     pub config: RwLock<AppConfig>,
+    /// Tag context menu state: (tag_id, optional task_id) set before popup, read in menu event
+    pub context_tag: RwLock<Option<(String, Option<String>)>>,
 }
 
 impl AppState {
@@ -101,6 +103,7 @@ impl AppState {
             boards: RwLock::new(HashMap::new()),
             active_board: RwLock::new(None),
             config: RwLock::new(AppConfig::load()),
+            context_tag: RwLock::new(None),
         }
     }
 

@@ -21,10 +21,18 @@ impl Execute<KanbanContext, KanbanError> for ListSwimlanes {
         match async {
             let mut swimlanes = ctx.read_all_swimlanes().await?;
             swimlanes.sort_by_key(|s| s.order);
+            let swimlanes_json: Vec<Value> = swimlanes
+                .iter()
+                .map(|s| {
+                    let mut v = serde_json::to_value(s).unwrap_or(Value::Null);
+                    v["id"] = serde_json::json!(&s.id);
+                    v
+                })
+                .collect();
 
             Ok(serde_json::json!({
-                "swimlanes": swimlanes,
-                "count": swimlanes.len()
+                "swimlanes": swimlanes_json,
+                "count": swimlanes_json.len()
             }))
         }
         .await

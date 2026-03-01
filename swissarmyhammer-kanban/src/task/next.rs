@@ -108,6 +108,7 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                     let progress = task.progress();
 
                     let mut result = serde_json::to_value(task)?;
+                    result["id"] = serde_json::json!(&task.id);
                     result["ready"] = serde_json::json!(true);
                     result["blocked_by"] = serde_json::to_value(&blocked_by)?;
                     result["blocks"] = serde_json::to_value(&blocks)?;

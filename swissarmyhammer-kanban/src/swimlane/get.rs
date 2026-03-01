@@ -26,7 +26,9 @@ impl Execute<KanbanContext, KanbanError> for GetSwimlane {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let swimlane = ctx.read_swimlane(&self.id).await?;
-            Ok(serde_json::to_value(&swimlane)?)
+            let mut result = serde_json::to_value(&swimlane)?;
+            result["id"] = serde_json::json!(&swimlane.id);
+            Ok(result)
         }
         .await
         {

@@ -1,15 +1,15 @@
 //! Kanban board engine with file-backed storage
 //!
-//! This crate provides a kanban board implementation that stores all data as JSON files
-//! in a `.kanban` directory. It's designed for git-friendly task management with
+//! This crate provides a kanban board implementation that stores all data as YAML/Markdown
+//! files in a `.kanban` directory. It's designed for git-friendly task management with
 //! support for concurrent access via file locking.
 //!
 //! ## Overview
 //!
 //! - **One repo = one board** - The `.kanban` directory lives at the repo root
-//! - **File-per-task** - Tasks are individual JSON files for clean git diffs
-//! - **Git-friendly** - Human-readable JSON, no binary formats
-//! - **Agent-aware** - Tracks which agent/user modified tasks and why
+//! - **File-per-entity** - Tasks, tags, columns, actors, swimlanes are individual files
+//! - **Git-friendly** - Human-readable YAML/Markdown, no binary formats
+//! - **Agent-aware** - Per-entity JSONL logs track which agent/user modified what and why
 //!
 //! ## Basic Usage
 //!
@@ -36,20 +36,37 @@
 //! ```text
 //! repo/
 //! └── .kanban/
-//!     ├── board.json         # Board metadata and column definitions
+//!     ├── board.yaml          # Board metadata (YAML)
+//!     ├── board.jsonl          # Board operation log
 //!     ├── tasks/
-//!     │   ├── {id}.json      # Current task state
-//!     │   ├── {id}.jsonl     # Per-task operation log
-//!     │   └── ...
+//!     │   ├── {id}.md          # Task (YAML frontmatter + markdown body)
+//!     │   ├── {id}.jsonl       # Per-task operation log
+//!     ├── tags/
+//!     │   ├── {id}.yaml        # Tag state
+//!     │   ├── {id}.jsonl       # Per-tag operation log
+//!     ├── columns/
+//!     │   ├── {id}.yaml        # Column state
+//!     │   ├── {id}.jsonl       # Per-column operation log
+//!     ├── swimlanes/
+//!     │   ├── {id}.yaml        # Swimlane state
+//!     │   ├── {id}.jsonl       # Per-swimlane operation log
+//!     ├── actors/
+//!     │   ├── {id}.yaml        # Actor state
+//!     │   ├── {id}.jsonl       # Per-actor operation log
 //!     └── activity/
-//!         ├── 000001.jsonl   # Global log (archived)
-//!         └── current.jsonl  # Active global log
+//!         └── current.jsonl    # Global operation log
 //! ```
+//!
+//! Entity state files use YAML (or YAML frontmatter + markdown for tasks).
+//! Operation logs use JSONL (one JSON object per line, newest first).
+//! JSON API responses remain unchanged — serde_json is used for all output.
 
+pub mod auto_color;
 mod context;
 mod error;
 pub mod parse;
 mod processor;
+pub mod tag_parser;
 pub mod types;
 
 // Command modules
@@ -69,7 +86,7 @@ pub use swissarmyhammer_operations::{
     async_trait, Execute, ExecutionResult, Operation, OperationProcessor,
 };
 
-pub use context::{KanbanContext, KanbanLock};
+pub use context::{KanbanContext, KanbanLock, MigrationStats};
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
 

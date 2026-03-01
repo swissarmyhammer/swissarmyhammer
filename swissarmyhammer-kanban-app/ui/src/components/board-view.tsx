@@ -401,6 +401,7 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
                 <ColumnView
                   column={col}
                   tasks={colTasks}
+                  tags={board.tags}
                   blockedIds={blockedIds}
                   onTaskClick={onTaskClick}
                   onUpdateTitle={onUpdateTitle}
@@ -414,7 +415,7 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
         </SortableContext>
       </div>
       <DragOverlay dropAnimation={null}>
-        {activeTask ? <TaskCard task={activeTask} /> : null}
+        {activeTask ? <TaskCard task={activeTask} tags={board.tags} /> : null}
         {activeColumn ? (
           <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
             {activeColumn.name}

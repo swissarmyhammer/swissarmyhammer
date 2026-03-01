@@ -2,10 +2,12 @@ import { forwardRef } from "react";
 import { GripVertical } from "lucide-react";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { SubtaskProgress } from "@/components/subtask-progress";
-import type { Task } from "@/types/kanban";
+import { TagPill } from "@/components/tag-pill";
+import type { Tag, Task } from "@/types/kanban";
 
 interface TaskCardProps {
   task: Task;
+  tags?: Tag[];
   isBlocked?: boolean;
   onClick?: (task: Task) => void;
   onUpdateTitle?: (taskId: string, title: string) => void;
@@ -14,7 +16,7 @@ interface TaskCardProps {
 }
 
 export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
-  function TaskCard({ task, isBlocked, onClick, onUpdateTitle, dragHandleProps, style, ...rest }, ref) {
+  function TaskCard({ task, tags = [], isBlocked, onClick, onUpdateTitle, dragHandleProps, style, ...rest }, ref) {
     return (
       <div
         ref={ref}
@@ -38,7 +40,6 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
           onClick={(e) => e.stopPropagation()}
           onDoubleClick={(e) => {
             e.stopPropagation();
-            // Blur the CodeMirror editor so it commits and returns to display mode
             if (document.activeElement instanceof HTMLElement) {
               document.activeElement.blur();
             }
@@ -51,6 +52,13 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
             className="leading-snug"
             inputClassName="leading-snug bg-transparent border-b border-ring w-full"
           />
+          {task.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {task.tags.map((tagId) => (
+                <TagPill key={tagId} slug={tagId} tags={tags} taskId={task.id} />
+              ))}
+            </div>
+          )}
           <SubtaskProgress description={task.description} className="mt-1.5" />
         </div>
       </div>

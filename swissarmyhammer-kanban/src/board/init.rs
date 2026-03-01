@@ -71,8 +71,13 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             }
 
             // Return board with columns in response (for API compatibility)
+            // Build column JSON manually to include IDs (Column.id has #[serde(skip)])
+            let columns: Vec<Value> = Board::default_columns()
+                .iter()
+                .map(|c| serde_json::json!({"id": c.id, "name": c.name, "order": c.order}))
+                .collect();
             let mut result = serde_json::to_value(&board)?;
-            result["columns"] = serde_json::to_value(Board::default_columns())?;
+            result["columns"] = serde_json::json!(columns);
             result["swimlanes"] = serde_json::json!([]);
             Ok(result)
         }
@@ -124,7 +129,12 @@ mod tests {
         assert_eq!(result["name"], "Test Board");
         assert_eq!(result["description"], "A test board");
         assert!(result["columns"].is_array());
-        assert_eq!(result["columns"].as_array().unwrap().len(), 3);
+        let columns = result["columns"].as_array().unwrap();
+        assert_eq!(columns.len(), 3);
+        // Verify column IDs are present (not omitted by serde(skip))
+        for col in columns {
+            assert!(col["id"].is_string(), "Column should have id field");
+        }
     }
 
     #[tokio::test]

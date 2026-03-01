@@ -5,10 +5,11 @@
 
 use crate::error::{KanbanError, Result};
 use crate::types::{
-    Actor, ActorId, Board, Column, ColumnId, LogEntry, Swimlane, SwimlaneId, Tag, TagId, Task,
-    TaskId,
+    Actor, ActorId, Attachment, Board, Column, ColumnId, Comment, LogEntry, Position, Swimlane,
+    SwimlaneId, Tag, TagId, Task, TaskId,
 };
 use fs2::FileExt;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -52,9 +53,9 @@ impl KanbanContext {
         &self.root
     }
 
-    /// Path to board.json
+    /// Path to board.yaml
     pub fn board_path(&self) -> PathBuf {
-        self.root.join("board.json")
+        self.root.join("board.yaml")
     }
 
     /// Path to tasks directory
@@ -62,9 +63,9 @@ impl KanbanContext {
         self.root.join("tasks")
     }
 
-    /// Path to a task's JSON file
+    /// Path to a task's markdown file (YAML frontmatter + markdown body)
     pub fn task_path(&self, id: &TaskId) -> PathBuf {
-        self.root.join("tasks").join(format!("{}.json", id))
+        self.root.join("tasks").join(format!("{}.md", id))
     }
 
     /// Path to a task's log file
@@ -77,9 +78,9 @@ impl KanbanContext {
         self.root.join("actors")
     }
 
-    /// Path to an actor's JSON file
+    /// Path to an actor's YAML file
     pub fn actor_path(&self, id: &ActorId) -> PathBuf {
-        self.root.join("actors").join(format!("{}.json", id))
+        self.root.join("actors").join(format!("{}.yaml", id))
     }
 
     /// Path to tags directory
@@ -87,9 +88,9 @@ impl KanbanContext {
         self.root.join("tags")
     }
 
-    /// Path to a tag's JSON file
+    /// Path to a tag's YAML file
     pub fn tag_path(&self, id: &TagId) -> PathBuf {
-        self.root.join("tags").join(format!("{}.json", id))
+        self.root.join("tags").join(format!("{}.yaml", id))
     }
 
     /// Path to columns directory
@@ -97,9 +98,9 @@ impl KanbanContext {
         self.root.join("columns")
     }
 
-    /// Path to a column's JSON file
+    /// Path to a column's YAML file
     pub fn column_path(&self, id: &ColumnId) -> PathBuf {
-        self.root.join("columns").join(format!("{}.json", id))
+        self.root.join("columns").join(format!("{}.yaml", id))
     }
 
     /// Path to a column's log file
@@ -112,9 +113,9 @@ impl KanbanContext {
         self.root.join("swimlanes")
     }
 
-    /// Path to a swimlane's JSON file
+    /// Path to a swimlane's YAML file
     pub fn swimlane_path(&self, id: &SwimlaneId) -> PathBuf {
-        self.root.join("swimlanes").join(format!("{}.json", id))
+        self.root.join("swimlanes").join(format!("{}.yaml", id))
     }
 
     /// Path to a swimlane's log file
@@ -141,9 +142,9 @@ impl KanbanContext {
     // Directory initialization
     // =========================================================================
 
-    /// Check if the board is initialized
+    /// Check if the board is initialized (checks board.yaml or legacy board.json)
     pub fn is_initialized(&self) -> bool {
-        self.board_path().exists()
+        self.board_path().exists() || self.root.join("board.json").exists()
     }
 
     /// Check if all required directories exist
@@ -192,18 +193,26 @@ impl KanbanContext {
 
     /// Read the board file, auto-migrating legacy format if needed.
     ///
-    /// If the board.json contains embedded columns/swimlanes (old format),
-    /// they are extracted to individual files and board.json is rewritten.
+    /// Tries board.yaml first, falls back to legacy board.json.
+    /// If the board contains embedded columns/swimlanes (old format),
+    /// they are extracted to individual files and board is rewritten.
     pub async fn read_board(&self) -> Result<Board> {
-        let path = self.board_path();
-        if !path.exists() {
-            return Err(KanbanError::NotInitialized {
-                path: self.root.clone(),
-            });
-        }
+        let yaml_path = self.board_path(); // board.yaml
+        let path = if yaml_path.exists() {
+            yaml_path
+        } else {
+            let json_path = self.root.join("board.json");
+            if !json_path.exists() {
+                return Err(KanbanError::NotInitialized {
+                    path: self.root.clone(),
+                });
+            }
+            json_path
+        };
 
         let content = fs::read_to_string(&path).await?;
-        let board: Board = serde_json::from_str(&content)?;
+        // serde_yaml can parse both YAML and JSON
+        let board: Board = serde_yaml::from_str(&content)?;
 
         // Migrate legacy embedded columns/swimlanes to individual files
         if !board.columns.is_empty() || !board.swimlanes.is_empty() {
@@ -220,7 +229,7 @@ impl KanbanContext {
                 }
             }
 
-            // Rewrite board.json without embedded columns/swimlanes
+            // Rewrite as board.yaml without embedded columns/swimlanes
             let slim_board = Board::new(&board.name);
             let slim_board = if let Some(ref desc) = board.description {
                 slim_board.with_description(desc)
@@ -229,16 +238,27 @@ impl KanbanContext {
             };
             self.write_board(&slim_board).await?;
 
+            // Remove legacy board.json if we migrated from it
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                let _ = fs::remove_file(&path).await;
+            }
+
             return Ok(slim_board);
+        }
+
+        // Auto-migrate legacy .json to .yaml
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            self.write_board(&board).await?;
+            let _ = fs::remove_file(&path).await;
         }
 
         Ok(board)
     }
 
-    /// Write the board file (atomic write via temp file)
+    /// Write the board file as YAML (atomic write via temp file)
     pub async fn write_board(&self, board: &Board) -> Result<()> {
         let path = self.board_path();
-        let content = serde_json::to_string_pretty(board)?;
+        let content = serde_yaml::to_string(board)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
@@ -276,38 +296,68 @@ impl KanbanContext {
     // Task I/O
     // =========================================================================
 
-    /// Read a task file, auto-migrating legacy subtasks to markdown checklists.
+    /// Read a task file, auto-migrating legacy formats.
+    ///
+    /// Tries `.md` (YAML frontmatter + markdown body) first, falls back to `.json`.
     pub async fn read_task(&self, id: &TaskId) -> Result<Task> {
-        let path = self.task_path(id);
-        if !path.exists() {
-            return Err(KanbanError::TaskNotFound { id: id.to_string() });
-        }
+        let md_path = self.task_path(id); // .md
+        let path = if md_path.exists() {
+            md_path
+        } else {
+            // Fall back to legacy .json
+            let json_path = self.root.join("tasks").join(format!("{}.json", id));
+            if !json_path.exists() {
+                return Err(KanbanError::TaskNotFound { id: id.to_string() });
+            }
+            json_path
+        };
 
         let content = fs::read_to_string(&path).await?;
-        let mut task: Task = serde_json::from_str(&content)?;
+
+        let mut task = if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            parse_task_markdown(&content)?
+        } else {
+            // Legacy JSON
+            serde_json::from_str(&content)?
+        };
+
+        task.id = id.clone();
 
         // Migrate legacy subtasks to markdown checklists in description
         if task.migrate_legacy_subtasks() {
             self.write_task(&task).await?;
         }
 
+        // Auto-migrate legacy .json to .md
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            self.write_task(&task).await?;
+            // Remove old .json file after successful .md write
+            let _ = fs::remove_file(&path).await;
+        }
+
         Ok(task)
     }
 
-    /// Write a task file (atomic write via temp file)
+    /// Write a task file as YAML frontmatter + markdown body
     pub async fn write_task(&self, task: &Task) -> Result<()> {
         let path = self.task_path(&task.id);
-        let content = serde_json::to_string_pretty(task)?;
+        let meta = TaskMeta::from_task(task);
+        let frontmatter = serde_yaml::to_string(&meta)?;
+        let content = format!("---\n{}---\n{}", frontmatter, task.description);
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete a task file and its log
+    /// Delete a task file and its log (handles both .md and legacy .json)
     pub async fn delete_task_file(&self, id: &TaskId) -> Result<()> {
-        let task_path = self.task_path(id);
+        let md_path = self.task_path(id); // .md
+        let json_path = self.root.join("tasks").join(format!("{}.json", id));
         let log_path = self.task_log_path(id);
 
-        if task_path.exists() {
-            fs::remove_file(&task_path).await?;
+        if md_path.exists() {
+            fs::remove_file(&md_path).await?;
+        }
+        if json_path.exists() {
+            fs::remove_file(&json_path).await?;
         }
         if log_path.exists() {
             fs::remove_file(&log_path).await?;
@@ -316,21 +366,25 @@ impl KanbanContext {
         Ok(())
     }
 
-    /// List all task IDs by reading the tasks directory
+    /// List all task IDs by reading the tasks directory (accepts .md and legacy .json)
     pub async fn list_task_ids(&self) -> Result<Vec<TaskId>> {
         let tasks_dir = self.tasks_dir();
         if !tasks_dir.exists() {
             return Ok(Vec::new());
         }
 
+        let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&tasks_dir).await?;
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let ext = path.extension().and_then(|s| s.to_str());
+            if ext == Some("md") || ext == Some("json") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    ids.push(TaskId::from_string(stem));
+                    if seen.insert(stem.to_string()) {
+                        ids.push(TaskId::from_string(stem));
+                    }
                 }
             }
         }
@@ -354,51 +408,77 @@ impl KanbanContext {
     // Actor I/O
     // =========================================================================
 
-    /// Read an actor file
+    /// Read an actor file (YAML, with JSON fallback)
     pub async fn read_actor(&self, id: &ActorId) -> Result<Actor> {
-        let path = self.actor_path(id);
-        if !path.exists() {
-            return Err(KanbanError::ActorNotFound { id: id.to_string() });
-        }
+        let yaml_path = self.actor_path(id); // .yaml
+        let path = if yaml_path.exists() {
+            yaml_path
+        } else {
+            let json_path = self.root.join("actors").join(format!("{}.json", id));
+            if !json_path.exists() {
+                return Err(KanbanError::ActorNotFound { id: id.to_string() });
+            }
+            json_path
+        };
 
         let content = fs::read_to_string(&path).await?;
-        let actor: Actor = serde_json::from_str(&content)?;
+        let mut actor: Actor = serde_yaml::from_str(&content)?;
+        actor.set_id(id.clone());
+
+        // Auto-migrate legacy .json to .yaml
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            self.write_actor(&actor).await?;
+            let _ = fs::remove_file(&path).await;
+        }
+
         Ok(actor)
     }
 
-    /// Write an actor file (atomic write via temp file)
+    /// Write an actor file as YAML (atomic write via temp file)
     pub async fn write_actor(&self, actor: &Actor) -> Result<()> {
         let path = self.actor_path(actor.id());
-        let content = serde_json::to_string_pretty(actor)?;
+        let content = serde_yaml::to_string(actor)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete an actor file
+    /// Delete an actor file and its log (handles both .yaml and legacy .json)
     pub async fn delete_actor_file(&self, id: &ActorId) -> Result<()> {
-        let actor_path = self.actor_path(id);
+        let yaml_path = self.actor_path(id);
+        let json_path = self.root.join("actors").join(format!("{}.json", id));
+        let log_path = self.actor_log_path(id);
 
-        if actor_path.exists() {
-            fs::remove_file(&actor_path).await?;
+        if yaml_path.exists() {
+            fs::remove_file(&yaml_path).await?;
+        }
+        if json_path.exists() {
+            fs::remove_file(&json_path).await?;
+        }
+        if log_path.exists() {
+            fs::remove_file(&log_path).await?;
         }
 
         Ok(())
     }
 
-    /// List all actor IDs by reading the actors directory
+    /// List all actor IDs by reading the actors directory (accepts .yaml and legacy .json)
     pub async fn list_actor_ids(&self) -> Result<Vec<ActorId>> {
         let actors_dir = self.actors_dir();
         if !actors_dir.exists() {
             return Ok(Vec::new());
         }
 
+        let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&actors_dir).await?;
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let ext = path.extension().and_then(|s| s.to_str());
+            if ext == Some("yaml") || ext == Some("json") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    ids.push(ActorId::from_string(stem));
+                    if seen.insert(stem.to_string()) {
+                        ids.push(ActorId::from_string(stem));
+                    }
                 }
             }
         }
@@ -418,60 +498,87 @@ impl KanbanContext {
         Ok(actors)
     }
 
-    /// Check if an actor exists
+    /// Check if an actor exists (checks .yaml and legacy .json)
     pub async fn actor_exists(&self, id: &ActorId) -> bool {
         self.actor_path(id).exists()
+            || self.root.join("actors").join(format!("{}.json", id)).exists()
     }
 
     // =========================================================================
     // Tag I/O
     // =========================================================================
 
-    /// Read a tag file
+    /// Read a tag file by ULID (YAML, with JSON fallback)
     pub async fn read_tag(&self, id: &TagId) -> Result<Tag> {
-        let path = self.tag_path(id);
-        if !path.exists() {
-            return Err(KanbanError::TagNotFound { id: id.to_string() });
-        }
+        let yaml_path = self.tag_path(id); // .yaml
+        let path = if yaml_path.exists() {
+            yaml_path
+        } else {
+            let json_path = self.root.join("tags").join(format!("{}.json", id));
+            if !json_path.exists() {
+                return Err(KanbanError::TagNotFound { id: id.to_string() });
+            }
+            json_path
+        };
 
         let content = fs::read_to_string(&path).await?;
-        let tag: Tag = serde_json::from_str(&content)?;
+        let mut tag: Tag = serde_yaml::from_str(&content)?;
+        tag.id = id.clone();
+
+        // Auto-migrate legacy .json to .yaml
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            self.write_tag(&tag).await?;
+            let _ = fs::remove_file(&path).await;
+        }
+
         Ok(tag)
     }
 
-    /// Write a tag file (atomic write via temp file)
+    /// Write a tag file as YAML (atomic write via temp file)
     pub async fn write_tag(&self, tag: &Tag) -> Result<()> {
         let path = self.tag_path(&tag.id);
-        let content = serde_json::to_string_pretty(tag)?;
+        let content = serde_yaml::to_string(tag)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete a tag file
+    /// Delete a tag file and its log (handles both .yaml and legacy .json)
     pub async fn delete_tag_file(&self, id: &TagId) -> Result<()> {
-        let tag_path = self.tag_path(id);
+        let yaml_path = self.tag_path(id);
+        let json_path = self.root.join("tags").join(format!("{}.json", id));
+        let log_path = self.tag_log_path(id);
 
-        if tag_path.exists() {
-            fs::remove_file(&tag_path).await?;
+        if yaml_path.exists() {
+            fs::remove_file(&yaml_path).await?;
+        }
+        if json_path.exists() {
+            fs::remove_file(&json_path).await?;
+        }
+        if log_path.exists() {
+            fs::remove_file(&log_path).await?;
         }
 
         Ok(())
     }
 
-    /// List all tag IDs by reading the tags directory
+    /// List all tag IDs by reading the tags directory (accepts .yaml and legacy .json)
     pub async fn list_tag_ids(&self) -> Result<Vec<TagId>> {
         let tags_dir = self.tags_dir();
         if !tags_dir.exists() {
             return Ok(Vec::new());
         }
 
+        let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&tags_dir).await?;
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let ext = path.extension().and_then(|s| s.to_str());
+            if ext == Some("yaml") || ext == Some("json") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    ids.push(TagId::from_string(stem));
+                    if seen.insert(stem.to_string()) {
+                        ids.push(TagId::from_string(stem));
+                    }
                 }
             }
         }
@@ -491,41 +598,73 @@ impl KanbanContext {
         Ok(tags)
     }
 
-    /// Check if a tag exists
+    /// Check if a tag exists by ULID (checks .yaml and legacy .json)
     pub async fn tag_exists(&self, id: &TagId) -> bool {
         self.tag_path(id).exists()
+            || self.root.join("tags").join(format!("{}.json", id)).exists()
+    }
+
+    /// Find a tag by its human-readable name (slug).
+    ///
+    /// Scans all tag files. Returns None if no tag has that name.
+    pub async fn find_tag_by_name(&self, name: &str) -> Result<Option<Tag>> {
+        let tags = self.read_all_tags().await?;
+        Ok(tags.into_iter().find(|t| t.name == name))
+    }
+
+    /// Check if a tag with the given name exists.
+    pub async fn tag_name_exists(&self, name: &str) -> Result<bool> {
+        Ok(self.find_tag_by_name(name).await?.is_some())
     }
 
     // =========================================================================
     // Column I/O
     // =========================================================================
 
-    /// Read a column file
+    /// Read a column file (YAML, with JSON fallback)
     pub async fn read_column(&self, id: &ColumnId) -> Result<Column> {
-        let path = self.column_path(id);
-        if !path.exists() {
-            return Err(KanbanError::ColumnNotFound { id: id.to_string() });
-        }
+        let yaml_path = self.column_path(id); // .yaml
+        let path = if yaml_path.exists() {
+            yaml_path
+        } else {
+            let json_path = self.root.join("columns").join(format!("{}.json", id));
+            if !json_path.exists() {
+                return Err(KanbanError::ColumnNotFound { id: id.to_string() });
+            }
+            json_path
+        };
 
         let content = fs::read_to_string(&path).await?;
-        let column: Column = serde_json::from_str(&content)?;
+        let mut column: Column = serde_yaml::from_str(&content)?;
+        column.id = id.clone();
+
+        // Auto-migrate legacy .json to .yaml
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            self.write_column(&column).await?;
+            let _ = fs::remove_file(&path).await;
+        }
+
         Ok(column)
     }
 
-    /// Write a column file (atomic write via temp file)
+    /// Write a column file as YAML (atomic write via temp file)
     pub async fn write_column(&self, column: &Column) -> Result<()> {
         let path = self.column_path(&column.id);
-        let content = serde_json::to_string_pretty(column)?;
+        let content = serde_yaml::to_string(column)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete a column file and its log
+    /// Delete a column file and its log (handles both .yaml and legacy .json)
     pub async fn delete_column_file(&self, id: &ColumnId) -> Result<()> {
-        let col_path = self.column_path(id);
+        let yaml_path = self.column_path(id);
+        let json_path = self.root.join("columns").join(format!("{}.json", id));
         let log_path = self.column_log_path(id);
 
-        if col_path.exists() {
-            fs::remove_file(&col_path).await?;
+        if yaml_path.exists() {
+            fs::remove_file(&yaml_path).await?;
+        }
+        if json_path.exists() {
+            fs::remove_file(&json_path).await?;
         }
         if log_path.exists() {
             fs::remove_file(&log_path).await?;
@@ -534,21 +673,25 @@ impl KanbanContext {
         Ok(())
     }
 
-    /// List all column IDs by reading the columns directory
+    /// List all column IDs by reading the columns directory (accepts .yaml and legacy .json)
     pub async fn list_column_ids(&self) -> Result<Vec<ColumnId>> {
         let columns_dir = self.columns_dir();
         if !columns_dir.exists() {
             return Ok(Vec::new());
         }
 
+        let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&columns_dir).await?;
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let ext = path.extension().and_then(|s| s.to_str());
+            if ext == Some("yaml") || ext == Some("json") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    ids.push(ColumnId::from_string(stem));
+                    if seen.insert(stem.to_string()) {
+                        ids.push(ColumnId::from_string(stem));
+                    }
                 }
             }
         }
@@ -568,41 +711,60 @@ impl KanbanContext {
         Ok(columns)
     }
 
-    /// Check if a column exists
+    /// Check if a column exists (checks .yaml and legacy .json)
     pub async fn column_exists(&self, id: &ColumnId) -> bool {
         self.column_path(id).exists()
+            || self.root.join("columns").join(format!("{}.json", id)).exists()
     }
 
     // =========================================================================
     // Swimlane I/O
     // =========================================================================
 
-    /// Read a swimlane file
+    /// Read a swimlane file (YAML, with JSON fallback)
     pub async fn read_swimlane(&self, id: &SwimlaneId) -> Result<Swimlane> {
-        let path = self.swimlane_path(id);
-        if !path.exists() {
-            return Err(KanbanError::SwimlaneNotFound { id: id.to_string() });
-        }
+        let yaml_path = self.swimlane_path(id); // .yaml
+        let path = if yaml_path.exists() {
+            yaml_path
+        } else {
+            let json_path = self.root.join("swimlanes").join(format!("{}.json", id));
+            if !json_path.exists() {
+                return Err(KanbanError::SwimlaneNotFound { id: id.to_string() });
+            }
+            json_path
+        };
 
         let content = fs::read_to_string(&path).await?;
-        let swimlane: Swimlane = serde_json::from_str(&content)?;
+        let mut swimlane: Swimlane = serde_yaml::from_str(&content)?;
+        swimlane.id = id.clone();
+
+        // Auto-migrate legacy .json to .yaml
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            self.write_swimlane(&swimlane).await?;
+            let _ = fs::remove_file(&path).await;
+        }
+
         Ok(swimlane)
     }
 
-    /// Write a swimlane file (atomic write via temp file)
+    /// Write a swimlane file as YAML (atomic write via temp file)
     pub async fn write_swimlane(&self, swimlane: &Swimlane) -> Result<()> {
         let path = self.swimlane_path(&swimlane.id);
-        let content = serde_json::to_string_pretty(swimlane)?;
+        let content = serde_yaml::to_string(swimlane)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete a swimlane file and its log
+    /// Delete a swimlane file and its log (handles both .yaml and legacy .json)
     pub async fn delete_swimlane_file(&self, id: &SwimlaneId) -> Result<()> {
-        let sl_path = self.swimlane_path(id);
+        let yaml_path = self.swimlane_path(id);
+        let json_path = self.root.join("swimlanes").join(format!("{}.json", id));
         let log_path = self.swimlane_log_path(id);
 
-        if sl_path.exists() {
-            fs::remove_file(&sl_path).await?;
+        if yaml_path.exists() {
+            fs::remove_file(&yaml_path).await?;
+        }
+        if json_path.exists() {
+            fs::remove_file(&json_path).await?;
         }
         if log_path.exists() {
             fs::remove_file(&log_path).await?;
@@ -611,21 +773,25 @@ impl KanbanContext {
         Ok(())
     }
 
-    /// List all swimlane IDs by reading the swimlanes directory
+    /// List all swimlane IDs by reading the swimlanes directory (accepts .yaml and legacy .json)
     pub async fn list_swimlane_ids(&self) -> Result<Vec<SwimlaneId>> {
         let swimlanes_dir = self.swimlanes_dir();
         if !swimlanes_dir.exists() {
             return Ok(Vec::new());
         }
 
+        let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&swimlanes_dir).await?;
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let ext = path.extension().and_then(|s| s.to_str());
+            if ext == Some("yaml") || ext == Some("json") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    ids.push(SwimlaneId::from_string(stem));
+                    if seen.insert(stem.to_string()) {
+                        ids.push(SwimlaneId::from_string(stem));
+                    }
                 }
             }
         }
@@ -645,9 +811,14 @@ impl KanbanContext {
         Ok(swimlanes)
     }
 
-    /// Check if a swimlane exists
+    /// Check if a swimlane exists (checks .yaml and legacy .json)
     pub async fn swimlane_exists(&self, id: &SwimlaneId) -> bool {
         self.swimlane_path(id).exists()
+            || self
+                .root
+                .join("swimlanes")
+                .join(format!("{}.json", id))
+                .exists()
     }
 
     // =========================================================================
@@ -662,6 +833,46 @@ impl KanbanContext {
     /// Append a log entry to a task's log
     pub async fn append_task_log(&self, task_id: &TaskId, entry: &LogEntry) -> Result<()> {
         self.append_log(&self.task_log_path(task_id), entry).await
+    }
+
+    /// Path to a tag's log file
+    pub fn tag_log_path(&self, id: &TagId) -> PathBuf {
+        self.root.join("tags").join(format!("{}.jsonl", id))
+    }
+
+    /// Path to an actor's log file
+    pub fn actor_log_path(&self, id: &ActorId) -> PathBuf {
+        self.root.join("actors").join(format!("{}.jsonl", id))
+    }
+
+    /// Path to the board log file
+    pub fn board_log_path(&self) -> PathBuf {
+        self.root.join("board.jsonl")
+    }
+
+    /// Append a log entry to a tag's log
+    pub async fn append_tag_log(&self, id: &TagId, entry: &LogEntry) -> Result<()> {
+        self.append_log(&self.tag_log_path(id), entry).await
+    }
+
+    /// Append a log entry to an actor's log
+    pub async fn append_actor_log(&self, id: &ActorId, entry: &LogEntry) -> Result<()> {
+        self.append_log(&self.actor_log_path(id), entry).await
+    }
+
+    /// Append a log entry to a column's log
+    pub async fn append_column_log(&self, id: &ColumnId, entry: &LogEntry) -> Result<()> {
+        self.append_log(&self.column_log_path(id), entry).await
+    }
+
+    /// Append a log entry to a swimlane's log
+    pub async fn append_swimlane_log(&self, id: &SwimlaneId, entry: &LogEntry) -> Result<()> {
+        self.append_log(&self.swimlane_log_path(id), entry).await
+    }
+
+    /// Append a log entry to the board log
+    pub async fn append_board_log(&self, entry: &LogEntry) -> Result<()> {
+        self.append_log(&self.board_log_path(), entry).await
     }
 
     /// Append a log entry to a JSONL file
@@ -709,6 +920,87 @@ impl KanbanContext {
     // Locking
     // =========================================================================
 
+    // =========================================================================
+    // Storage migration
+    // =========================================================================
+
+    /// Migrate all entity files from legacy JSON format to YAML/Markdown.
+    ///
+    /// This triggers a read+write cycle on every entity, which auto-converts:
+    /// - `board.json` → `board.yaml`
+    /// - `tasks/*.json` → `tasks/*.md` (YAML frontmatter + markdown body)
+    /// - `tags/*.json` → `tags/*.yaml`
+    /// - `columns/*.json` → `columns/*.yaml`
+    /// - `swimlanes/*.json` → `swimlanes/*.yaml`
+    /// - `actors/*.json` → `actors/*.yaml`
+    ///
+    /// Returns counts of migrated entities. Safe to run multiple times (idempotent).
+    pub async fn migrate_storage(&self) -> Result<MigrationStats> {
+        let mut stats = MigrationStats::default();
+
+        // Board
+        if self.root.join("board.json").exists() {
+            self.read_board().await?;
+            stats.board = true;
+        }
+
+        // Tasks
+        let task_ids = self.list_task_ids().await?;
+        for id in &task_ids {
+            let json_path = self.root.join("tasks").join(format!("{}.json", id));
+            if json_path.exists() {
+                self.read_task(id).await?;
+                stats.tasks += 1;
+            }
+        }
+
+        // Tags
+        let tag_ids = self.list_tag_ids().await?;
+        for id in &tag_ids {
+            let json_path = self.root.join("tags").join(format!("{}.json", id));
+            if json_path.exists() {
+                self.read_tag(id).await?;
+                stats.tags += 1;
+            }
+        }
+
+        // Columns
+        let col_ids = self.list_column_ids().await?;
+        for id in &col_ids {
+            let json_path = self.root.join("columns").join(format!("{}.json", id));
+            if json_path.exists() {
+                self.read_column(id).await?;
+                stats.columns += 1;
+            }
+        }
+
+        // Swimlanes
+        let sl_ids = self.list_swimlane_ids().await?;
+        for id in &sl_ids {
+            let json_path = self.root.join("swimlanes").join(format!("{}.json", id));
+            if json_path.exists() {
+                self.read_swimlane(id).await?;
+                stats.swimlanes += 1;
+            }
+        }
+
+        // Actors
+        let actor_ids = self.list_actor_ids().await?;
+        for id in &actor_ids {
+            let json_path = self.root.join("actors").join(format!("{}.json", id));
+            if json_path.exists() {
+                self.read_actor(id).await?;
+                stats.actors += 1;
+            }
+        }
+
+        Ok(stats)
+    }
+
+    // =========================================================================
+    // Locking
+    // =========================================================================
+
     /// Try to acquire an exclusive lock (non-blocking)
     pub async fn lock(&self) -> Result<KanbanLock> {
         let lock_path = self.lock_path();
@@ -735,6 +1027,51 @@ impl KanbanContext {
     }
 }
 
+/// Statistics from a storage migration run
+#[derive(Debug, Default)]
+pub struct MigrationStats {
+    /// Whether the board was migrated
+    pub board: bool,
+    /// Number of tasks migrated
+    pub tasks: usize,
+    /// Number of tags migrated
+    pub tags: usize,
+    /// Number of columns migrated
+    pub columns: usize,
+    /// Number of swimlanes migrated
+    pub swimlanes: usize,
+    /// Number of actors migrated
+    pub actors: usize,
+}
+
+impl MigrationStats {
+    /// Total number of entities migrated
+    pub fn total(&self) -> usize {
+        (if self.board { 1 } else { 0 })
+            + self.tasks
+            + self.tags
+            + self.columns
+            + self.swimlanes
+            + self.actors
+    }
+}
+
+impl std::fmt::Display for MigrationStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Migrated {} entities (board: {}, tasks: {}, tags: {}, columns: {}, swimlanes: {}, actors: {})",
+            self.total(),
+            self.board,
+            self.tasks,
+            self.tags,
+            self.columns,
+            self.swimlanes,
+            self.actors,
+        )
+    }
+}
+
 /// RAII lock guard - releases on drop
 pub struct KanbanLock {
     file: std::fs::File,
@@ -746,6 +1083,65 @@ impl Drop for KanbanLock {
     fn drop(&mut self) {
         let _ = self.file.unlock();
     }
+}
+
+/// Helper for YAML frontmatter serialization (everything except description and id)
+#[derive(Serialize, Deserialize)]
+struct TaskMeta {
+    pub title: String,
+    #[serde(default, skip_serializing)]
+    _legacy_tags: Vec<String>,
+    pub position: Position,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<TaskId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<ActorId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<Comment>,
+    #[serde(default, skip_serializing, rename = "subtasks")]
+    _legacy_subtasks: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+}
+
+impl TaskMeta {
+    fn from_task(task: &Task) -> Self {
+        Self {
+            title: task.title.clone(),
+            _legacy_tags: Vec::new(),
+            position: task.position.clone(),
+            depends_on: task.depends_on.clone(),
+            assignees: task.assignees.clone(),
+            comments: task.comments.clone(),
+            _legacy_subtasks: Vec::new(),
+            attachments: task.attachments.clone(),
+        }
+    }
+}
+
+/// Parse a task from YAML frontmatter + markdown body format
+fn parse_task_markdown(content: &str) -> Result<Task> {
+    // Split on "---" delimiters
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    // parts[0] = "" (before first ---), parts[1] = frontmatter, parts[2] = body
+    if parts.len() < 3 {
+        return Err(KanbanError::parse(
+            "invalid task markdown: missing frontmatter delimiters",
+        ));
+    }
+    let frontmatter = parts[1].trim();
+    let body = parts[2].strip_prefix('\n').unwrap_or(parts[2]);
+
+    let meta: TaskMeta = serde_yaml::from_str(frontmatter)?;
+    Ok(Task::from_parts(
+        meta.title,
+        body.to_string(),
+        meta.position,
+        meta.depends_on,
+        meta.assignees,
+        meta.comments,
+        meta.attachments,
+    ))
 }
 
 /// Atomic write via temp file and rename
@@ -786,7 +1182,7 @@ mod tests {
         let root = temp.path().join(".kanban");
 
         assert_eq!(ctx.root(), root);
-        assert_eq!(ctx.board_path(), root.join("board.json"));
+        assert_eq!(ctx.board_path(), root.join("board.yaml"));
         assert_eq!(ctx.tasks_dir(), root.join("tasks"));
     }
 
@@ -919,7 +1315,7 @@ mod tests {
         assert_eq!(ctx.columns_dir(), root.join("columns"));
         assert_eq!(
             ctx.column_path(&ColumnId::from_string("todo")),
-            root.join("columns").join("todo.json")
+            root.join("columns").join("todo.yaml")
         );
         assert_eq!(
             ctx.column_log_path(&ColumnId::from_string("todo")),
@@ -935,7 +1331,7 @@ mod tests {
         assert_eq!(ctx.swimlanes_dir(), root.join("swimlanes"));
         assert_eq!(
             ctx.swimlane_path(&SwimlaneId::from_string("backend")),
-            root.join("swimlanes").join("backend.json")
+            root.join("swimlanes").join("backend.yaml")
         );
         assert_eq!(
             ctx.swimlane_log_path(&SwimlaneId::from_string("backend")),

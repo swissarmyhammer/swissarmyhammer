@@ -1,16 +1,17 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { TaskCard } from "@/components/task-card";
-import type { Task } from "@/types/kanban";
+import type { Tag, Task } from "@/types/kanban";
 
 interface SortableTaskCardProps {
   task: Task;
+  tags?: Tag[];
   isBlocked?: boolean;
   onClick?: (task: Task) => void;
   onUpdateTitle?: (taskId: string, title: string) => void;
 }
 
-export function SortableTaskCard({ task, isBlocked, onClick, onUpdateTitle }: SortableTaskCardProps) {
+export function SortableTaskCard({ task, tags, isBlocked, onClick, onUpdateTitle }: SortableTaskCardProps) {
   const {
     attributes,
     listeners,
@@ -31,6 +32,7 @@ export function SortableTaskCard({ task, isBlocked, onClick, onUpdateTitle }: So
       ref={setNodeRef}
       style={style}
       task={task}
+      tags={tags}
       isBlocked={isBlocked}
       onClick={onClick}
       onUpdateTitle={onUpdateTitle}

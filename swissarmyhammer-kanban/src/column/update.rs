@@ -62,7 +62,9 @@ impl Execute<KanbanContext, KanbanError> for UpdateColumn {
             }
 
             ctx.write_column(&column).await?;
-            Ok(serde_json::to_value(&column)?)
+            let mut result = serde_json::to_value(&column)?;
+            result["id"] = serde_json::json!(&column.id);
+            Ok(result)
         }
         .await;
 

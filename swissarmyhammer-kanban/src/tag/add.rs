@@ -2,35 +2,41 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::{Tag, TagId};
+use crate::types::Tag;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Add a new tag to the board
+/// Add a new tag to the board.
+///
+/// The `name` is the tag slug (e.g. "bug", "high-priority").
+/// A ULID is generated automatically for the tag's stable identity.
+/// Color is optional — if omitted, a deterministic auto-color is assigned.
 #[operation(verb = "add", noun = "tag", description = "Add a new tag to the board")]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddTag {
-    /// The tag ID (slug)
-    pub id: TagId,
-    /// The tag display name
+    /// The tag name (human-readable slug)
     pub name: String,
-    /// 6-character hex color code (without #)
-    pub color: String,
+    /// 6-character hex color code (without #). Optional — auto-assigned if omitted.
+    pub color: Option<String>,
     /// Optional description
     pub description: Option<String>,
 }
 
 impl AddTag {
-    pub fn new(id: impl Into<TagId>, name: impl Into<String>, color: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
             name: name.into(),
-            color: color.into(),
+            color: None,
             description: None,
         }
+    }
+
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
     }
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
@@ -46,20 +52,25 @@ impl Execute<KanbanContext, KanbanError> for AddTag {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            // Check if tag already exists using file-based storage
-            if ctx.tag_exists(&self.id).await {
-                return Err(KanbanError::duplicate_id("tag", self.id.to_string()));
+            // Check if a tag with this name already exists
+            if ctx.tag_name_exists(&self.name).await? {
+                return Err(KanbanError::duplicate_id("tag", self.name.clone()));
             }
 
-            let mut tag = Tag::new(self.id.0.clone(), &self.name, &self.color);
+            let mut tag = Tag::new(&self.name);
+            if let Some(color) = &self.color {
+                tag = tag.with_color(color);
+            }
             if let Some(desc) = &self.description {
                 tag = tag.with_description(desc);
             }
 
-            // Write tag to file
+            // Write tag to file (filename is ULID)
             ctx.write_tag(&tag).await?;
 
-            Ok(serde_json::to_value(&tag)?)
+            let mut result = serde_json::to_value(&tag)?;
+            result["id"] = serde_json::json!(&tag.id);
+            Ok(result)
         }
         .await;
 

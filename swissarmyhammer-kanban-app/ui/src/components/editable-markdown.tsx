@@ -9,6 +9,12 @@ import { emacs } from "@replit/codemirror-emacs";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useKeymap } from "@/lib/keymap-context";
+import { tagDecorations } from "@/lib/cm-tag-decorations";
+import { tagAutocomplete } from "@/lib/cm-tag-autocomplete";
+import { tagTooltips, type TagMeta } from "@/lib/cm-tag-tooltip";
+import { remarkTags } from "@/lib/remark-tags";
+import { TagPill } from "@/components/tag-pill";
+import type { Tag } from "@/types/kanban";
 
 interface EditableMarkdownProps {
   value: string;
@@ -17,6 +23,8 @@ interface EditableMarkdownProps {
   inputClassName?: string;
   multiline?: boolean;
   placeholder?: string;
+  /** Tags for colored pill decorations in the editor */
+  tags?: Tag[];
 }
 
 /** Regex matching a GFM task list checkbox in markdown source */
@@ -65,6 +73,7 @@ export function EditableMarkdown({
   inputClassName,
   multiline,
   placeholder,
+  tags,
 }: EditableMarkdownProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -78,12 +87,24 @@ export function EditableMarkdown({
     if (!editing) setDraft(value);
   }, [value, editing]);
 
+  // Guard against re-entrant commits (blur fires after Escape unmounts CM)
+  const committedRef = useRef(false);
+  useEffect(() => {
+    if (editing) committedRef.current = false;
+  }, [editing]);
+
   // Save + exit the editor
+  // Read directly from the CM view to avoid stale draft state
+  // (React may not have re-rendered after CM's onChange → setDraft yet)
   const commitAndExit = useCallback(() => {
+    if (committedRef.current) return;
+    committedRef.current = true;
+    const text = editorRef.current?.view
+      ? editorRef.current.view.state.doc.toString().trim()
+      : draft.trim();
     setEditing(false);
-    const trimmed = draft.trim();
-    if (trimmed !== value) {
-      onCommit(trimmed);
+    if (text !== value) {
+      onCommit(text);
     }
   }, [draft, value, onCommit]);
 
@@ -176,6 +197,32 @@ export function EditableMarkdown({
     [value]
   );
 
+  // Known tag slugs for the remark plugin
+  const knownSlugs = useMemo(
+    () => (tags ? tags.map((t) => t.name) : []),
+    [tags],
+  );
+
+  // Build tag color map for CM6 decorations
+  const tagColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (tags) {
+      for (const tag of tags) map.set(tag.name, tag.color);
+    }
+    return map;
+  }, [tags]);
+
+  // Build tag meta map for CM6 hover tooltips
+  const tagMetaMap = useMemo(() => {
+    const map = new Map<string, TagMeta>();
+    if (tags) {
+      for (const tag of tags) {
+        map.set(tag.name, { color: tag.color, description: tag.description });
+      }
+    }
+    return map;
+  }, [tags]);
+
   // Memoize extensions so keystroke-driven re-renders don't recreate
   // the vim/emacs extension and blow away modal state
   const extensions = useMemo(
@@ -233,8 +280,14 @@ export function EditableMarkdown({
       ...(multiline
         ? [markdown({ base: markdownLanguage, codeLanguages: languages })]
         : []),
+      // Tag decorations — colored pills for #tag patterns
+      ...(multiline ? [tagDecorations(tagColorMap)] : []),
+      // Tag autocomplete — triggered by # in multiline mode
+      ...(multiline && tagColorMap.size > 0 ? [tagAutocomplete(tagColorMap)] : []),
+      // Tag hover tooltips
+      ...(multiline && tagMetaMap.size > 0 ? [tagTooltips(tagMetaMap)] : []),
     ],
-    [mode, multiline]
+    [mode, multiline, tagColorMap, tagMetaMap]
   );
 
   if (editing) {
@@ -269,7 +322,7 @@ export function EditableMarkdown({
     >
       {value ? (
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={[remarkGfm, remarkTags(knownSlugs)]}
           components={{
             input: (props) => {
               if (props.type === "checkbox") {
@@ -284,6 +337,12 @@ export function EditableMarkdown({
               }
               return <input {...props} />;
             },
+            ...({
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              "tag-pill": (props: any) => (
+                <TagPill slug={props.slug ?? ""} tags={tags ?? []} />
+              ),
+            } as Record<string, React.ComponentType>),
           }}
         >
           {value}

@@ -92,6 +92,10 @@ pub enum KanbanError {
     /// JSON serialization error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// YAML serialization error
+    #[error("YAML error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
 }
 
 impl KanbanError {

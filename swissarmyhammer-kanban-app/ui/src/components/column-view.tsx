@@ -8,11 +8,12 @@ import { Inbox, Plus } from "lucide-react";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { SortableTaskCard } from "@/components/sortable-task-card";
 import { Badge } from "@/components/ui/badge";
-import type { Column, Task } from "@/types/kanban";
+import type { Column, Tag, Task } from "@/types/kanban";
 
 interface ColumnViewProps {
   column: Column;
   tasks: Task[];
+  tags?: Tag[];
   blockedIds: Set<string>;
   onTaskClick?: (task: Task) => void;
   onUpdateTitle?: (taskId: string, title: string) => void;
@@ -22,7 +23,7 @@ interface ColumnViewProps {
   presorted?: boolean;
 }
 
-export function ColumnView({ column, tasks, blockedIds, onTaskClick, onUpdateTitle, onAddTask, onRenameColumn, presorted }: ColumnViewProps) {
+export function ColumnView({ column, tasks, tags, blockedIds, onTaskClick, onUpdateTitle, onAddTask, onRenameColumn, presorted }: ColumnViewProps) {
   const sorted = useMemo(
     () =>
       presorted
@@ -69,6 +70,7 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onUpdateTit
               <SortableTaskCard
                 key={task.id}
                 task={task}
+                tags={tags}
                 isBlocked={blockedIds.has(task.id)}
                 onClick={onTaskClick}
                 onUpdateTitle={onUpdateTitle}

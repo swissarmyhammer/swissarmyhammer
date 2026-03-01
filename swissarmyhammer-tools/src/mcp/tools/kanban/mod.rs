@@ -79,7 +79,7 @@ static TAG_TASK: Lazy<TagTask> = Lazy::new(|| TagTask::new("", ""));
 static UNTAG_TASK: Lazy<UntagTask> = Lazy::new(|| UntagTask::new("", ""));
 static LIST_TASKS: Lazy<ListTasks> = Lazy::new(ListTasks::new);
 
-static ADD_TAG: Lazy<AddTag> = Lazy::new(|| AddTag::new("", "", ""));
+static ADD_TAG: Lazy<AddTag> = Lazy::new(|| AddTag::new(""));
 static GET_TAG: Lazy<GetTag> = Lazy::new(|| GetTag::new(""));
 static UPDATE_TAG: Lazy<UpdateTag> = Lazy::new(|| UpdateTag::new(""));
 static DELETE_TAG: Lazy<DeleteTag> = Lazy::new(|| DeleteTag::new(""));
@@ -681,17 +681,16 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
 
         // Tag operations (board-level)
         (Verb::Add, Noun::Tag) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
+            // Accept "name" or fall back to "id" for the tag name
             let name = op
                 .get_string("name")
+                .or_else(|| op.get_string("id"))
                 .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
-            let color = op
-                .get_string("color")
-                .ok_or_else(|| McpError::invalid_params("missing required field: color", None))?;
 
-            let mut cmd = AddTag::new(id, name, color);
+            let mut cmd = AddTag::new(name);
+            if let Some(color) = op.get_string("color") {
+                cmd = cmd.with_color(color);
+            }
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
@@ -1403,14 +1402,12 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), json!("add tag"));
         args.insert("id".to_string(), json!("bug"));
-        args.insert("name".to_string(), json!("Bug"));
         args.insert("color".to_string(), json!("ff0000"));
 
         let result = tool.execute(args, &context).await.unwrap();
         let data = parse_json(&result);
 
         assert_eq!(data["id"], "bug");
-        assert_eq!(data["name"], "Bug");
         assert_eq!(data["color"], "ff0000");
     }
 
@@ -1427,7 +1424,6 @@ mod tests {
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add tag"));
         add_args.insert("id".to_string(), json!("bug"));
-        add_args.insert("name".to_string(), json!("Bug"));
         add_args.insert("color".to_string(), json!("ff0000"));
         tool.execute(add_args, &context).await.unwrap();
 
@@ -1440,7 +1436,7 @@ mod tests {
         let data = parse_json(&result);
 
         assert_eq!(data["id"], "bug");
-        assert_eq!(data["name"], "Bug");
+        assert_eq!(data["color"], "ff0000");
     }
 
     #[tokio::test]
@@ -1453,11 +1449,10 @@ mod tests {
         init_test_board(&tool, &context).await;
 
         // Add tags
-        for (id, name, color) in [("bug", "Bug", "ff0000"), ("feature", "Feature", "00ff00")] {
+        for (id, color) in [("bug", "ff0000"), ("feature", "00ff00")] {
             let mut add_args = serde_json::Map::new();
             add_args.insert("op".to_string(), json!("add tag"));
             add_args.insert("id".to_string(), json!(id));
-            add_args.insert("name".to_string(), json!(name));
             add_args.insert("color".to_string(), json!(color));
             tool.execute(add_args, &context).await.unwrap();
         }
@@ -1488,7 +1483,6 @@ mod tests {
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add tag"));
         add_args.insert("id".to_string(), json!("bug"));
-        add_args.insert("name".to_string(), json!("Bug"));
         add_args.insert("color".to_string(), json!("ff0000"));
         tool.execute(add_args, &context).await.unwrap();
 
@@ -1526,7 +1520,6 @@ mod tests {
         let mut tag_args = serde_json::Map::new();
         tag_args.insert("op".to_string(), json!("add tag"));
         tag_args.insert("id".to_string(), json!("bug"));
-        tag_args.insert("name".to_string(), json!("Bug"));
         tag_args.insert("color".to_string(), json!("ff0000"));
         tool.execute(tag_args, &context).await.unwrap();
 
@@ -1577,7 +1570,6 @@ mod tests {
         let mut tag_args = serde_json::Map::new();
         tag_args.insert("op".to_string(), json!("add tag"));
         tag_args.insert("id".to_string(), json!("bug"));
-        tag_args.insert("name".to_string(), json!("Bug"));
         tag_args.insert("color".to_string(), json!("ff0000"));
         tool.execute(tag_args, &context).await.unwrap();
 
@@ -2300,7 +2292,6 @@ mod tests {
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add tag"));
         add_args.insert("id".to_string(), json!("bug"));
-        add_args.insert("name".to_string(), json!("Bug"));
         add_args.insert("color".to_string(), json!("ff0000"));
         tool.execute(add_args, &context).await.unwrap();
 
@@ -2308,14 +2299,12 @@ mod tests {
         let mut update_args = serde_json::Map::new();
         update_args.insert("op".to_string(), json!("update tag"));
         update_args.insert("id".to_string(), json!("bug"));
-        update_args.insert("name".to_string(), json!("Bug Fix"));
         update_args.insert("color".to_string(), json!("ff5500"));
 
         let result = tool.execute(update_args, &context).await.unwrap();
         let data = parse_json(&result);
 
         assert_eq!(data["id"], "bug");
-        assert_eq!(data["name"], "Bug Fix");
         assert_eq!(data["color"], "ff5500");
     }
 
@@ -2480,7 +2469,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tag_nonexistent_tag() {
+    async fn test_tag_nonexistent_tag_auto_creates() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context()
             .await
@@ -2495,14 +2484,14 @@ mod tests {
         let result = tool.execute(task_args, &context).await.unwrap();
         let task_id = extract_task_id(&result);
 
-        // Try to tag with nonexistent tag
+        // Tagging with a nonexistent tag should auto-create the tag
         let mut tag_args = serde_json::Map::new();
         tag_args.insert("op".to_string(), json!("tag task"));
         tag_args.insert("id".to_string(), json!(task_id));
         tag_args.insert("tag".to_string(), json!("nonexistent"));
 
         let result = tool.execute(tag_args, &context).await;
-        assert!(result.is_err());
+        assert!(result.is_ok(), "TagTask should auto-create unknown tags");
     }
 
     #[tokio::test]

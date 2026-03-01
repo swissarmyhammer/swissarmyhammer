@@ -1,6 +1,6 @@
 //! Kanban operation processor
 
-use crate::types::TaskId;
+use crate::types::{ActorId, ColumnId, SwimlaneId, TagId, TaskId};
 use crate::{KanbanContext, KanbanError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -90,6 +90,53 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         for resource_id in affected_resources {
             let task_id = TaskId::from_string(resource_id);
             ctx.append_task_log(&task_id, log_entry).await?;
+        }
+
+        // Per-entity logs based on operation noun
+        let noun = log_entry.op.split_whitespace().nth(1).unwrap_or("");
+        let entity_id = log_entry
+            .output
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        match noun {
+            "tag" => {
+                if let Some(id) = entity_id {
+                    ctx.append_tag_log(&TagId::from_string(&id), log_entry)
+                        .await?;
+                }
+            }
+            "column" => {
+                if let Some(id) = entity_id {
+                    ctx.append_column_log(&ColumnId::from_string(&id), log_entry)
+                        .await?;
+                }
+            }
+            "swimlane" => {
+                if let Some(id) = entity_id {
+                    ctx.append_swimlane_log(&SwimlaneId::from_string(&id), log_entry)
+                        .await?;
+                }
+            }
+            "actor" => {
+                let id = entity_id.or_else(|| {
+                    log_entry
+                        .output
+                        .get("actor")
+                        .and_then(|a| a.get("id"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
+                if let Some(id) = id {
+                    ctx.append_actor_log(&ActorId::from_string(&id), log_entry)
+                        .await?;
+                }
+            }
+            "board" => {
+                ctx.append_board_log(log_entry).await?;
+            }
+            _ => {}
         }
 
         Ok(())

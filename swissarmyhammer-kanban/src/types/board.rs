@@ -60,6 +60,7 @@ impl Board {
 /// A column defines a workflow stage
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Column {
+    #[serde(skip)]
     pub id: ColumnId,
     pub name: String,
     pub order: usize,
@@ -68,6 +69,7 @@ pub struct Column {
 /// A swimlane provides horizontal grouping orthogonal to columns
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Swimlane {
+    #[serde(skip)]
     pub id: SwimlaneId,
     pub name: String,
     pub order: usize,
@@ -77,8 +79,16 @@ pub struct Swimlane {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Actor {
-    Human { id: ActorId, name: String },
-    Agent { id: ActorId, name: String },
+    Human {
+        #[serde(skip)]
+        id: ActorId,
+        name: String,
+    },
+    Agent {
+        #[serde(skip)]
+        id: ActorId,
+        name: String,
+    },
 }
 
 impl Actor {
@@ -95,6 +105,14 @@ impl Actor {
         Self::Agent {
             id: ActorId::from_string(id),
             name: name.into(),
+        }
+    }
+
+    /// Set the actor's ID (used after deserialization to restore from filename)
+    pub fn set_id(&mut self, new_id: ActorId) {
+        match self {
+            Self::Human { id, .. } => *id = new_id,
+            Self::Agent { id, .. } => *id = new_id,
         }
     }
 
@@ -125,10 +143,17 @@ impl Actor {
     }
 }
 
-/// A tag categorizes tasks
+/// A tag categorizes tasks.
+///
+/// Tags have a ULID-based `id` for stable identity and a human-readable
+/// `name` (slug) that appears as `#name` in task descriptions.
+/// Color defaults to a deterministic auto-color based on the name.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Tag {
+    #[serde(skip)]
     pub id: TagId,
+    /// Human-readable slug (e.g. "bug", "high-priority").
+    /// This is what appears as `#name` in task descriptions.
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -137,14 +162,22 @@ pub struct Tag {
 }
 
 impl Tag {
-    /// Create a new tag
-    pub fn new(id: impl Into<String>, name: impl Into<String>, color: impl Into<String>) -> Self {
+    /// Create a new tag with a ULID and auto-color based on name.
+    pub fn new(name: impl Into<String>) -> Self {
+        let name = name.into();
+        let color = crate::auto_color::auto_color(&name).to_string();
         Self {
-            id: TagId::from_string(id),
-            name: name.into(),
+            id: TagId::new(),
+            name,
             description: None,
-            color: color.into(),
+            color,
         }
+    }
+
+    /// Create a new tag with an explicit color.
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = color.into();
+        self
     }
 
     /// Add a description to the tag
@@ -212,9 +245,6 @@ mod tests {
             "swimlanes": [],
             "actors": [
                 {"type": "human", "id": "alice", "name": "Alice"}
-            ],
-            "tags": [
-                {"id": "bug", "name": "Bug", "color": "FF0000"}
             ]
         }"#;
 
@@ -229,5 +259,19 @@ mod tests {
         assert_eq!(board.name, "Test Board");
         // Legacy columns are readable for migration purposes
         assert_eq!(board.columns.len(), 1);
+    }
+
+    #[test]
+    fn test_tag_creation() {
+        let tag = Tag::new("bug");
+        assert_eq!(tag.name, "bug");
+        assert!(!tag.id.as_str().is_empty());
+        // ULID should be 26 chars
+        assert_eq!(tag.id.as_str().len(), 26);
+
+        // Serialized output should contain name
+        let serialized = serde_json::to_string(&tag).unwrap();
+        assert!(serialized.contains("\"name\""));
+        assert!(serialized.contains("\"bug\""));
     }
 }

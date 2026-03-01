@@ -1,15 +1,19 @@
 //! UpdateTask command
 
+use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, Attachment, SwimlaneId, TagId, TaskId};
+use crate::types::{ActorId, Attachment, SwimlaneId, Tag, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Update an existing task
+/// Update an existing task.
+///
+/// Tags are derived from `#tag` patterns in the description — edit the
+/// description to change tags.
 #[operation(verb = "update", noun = "task", description = "Update task properties")]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateTask {
@@ -17,12 +21,10 @@ pub struct UpdateTask {
     pub id: TaskId,
     /// New title
     pub title: Option<String>,
-    /// New description
+    /// New description (may contain #tag patterns)
     pub description: Option<String>,
     /// New swimlane (None = don't change, Some(None) = clear, Some(Some(x)) = set)
     pub swimlane: Option<Option<SwimlaneId>>,
-    /// Replace all tags
-    pub tags: Option<Vec<TagId>>,
     /// Replace all assignees
     pub assignees: Option<Vec<ActorId>>,
     /// Replace all dependencies
@@ -39,7 +41,6 @@ impl UpdateTask {
             title: None,
             description: None,
             swimlane: None,
-            tags: None,
             assignees: None,
             depends_on: None,
             attachments: None,
@@ -61,12 +62,6 @@ impl UpdateTask {
     /// Set the swimlane
     pub fn with_swimlane(mut self, swimlane: Option<SwimlaneId>) -> Self {
         self.swimlane = Some(swimlane);
-        self
-    }
-
-    /// Set the tags (replaces all existing tags)
-    pub fn with_tags(mut self, tags: Vec<TagId>) -> Self {
-        self.tags = Some(tags);
         self
     }
 
@@ -108,9 +103,6 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
             if let Some(swimlane) = &self.swimlane {
                 task.position.swimlane = swimlane.clone();
             }
-            if let Some(tags) = &self.tags {
-                task.tags = tags.clone();
-            }
             if let Some(assignees) = &self.assignees {
                 task.assignees = assignees.clone();
             }
@@ -122,7 +114,21 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
             }
 
             ctx.write_task(&task).await?;
-            Ok(serde_json::to_value(&task)?)
+
+            // Auto-create Tag objects for any new #tag patterns in description
+            let tags = task.tags();
+            for tag_name in &tags {
+                if !ctx.tag_name_exists(tag_name).await? {
+                    let color = auto_color::auto_color(tag_name).to_string();
+                    let tag_obj = Tag::new(tag_name).with_color(&color);
+                    ctx.write_tag(&tag_obj).await?;
+                }
+            }
+
+            let mut result = serde_json::to_value(&task)?;
+            result["id"] = serde_json::json!(&task.id);
+            result["tags"] = serde_json::to_value(&tags)?;
+            Ok(result)
         }
         .await;
 

@@ -64,7 +64,9 @@ impl Execute<KanbanContext, KanbanError> for UpdateActor {
 
             ctx.write_actor(&updated_actor).await?;
 
-            Ok(serde_json::to_value(&updated_actor)?)
+            let mut result = serde_json::to_value(&updated_actor)?;
+            result["id"] = serde_json::json!(updated_actor.id());
+            Ok(result)
         }
         .await;
 

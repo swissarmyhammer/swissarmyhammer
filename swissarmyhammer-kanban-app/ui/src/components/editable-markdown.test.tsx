@@ -100,6 +100,59 @@ describe("EditableMarkdown", () => {
     });
   });
 
+  describe("commit on blur (single-line)", () => {
+    it("calls onCommit with changed text when editor loses focus", async () => {
+      const onCommit = vi.fn();
+      const { container } = renderWithProvider(
+        <EditableMarkdown value="bug" onCommit={onCommit} />
+      );
+
+      // Click to enter edit mode
+      fireEvent.click(container.querySelector(".cursor-text")!);
+      const editor = container.querySelector(".cm-editor");
+      expect(editor).toBeTruthy();
+
+      const cmEditor = container.querySelector(".cm-editor") as HTMLElement;
+      expect(cmEditor).toBeTruthy();
+
+      // Get the CM6 EditorView via internal DOM property
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      expect(cmContent).toBeTruthy();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const editorView = (cmContent as any).cmTile?.view;
+      expect(editorView?.dispatch).toBeTruthy();
+
+      // Dispatch a real CM6 transaction to replace the document
+      editorView.dispatch({
+        changes: { from: 0, to: editorView.state.doc.length, insert: "defect" },
+      });
+
+      // Blur the editor to trigger commit
+      fireEvent.blur(cmContent);
+
+      // onCommit should have been called with the new text
+      expect(onCommit).toHaveBeenCalledWith("defect");
+    });
+
+    it("does NOT call onCommit when text is unchanged", async () => {
+      const onCommit = vi.fn();
+      const { container } = renderWithProvider(
+        <EditableMarkdown value="bug" onCommit={onCommit} />
+      );
+
+      // Click to enter edit mode
+      fireEvent.click(container.querySelector(".cursor-text")!);
+      expect(container.querySelector(".cm-editor")).toBeTruthy();
+
+      // Blur without changing text
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      fireEvent.blur(cmContent);
+
+      // onCommit should NOT be called since text didn't change
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+  });
+
   describe("checkbox toggling", () => {
     it("toggles unchecked checkbox to checked", () => {
       const onCommit = vi.fn();

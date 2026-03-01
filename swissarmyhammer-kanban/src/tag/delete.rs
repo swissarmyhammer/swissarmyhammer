@@ -2,6 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::tag_parser;
 use crate::types::TagId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,7 +10,7 @@ use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Delete a tag (removes from all tasks)
+/// Delete a tag (removes `#name` from all task descriptions and deletes the tag file)
 #[operation(
     verb = "delete",
     noun = "tag",
@@ -17,7 +18,7 @@ use swissarmyhammer_operations::{
 )]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeleteTag {
-    /// The tag ID to delete
+    /// The tag ID (ULID) to delete
     pub id: TagId,
 }
 
@@ -33,20 +34,18 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
 
-        let result = async {
-            // Check tag exists using file-based storage
-            if !ctx.tag_exists(&self.id).await {
-                return Err(KanbanError::TagNotFound {
-                    id: self.id.to_string(),
-                });
-            }
+        let result: std::result::Result<Value, KanbanError> = async {
+            // Read tag to get its name
+            let tag = ctx.read_tag(&self.id).await?;
+            let tag_name = &tag.name;
 
-            // Remove tag from all tasks
+            // Remove #name text from all task descriptions
             let task_ids = ctx.list_task_ids().await?;
             for id in task_ids {
                 let mut task = ctx.read_task(&id).await?;
-                if task.tags.contains(&self.id) {
-                    task.tags.retain(|t| t != &self.id);
+                let new_desc = tag_parser::remove_tag(&task.description, tag_name);
+                if new_desc != task.description {
+                    task.description = new_desc;
                     ctx.write_task(&task).await?;
                 }
             }
@@ -56,7 +55,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
 
             Ok(serde_json::json!({
                 "deleted": true,
-                "id": self.id.to_string()
+                "id": self.id.to_string(),
+                "name": tag_name
             }))
         }
         .await;

@@ -22,6 +22,7 @@ pub enum Verb {
     Complete,
     Assign,
     Unassign,
+    Rename,
 }
 
 impl Verb {
@@ -41,6 +42,7 @@ impl Verb {
             Self::Complete => "complete",
             Self::Assign => "assign",
             Self::Unassign => "unassign",
+            Self::Rename => "rename",
         }
     }
 
@@ -60,6 +62,7 @@ impl Verb {
             "complete" | "done" | "finish" | "close" => Some(Self::Complete),
             "assign" => Some(Self::Assign),
             "unassign" | "remove_assignee" => Some(Self::Unassign),
+            "rename" => Some(Self::Rename),
             _ => None,
         }
     }

@@ -7,11 +7,13 @@ use std::path::PathBuf;
 use swissarmyhammer_kanban::{
     board::GetBoard,
     column::UpdateColumn,
-    task::{AddTask, ListTasks, MoveTask, UpdateTask},
+    tag::UpdateTag,
+    task::{AddTask, ListTasks, MoveTask, UntagTask, UpdateTask},
     types::{Ordinal, Position},
     OperationProcessor,
 };
-use tauri::{AppHandle, State};
+use tauri::menu::{ContextMenu, MenuBuilder, PredefinedMenuItem};
+use tauri::{AppHandle, State, Window};
 
 /// Get the board metadata for the active (or specified) board.
 #[tauri::command]
@@ -234,6 +236,80 @@ pub async fn update_task_description(
     let handle = state.active_handle().await.ok_or("No active board")?;
 
     let cmd = UpdateTask::new(id).with_description(description);
+    let result = handle
+        .processor
+        .process(&cmd, &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+/// Update a tag's name, color, or description.
+/// When name changes, bulk find-replaces `#old-name` → `#new-name` across all tasks.
+#[tauri::command]
+pub async fn update_tag(
+    state: State<'_, AppState>,
+    id: String,
+    name: Option<String>,
+    color: Option<String>,
+    description: Option<String>,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+
+    let mut cmd = UpdateTag::new(id);
+    if let Some(n) = name {
+        cmd = cmd.with_name(n);
+    }
+    if let Some(c) = color {
+        cmd = cmd.with_color(c);
+    }
+    if let Some(d) = description {
+        cmd = cmd.with_description(d);
+    }
+    let result = handle
+        .processor
+        .process(&cmd, &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+/// Show a native context menu for a tag pill.
+#[tauri::command]
+pub async fn show_tag_context_menu(
+    app: AppHandle,
+    window: Window,
+    state: State<'_, AppState>,
+    tag_id: String,
+    task_id: Option<String>,
+) -> Result<(), String> {
+    // Store context for the menu event handler
+    *state.context_tag.write().await = Some((tag_id, task_id));
+
+    let menu = MenuBuilder::new(&app)
+        .text("tag_edit", "Edit Tag\u{2026}")
+        .item(&PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?)
+        .text("tag_delete", "Remove Tag")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    menu.popup(window).map_err(|e: tauri::Error| e.to_string())?;
+
+    Ok(())
+}
+
+/// Remove a tag from a task's markdown (does NOT delete the tag file).
+#[tauri::command]
+pub async fn untag_task(
+    state: State<'_, AppState>,
+    id: String,
+    tag: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+
+    let cmd = UntagTask::new(id, tag);
     let result = handle
         .processor
         .process(&cmd, &handle.ctx)

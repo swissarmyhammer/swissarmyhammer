@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::{ColumnId, SwimlaneId, TagId};
+use crate::types::{ColumnId, SwimlaneId};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -44,12 +44,24 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             // If counts are not requested, return basic board structure
             if !self.include_counts {
                 let tags = ctx.read_all_tags().await?;
+                let columns_json: Vec<Value> = all_columns
+                    .iter()
+                    .map(|c| json!({"id": c.id, "name": c.name, "order": c.order}))
+                    .collect();
+                let swimlanes_json: Vec<Value> = all_swimlanes
+                    .iter()
+                    .map(|s| json!({"id": s.id, "name": s.name, "order": s.order}))
+                    .collect();
+                let tags_json: Vec<Value> = tags
+                    .iter()
+                    .map(|t| json!({"id": t.id, "name": t.name, "description": t.description, "color": t.color}))
+                    .collect();
                 return Ok(json!({
                     "name": board.name,
                     "description": board.description,
-                    "columns": all_columns,
-                    "swimlanes": all_swimlanes,
-                    "tags": tags,
+                    "columns": columns_json,
+                    "swimlanes": swimlanes_json,
+                    "tags": tags_json,
                 }));
             }
 
@@ -82,11 +94,12 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 }
             }
 
-            // Count tasks by tag
-            let mut tag_counts: HashMap<&TagId, usize> = HashMap::new();
-            for task in &all_tasks {
-                for tag in &task.tags {
-                    *tag_counts.entry(tag).or_insert(0) += 1;
+            // Count tasks by tag name (computed from description)
+            let task_tags: Vec<Vec<String>> = all_tasks.iter().map(|t| t.tags()).collect();
+            let mut tag_counts: HashMap<&str, usize> = HashMap::new();
+            for tags in &task_tags {
+                for tag_name in tags {
+                    *tag_counts.entry(tag_name.as_str()).or_insert(0) += 1;
                 }
             }
 
@@ -127,7 +140,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             let tags: Vec<Value> = all_tags
                 .iter()
                 .map(|tag| {
-                    let count = tag_counts.get(&tag.id).copied().unwrap_or(0);
+                    let count = tag_counts.get(tag.name.as_str()).copied().unwrap_or(0);
 
                     json!({
                         "id": tag.id,
@@ -411,19 +424,23 @@ mod tests {
     async fn test_tag_counts() {
         let (_temp, ctx) = setup().await;
 
-        // Create tags
-        AddTag::new("bug", "Bug", "d73a4a")
+        // Create tags and capture ULIDs
+        let bug_result = AddTag::new("bug")
+            .with_color("d73a4a")
             .with_description("Something isn't working")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
+        let bug_id = bug_result["id"].as_str().unwrap().to_string();
 
-        AddTag::new("feature", "Feature", "a2eeef")
+        let feature_result = AddTag::new("feature")
+            .with_color("a2eeef")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
+        let feature_id = feature_result["id"].as_str().unwrap().to_string();
 
         // Add tasks with tags
         let task1_id = AddTask::new("Task 1")
@@ -470,16 +487,14 @@ mod tests {
             .unwrap();
 
         let tags = result["tags"].as_array().unwrap();
-        let bug_tag = tags.iter().find(|t| t["id"] == "bug").unwrap();
-        let feature_tag = tags.iter().find(|t| t["id"] == "feature").unwrap();
+        let bug_tag = tags.iter().find(|t| t["id"].as_str() == Some(&*bug_id)).unwrap();
+        let feature_tag = tags.iter().find(|t| t["id"].as_str() == Some(&*feature_id)).unwrap();
 
         assert_eq!(bug_tag["task_count"], 2);
-        assert_eq!(bug_tag["name"], "Bug");
         assert_eq!(bug_tag["description"], "Something isn't working");
         assert_eq!(bug_tag["color"], "d73a4a");
 
         assert_eq!(feature_tag["task_count"], 1);
-        assert_eq!(feature_tag["name"], "Feature");
     }
 
     #[tokio::test]

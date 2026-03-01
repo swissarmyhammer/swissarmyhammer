@@ -1,15 +1,18 @@
-//! UntagTask command
+//! UntagTask command — removes `#tag` from task description
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{TagId, TaskId};
+use crate::tag_parser;
+use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Remove a tag from a task
+/// Remove a tag from a task by removing `#tag` from its description.
+///
+/// The `tag` field is the tag name/slug (e.g. "bug").
 #[operation(
     verb = "untag",
     noun = "task",
@@ -19,12 +22,12 @@ use swissarmyhammer_operations::{
 pub struct UntagTask {
     /// The task ID to untag
     pub id: TaskId,
-    /// The tag ID to remove
-    pub tag: TagId,
+    /// The tag name (slug) to remove
+    pub tag: String,
 }
 
 impl UntagTask {
-    pub fn new(id: impl Into<TaskId>, tag: impl Into<TagId>) -> Self {
+    pub fn new(id: impl Into<TaskId>, tag: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             tag: tag.into(),
@@ -39,20 +42,23 @@ impl Execute<KanbanContext, KanbanError> for UntagTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
+            let slug = tag_parser::normalize_slug(&self.tag);
             let mut task = ctx.read_task(&self.id).await?;
 
-            // Remove tag if present
-            let was_present = task.tags.contains(&self.tag);
-            task.tags.retain(|t| t != &self.tag);
+            // Check if tag is present in description
+            let was_present = task.tags().iter().any(|t| t == &slug);
 
-            if was_present {
+            // Remove #tag from description
+            let new_desc = tag_parser::remove_tag(&task.description, &slug);
+            if new_desc != task.description {
+                task.description = new_desc;
                 ctx.write_task(&task).await?;
             }
 
             Ok(serde_json::json!({
                 "untagged": was_present,
                 "task_id": self.id.to_string(),
-                "tag_id": self.tag.to_string()
+                "tag": slug
             }))
         }
         .await;

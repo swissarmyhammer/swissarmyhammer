@@ -80,8 +80,10 @@ impl Execute<KanbanContext, KanbanError> for AddActor {
                 if self.ensure {
                     // Idempotent mode: return existing actor
                     let actor = ctx.read_actor(&self.id).await?;
+                    let mut actor_val = serde_json::to_value(&actor)?;
+                    actor_val["id"] = serde_json::json!(actor.id());
                     return Ok(serde_json::json!({
-                        "actor": actor,
+                        "actor": actor_val,
                         "created": false,
                         "message": "Actor already exists"
                     }));
@@ -102,8 +104,10 @@ impl Execute<KanbanContext, KanbanError> for AddActor {
 
             ctx.write_actor(&actor).await?;
 
+            let mut actor_val = serde_json::to_value(&actor)?;
+            actor_val["id"] = serde_json::json!(actor.id());
             Ok(serde_json::json!({
-                "actor": actor,
+                "actor": actor_val,
                 "created": true
             }))
         }

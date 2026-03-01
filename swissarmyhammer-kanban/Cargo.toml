@@ -11,6 +11,7 @@ description = "Kanban board engine with file-backed storage for task management"
 # Workspace dependencies
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -162,7 +162,11 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
             };
 
             ctx.write_task(&task).await?;
-            Ok(serde_json::to_value(&task)?)
+            let tags = task.tags();
+            let mut result = serde_json::to_value(&task)?;
+            result["id"] = serde_json::json!(&task.id);
+            result["tags"] = serde_json::to_value(&tags)?;
+            Ok(result)
         }
         .await;
 

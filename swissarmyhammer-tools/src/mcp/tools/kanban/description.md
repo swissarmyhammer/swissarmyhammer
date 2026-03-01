@@ -278,7 +278,6 @@ Complete a task:
 {
   "op": "add tag",
   "id": "bug",
-  "name": "Bug",
   "color": "ff0000",
   "description": "Bug fixes"
 }
@@ -394,7 +393,7 @@ The blocked task won't appear in ready tasks until the blocker is completed:
 {"op": "add actor", "id": "assistant", "name": "AI Assistant", "type": "agent", "ensure": true}
 
 // 3. Add a tag
-{"op": "add tag", "id": "feature", "name": "Feature", "color": "00ff00"}
+{"op": "add tag", "id": "feature", "color": "00ff00"}
 
 // 4. Create a task
 {"op": "add task", "title": "Implement login", "tags": ["feature"]}

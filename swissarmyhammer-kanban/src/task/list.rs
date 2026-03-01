@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::{ActorId, ColumnId, SwimlaneId, TagId};
+use crate::types::{ActorId, ColumnId, SwimlaneId};
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -19,8 +19,8 @@ pub struct ListTasks {
     pub column: Option<ColumnId>,
     /// Filter by swimlane
     pub swimlane: Option<SwimlaneId>,
-    /// Filter by tag
-    pub tag: Option<TagId>,
+    /// Filter by tag name (slug)
+    pub tag: Option<String>,
     /// Filter by assignee
     pub assignee: Option<ActorId>,
     /// Filter by readiness status
@@ -51,8 +51,8 @@ impl ListTasks {
         self
     }
 
-    /// Filter by tag
-    pub fn with_tag(mut self, tag: impl Into<TagId>) -> Self {
+    /// Filter by tag name (slug)
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         self.tag = Some(tag.into());
         self
     }
@@ -101,9 +101,9 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                         }
                     }
 
-                    // Filter by tag
-                    if let Some(ref tag) = self.tag {
-                        if !t.tags.contains(tag) {
+                    // Filter by tag name (computed from description)
+                    if let Some(ref tag_name) = self.tag {
+                        if !t.tags().iter().any(|t| t == tag_name) {
                             return false;
                         }
                     }
@@ -129,11 +129,14 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                     let ready = t.is_ready(&all_tasks, terminal_column);
                     let blocked_by = t.blocked_by(&all_tasks, terminal_column);
                     let progress = t.progress();
+                    let tags = t.tags();
 
                     let mut result = serde_json::to_value(t).unwrap_or(Value::Null);
+                    result["id"] = serde_json::json!(&t.id);
                     result["ready"] = serde_json::json!(ready);
                     result["blocked_by"] = serde_json::to_value(&blocked_by).unwrap_or(Value::Null);
                     result["progress"] = serde_json::json!(progress);
+                    result["tags"] = serde_json::to_value(&tags).unwrap_or(Value::Null);
                     result
                 })
                 .collect();

@@ -67,7 +67,7 @@ define_id!(AttachmentId, "ULID-based identifier for attachments");
 define_id!(LogEntryId, "ULID-based identifier for log entries");
 define_id!(SwimlaneId, "Identifier for swimlanes (slug-style)");
 define_id!(ActorId, "Identifier for actors (people or agents)");
-define_id!(TagId, "Identifier for tags (slug-style)");
+define_id!(TagId, "ULID-based identifier for tags");
 define_id!(CommentId, "ULID-based identifier for comments");
 
 #[cfg(test)]

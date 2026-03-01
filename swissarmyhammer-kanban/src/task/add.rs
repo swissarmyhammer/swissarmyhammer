@@ -1,15 +1,19 @@
 //! AddTask command
 
+use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, Ordinal, Position, TagId, Task, TaskId};
+use crate::types::{ActorId, Ordinal, Position, Tag, Task, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Add a new task to the board
+/// Add a new task to the board.
+///
+/// Tags are derived from `#tag` patterns in the description — no explicit
+/// tags parameter needed.
 #[operation(
     verb = "add",
     noun = "task",
@@ -19,13 +23,10 @@ use swissarmyhammer_operations::{
 pub struct AddTask {
     /// The task title (required)
     pub title: String,
-    /// Detailed task description
+    /// Detailed task description (may contain #tag patterns)
     pub description: Option<String>,
     /// Initial position (column, swimlane, ordinal)
     pub position: Option<Position>,
-    /// Tags to apply
-    #[serde(default)]
-    pub tags: Vec<TagId>,
     /// Assignees for this task
     #[serde(default)]
     pub assignees: Vec<ActorId>,
@@ -41,7 +42,6 @@ impl AddTask {
             title: title.into(),
             description: None,
             position: None,
-            tags: Vec::new(),
             assignees: Vec::new(),
             depends_on: Vec::new(),
         }
@@ -56,12 +56,6 @@ impl AddTask {
     /// Set the position
     pub fn with_position(mut self, position: Position) -> Self {
         self.position = Some(position);
-        self
-    }
-
-    /// Set the tags
-    pub fn with_tags(mut self, tags: Vec<TagId>) -> Self {
-        self.tags = tags;
         self
     }
 
@@ -125,12 +119,25 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 
             let task = Task::new(&self.title, position)
                 .with_description(self.description.clone().unwrap_or_default())
-                .with_tags(self.tags.clone())
                 .with_depends_on(self.depends_on.clone())
                 .with_assignees(self.assignees.clone());
 
             ctx.write_task(&task).await?;
-            Ok(serde_json::to_value(&task)?)
+
+            // Auto-create Tag objects for any #tag patterns in description
+            let tags = task.tags();
+            for tag_name in &tags {
+                if !ctx.tag_name_exists(tag_name).await? {
+                    let color = auto_color::auto_color(tag_name).to_string();
+                    let tag_obj = Tag::new(tag_name).with_color(&color);
+                    ctx.write_tag(&tag_obj).await?;
+                }
+            }
+
+            let mut result = serde_json::to_value(&task)?;
+            result["id"] = serde_json::json!(&task.id);
+            result["tags"] = serde_json::to_value(&tags)?;
+            Ok(result)
         }
         .await;
 

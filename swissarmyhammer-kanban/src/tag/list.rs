@@ -26,10 +26,18 @@ impl Execute<KanbanContext, KanbanError> for ListTags {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let tags = ctx.read_all_tags().await?;
+            let tags_json: Vec<Value> = tags
+                .iter()
+                .map(|t| {
+                    let mut v = serde_json::to_value(t).unwrap_or(Value::Null);
+                    v["id"] = serde_json::json!(&t.id);
+                    v
+                })
+                .collect();
 
             Ok(serde_json::json!({
-                "tags": tags,
-                "count": tags.len()
+                "tags": tags_json,
+                "count": tags_json.len()
             }))
         }
         .await
