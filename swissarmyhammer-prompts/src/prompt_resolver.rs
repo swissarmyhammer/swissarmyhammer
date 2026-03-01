@@ -141,7 +141,7 @@ impl PromptResolver {
         let builtin_partials = get_builtin_partials();
         for (name, content) in builtin_partials {
             self.vfs
-                .add_builtin(&format!("_partials/{}", name), content);
+                .add_builtin(format!("_partials/{}", name), content);
         }
 
         Ok(())
