@@ -297,6 +297,11 @@ pub async fn create_agent_with_options(
             let handle = create_llama_agent(llama_config, mcp_config).await?;
             ("Llama", handle)
         }
+        ModelExecutorType::LlamaEmbedding => {
+            return Err(AcpError::ConfigurationError(
+                "Embedding models cannot be used as agents".to_string(),
+            ))
+        }
     };
 
     // Wrap agent with TracingAgent for unified logging

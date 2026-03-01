@@ -1,0 +1,12 @@
+---
+description: "Qwen3 Embedding 0.6B: Compact semantic embedding model"
+---
+quiet: false
+executor:
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
+      filename: "Qwen3-Embedding-0.6B-Q8_0.gguf"
+    normalize: true
+    max_sequence_length: 512

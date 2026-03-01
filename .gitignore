@@ -203,3 +203,6 @@ swissarmyhammer-config/.swissarmyhammer/
 
 # Installed agents (generated from builtin/agents/ during install)
 .agents/
+
+# Shell tool runtime data (SQLite DB, WAL files, logs)
+.shell/
