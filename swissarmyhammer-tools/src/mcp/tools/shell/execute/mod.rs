@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
-use swissarmyhammer_operations::{generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig};
+use swissarmyhammer_operations::{
+    generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
+};
 // Replaced sah_config with local defaults for shell configuration
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -1552,9 +1554,8 @@ impl Operation for ExecuteCommand {
 // Static operation instances for schema generation
 static EXECUTE_CMD: Lazy<ExecuteCommand> = Lazy::new(ExecuteCommand::default);
 
-pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
-    vec![&*EXECUTE_CMD as &dyn Operation]
-});
+pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> =
+    Lazy::new(|| vec![&*EXECUTE_CMD as &dyn Operation]);
 
 /// Tool for executing shell commands
 #[derive(Default, Clone)]

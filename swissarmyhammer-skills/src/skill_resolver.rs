@@ -186,12 +186,9 @@ impl SkillResolver {
                         content_title: Some(skill_name),
                         line: None,
                         column: None,
-                        message: format!(
-                            "Failed to load {source_label} skill: {e}"
-                        ),
+                        message: format!("Failed to load {source_label} skill: {e}"),
                         suggestion: Some(
-                            "Check SKILL.md exists and has valid frontmatter"
-                                .to_string(),
+                            "Check SKILL.md exists and has valid frontmatter".to_string(),
                         ),
                     });
                 }
@@ -364,10 +361,7 @@ mod tests {
             .iter()
             .filter(|issue| {
                 issue.level == ValidationLevel::Error
-                    && issue
-                        .file_path
-                        .to_string_lossy()
-                        .contains("broken-skill")
+                    && issue.file_path.to_string_lossy().contains("broken-skill")
             })
             .collect();
 

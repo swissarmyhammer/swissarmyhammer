@@ -140,8 +140,7 @@ impl PromptResolver {
         // so {% include "_partials/..." %} references resolve correctly
         let builtin_partials = get_builtin_partials();
         for (name, content) in builtin_partials {
-            self.vfs
-                .add_builtin(format!("_partials/{}", name), content);
+            self.vfs.add_builtin(format!("_partials/{}", name), content);
         }
 
         Ok(())

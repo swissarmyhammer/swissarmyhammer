@@ -123,7 +123,7 @@ mod tests {
     fn test_complex_patterns() {
         let filter = ToolFilter::new(
             vec!["^(files|web)$".to_string()], // Allow files and web
-            vec!["^shell".to_string()],     // Deny shell tools
+            vec!["^shell".to_string()],        // Deny shell tools
         )
         .unwrap();
 

@@ -115,8 +115,8 @@ fn test_deny_patterns_enforced() {
 #[test]
 fn test_combined_filters_security() {
     let filter = ToolFilter::new(
-        vec!["^files$".to_string()],   // Allow files
-        vec!["^shell".to_string()], // Deny shell tools
+        vec!["^files$".to_string()], // Allow files
+        vec!["^shell".to_string()],  // Deny shell tools
     )
     .unwrap();
 
