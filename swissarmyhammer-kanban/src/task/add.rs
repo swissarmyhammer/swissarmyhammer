@@ -3,8 +3,9 @@
 use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
+use crate::tag::tag_name_exists_entity;
 use crate::task_helpers::task_entity_to_json;
-use crate::types::{ActorId, Ordinal, Tag, TaskId};
+use crate::types::{ActorId, Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
@@ -152,13 +153,16 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 
             ectx.write(&entity).await?;
 
-            // Auto-create Tag objects for any #tag patterns in description
+            // Auto-create Tag entities for any #tag patterns in description
             let tags = crate::task_helpers::task_tags(&entity);
             for tag_name in &tags {
-                if !ctx.tag_name_exists(tag_name).await? {
+                if !tag_name_exists_entity(&ectx, tag_name).await {
                     let color = auto_color::auto_color(tag_name).to_string();
-                    let tag_obj = Tag::new(tag_name).with_color(&color);
-                    ctx.write_tag(&tag_obj).await?;
+                    let tag_id = ulid::Ulid::new().to_string();
+                    let mut tag_entity = Entity::new("tag", &tag_id);
+                    tag_entity.set("tag_name", json!(tag_name));
+                    tag_entity.set("color", json!(color));
+                    ectx.write(&tag_entity).await?;
                 }
             }
 

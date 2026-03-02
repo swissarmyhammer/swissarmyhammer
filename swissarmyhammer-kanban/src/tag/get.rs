@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::TagId;
+use crate::tag::{find_tag_entity_by_name, tag_entity_to_json};
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -28,20 +28,16 @@ impl GetTag {
 impl Execute<KanbanContext, KanbanError> for GetTag {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
+            let ectx = ctx.entity_context().await?;
+
             // Try direct ULID lookup first
-            let tag_id = TagId::from_string(&self.id);
-            if ctx.tag_exists(&tag_id).await {
-                let tag = ctx.read_tag(&tag_id).await?;
-                let mut result = serde_json::to_value(&tag)?;
-                result["id"] = serde_json::json!(&tag.id);
-                return Ok(result);
+            if let Ok(entity) = ectx.read("tag", &self.id).await {
+                return Ok(tag_entity_to_json(&entity));
             }
 
             // Fall back to name lookup
-            if let Some(tag) = ctx.find_tag_by_name(&self.id).await? {
-                let mut result = serde_json::to_value(&tag)?;
-                result["id"] = serde_json::json!(&tag.id);
-                return Ok(result);
+            if let Some(entity) = find_tag_entity_by_name(&ectx, &self.id).await {
+                return Ok(tag_entity_to_json(&entity));
             }
 
             Err(KanbanError::TagNotFound {

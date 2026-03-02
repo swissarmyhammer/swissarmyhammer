@@ -3,10 +3,12 @@
 use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::tag::tag_name_exists_entity;
 use crate::tag_parser;
-use crate::types::{Tag, TaskId};
+use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -42,14 +44,17 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
         let result: std::result::Result<Value, KanbanError> = async {
             let slug = tag_parser::normalize_slug(&self.tag);
 
-            // Auto-create Tag object if it doesn't exist
-            if !ctx.tag_name_exists(&slug).await? {
-                let color = auto_color::auto_color(&slug).to_string();
-                let tag = Tag::new(&slug).with_color(&color);
-                ctx.write_tag(&tag).await?;
-            }
-
             let ectx = ctx.entity_context().await?;
+
+            // Auto-create Tag entity if it doesn't exist
+            if !tag_name_exists_entity(&ectx, &slug).await {
+                let color = auto_color::auto_color(&slug).to_string();
+                let tag_id = ulid::Ulid::new().to_string();
+                let mut tag_entity = Entity::new("tag", &tag_id);
+                tag_entity.set("tag_name", json!(slug));
+                tag_entity.set("color", json!(color));
+                ectx.write(&tag_entity).await?;
+            }
             let mut entity = ectx.read("task", self.id.as_str()).await?;
 
             // Append #tag to body if not already present

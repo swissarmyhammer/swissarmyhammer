@@ -148,14 +148,11 @@ impl EntityLookup for KanbanLookup {
                 })
             }
             "tag" => {
-                let tag_id = crate::types::TagId::from_string(id);
-                ctx.read_tag(&tag_id).await.ok().map(|t| {
-                    let mut v = serde_json::to_value(&t).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id.to_string()));
-                    }
-                    v
-                })
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.read("tag", id).await.ok().map(|e| e.to_json())
+                } else {
+                    None
+                }
             }
             "actor" => {
                 let actor_id = crate::types::ActorId::from_string(id);
@@ -203,20 +200,18 @@ impl EntityLookup for KanbanLookup {
                     v
                 })
                 .collect(),
-            "tag" => ctx
-                .read_all_tags()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|t| {
-                    let id = t.id.to_string();
-                    let mut v = serde_json::to_value(&t).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id));
-                    }
-                    v
-                })
-                .collect(),
+            "tag" => {
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.list("tag")
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|e| e.to_json())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
             "actor" => ctx
                 .read_all_actors()
                 .await

@@ -5,12 +5,12 @@ use crate::error::KanbanError;
 use crate::tag_parser;
 use crate::types::TagId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Delete a tag (removes `#name` from all task descriptions and deletes the tag file)
+/// Delete a tag (removes `#name` from all task descriptions and deletes the tag entity)
 #[operation(
     verb = "delete",
     noun = "tag",
@@ -35,24 +35,25 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
         let input = serde_json::to_value(self).unwrap();
 
         let result: std::result::Result<Value, KanbanError> = async {
-            // Read tag to get its name
-            let tag = ctx.read_tag(&self.id).await?;
-            let tag_name = &tag.name;
+            let ectx = ctx.entity_context().await?;
+
+            // Read tag entity to get its name
+            let entity = ectx.read("tag", self.id.as_str()).await?;
+            let tag_name = entity.get_str("tag_name").unwrap_or("").to_string();
 
             // Remove #name text from all task bodies
-            let ectx = ctx.entity_context().await?;
             let all_tasks = ectx.list("task").await?;
             for mut task in all_tasks {
                 let body = task.get_str("body").unwrap_or("").to_string();
-                let new_body = tag_parser::remove_tag(&body, tag_name);
+                let new_body = tag_parser::remove_tag(&body, &tag_name);
                 if new_body != body {
-                    task.set("body", serde_json::json!(new_body));
+                    task.set("body", json!(new_body));
                     ectx.write(&task).await?;
                 }
             }
 
-            // Delete tag file
-            ctx.delete_tag_file(&self.id).await?;
+            // Delete tag entity
+            ectx.delete("tag", self.id.as_str()).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,

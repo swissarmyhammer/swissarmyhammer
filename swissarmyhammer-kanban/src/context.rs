@@ -572,50 +572,36 @@ impl KanbanContext {
     // Tag I/O
     // =========================================================================
 
-    /// Read a tag file by ULID (YAML, with JSON fallback)
+    /// Read a tag file by ULID (YAML)
+    #[deprecated(note = "use entity_context().read(\"tag\", id) instead")]
     pub async fn read_tag(&self, id: &TagId) -> Result<Tag> {
-        let yaml_path = self.tag_path(id); // .yaml
-        let path = if yaml_path.exists() {
-            yaml_path
-        } else {
-            let json_path = self.root.join("tags").join(format!("{}.json", id));
-            if !json_path.exists() {
-                return Err(KanbanError::TagNotFound { id: id.to_string() });
-            }
-            json_path
-        };
-
-        let content = fs::read_to_string(&path).await?;
-        let mut tag: Tag = serde_yaml::from_str(&content)?;
-        tag.id = id.clone();
-
-        // Auto-migrate legacy .json to .yaml
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            self.write_tag(&tag).await?;
-            let _ = fs::remove_file(&path).await;
+        let yaml_path = self.tag_path(id);
+        if !yaml_path.exists() {
+            return Err(KanbanError::TagNotFound { id: id.to_string() });
         }
 
+        let content = fs::read_to_string(&yaml_path).await?;
+        let mut tag: Tag = serde_yaml::from_str(&content)?;
+        tag.id = id.clone();
         Ok(tag)
     }
 
     /// Write a tag file as YAML (atomic write via temp file)
+    #[deprecated(note = "use entity_context().write(&entity) instead")]
     pub async fn write_tag(&self, tag: &Tag) -> Result<()> {
         let path = self.tag_path(&tag.id);
         let content = serde_yaml::to_string(tag)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete a tag file and its log (handles both .yaml and legacy .json)
+    /// Delete a tag file and its log
+    #[deprecated(note = "use entity_context().delete(\"tag\", id) instead")]
     pub async fn delete_tag_file(&self, id: &TagId) -> Result<()> {
         let yaml_path = self.tag_path(id);
-        let json_path = self.root.join("tags").join(format!("{}.json", id));
         let log_path = self.tag_log_path(id);
 
         if yaml_path.exists() {
             fs::remove_file(&yaml_path).await?;
-        }
-        if json_path.exists() {
-            fs::remove_file(&json_path).await?;
         }
         if log_path.exists() {
             fs::remove_file(&log_path).await?;
@@ -625,6 +611,7 @@ impl KanbanContext {
     }
 
     /// List all tag IDs by reading the tags directory (accepts .yaml and legacy .json)
+    #[deprecated(note = "use entity_context().list(\"tag\") instead")]
     pub async fn list_tag_ids(&self) -> Result<Vec<TagId>> {
         let tags_dir = self.tags_dir();
         if !tags_dir.exists() {
@@ -651,6 +638,8 @@ impl KanbanContext {
     }
 
     /// Read all tags
+    #[deprecated(note = "use entity_context().list(\"tag\") instead")]
+    #[allow(deprecated)]
     pub async fn read_all_tags(&self) -> Result<Vec<Tag>> {
         let ids = self.list_tag_ids().await?;
         let mut tags = Vec::with_capacity(ids.len());
@@ -663,6 +652,7 @@ impl KanbanContext {
     }
 
     /// Check if a tag exists by ULID (checks .yaml and legacy .json)
+    #[deprecated(note = "use entity_context().read(\"tag\", id).is_ok() instead")]
     pub async fn tag_exists(&self, id: &TagId) -> bool {
         self.tag_path(id).exists() || self.root.join("tags").join(format!("{}.json", id)).exists()
     }
@@ -670,12 +660,16 @@ impl KanbanContext {
     /// Find a tag by its human-readable name (slug).
     ///
     /// Scans all tag files. Returns None if no tag has that name.
+    #[deprecated(note = "use tag::find_tag_entity_by_name() instead")]
+    #[allow(deprecated)]
     pub async fn find_tag_by_name(&self, name: &str) -> Result<Option<Tag>> {
         let tags = self.read_all_tags().await?;
         Ok(tags.into_iter().find(|t| t.name == name))
     }
 
     /// Check if a tag with the given name exists.
+    #[deprecated(note = "use tag::tag_name_exists_entity() instead")]
+    #[allow(deprecated)]
     pub async fn tag_name_exists(&self, name: &str) -> Result<bool> {
         Ok(self.find_tag_by_name(name).await?.is_some())
     }
@@ -1068,10 +1062,12 @@ impl KanbanContext {
         }
 
         // Tags
+        #[allow(deprecated)]
         let tag_ids = self.list_tag_ids().await?;
         for id in &tag_ids {
             let json_path = self.root.join("tags").join(format!("{}.json", id));
             if json_path.exists() {
+                #[allow(deprecated)]
                 self.read_tag(id).await?;
                 stats.tags += 1;
             }

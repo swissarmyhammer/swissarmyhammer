@@ -4,6 +4,7 @@ use crate::column::column_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::swimlane::swimlane_entity_to_json;
+use crate::tag::tag_entity_to_json;
 use crate::task_helpers::{task_is_ready, task_tags};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -52,16 +53,16 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
 
             // If counts are not requested, return basic board structure
             if !self.include_counts {
-                let tags = ctx.read_all_tags().await?;
+                let all_tags = ectx.list("tag").await?;
                 let columns_json: Vec<Value> =
                     all_columns.iter().map(column_entity_to_json).collect();
                 let swimlanes_json: Vec<Value> = all_swimlanes
                     .iter()
                     .map(swimlane_entity_to_json)
                     .collect();
-                let tags_json: Vec<Value> = tags
+                let tags_json: Vec<Value> = all_tags
                     .iter()
-                    .map(|t| json!({"id": t.id, "name": t.name, "description": t.description, "color": t.color}))
+                    .map(tag_entity_to_json)
                     .collect();
                 return Ok(json!({
                     "name": board.name,
@@ -145,17 +146,18 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .collect();
 
             // Read all tags and enhance with counts
-            let all_tags = ctx.read_all_tags().await?;
+            let all_tags = ectx.list("tag").await?;
             let tags: Vec<Value> = all_tags
                 .iter()
                 .map(|tag| {
-                    let count = tag_counts.get(tag.name.as_str()).copied().unwrap_or(0);
+                    let tag_name = tag.get_str("tag_name").unwrap_or("");
+                    let count = tag_counts.get(tag_name).copied().unwrap_or(0);
 
                     json!({
                         "id": tag.id,
-                        "name": tag.name,
-                        "description": tag.description,
-                        "color": tag.color,
+                        "name": tag_name,
+                        "description": tag.get_str("description").unwrap_or(""),
+                        "color": tag.get_str("color").unwrap_or(""),
                         "task_count": count
                     })
                 })

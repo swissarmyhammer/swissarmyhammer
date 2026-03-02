@@ -2,10 +2,11 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::tag::{find_tag_entity_by_name, tag_entity_to_json};
 use crate::tag_parser;
 use crate::types::TagId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -64,50 +65,45 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
         let input = serde_json::to_value(self).unwrap();
 
         let result: std::result::Result<Value, KanbanError> = async {
-            // Read tag from file
-            let mut tag = ctx.read_tag(&self.id).await?;
-            let old_name = tag.name.clone();
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("tag", self.id.as_str()).await?;
+            let old_name = entity.get_str("tag_name").unwrap_or("").to_string();
 
             if let Some(name) = &self.name {
                 let normalized = tag_parser::normalize_slug(name);
                 if normalized != old_name {
                     // Check that no other tag has this name
-                    if let Some(existing) = ctx.find_tag_by_name(&normalized).await? {
-                        if existing.id != self.id {
+                    if let Some(existing) = find_tag_entity_by_name(&ectx, &normalized).await {
+                        if existing.id != self.id.as_str() {
                             return Err(KanbanError::duplicate_id("tag", normalized));
                         }
                     }
 
                     // Bulk rename #old-name → #new-name in all task bodies
-                    let ectx = ctx.entity_context().await?;
                     let all_tasks = ectx.list("task").await?;
                     for mut task in all_tasks {
                         let body = task.get_str("body").unwrap_or("").to_string();
                         let new_body =
                             tag_parser::rename_tag(&body, &old_name, &normalized);
                         if new_body != body {
-                            task.set("body", serde_json::json!(new_body));
+                            task.set("body", json!(new_body));
                             ectx.write(&task).await?;
                         }
                     }
 
-                    tag.name = normalized;
+                    entity.set("tag_name", json!(normalized));
                 }
             }
 
             if let Some(color) = &self.color {
-                tag.color = color.clone();
+                entity.set("color", json!(color));
             }
             if let Some(description) = &self.description {
-                tag.description = Some(description.clone());
+                entity.set("description", json!(description));
             }
 
-            // Write updated tag back to same ULID file
-            ctx.write_tag(&tag).await?;
-
-            let mut result = serde_json::to_value(&tag)?;
-            result["id"] = serde_json::json!(&tag.id);
-            Ok(result)
+            ectx.write(&entity).await?;
+            Ok(tag_entity_to_json(&entity))
         }
         .await;
 
