@@ -27,6 +27,9 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
     // (init always installs them, so deinit should always remove them)
     uninstall_builtin_skills(global)?;
 
+    // Always remove builtin agents from .agents/ store and agent dirs
+    uninstall_builtin_agents(global)?;
+
     // Remove directories if requested
     if remove_directory {
         let cwd = std::env::current_dir()
@@ -244,6 +247,65 @@ fn uninstall_builtin_skills(global: bool) -> Result<(), String> {
     }
 
     // Remove the .skills/ directory if empty
+    if store_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&store_dir) {
+            if entries.count() == 0 {
+                let _ = fs::remove_dir(&store_dir);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Remove builtin agent symlinks from coding agent directories and clean up the .agents/ store.
+///
+/// Mirrors `uninstall_builtin_skills` but for the agent store.
+fn uninstall_builtin_agents(global: bool) -> Result<(), String> {
+    use swissarmyhammer_agents::AgentResolver;
+
+    let store_dir = mirdan::store::agent_store_dir(global);
+
+    let config = mirdan::agents::load_agents_config()
+        .map_err(|e| format!("Failed to load agents config: {}", e))?;
+    let agents = mirdan::agents::get_detected_agents(&config);
+
+    let resolver = AgentResolver::new();
+    let builtins = resolver.resolve_builtins();
+    let builtin_names: Vec<String> = builtins.keys().cloned().collect();
+
+    for name in &builtin_names {
+        let store_path = store_dir.join(name);
+
+        // Remove only symlinks from each coding agent's agent directory
+        for agent in &agents {
+            let link_name = mirdan::store::symlink_name(name, &agent.def.symlink_policy);
+            let agent_agent_dir = if global {
+                mirdan::agents::agent_global_agent_dir(&agent.def)
+            } else {
+                mirdan::agents::agent_project_agent_dir(&agent.def)
+            };
+            if let Some(agent_agent_dir) = agent_agent_dir {
+                let link_path = agent_agent_dir.join(&link_name);
+                remove_if_symlink(&link_path);
+            }
+        }
+
+        // Remove agent from the .agents/ store
+        if store_path.exists() {
+            if let Err(e) = fs::remove_dir_all(&store_path) {
+                eprintln!(
+                    "Warning: failed to remove store entry {}: {}",
+                    store_path.display(),
+                    e
+                );
+            } else {
+                println!("Removed agent store: {}", store_path.display());
+            }
+        }
+    }
+
+    // Remove the .agents/ directory if empty
     if store_dir.exists() {
         if let Ok(entries) = fs::read_dir(&store_dir) {
             if entries.count() == 0 {
