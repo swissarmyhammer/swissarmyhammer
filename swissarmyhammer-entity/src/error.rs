@@ -24,6 +24,10 @@ pub enum EntityError {
         source: serde_yaml::Error,
     },
 
+    /// A text diff patch could not be parsed or applied.
+    #[error("patch apply error: {0}")]
+    PatchApply(String),
+
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

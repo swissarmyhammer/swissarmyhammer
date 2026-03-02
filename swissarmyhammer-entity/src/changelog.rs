@@ -1,9 +1,10 @@
 //! Entity change logging with field-level diffs.
 //!
 //! Every mutation to an entity produces a [`ChangeEntry`] recording which fields
-//! changed and how. String fields store a unified text diff (via `similar`)
-//! instead of full old/new values. Changes are reversible — each [`FieldChange`]
-//! has a natural inverse.
+//! changed and how. String fields store a unified diff patch that captures exactly
+//! which lines were added, removed, or modified. Non-string fields store old/new
+//! as JSON values. Changes are reversible — each [`FieldChange`] has a natural
+//! inverse.
 //!
 //! ## Usage
 //!
@@ -23,9 +24,9 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use similar::TextDiff;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
+use tracing::warn;
 use ulid::Ulid;
 
 use crate::entity::Entity;
@@ -41,8 +42,15 @@ pub enum FieldChange {
     Removed { old_value: Value },
     /// Non-string field changed — record old and new values.
     Changed { old_value: Value, new_value: Value },
-    /// String field changed — record a unified text diff.
-    TextDiff { diff: String },
+    /// String field changed — stores forward and reverse unified diff patches.
+    ///
+    /// The `forward_patch` transforms old text → new text.
+    /// The `reverse_patch` transforms new text → old text.
+    /// Both are computed at diff time using `diffy::create_patch`.
+    TextDiff {
+        forward_patch: String,
+        reverse_patch: String,
+    },
 }
 
 /// A single change event for an entity.
@@ -77,7 +85,8 @@ impl ChangeEntry {
 
 /// Compare two entity snapshots, producing field-level changes.
 ///
-/// String values get text diffs via `similar`; others get `Changed` with old/new.
+/// String values produce `TextDiff` with forward and reverse unified diff patches.
+/// Non-string values produce `Changed` with old/new JSON values.
 /// Fields present only in `new` produce `Set`; fields only in `old` produce `Removed`.
 pub fn diff_entities(old: &Entity, new: &Entity) -> Vec<(String, FieldChange)> {
     let mut changes = Vec::new();
@@ -89,10 +98,17 @@ pub fn diff_entities(old: &Entity, new: &Entity) -> Vec<(String, FieldChange)> {
                 // Unchanged — skip
             }
             Some(old_val) => {
-                // Changed — use text diff for strings, Changed for others
+                // Changed — use TextDiff for strings, Changed for others
                 if let (Some(old_str), Some(new_str)) = (old_val.as_str(), new_val.as_str()) {
-                    let diff = make_text_diff(old_str, new_str);
-                    changes.push((key.clone(), FieldChange::TextDiff { diff }));
+                    let forward = diffy::create_patch(old_str, new_str);
+                    let reverse = diffy::create_patch(new_str, old_str);
+                    changes.push((
+                        key.clone(),
+                        FieldChange::TextDiff {
+                            forward_patch: forward.to_string(),
+                            reverse_patch: reverse.to_string(),
+                        },
+                    ));
                 } else {
                     changes.push((
                         key.clone(),
@@ -132,7 +148,7 @@ pub fn diff_entities(old: &Entity, new: &Entity) -> Vec<(String, FieldChange)> {
 /// - `Set { value }` → `Removed { old_value: value }`
 /// - `Removed { old_value }` → `Set { value: old_value }`
 /// - `Changed { old, new }` → `Changed { old: new, new: old }`
-/// - `TextDiff { diff }` → `TextDiff { reversed_diff }`
+/// - `TextDiff { forward, reverse }` → `TextDiff { forward: reverse, reverse: forward }`
 pub fn reverse_changes(changes: &[(String, FieldChange)]) -> Vec<(String, FieldChange)> {
     changes
         .iter()
@@ -151,8 +167,12 @@ pub fn reverse_changes(changes: &[(String, FieldChange)]) -> Vec<(String, FieldC
                     old_value: new_value.clone(),
                     new_value: old_value.clone(),
                 },
-                FieldChange::TextDiff { diff } => FieldChange::TextDiff {
-                    diff: reverse_unified_diff(diff),
+                FieldChange::TextDiff {
+                    forward_patch,
+                    reverse_patch,
+                } => FieldChange::TextDiff {
+                    forward_patch: reverse_patch.clone(),
+                    reverse_patch: forward_patch.clone(),
                 },
             };
             (key.clone(), reversed)
@@ -161,10 +181,10 @@ pub fn reverse_changes(changes: &[(String, FieldChange)]) -> Vec<(String, FieldC
 }
 
 /// Apply changes forward (or reversed changes for undo) to an entity.
-pub fn apply_changes(
-    entity: &mut Entity,
-    changes: &[(String, FieldChange)],
-) -> Result<()> {
+///
+/// For `TextDiff`, the forward patch is applied to the current field value using `diffy::apply`.
+/// Returns an error if a text patch cannot be applied cleanly.
+pub fn apply_changes(entity: &mut Entity, changes: &[(String, FieldChange)]) -> Result<()> {
     for (key, change) in changes {
         match change {
             FieldChange::Set { value } => {
@@ -176,10 +196,20 @@ pub fn apply_changes(
             FieldChange::Changed { new_value, .. } => {
                 entity.set(key, new_value.clone());
             }
-            FieldChange::TextDiff { diff } => {
-                let old_text = entity.get_str(key).unwrap_or("");
-                let new_text = apply_unified_diff(old_text, diff);
-                entity.set(key, Value::String(new_text));
+            FieldChange::TextDiff { forward_patch, .. } => {
+                let current = entity
+                    .get_str(key)
+                    .unwrap_or("")
+                    .to_string();
+                let patch = diffy::Patch::from_str(&forward_patch)
+                    .map_err(|e| crate::error::EntityError::PatchApply(format!(
+                        "failed to parse patch for field '{}': {}", key, e
+                    )))?;
+                let result = diffy::apply(&current, &patch)
+                    .map_err(|e| crate::error::EntityError::PatchApply(format!(
+                        "failed to apply patch to field '{}': {}", key, e
+                    )))?;
+                entity.set(key, Value::String(result));
             }
         }
     }
@@ -206,6 +236,8 @@ pub async fn append_changelog(path: &Path, entry: &ChangeEntry) -> Result<()> {
 }
 
 /// Read all change entries from a JSONL log file.
+///
+/// Malformed lines are logged as warnings and skipped.
 pub async fn read_changelog(path: &Path) -> Result<Vec<ChangeEntry>> {
     let content = match fs::read_to_string(path).await {
         Ok(c) => c,
@@ -213,150 +245,30 @@ pub async fn read_changelog(path: &Path) -> Result<Vec<ChangeEntry>> {
         Err(e) => return Err(crate::error::EntityError::Io(e)),
     };
 
-    let entries = content
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str::<ChangeEntry>(line).ok())
-        .collect();
+    let mut entries = Vec::new();
+    for (i, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<ChangeEntry>(line) {
+            Ok(entry) => entries.push(entry),
+            Err(e) => {
+                warn!(
+                    path = %path.display(),
+                    line_number = i + 1,
+                    error = %e,
+                    "skipping malformed changelog entry"
+                );
+            }
+        }
+    }
 
     Ok(entries)
-}
-
-// --- Internal helpers ---
-
-/// Create a unified diff between two strings.
-fn make_text_diff(old: &str, new: &str) -> String {
-    let diff = TextDiff::from_lines(old, new);
-    diff.unified_diff()
-        .context_radius(3)
-        .header("old", "new")
-        .to_string()
-}
-
-/// Reverse a unified diff by swapping +/- lines.
-fn reverse_unified_diff(diff: &str) -> String {
-    diff.lines()
-        .map(|line| {
-            if let Some(rest) = line.strip_prefix('+') {
-                if rest.starts_with("++") {
-                    // Header line (+++ new) → (--- new)
-                    format!("---{}", rest)
-                } else {
-                    format!("-{}", rest)
-                }
-            } else if let Some(rest) = line.strip_prefix('-') {
-                if rest.starts_with("--") {
-                    // Header line (--- old) → (+++ old)
-                    format!("+++{}", rest)
-                } else {
-                    format!("+{}", rest)
-                }
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Apply a unified diff to a string.
-///
-/// This is a simple line-based application — it processes +/- lines to
-/// reconstruct the result. Context lines and headers are skipped.
-fn apply_unified_diff(old: &str, diff: &str) -> String {
-    let old_lines: Vec<&str> = old.lines().collect();
-    let mut result = Vec::new();
-    let mut old_idx = 0;
-
-    // Parse the diff to find hunk headers and apply changes
-    let diff_lines: Vec<&str> = diff.lines().collect();
-    let mut diff_idx = 0;
-
-    // Skip header lines (--- and +++)
-    while diff_idx < diff_lines.len() {
-        let line = diff_lines[diff_idx];
-        if line.starts_with("---") || line.starts_with("+++") {
-            diff_idx += 1;
-        } else {
-            break;
-        }
-    }
-
-    while diff_idx < diff_lines.len() {
-        let line = diff_lines[diff_idx];
-        if line.starts_with("@@") {
-            // Parse hunk header: @@ -start,count +start,count @@
-            if let Some((old_start, _)) = parse_hunk_header(line) {
-                // Copy unchanged lines before this hunk
-                let target = (old_start as usize).saturating_sub(1);
-                while old_idx < target && old_idx < old_lines.len() {
-                    result.push(old_lines[old_idx].to_string());
-                    old_idx += 1;
-                }
-            }
-            diff_idx += 1;
-        } else if let Some(content) = line.strip_prefix('+') {
-            // Added line
-            result.push(content.to_string());
-            diff_idx += 1;
-        } else if line.starts_with('-') {
-            // Removed line — skip in old
-            old_idx += 1;
-            diff_idx += 1;
-        } else if line.starts_with(' ') {
-            // Context line
-            result.push(line[1..].to_string());
-            old_idx += 1;
-            diff_idx += 1;
-        } else {
-            // Unknown line, skip
-            diff_idx += 1;
-        }
-    }
-
-    // Copy remaining old lines
-    while old_idx < old_lines.len() {
-        result.push(old_lines[old_idx].to_string());
-        old_idx += 1;
-    }
-
-    // Reconstruct with newlines, preserving trailing newline from original
-    let mut output = result.join("\n");
-    if old.ends_with('\n') && !output.ends_with('\n') {
-        output.push('\n');
-    }
-    output
-}
-
-/// Parse a unified diff hunk header like `@@ -1,3 +1,4 @@`.
-/// Returns (old_start, new_start).
-fn parse_hunk_header(line: &str) -> Option<(i64, i64)> {
-    // Format: @@ -old_start[,old_count] +new_start[,new_count] @@
-    let line = line.strip_prefix("@@ ")?;
-    let line = line.split(" @@").next()?;
-    let parts: Vec<&str> = line.split(' ').collect();
-    if parts.len() < 2 {
-        return None;
-    }
-    let old_start = parts[0]
-        .strip_prefix('-')?
-        .split(',')
-        .next()?
-        .parse::<i64>()
-        .ok()?;
-    let new_start = parts[1]
-        .strip_prefix('+')?
-        .split(',')
-        .next()?
-        .parse::<i64>()
-        .ok()?;
-    Some((old_start, new_start))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn diff_no_changes() {
@@ -400,7 +312,10 @@ mod tests {
         let changes = diff_entities(&old, &new);
         assert_eq!(changes.len(), 1);
         match &changes[0].1 {
-            FieldChange::Changed { old_value, new_value } => {
+            FieldChange::Changed {
+                old_value,
+                new_value,
+            } => {
                 assert_eq!(*old_value, serde_json::json!(1));
                 assert_eq!(*new_value, serde_json::json!(2));
             }
@@ -409,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_changed_string_uses_text_diff() {
+    fn diff_changed_string_produces_text_diff() {
         let mut old = Entity::new("task", "01ABC");
         old.set("body", Value::String("line1\nline2\nline3".into()));
         let mut new = Entity::new("task", "01ABC");
@@ -418,12 +333,50 @@ mod tests {
         let changes = diff_entities(&old, &new);
         assert_eq!(changes.len(), 1);
         match &changes[0].1 {
-            FieldChange::TextDiff { diff } => {
-                assert!(diff.contains("-line2"));
-                assert!(diff.contains("+modified"));
+            FieldChange::TextDiff {
+                forward_patch,
+                reverse_patch,
+            } => {
+                // Forward patch should show line2 → modified
+                assert!(forward_patch.contains("-line2"));
+                assert!(forward_patch.contains("+modified"));
+                // Reverse patch should show modified → line2
+                assert!(reverse_patch.contains("-modified"));
+                assert!(reverse_patch.contains("+line2"));
             }
             _ => panic!("expected TextDiff"),
         }
+    }
+
+    #[test]
+    fn text_diff_forward_patch_applies_correctly() {
+        let mut old = Entity::new("task", "01ABC");
+        old.set("body", Value::String("line1\nline2\nline3".into()));
+        let mut new = Entity::new("task", "01ABC");
+        new.set("body", Value::String("line1\nmodified\nline3".into()));
+
+        let changes = diff_entities(&old, &new);
+
+        // Apply forward to old → should produce new
+        let mut result = old.clone();
+        apply_changes(&mut result, &changes).unwrap();
+        assert_eq!(result.get_str("body"), Some("line1\nmodified\nline3"));
+    }
+
+    #[test]
+    fn text_diff_reverse_patch_applies_correctly() {
+        let mut old = Entity::new("task", "01ABC");
+        old.set("body", Value::String("line1\nline2\nline3".into()));
+        let mut new = Entity::new("task", "01ABC");
+        new.set("body", Value::String("line1\nmodified\nline3".into()));
+
+        let changes = diff_entities(&old, &new);
+        let reversed = reverse_changes(&changes);
+
+        // Apply reversed to new → should produce old
+        let mut result = new.clone();
+        apply_changes(&mut result, &reversed).unwrap();
+        assert_eq!(result.get_str("body"), Some("line1\nline2\nline3"));
     }
 
     #[test]
@@ -472,11 +425,36 @@ mod tests {
         )];
         let reversed = reverse_changes(&changes);
         match &reversed[0].1 {
-            FieldChange::Changed { old_value, new_value } => {
+            FieldChange::Changed {
+                old_value,
+                new_value,
+            } => {
                 assert_eq!(*old_value, serde_json::json!(2));
                 assert_eq!(*new_value, serde_json::json!(1));
             }
             _ => panic!("expected Changed"),
+        }
+    }
+
+    #[test]
+    fn reverse_text_diff_swaps_patches() {
+        let changes = vec![(
+            "body".to_string(),
+            FieldChange::TextDiff {
+                forward_patch: "forward".into(),
+                reverse_patch: "reverse".into(),
+            },
+        )];
+        let reversed = reverse_changes(&changes);
+        match &reversed[0].1 {
+            FieldChange::TextDiff {
+                forward_patch,
+                reverse_patch,
+            } => {
+                assert_eq!(forward_patch, "reverse");
+                assert_eq!(reverse_patch, "forward");
+            }
+            _ => panic!("expected TextDiff"),
         }
     }
 
@@ -526,20 +504,18 @@ mod tests {
     fn diff_then_reverse_restores_original() {
         let mut old = Entity::new("task", "01ABC");
         old.set("title", Value::String("Original".into()));
-        old.set("body", Value::String("line1\nline2\nline3".into()));
+        old.set(
+            "body",
+            Value::String("line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19\nline20".into()),
+        );
         old.set("count", serde_json::json!(5));
 
         let mut new = old.clone();
         new.set("title", Value::String("Updated".into()));
-        new.set("body", Value::String("line1\nmodified\nline3".into()));
-        new.set("count", serde_json::json!(10));
-        new.set("extra", Value::String("new field".into()));
-        new.remove("title"); // Actually remove title to test Removed
-
-        // Re-add title with new value for a cleaner test
-        let mut new = old.clone();
-        new.set("title", Value::String("Updated".into()));
-        new.set("body", Value::String("line1\nmodified\nline3".into()));
+        new.set(
+            "body",
+            Value::String("line1\nline2\nINSERTED\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11\nline12\nline13\nline14\nline15\nline16\nline17\nMODIFIED18\nline19\nline20".into()),
+        );
         new.remove("count");
         new.set("extra", Value::String("new field".into()));
 
@@ -549,17 +525,62 @@ mod tests {
         // Apply forward changes to old, should match new
         let mut forward = old.clone();
         apply_changes(&mut forward, &changes).unwrap();
-        assert_eq!(forward.get_str("title"), Some("Updated"));
+        assert_eq!(forward.get_str("title"), new.get_str("title"));
         assert_eq!(forward.get_str("body"), new.get_str("body"));
         assert_eq!(forward.get("count"), None);
         assert_eq!(forward.get_str("extra"), Some("new field"));
 
         // Apply reversed changes to forward, should match old
         apply_changes(&mut forward, &reversed).unwrap();
-        assert_eq!(forward.get_str("title"), Some("Original"));
+        assert_eq!(forward.get_str("title"), old.get_str("title"));
         assert_eq!(forward.get_str("body"), old.get_str("body"));
         assert_eq!(forward.get_i64("count"), Some(5));
         assert_eq!(forward.get("extra"), None);
+    }
+
+    #[test]
+    fn diff_then_reverse_with_scattered_edits() {
+        // Real editing pattern: multiple scattered changes across a long document
+        let old_lines: Vec<String> = (1..=50).map(|i| format!("line {}", i)).collect();
+        let old_text = old_lines.join("\n");
+
+        let mut new_lines = old_lines.clone();
+        new_lines[2] = "MODIFIED line 3".into();           // edit near top
+        new_lines.insert(10, "INSERTED after line 10".into()); // insert in middle
+        new_lines[40] = "MODIFIED line 40".into();          // edit near bottom
+        new_lines.push("APPENDED line 51".into());          // append at end
+        let new_text = new_lines.join("\n");
+
+        let mut old = Entity::new("task", "01ABC");
+        old.set("body", Value::String(old_text.clone()));
+
+        let mut new = Entity::new("task", "01ABC");
+        new.set("body", Value::String(new_text.clone()));
+
+        let changes = diff_entities(&old, &new);
+
+        // Verify it produced a TextDiff with actual patch content
+        match &changes[0].1 {
+            FieldChange::TextDiff { forward_patch, .. } => {
+                // Should show the actual edits, not 50+ lines of old/new
+                assert!(forward_patch.contains("MODIFIED line 3"));
+                assert!(forward_patch.contains("INSERTED after line 10"));
+                assert!(forward_patch.contains("MODIFIED line 40"));
+                assert!(forward_patch.contains("APPENDED line 51"));
+            }
+            _ => panic!("expected TextDiff"),
+        }
+
+        let reversed = reverse_changes(&changes);
+
+        // Forward
+        let mut forward = old.clone();
+        apply_changes(&mut forward, &changes).unwrap();
+        assert_eq!(forward.get_str("body"), Some(new_text.as_str()));
+
+        // Reverse
+        apply_changes(&mut forward, &reversed).unwrap();
+        assert_eq!(forward.get_str("body"), Some(old_text.as_str()));
     }
 
     #[test]
@@ -580,6 +601,17 @@ mod tests {
         assert_eq!(parsed.op, "update");
         assert_eq!(parsed.actor, Some("user1".into()));
         assert_eq!(parsed.changes.len(), 1);
+    }
+
+    #[test]
+    fn text_diff_serializes_to_json() {
+        let change = FieldChange::TextDiff {
+            forward_patch: "--- original\n+++ modified\n@@ -1 +1 @@\n-old\n+new\n".into(),
+            reverse_patch: "--- modified\n+++ original\n@@ -1 +1 @@\n-new\n+old\n".into(),
+        };
+        let json = serde_json::to_string(&change).unwrap();
+        let parsed: FieldChange = serde_json::from_str(&json).unwrap();
+        assert_eq!(change, parsed);
     }
 
     #[tokio::test]
@@ -625,37 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn text_diff_round_trip() {
-        let old_text = "line1\nline2\nline3\nline4\nline5";
-        let new_text = "line1\nmodified\nline3\nline4\nline5\nline6";
-
-        let diff = make_text_diff(old_text, new_text);
-
-        // Apply forward
-        let applied = apply_unified_diff(old_text, &diff);
-        assert_eq!(applied, new_text);
-
-        // Reverse and apply
-        let reversed_diff = reverse_unified_diff(&diff);
-        let restored = apply_unified_diff(new_text, &reversed_diff);
-        assert_eq!(restored, old_text);
-    }
-
-    #[test]
-    fn text_diff_empty_to_content() {
-        let diff = make_text_diff("", "hello\nworld");
-        let applied = apply_unified_diff("", &diff);
-        assert_eq!(applied, "hello\nworld");
-    }
-
-    #[test]
-    fn text_diff_content_to_empty() {
-        let diff = make_text_diff("hello\nworld", "");
-        let applied = apply_unified_diff("hello\nworld", &diff);
-        assert_eq!(applied, "");
-    }
-
-    #[test]
     fn diff_entities_sorted_deterministically() {
         let mut old = Entity::new("task", "01ABC");
         old.set("zebra", Value::String("z".into()));
@@ -671,11 +672,27 @@ mod tests {
     }
 
     #[test]
-    fn parse_hunk_header_basic() {
-        let result = parse_hunk_header("@@ -1,3 +1,4 @@");
-        assert_eq!(result, Some((1, 1)));
-
-        let result = parse_hunk_header("@@ -5 +5,2 @@");
-        assert_eq!(result, Some((5, 5)));
+    fn all_field_change_variants_round_trip_through_json() {
+        let variants = vec![
+            FieldChange::Set {
+                value: serde_json::json!(42),
+            },
+            FieldChange::Removed {
+                old_value: serde_json::json!("gone"),
+            },
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+            FieldChange::TextDiff {
+                forward_patch: "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n".into(),
+                reverse_patch: "--- b\n+++ a\n@@ -1 +1 @@\n-new\n+old\n".into(),
+            },
+        ];
+        for variant in &variants {
+            let json = serde_json::to_string(variant).unwrap();
+            let parsed: FieldChange = serde_json::from_str(&json).unwrap();
+            assert_eq!(*variant, parsed, "round-trip failed for: {}", json);
+        }
     }
 }
