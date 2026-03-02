@@ -25,6 +25,8 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 swissarmyhammer-operations = { workspace = true }
 
+include_dir = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = { workspace = true }

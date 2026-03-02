@@ -3,7 +3,7 @@
 //! The context provides access to storage and utilities. No business logic methods,
 //! just data access primitives. Commands do all the work.
 
-use crate::defaults::kanban_defaults;
+use crate::defaults::{builtin_entity_definitions, builtin_field_definitions};
 use crate::error::{KanbanError, Result};
 use crate::types::{
     Actor, ActorId, Attachment, Board, Column, ColumnId, Comment, LogEntry, Position, Swimlane,
@@ -12,7 +12,7 @@ use crate::types::{
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use swissarmyhammer_fields::FieldsContext;
+use swissarmyhammer_fields::{load_yaml_dir, FieldsContext};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -38,15 +38,42 @@ impl KanbanContext {
 
     /// Create a fully-initialized context with field registry.
     ///
-    /// Opens (or creates) the `fields/` directory under root and seeds
-    /// built-in kanban field definitions and entity templates.
+    /// Loads builtin field/entity YAML definitions (embedded at compile time),
+    /// then merges with any local overrides from `.kanban/fields/`.
     pub async fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
-        let fields = FieldsContext::open(root.join("fields"))
-            .with_defaults(kanban_defaults())
-            .build()
-            .await
+        let fields_root = root.join("fields");
+
+        // Ensure fields directory structure exists for local overrides
+        fs::create_dir_all(fields_root.join("definitions")).await?;
+        fs::create_dir_all(fields_root.join("entities")).await?;
+
+        // Start with builtins (embedded at compile time)
+        let builtin_defs = builtin_field_definitions();
+        let builtin_entities = builtin_entity_definitions();
+
+        // Load local overrides from .kanban/fields/definitions/ and .kanban/fields/entities/
+        let local_defs = load_yaml_dir(&fields_root.join("definitions"));
+        let local_entities = load_yaml_dir(&fields_root.join("entities"));
+
+        // Merge: builtins first, then locals (locals override builtins by name)
+        let mut all_defs: Vec<(&str, &str)> = builtin_defs.clone();
+        let local_def_refs: Vec<(&str, &str)> = local_defs
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        all_defs.extend(local_def_refs);
+
+        let mut all_entities: Vec<(&str, &str)> = builtin_entities.clone();
+        let local_entity_refs: Vec<(&str, &str)> = local_entities
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        all_entities.extend(local_entity_refs);
+
+        let fields = FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
             .map_err(|e| KanbanError::FieldsError(e.to_string()))?;
+
         Ok(Self {
             root,
             fields: Some(fields),
@@ -1516,29 +1543,23 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 16 built-in fields
-        assert_eq!(fields.all_fields().len(), 16);
+        // Should have all 21 built-in fields
+        assert_eq!(fields.all_fields().len(), 21);
 
-        // Should have all 5 entity templates
-        assert_eq!(fields.all_entities().len(), 5);
+        // Should have all 7 entity templates
+        assert_eq!(fields.all_entities().len(), 7);
 
         // Check a specific field
-        let status = fields.get_field_by_name("status").unwrap();
-        assert_eq!(status.name, "status");
+        let title = fields.get_field_by_name("title").unwrap();
+        assert_eq!(title.name, "title");
     }
 
     #[tokio::test]
     async fn test_open_preserves_customizations() {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
-        std::fs::create_dir_all(&kanban_dir).unwrap();
-
-        // First open — seeds defaults
-        {
-            let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
-            let fields = ctx.fields().unwrap();
-            assert_eq!(fields.all_fields().len(), 16);
-        }
+        let fields_defs_dir = kanban_dir.join("fields/definitions");
+        std::fs::create_dir_all(&fields_defs_dir).unwrap();
 
         // Manually add a custom field to definitions/
         let custom_yaml = r#"id: 0000000000000000000000ZZZZ
@@ -1547,17 +1568,14 @@ type:
   kind: text
   single_line: true
 "#;
-        tokio::fs::write(
-            kanban_dir.join("fields/definitions/sprint.yaml"),
-            custom_yaml,
-        )
-        .await
-        .unwrap();
+        tokio::fs::write(fields_defs_dir.join("sprint.yaml"), custom_yaml)
+            .await
+            .unwrap();
 
-        // Re-open — should have 16 built-in + 1 custom = 17
+        // Open — should have 21 built-in + 1 custom = 22
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 17);
+        assert_eq!(fields.all_fields().len(), 22);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();
@@ -1581,7 +1599,7 @@ type:
 
         // Should be able to look up fields by name
         assert!(fields.get_field_by_name("title").is_some());
-        assert!(fields.get_field_by_name("status").is_some());
+        assert!(fields.get_field_by_name("body").is_some());
         assert!(fields.get_field_by_name("nonexistent").is_none());
 
         // Should be able to get entity templates
@@ -1591,6 +1609,6 @@ type:
 
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
-        assert!(task_fields.len() >= 7); // title, status, priority, tags, assignees, due, depends_on, body
+        assert_eq!(task_fields.len(), 11); // title, tags, progress, assignees, due, depends_on, body, position_column, position_swimlane, position_ordinal, attachments
     }
 }

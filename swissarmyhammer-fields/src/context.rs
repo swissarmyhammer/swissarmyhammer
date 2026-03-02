@@ -1,8 +1,12 @@
 //! FieldsContext — main API surface for the fields registry.
 //!
-//! Manages field definitions and entity templates as YAML files under a
-//! `fields/` directory. Provides in-memory indexes for fast lookup by
-//! both name and ULID.
+//! Manages field definitions and entity templates. Provides in-memory
+//! indexes for fast lookup by both name and ULID.
+//!
+//! Two ways to create a FieldsContext:
+//!
+//! 1. `from_yaml_sources()` — from pre-loaded YAML content (VFS / embedded)
+//! 2. `open().build()` — from a directory on disk (for tests / standalone)
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,67 +18,13 @@ use ulid::Ulid;
 use crate::error::{FieldsError, Result};
 use crate::types::{EntityDef, FieldDef};
 
-/// A collection of default field definitions and entity templates.
-///
-/// Consumers build this to pass to `FieldsContextBuilder::with_defaults()`.
-/// On open, defaults that don't already exist on disk are written.
-pub struct FieldDefaults {
-    fields: Vec<FieldDef>,
-    entities: Vec<EntityDef>,
-}
-
-impl FieldDefaults {
-    pub fn new() -> Self {
-        Self {
-            fields: Vec::new(),
-            entities: Vec::new(),
-        }
-    }
-
-    /// Add a default field definition.
-    pub fn field(mut self, def: FieldDef) -> Self {
-        self.fields.push(def);
-        self
-    }
-
-    /// Add a default entity template.
-    pub fn entity(mut self, def: EntityDef) -> Self {
-        self.entities.push(def);
-        self
-    }
-
-    /// Access the field definitions.
-    pub fn fields(&self) -> &[FieldDef] {
-        &self.fields
-    }
-
-    /// Access the entity templates.
-    pub fn entities(&self) -> &[EntityDef] {
-        &self.entities
-    }
-}
-
-impl Default for FieldDefaults {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Builder for `FieldsContext`. Created by `FieldsContext::open()`.
 pub struct FieldsContextBuilder {
     root: PathBuf,
-    defaults: Option<FieldDefaults>,
 }
 
 impl FieldsContextBuilder {
-    /// Provide default field definitions and entity templates.
-    /// Defaults are seeded on first open; existing definitions are preserved.
-    pub fn with_defaults(mut self, defaults: FieldDefaults) -> Self {
-        self.defaults = Some(defaults);
-        self
-    }
-
-    /// Build the context: create directories, seed defaults, load from disk.
+    /// Build the context: create directories, load from disk.
     pub async fn build(self) -> Result<FieldsContext> {
         let root = self.root;
 
@@ -85,11 +35,6 @@ impl FieldsContextBuilder {
         fs::create_dir_all(&defs_dir).await?;
         fs::create_dir_all(&entities_dir).await?;
         fs::create_dir_all(&lib_dir).await?;
-
-        // Seed defaults before loading
-        if let Some(defaults) = self.defaults {
-            seed_defaults(&root, &defaults).await?;
-        }
 
         let mut ctx = FieldsContext {
             root,
@@ -113,64 +58,9 @@ impl FieldsContextBuilder {
     }
 }
 
-/// Seed default definitions that don't already exist on disk.
-///
-/// Fields are matched by ULID — if a file with that ULID exists (even if renamed),
-/// the default is skipped. Entity templates are matched by name.
-async fn seed_defaults(root: &Path, defaults: &FieldDefaults) -> Result<()> {
-    let defs_dir = root.join("definitions");
-    let entities_dir = root.join("entities");
-
-    // Collect existing field ULIDs from disk
-    let existing_ids = collect_existing_field_ids(&defs_dir).await?;
-
-    // Seed field definitions (ULID-matched)
-    for def in &defaults.fields {
-        if !existing_ids.contains(&def.id) {
-            let yaml = serde_yaml::to_string(def)?;
-            let path = defs_dir.join(format!("{}.yaml", def.name));
-            atomic_write(&path, yaml.as_bytes()).await?;
-            debug!(name = %def.name, id = %def.id, "seeded default field");
-        }
-    }
-
-    // Seed entity templates (name-matched)
-    for def in &defaults.entities {
-        let path = entities_dir.join(format!("{}.yaml", def.name));
-        if !path.exists() {
-            let yaml = serde_yaml::to_string(def)?;
-            atomic_write(&path, yaml.as_bytes()).await?;
-            debug!(name = %def.name, "seeded default entity template");
-        }
-    }
-
-    Ok(())
-}
-
-/// Read all .yaml files in definitions/ and extract their ULIDs.
-async fn collect_existing_field_ids(defs_dir: &Path) -> Result<Vec<Ulid>> {
-    let mut ids = Vec::new();
-    if !defs_dir.exists() {
-        return Ok(ids);
-    }
-    let mut entries = fs::read_dir(defs_dir).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
-            continue;
-        }
-        if let Ok(content) = fs::read_to_string(&path).await {
-            if let Ok(def) = serde_yaml::from_str::<FieldDef>(&content) {
-                ids.push(def.id);
-            }
-        }
-    }
-    Ok(ids)
-}
-
 /// Context for field definitions and entity templates.
 ///
-/// Owns a directory on disk with the structure:
+/// Owns a writable directory on disk with the structure:
 /// ```text
 /// fields/
 ///   definitions/    ← one .yaml per field
@@ -187,23 +77,87 @@ pub struct FieldsContext {
 }
 
 impl FieldsContext {
-    /// Open or create a fields directory. Returns a builder for optional configuration.
+    /// Build context from pre-loaded YAML content.
+    ///
+    /// Each entry is `(name, yaml_content)`. Definitions and entities are
+    /// provided separately. The writable_root is where modifications are persisted.
     ///
     /// ```rust,ignore
-    /// // Simple open:
-    /// let ctx = FieldsContext::open(path).build().await?;
+    /// let ctx = FieldsContext::from_yaml_sources(
+    ///     root.join("fields"),
+    ///     &[("title", title_yaml), ("body", body_yaml)],
+    ///     &[("task", task_yaml)],
+    /// )?;
+    /// ```
+    pub fn from_yaml_sources(
+        writable_root: impl Into<PathBuf>,
+        definitions: &[(&str, &str)],
+        entities: &[(&str, &str)],
+    ) -> Result<FieldsContext> {
+        let root = writable_root.into();
+        let mut ctx = FieldsContext {
+            root,
+            fields: Vec::new(),
+            entities: Vec::new(),
+            name_index: HashMap::new(),
+            id_index: HashMap::new(),
+            entity_index: HashMap::new(),
+        };
+
+        for (name, yaml) in definitions {
+            match serde_yaml::from_str::<FieldDef>(yaml) {
+                Ok(def) => {
+                    let idx = ctx.fields.len();
+                    // Later entries override earlier ones (same name)
+                    if let Some(&old_idx) = ctx.name_index.get(&def.name) {
+                        ctx.id_index.remove(&ctx.fields[old_idx].id);
+                        ctx.fields[old_idx] = def.clone();
+                        ctx.id_index.insert(def.id, old_idx);
+                    } else {
+                        ctx.name_index.insert(def.name.clone(), idx);
+                        ctx.id_index.insert(def.id, idx);
+                        ctx.fields.push(def);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(name = %name, %e, "skipping invalid field definition");
+                }
+            }
+        }
+
+        for (name, yaml) in entities {
+            match serde_yaml::from_str::<EntityDef>(yaml) {
+                Ok(def) => {
+                    let idx = ctx.entities.len();
+                    if let Some(&old_idx) = ctx.entity_index.get(&def.name) {
+                        ctx.entities[old_idx] = def;
+                    } else {
+                        ctx.entity_index.insert(def.name.clone(), idx);
+                        ctx.entities.push(def);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(name = %name, %e, "skipping invalid entity definition");
+                }
+            }
+        }
+
+        debug!(
+            fields = ctx.fields.len(),
+            entities = ctx.entities.len(),
+            "fields context built from YAML sources"
+        );
+
+        Ok(ctx)
+    }
+
+    /// Open or create a fields directory. Returns a builder.
     ///
-    /// // With defaults:
-    /// let ctx = FieldsContext::open(path)
-    ///     .with_defaults(my_defaults())
-    ///     .build()
-    ///     .await?;
+    /// ```rust,ignore
+    /// let ctx = FieldsContext::open(path).build().await?;
     /// ```
     pub fn open(root: impl Into<PathBuf>) -> FieldsContextBuilder {
-        FieldsContextBuilder {
-            root: root.into(),
-            defaults: None,
-        }
+        FieldsContextBuilder { root: root.into() }
     }
 
     // --- Field definitions ---
@@ -227,6 +181,9 @@ impl FieldsContext {
     pub async fn write_field(&mut self, def: &FieldDef) -> Result<()> {
         let yaml = serde_yaml::to_string(def)?;
         let path = self.definition_path(&def.name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
         atomic_write(&path, yaml.as_bytes()).await?;
 
         // Update in-memory state
@@ -295,6 +252,9 @@ impl FieldsContext {
     pub async fn write_entity(&mut self, def: &EntityDef) -> Result<()> {
         let yaml = serde_yaml::to_string(def)?;
         let path = self.entity_path(&def.name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
         atomic_write(&path, yaml.as_bytes()).await?;
 
         if let Some(&idx) = self.entity_index.get(&def.name) {
@@ -344,6 +304,9 @@ impl FieldsContext {
 
     async fn load_definitions(&mut self) -> Result<()> {
         let defs_dir = self.root.join("definitions");
+        if !defs_dir.exists() {
+            return Ok(());
+        }
         let mut entries = fs::read_dir(&defs_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
@@ -368,6 +331,9 @@ impl FieldsContext {
 
     async fn load_entities(&mut self) -> Result<()> {
         let entities_dir = self.root.join("entities");
+        if !entities_dir.exists() {
+            return Ok(());
+        }
         let mut entries = fs::read_dir(&entities_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
@@ -401,10 +367,39 @@ async fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Load YAML files from a directory as `(name, content)` pairs.
+///
+/// Scans for `.yaml` files, returns the file stem as the name.
+/// Silently skips non-existent directories.
+pub fn load_yaml_dir(dir: &Path) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    if !dir.exists() {
+        return entries;
+    }
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return entries;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            entries.push((name, content));
+        }
+    }
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Editor, EntityDef, FieldDef, FieldType, SelectOption};
+    use crate::types::{Editor, EntityDef, FieldDef, FieldType};
     use tempfile::TempDir;
 
     fn make_test_field(name: &str) -> FieldDef {
@@ -423,53 +418,125 @@ mod tests {
         }
     }
 
-    fn sample_defaults() -> FieldDefaults {
-        let status_id = Ulid::from_string("00000000000000000000000001").unwrap();
-        let title_id = Ulid::from_string("00000000000000000000000002").unwrap();
+    // --- from_yaml_sources tests ---
 
-        FieldDefaults::new()
-            .field(FieldDef {
-                id: status_id,
-                name: "status".into(),
-                description: Some("Current workflow state".into()),
-                type_: FieldType::Select {
-                    options: vec![SelectOption {
-                        value: "Backlog".into(),
-                        label: None,
-                        color: Some("gray".into()),
-                        icon: None,
-                        order: 0,
-                    }],
-                },
-                default: Some("Backlog".into()),
-                editor: Some(Editor::Select),
-                display: None,
-                sort: None,
-                filter: None,
-                group: None,
-                validate: None,
-            })
-            .field(FieldDef {
-                id: title_id,
-                name: "title".into(),
-                description: None,
-                type_: FieldType::Text { single_line: true },
-                default: None,
-                editor: Some(Editor::Markdown),
-                display: None,
-                sort: None,
-                filter: None,
-                group: None,
-                validate: None,
-            })
-            .entity(EntityDef {
-                name: "task".into(),
-                body_field: Some("body".into()),
-                fields: vec!["title".into(), "status".into()],
-            })
+    #[test]
+    fn from_yaml_sources_parses_definitions() {
+        let title_yaml = r#"
+id: "00000000000000000000000001"
+name: title
+type:
+  kind: text
+  single_line: true
+"#;
+        let body_yaml = r#"
+id: "00000000000000000000000002"
+name: body
+type:
+  kind: markdown
+  single_line: false
+"#;
+        let task_yaml = r#"
+name: task
+body_field: body
+fields:
+  - title
+  - body
+"#;
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[("title", title_yaml), ("body", body_yaml)],
+            &[("task", task_yaml)],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_fields().len(), 2);
+        assert!(ctx.get_field_by_name("title").is_some());
+        assert!(ctx.get_field_by_name("body").is_some());
+        assert_eq!(ctx.all_entities().len(), 1);
+        assert!(ctx.get_entity("task").is_some());
+        assert_eq!(ctx.fields_for_entity("task").len(), 2);
     }
 
-    // --- Basic context tests (updated for builder pattern) ---
+    #[test]
+    fn from_yaml_sources_later_overrides_earlier() {
+        let v1 = r#"
+id: "00000000000000000000000001"
+name: title
+description: "Version 1"
+type:
+  kind: text
+  single_line: true
+"#;
+        let v2 = r#"
+id: "00000000000000000000000099"
+name: title
+description: "Version 2"
+type:
+  kind: text
+  single_line: true
+"#;
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[("title", v1), ("title", v2)],
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_fields().len(), 1);
+        assert_eq!(
+            ctx.get_field_by_name("title").unwrap().description,
+            Some("Version 2".into())
+        );
+    }
+
+    #[test]
+    fn from_yaml_sources_skips_invalid_yaml() {
+        let good = r#"
+id: "00000000000000000000000001"
+name: title
+type:
+  kind: text
+  single_line: true
+"#;
+        let bad = "this is not valid yaml: [[[";
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[("title", good), ("bad", bad)],
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_fields().len(), 1);
+    }
+
+    // --- load_yaml_dir tests ---
+
+    #[test]
+    fn load_yaml_dir_reads_yaml_files() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("title.yaml"), "name: title").unwrap();
+        std::fs::write(dir.join("body.yaml"), "name: body").unwrap();
+        std::fs::write(dir.join("readme.md"), "# ignore me").unwrap();
+
+        let entries = load_yaml_dir(dir);
+        assert_eq!(entries.len(), 2);
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"title"));
+        assert!(names.contains(&"body"));
+    }
+
+    #[test]
+    fn load_yaml_dir_nonexistent_returns_empty() {
+        let entries = load_yaml_dir(Path::new("/nonexistent/path"));
+        assert!(entries.is_empty());
+    }
+
+    // --- Basic context tests ---
 
     #[tokio::test]
     async fn open_creates_directories() {
@@ -700,152 +767,6 @@ mod tests {
         assert!(ctx.get_field_by_name("a").is_some());
         assert!(ctx.get_field_by_name("b").is_none());
         assert!(ctx.get_field_by_name("c").is_some());
-    }
-
-    // --- with_defaults() seeding tests ---
-
-    #[tokio::test]
-    async fn first_open_seeds_all_defaults() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("fields");
-
-        let ctx = FieldsContext::open(&root)
-            .with_defaults(sample_defaults())
-            .build()
-            .await
-            .unwrap();
-
-        assert_eq!(ctx.all_fields().len(), 2);
-        assert!(ctx.get_field_by_name("status").is_some());
-        assert!(ctx.get_field_by_name("title").is_some());
-        assert_eq!(ctx.all_entities().len(), 1);
-        assert!(ctx.get_entity("task").is_some());
-
-        // Files exist on disk
-        assert!(root.join("definitions/status.yaml").exists());
-        assert!(root.join("definitions/title.yaml").exists());
-        assert!(root.join("entities/task.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn subsequent_open_skips_existing() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("fields");
-
-        // First open seeds
-        let _ctx = FieldsContext::open(&root)
-            .with_defaults(sample_defaults())
-            .build()
-            .await
-            .unwrap();
-
-        // Second open with same defaults — should not duplicate
-        let ctx = FieldsContext::open(&root)
-            .with_defaults(sample_defaults())
-            .build()
-            .await
-            .unwrap();
-
-        assert_eq!(ctx.all_fields().len(), 2);
-        assert_eq!(ctx.all_entities().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn user_modified_definitions_preserved() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("fields");
-
-        let status_id = Ulid::from_string("00000000000000000000000001").unwrap();
-
-        // First open seeds defaults
-        let mut ctx = FieldsContext::open(&root)
-            .with_defaults(sample_defaults())
-            .build()
-            .await
-            .unwrap();
-
-        // User renames "status" to "state"
-        let mut status = ctx.get_field_by_id(&status_id).unwrap().clone();
-        status.name = "state".into();
-        ctx.write_field(&status).await.unwrap();
-        drop(ctx);
-
-        // Reopen with defaults — renamed field should NOT be overwritten
-        let ctx = FieldsContext::open(&root)
-            .with_defaults(sample_defaults())
-            .build()
-            .await
-            .unwrap();
-
-        assert!(ctx.get_field_by_name("state").is_some());
-        assert!(ctx.get_field_by_name("status").is_none());
-        assert_eq!(ctx.get_field_by_id(&status_id).unwrap().name, "state");
-    }
-
-    #[tokio::test]
-    async fn new_defaults_added_on_reopen() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("fields");
-
-        // First open with just status
-        let defaults_v1 = FieldDefaults::new().field(FieldDef {
-            id: Ulid::from_string("00000000000000000000000001").unwrap(),
-            name: "status".into(),
-            description: None,
-            type_: FieldType::Text { single_line: true },
-            default: None,
-            editor: None,
-            display: None,
-            sort: None,
-            filter: None,
-            group: None,
-            validate: None,
-        });
-
-        let _ctx = FieldsContext::open(&root)
-            .with_defaults(defaults_v1)
-            .build()
-            .await
-            .unwrap();
-
-        // Second open adds a new default field
-        let defaults_v2 = FieldDefaults::new()
-            .field(FieldDef {
-                id: Ulid::from_string("00000000000000000000000001").unwrap(),
-                name: "status".into(),
-                description: None,
-                type_: FieldType::Text { single_line: true },
-                default: None,
-                editor: None,
-                display: None,
-                sort: None,
-                filter: None,
-                group: None,
-                validate: None,
-            })
-            .field(FieldDef {
-                id: Ulid::from_string("00000000000000000000000003").unwrap(),
-                name: "priority".into(),
-                description: None,
-                type_: FieldType::Text { single_line: true },
-                default: None,
-                editor: None,
-                display: None,
-                sort: None,
-                filter: None,
-                group: None,
-                validate: None,
-            });
-
-        let ctx = FieldsContext::open(&root)
-            .with_defaults(defaults_v2)
-            .build()
-            .await
-            .unwrap();
-
-        assert_eq!(ctx.all_fields().len(), 2);
-        assert!(ctx.get_field_by_name("status").is_some());
-        assert!(ctx.get_field_by_name("priority").is_some());
     }
 
     #[tokio::test]
