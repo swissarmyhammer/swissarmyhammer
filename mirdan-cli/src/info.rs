@@ -189,6 +189,7 @@ fn read_frontmatter_field(path: &Path, field: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_read_frontmatter_field_metadata_fallback() {
@@ -215,6 +216,7 @@ metadata:
     }
 
     #[test]
+    #[serial]
     fn test_show_local_info_agent_filter_skips_validators() {
         let dir = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -237,6 +239,7 @@ metadata:
     }
 
     #[test]
+    #[serial]
     fn test_show_local_info_no_filter_finds_validator() {
         let dir = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();

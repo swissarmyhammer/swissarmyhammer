@@ -469,8 +469,10 @@ mirdan publish
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_new_skill_creates_structure() {
         let dir = tempfile::tempdir().unwrap();
         let name = "test-skill";
@@ -492,6 +494,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_new_validator_creates_structure() {
         let dir = tempfile::tempdir().unwrap();
         let name = "test-validator";
@@ -524,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_new_skill_already_exists() {
         let dir = tempfile::tempdir().unwrap();
         let name = "existing-skill";
@@ -539,6 +543,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_new_tool_creates_structure() {
         let dir = tempfile::tempdir().unwrap();
         let name = "test-tool";
@@ -567,6 +572,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_new_plugin_creates_structure() {
         let dir = tempfile::tempdir().unwrap();
         let name = "test-plugin";

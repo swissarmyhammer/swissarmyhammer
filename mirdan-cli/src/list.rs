@@ -307,6 +307,7 @@ fn merge_packages(packages: Vec<InstalledPackage>) -> Vec<InstalledPackage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_read_frontmatter_version_skill() {
@@ -385,6 +386,7 @@ metadata:
     }
 
     #[test]
+    #[serial]
     fn test_run_list_agent_filter_suppresses_validators() {
         let dir = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -409,6 +411,7 @@ metadata:
     }
 
     #[test]
+    #[serial]
     fn test_run_list_no_filter_shows_validators() {
         let dir = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();

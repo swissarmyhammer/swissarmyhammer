@@ -20,6 +20,52 @@ use std::os::raw::c_char;
 
 static GLOBAL_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 
+/// Get or initialize the global LlamaBackend singleton.
+///
+/// This is the canonical way to obtain a `LlamaBackend` reference. All code
+/// within the process should use this function rather than calling
+/// `LlamaBackend::init()` directly, because the llama.cpp C backend can only
+/// be initialized once per process. Going through this function ensures that
+/// every caller shares the same `Arc<LlamaBackend>` stored in `GLOBAL_BACKEND`,
+/// preventing "Backend already initialized" errors when tests or other code
+/// paths race to initialize the backend.
+pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, ModelError> {
+    // Fast path: backend already initialized
+    if let Some(backend) = GLOBAL_BACKEND.get() {
+        return Ok(backend.clone());
+    }
+
+    // Slow path: try to initialize
+    let new_backend = match LlamaBackend::init() {
+        Ok(backend) => Arc::new(backend),
+        Err(llama_cpp_2::LLamaCppError::BackendAlreadyInitialized) => {
+            // Another thread may have raced us and populated the OnceLock
+            // between our get() check and init() call.
+            if let Some(backend) = GLOBAL_BACKEND.get() {
+                return Ok(backend.clone());
+            }
+            // Backend was initialized by code that bypassed this function.
+            // This should not happen if all callers use get_or_init_backend().
+            return Err(ModelError::LoadingFailed(
+                "Backend already initialized by external code".to_string(),
+            ));
+        }
+        Err(e) => {
+            return Err(ModelError::LoadingFailed(format!(
+                "Failed to initialize LlamaBackend: {}",
+                e
+            )));
+        }
+    };
+
+    // Store globally; if another thread beat us, use theirs
+    if GLOBAL_BACKEND.set(new_backend.clone()).is_err() {
+        Ok(GLOBAL_BACKEND.get().unwrap().clone())
+    } else {
+        Ok(new_backend)
+    }
+}
+
 // Null log callback to suppress llama.cpp verbose output
 extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
     // Do nothing - this suppresses all llama.cpp logging
@@ -84,37 +130,8 @@ impl ModelManager {
             set_logging_suppression(true);
         }
 
-        // Get existing backend or try to initialize new one
-        let backend = if let Some(backend) = GLOBAL_BACKEND.get() {
-            backend.clone()
-        } else {
-            // Try to initialize the backend
-            let new_backend = match LlamaBackend::init() {
-                Ok(backend) => Arc::new(backend),
-                Err(llama_cpp_2::LLamaCppError::BackendAlreadyInitialized) => {
-                    // Backend was already initialized but we don't have a reference
-                    // This is a limitation of llama-cpp-2 - we can't get a reference to an existing backend
-                    // For now, we'll work around this by skipping backend initialization in tests
-                    return Err(ModelError::LoadingFailed(
-                        "Backend already initialized by external code".to_string(),
-                    ));
-                }
-                Err(e) => {
-                    return Err(ModelError::LoadingFailed(format!(
-                        "Failed to initialize LlamaBackend: {}",
-                        e
-                    )));
-                }
-            };
-
-            // Try to store it globally, but don't fail if someone else beat us to it
-            if GLOBAL_BACKEND.set(new_backend.clone()).is_err() {
-                // Someone else set it, use theirs instead
-                GLOBAL_BACKEND.get().unwrap().clone()
-            } else {
-                new_backend
-            }
-        };
+        // Get or initialize the shared backend singleton
+        let backend = get_or_init_backend()?;
 
         let manager = Self {
             model: Arc::new(RwLock::new(None)),
@@ -676,30 +693,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_get_or_init_backend_is_idempotent() {
+        // get_or_init_backend() should succeed on every call, regardless of
+        // whether the backend was already initialized by this or another caller.
+        let first = get_or_init_backend();
+        assert!(first.is_ok(), "First call should succeed");
+
+        let second = get_or_init_backend();
+        assert!(second.is_ok(), "Second call should also succeed (idempotent)");
+
+        // Both calls should return the same Arc (same underlying backend)
+        let a = first.unwrap();
+        let b = second.unwrap();
+        assert!(Arc::ptr_eq(&a, &b), "Both calls should return the same backend instance");
+    }
+
     #[tokio::test]
     async fn test_model_manager_creation() {
         let config = create_test_config_local(PathBuf::from("/tmp"), None);
 
-        // When running tests in parallel, the backend might already be initialized by another test
-        match ModelManager::new(config) {
-            Ok(manager) => {
-                assert!(!manager.is_loaded().await);
+        // ModelManager::new() must always succeed — backend init is idempotent
+        let manager = ModelManager::new(config).expect("ModelManager::new should always succeed");
+        assert!(!manager.is_loaded().await);
 
-                // Test with_model when no model is loaded
-                let result = manager.with_model(|_model| ()).await;
-                assert!(result.is_err());
-            }
-            Err(ModelError::LoadingFailed(msg))
-                if msg.contains("Backend already initialized by external code") =>
-            {
-                // This is expected when running tests in parallel - one test initializes the backend
-                // and subsequent tests see it as already initialized. This is fine for the test.
-                println!("Backend already initialized by another test - this is expected in parallel test execution");
-            }
-            Err(e) => {
-                panic!("Unexpected error creating ModelManager: {:?}", e);
-            }
-        }
+        // Test with_model when no model is loaded
+        let result = manager.with_model(|_model| ()).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

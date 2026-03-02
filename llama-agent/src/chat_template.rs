@@ -1361,9 +1361,9 @@ mod qwen3coder_model_integration {
         MCPServerConfig, Message, MessageRole, ModelConfig, ModelSource, ProcessServerConfig,
         RetryConfig, Session, SessionId, ToolDefinition,
     };
+    use crate::model::get_or_init_backend;
     use llama_cpp_2::{
         context::params::LlamaContextParams,
-        llama_backend::LlamaBackend,
         model::{params::LlamaModelParams, LlamaModel},
     };
     use std::env;
@@ -1516,7 +1516,7 @@ mod qwen3coder_model_integration {
         let model_path = get_model_path();
 
         // Initialize the backend
-        let backend = LlamaBackend::init().expect("Backend should initialize");
+        let backend = get_or_init_backend().expect("Backend should initialize");
 
         // Test model loading
         let model_params = LlamaModelParams::default();
@@ -1551,7 +1551,7 @@ mod qwen3coder_model_integration {
         let model_path = get_model_path();
 
         // Initialize the backend
-        let backend = LlamaBackend::init().expect("Backend should initialize");
+        let backend = get_or_init_backend().expect("Backend should initialize");
 
         // Load model
         let model_params = LlamaModelParams::default();
@@ -1601,7 +1601,7 @@ mod qwen3coder_model_integration {
         let model_path = get_model_path();
 
         // Initialize the backend
-        let backend = LlamaBackend::init().expect("Backend should initialize");
+        let backend = get_or_init_backend().expect("Backend should initialize");
 
         // Load model
         let model_params = LlamaModelParams::default();
@@ -1858,7 +1858,7 @@ mod qwen3coder_model_integration {
         let model_path = get_model_path();
 
         // Initialize the backend
-        let backend = LlamaBackend::init().expect("Backend should initialize");
+        let backend = get_or_init_backend().expect("Backend should initialize");
 
         // Load model
         let model_params = LlamaModelParams::default();
