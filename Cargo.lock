@@ -8047,15 +8047,18 @@ dependencies = [
 name = "swissarmyhammer-entity"
 version = "0.8.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "serde_yaml",
+ "similar",
  "swissarmyhammer-fields",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
  "tracing",
+ "ulid",
 ]
 
 [[package]]

@@ -15,6 +15,7 @@
 //! Entity IDs come from filenames, not file contents.
 //! Writes are atomic (temp file + rename).
 
+pub mod changelog;
 pub mod entity;
 pub mod error;
 pub mod io;
