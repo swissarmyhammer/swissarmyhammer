@@ -26,6 +26,23 @@ async fn setup_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
     (env, context)
 }
 
+/// Creates a test context with agent mode enabled.
+///
+/// Agent mode registers additional tools (files, shell, skill) that are
+/// normally omitted when running alongside Claude Code.
+async fn setup_agent_mode_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = env.temp_dir();
+
+    // Set up git repository for tests that need it
+    setup_git_repo(&temp_path).expect("Failed to set up git repository");
+
+    let context = CliToolContext::new_with_agent_mode(&temp_path)
+        .await
+        .expect("Failed to create CliToolContext with agent mode");
+    (env, context)
+}
+
 /// Creates a CallToolResult for testing purposes.
 #[cfg(test)]
 fn create_test_call_result(text: &str, is_error: bool) -> rmcp::model::CallToolResult {
@@ -68,7 +85,8 @@ async fn test_cli_can_call_mcp_tools() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_files_read_tool_integration() {
-    let (env, context) = setup_test_context().await;
+    // The files tool is only registered in agent mode
+    let (env, context) = setup_agent_mode_test_context().await;
 
     // Create a test file to read
     let test_file = env.temp_dir().join("test_file.txt");
@@ -121,7 +139,8 @@ async fn test_nonexistent_tool_error() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_invalid_arguments_error() {
-    let (_env, context) = setup_test_context().await;
+    // The files tool is only registered in agent mode
+    let (_env, context) = setup_agent_mode_test_context().await;
 
     // Test calling files with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
