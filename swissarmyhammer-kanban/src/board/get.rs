@@ -1,5 +1,6 @@
 //! GetBoard command
 
+use crate::column::column_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::task_helpers::{task_is_ready, task_tags};
@@ -38,16 +39,18 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let board = ctx.read_board().await?;
-            let all_columns = ctx.read_all_columns().await?;
+            let ectx = ctx.entity_context().await?;
+            let mut all_columns = ectx.list("column").await?;
+            all_columns.sort_by_key(|c| {
+                c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
+            });
             let all_swimlanes = ctx.read_all_swimlanes().await?;
 
             // If counts are not requested, return basic board structure
             if !self.include_counts {
                 let tags = ctx.read_all_tags().await?;
-                let columns_json: Vec<Value> = all_columns
-                    .iter()
-                    .map(|c| json!({"id": c.id, "name": c.name, "order": c.order}))
-                    .collect();
+                let columns_json: Vec<Value> =
+                    all_columns.iter().map(column_entity_to_json).collect();
                 let swimlanes_json: Vec<Value> = all_swimlanes
                     .iter()
                     .map(|s| json!({"id": s.id, "name": s.name, "order": s.order}))
@@ -66,10 +69,10 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             }
 
             // Read all tasks as entities
-            let ectx = ctx.entity_context().await?;
             let all_tasks = ectx.list("task").await?;
-            let terminal = all_columns.iter().max_by_key(|c| c.order);
-            let terminal_id = terminal
+            let terminal_id = all_columns
+                .iter()
+                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
@@ -114,8 +117,8 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
 
                     json!({
                         "id": col.id,
-                        "name": col.name,
-                        "order": col.order,
+                        "name": col.get_str("name").unwrap_or(""),
+                        "order": col.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
                         "task_count": count,
                         "ready_count": ready
                     })

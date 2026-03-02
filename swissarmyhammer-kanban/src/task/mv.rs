@@ -3,9 +3,10 @@
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::task_helpers::task_entity_to_json;
-use crate::types::{Column, ColumnId, Ordinal, Position, Swimlane, SwimlaneId, TaskId};
+use crate::types::{ColumnId, Ordinal, Position, SwimlaneId, TaskId};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -54,6 +55,20 @@ impl MoveTask {
     }
 }
 
+/// Auto-create a column entity if it doesn't exist. Returns a title-cased name from the slug.
+fn slug_to_name(slug: &str) -> String {
+    slug.split(['-', '_'])
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for MoveTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
@@ -65,34 +80,19 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
             let mut entity = ectx.read("task", self.id.as_str()).await?;
 
             // Auto-create column if it doesn't exist
-            if !ctx.column_exists(&self.position.column).await {
-                let columns = ctx.read_all_columns().await?;
+            if ectx.read("column", self.position.column.as_str()).await.is_err() {
+                let columns = ectx.list("column").await?;
                 let order = columns
                     .iter()
-                    .map(|c| c.order)
+                    .filter_map(|c| c.get("order").and_then(|v| v.as_u64()))
                     .max()
-                    .map(|o| o + 1)
+                    .map(|o| o as usize + 1)
                     .unwrap_or(0);
-                let name = self
-                    .position
-                    .column
-                    .as_str()
-                    .split(['-', '_'])
-                    .map(|word| {
-                        let mut chars = word.chars();
-                        match chars.next() {
-                            Some(first) => first.to_uppercase().to_string() + chars.as_str(),
-                            None => String::new(),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                ctx.write_column(&Column {
-                    id: self.position.column.clone(),
-                    name,
-                    order,
-                })
-                .await?;
+                let name = slug_to_name(self.position.column.as_str());
+                let mut col_entity = Entity::new("column", self.position.column.as_str());
+                col_entity.set("name", json!(name));
+                col_entity.set("order", json!(order));
+                ectx.write(&col_entity).await?;
             }
 
             // Auto-create swimlane if it doesn't exist
@@ -105,19 +105,8 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                         .max()
                         .map(|o| o + 1)
                         .unwrap_or(0);
-                    let name = swimlane_id
-                        .as_str()
-                        .split(['-', '_'])
-                        .map(|word| {
-                            let mut chars = word.chars();
-                            match chars.next() {
-                                Some(first) => first.to_uppercase().to_string() + chars.as_str(),
-                                None => String::new(),
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    ctx.write_swimlane(&Swimlane {
+                    let name = slug_to_name(swimlane_id.as_str());
+                    ctx.write_swimlane(&crate::types::Swimlane {
                         id: swimlane_id.clone(),
                         name,
                         order,
@@ -162,17 +151,17 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
             // Update position fields
             entity.set(
                 "position_column",
-                serde_json::json!(self.position.column.as_str()),
+                json!(self.position.column.as_str()),
             );
             match &self.position.swimlane {
-                Some(s) => entity.set("position_swimlane", serde_json::json!(s.as_str())),
+                Some(s) => entity.set("position_swimlane", json!(s.as_str())),
                 None => {
                     entity.remove("position_swimlane");
                 }
             }
             entity.set(
                 "position_ordinal",
-                serde_json::json!(ordinal.as_str()),
+                json!(ordinal.as_str()),
             );
 
             ectx.write(&entity).await?;
@@ -272,11 +261,9 @@ mod tests {
 
         assert_eq!(result["position"]["column"], "in-review");
 
-        // Verify the column was created as an individual file
-        let col = ctx
-            .read_column(&ColumnId::from_string("in-review"))
-            .await
-            .unwrap();
-        assert_eq!(col.name, "In Review");
+        // Verify the column was created as an entity
+        let ectx = ctx.entity_context().await.unwrap();
+        let col_entity = ectx.read("column", "in-review").await.unwrap();
+        assert_eq!(col_entity.get_str("name").unwrap(), "In Review");
     }
 }

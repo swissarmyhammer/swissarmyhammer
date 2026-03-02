@@ -4,7 +4,8 @@ use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::Board;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -39,6 +40,11 @@ impl InitBoard {
     }
 }
 
+/// Default column definitions: (id, name, order)
+fn default_columns() -> Vec<(&'static str, &'static str, usize)> {
+    vec![("todo", "To Do", 0), ("doing", "Doing", 1), ("done", "Done", 2)]
+}
+
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for InitBoard {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
@@ -65,20 +71,21 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             // Write board file
             ctx.write_board(&board).await?;
 
-            // Write default columns as individual files
-            for column in Board::default_columns() {
-                ctx.write_column(&column).await?;
+            // Write default columns as entities
+            let ectx = ctx.entity_context().await?;
+            let mut columns_json: Vec<Value> = Vec::new();
+            for (id, name, order) in default_columns() {
+                let mut entity = Entity::new("column", id);
+                entity.set("name", json!(name));
+                entity.set("order", json!(order));
+                ectx.write(&entity).await?;
+                columns_json.push(json!({"id": id, "name": name, "order": order}));
             }
 
             // Return board with columns in response (for API compatibility)
-            // Build column JSON manually to include IDs (Column.id has #[serde(skip)])
-            let columns: Vec<Value> = Board::default_columns()
-                .iter()
-                .map(|c| serde_json::json!({"id": c.id, "name": c.name, "order": c.order}))
-                .collect();
             let mut result = serde_json::to_value(&board)?;
-            result["columns"] = serde_json::json!(columns);
-            result["swimlanes"] = serde_json::json!([]);
+            result["columns"] = json!(columns_json);
+            result["swimlanes"] = json!([]);
             Ok(result)
         }
         .await;
@@ -131,7 +138,7 @@ mod tests {
         assert!(result["columns"].is_array());
         let columns = result["columns"].as_array().unwrap();
         assert_eq!(columns.len(), 3);
-        // Verify column IDs are present (not omitted by serde(skip))
+        // Verify column IDs are present
         for col in columns {
             assert!(col["id"].is_string(), "Column should have id field");
         }

@@ -58,20 +58,23 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let ectx = ctx.entity_context().await?;
-            let all_columns = ctx.read_all_columns().await?;
+            let all_columns = ectx.list("column").await?;
             let all_tasks = ectx.list("task").await?;
 
-            // Get first column
-            let first_col = all_columns.iter().min_by_key(|c| c.order);
-            let first_column = match first_col {
-                Some(c) => c.id.as_str(),
+            // Get first column (lowest order)
+            let first_column = all_columns
+                .iter()
+                .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+                .map(|c| c.id.as_str());
+            let first_column = match first_column {
+                Some(c) => c,
                 None => return Ok(Value::Null),
             };
 
             // Get terminal column for readiness check
             let terminal_column = all_columns
                 .iter()
-                .max_by_key(|c| c.order)
+                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 

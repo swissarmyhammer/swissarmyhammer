@@ -44,9 +44,13 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         if !ctx.is_initialized() && operation.op_string() != "init board" {
             let board = crate::types::Board::new("Untitled Board");
             ctx.write_board(&board).await?;
-            // Write default columns as individual files
-            for column in crate::types::Board::default_columns() {
-                ctx.write_column(&column).await?;
+            // Write default columns as entities
+            let ectx = ctx.entity_context().await?;
+            for (id, name, order) in [("todo", "To Do", 0), ("doing", "Doing", 1), ("done", "Done", 2)] {
+                let mut entity = swissarmyhammer_entity::Entity::new("column", id);
+                entity.set("name", serde_json::json!(name));
+                entity.set("order", serde_json::json!(order));
+                ectx.write(&entity).await?;
             }
         }
 

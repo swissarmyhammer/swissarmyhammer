@@ -34,12 +34,12 @@ impl Execute<KanbanContext, KanbanError> for GetTask {
             let ectx = ctx.entity_context().await?;
             let entity = ectx.read("task", self.id.as_str()).await?;
 
-            let all_columns = ctx.read_all_columns().await?;
+            let all_columns = ectx.list("column").await?;
             let all_tasks = ectx.list("task").await?;
 
             let terminal_column = all_columns
                 .iter()
-                .max_by_key(|c| c.order)
+                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 

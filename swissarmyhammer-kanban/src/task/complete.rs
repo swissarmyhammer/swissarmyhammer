@@ -40,12 +40,13 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
             let mut entity = ectx.read("task", self.id.as_str()).await?;
 
             // Get terminal column (highest order = done)
-            let terminal =
-                ctx.terminal_column()
-                    .await?
-                    .ok_or_else(|| KanbanError::ColumnNotFound {
-                        id: "done".to_string(),
-                    })?;
+            let all_columns = ectx.list("column").await?;
+            let terminal = all_columns
+                .iter()
+                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+                .ok_or_else(|| KanbanError::ColumnNotFound {
+                    id: "done".to_string(),
+                })?;
 
             // Calculate ordinal at end of done column
             let all_tasks = ectx.list("task").await?;

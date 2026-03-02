@@ -1,10 +1,11 @@
 //! AddColumn command
 
 use crate::context::KanbanContext;
-use crate::error::KanbanError;
-use crate::types::{Column, ColumnId};
+use crate::error::{KanbanError, Result};
+use crate::types::ColumnId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -48,41 +49,34 @@ impl Execute<KanbanContext, KanbanError> for AddColumn {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
 
-        let result = async {
+        let result: Result<Value> = async {
+            let ectx = ctx.entity_context().await?;
+
             // Check for duplicate ID
-            if ctx.column_exists(&self.id).await {
+            if ectx.read("column", self.id.as_str()).await.is_ok() {
                 return Err(KanbanError::duplicate_id("column", self.id.to_string()));
             }
 
             // Determine order
-            let order = self.order.unwrap_or_else(|| {
-                // Synchronous fallback: we'll compute after reading all columns
-                0 // placeholder, overridden below
-            });
-
-            let order = if self.order.is_some() {
+            let order = if let Some(order) = self.order {
                 order
             } else {
-                let columns = ctx.read_all_columns().await?;
+                let columns = ectx.list("column").await?;
                 columns
                     .iter()
-                    .map(|c| c.order)
+                    .filter_map(|c| c.get("order").and_then(|v| v.as_u64()))
                     .max()
-                    .map(|o| o + 1)
+                    .map(|o| o as usize + 1)
                     .unwrap_or(0)
             };
 
-            let column = Column {
-                id: self.id.clone(),
-                name: self.name.clone(),
-                order,
-            };
+            let mut entity = Entity::new("column", self.id.as_str());
+            entity.set("name", json!(self.name));
+            entity.set("order", json!(order));
 
-            ctx.write_column(&column).await?;
+            ectx.write(&entity).await?;
 
-            let mut result = serde_json::to_value(&column)?;
-            result["id"] = serde_json::json!(&column.id);
-            Ok(result)
+            Ok(column_entity_to_json(&entity))
         }
         .await;
 
@@ -108,6 +102,15 @@ impl Execute<KanbanContext, KanbanError> for AddColumn {
             }
         }
     }
+}
+
+/// Convert a column Entity to the API JSON format
+pub(crate) fn column_entity_to_json(entity: &Entity) -> Value {
+    json!({
+        "id": entity.id,
+        "name": entity.get_str("name").unwrap_or(""),
+        "order": entity.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
+    })
 }
 
 #[cfg(test)]

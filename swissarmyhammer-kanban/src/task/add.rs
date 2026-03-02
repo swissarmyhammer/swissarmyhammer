@@ -95,11 +95,12 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
             let column = match &self.column {
                 Some(col) => col.clone(),
                 None => {
-                    let col = ctx
-                        .first_column()
-                        .await?
+                    let columns = ectx.list("column").await?;
+                    let first = columns
+                        .iter()
+                        .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                         .expect("board must have at least one column");
-                    col.id.to_string()
+                    first.id.clone()
                 }
             };
 

@@ -1,10 +1,11 @@
 //! UpdateColumn command
 
+use crate::column::add::column_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::ColumnId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -52,19 +53,18 @@ impl Execute<KanbanContext, KanbanError> for UpdateColumn {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut column = ctx.read_column(&self.id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("column", self.id.as_str()).await?;
 
             if let Some(name) = &self.name {
-                column.name = name.clone();
+                entity.set("name", json!(name));
             }
             if let Some(order) = self.order {
-                column.order = order;
+                entity.set("order", json!(order));
             }
 
-            ctx.write_column(&column).await?;
-            let mut result = serde_json::to_value(&column)?;
-            result["id"] = serde_json::json!(&column.id);
-            Ok(result)
+            ectx.write(&entity).await?;
+            Ok(column_entity_to_json(&entity))
         }
         .await;
 

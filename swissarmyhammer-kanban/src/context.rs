@@ -263,6 +263,7 @@ impl KanbanContext {
         if !board.columns.is_empty() || !board.swimlanes.is_empty() {
             self.ensure_directories().await?;
 
+            #[allow(deprecated)]
             for column in &board.columns {
                 if !self.column_exists(&column.id).await {
                     self.write_column(column).await?;
@@ -308,19 +309,25 @@ impl KanbanContext {
     }
 
     /// Get the first column (lowest order) from file-based storage
+    #[deprecated(note = "use entity_context().list(\"column\") instead")]
     pub async fn first_column(&self) -> Result<Option<Column>> {
+        #[allow(deprecated)]
         let columns = self.read_all_columns().await?;
         Ok(columns.into_iter().min_by_key(|c| c.order))
     }
 
     /// Get the terminal/done column (highest order) from file-based storage
+    #[deprecated(note = "use entity_context().list(\"column\") instead")]
     pub async fn terminal_column(&self) -> Result<Option<Column>> {
+        #[allow(deprecated)]
         let columns = self.read_all_columns().await?;
         Ok(columns.into_iter().max_by_key(|c| c.order))
     }
 
     /// Find a column by ID from file-based storage
+    #[deprecated(note = "use entity_context().read(\"column\", id) instead")]
     pub async fn find_column(&self, id: &ColumnId) -> Result<Option<Column>> {
+        #[allow(deprecated)]
         match self.read_column(id).await {
             Ok(col) => Ok(Some(col)),
             Err(KanbanError::ColumnNotFound { .. }) => Ok(None),
@@ -674,50 +681,36 @@ impl KanbanContext {
     // Column I/O
     // =========================================================================
 
-    /// Read a column file (YAML, with JSON fallback)
+    /// Read a column file (YAML only)
+    #[deprecated(note = "use entity_context().read(\"column\", id) instead")]
     pub async fn read_column(&self, id: &ColumnId) -> Result<Column> {
-        let yaml_path = self.column_path(id); // .yaml
-        let path = if yaml_path.exists() {
-            yaml_path
-        } else {
-            let json_path = self.root.join("columns").join(format!("{}.json", id));
-            if !json_path.exists() {
-                return Err(KanbanError::ColumnNotFound { id: id.to_string() });
-            }
-            json_path
-        };
+        let path = self.column_path(id);
+        if !path.exists() {
+            return Err(KanbanError::ColumnNotFound { id: id.to_string() });
+        }
 
         let content = fs::read_to_string(&path).await?;
         let mut column: Column = serde_yaml::from_str(&content)?;
         column.id = id.clone();
-
-        // Auto-migrate legacy .json to .yaml
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            self.write_column(&column).await?;
-            let _ = fs::remove_file(&path).await;
-        }
-
         Ok(column)
     }
 
     /// Write a column file as YAML (atomic write via temp file)
+    #[deprecated(note = "use entity_context().write() instead")]
     pub async fn write_column(&self, column: &Column) -> Result<()> {
         let path = self.column_path(&column.id);
         let content = serde_yaml::to_string(column)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete a column file and its log (handles both .yaml and legacy .json)
+    /// Delete a column file and its log
+    #[deprecated(note = "use entity_context().delete(\"column\", id) instead")]
     pub async fn delete_column_file(&self, id: &ColumnId) -> Result<()> {
         let yaml_path = self.column_path(id);
-        let json_path = self.root.join("columns").join(format!("{}.json", id));
         let log_path = self.column_log_path(id);
 
         if yaml_path.exists() {
             fs::remove_file(&yaml_path).await?;
-        }
-        if json_path.exists() {
-            fs::remove_file(&json_path).await?;
         }
         if log_path.exists() {
             fs::remove_file(&log_path).await?;
@@ -726,25 +719,22 @@ impl KanbanContext {
         Ok(())
     }
 
-    /// List all column IDs by reading the columns directory (accepts .yaml and legacy .json)
+    /// List all column IDs by reading the columns directory
+    #[deprecated(note = "use entity_context().list(\"column\") instead")]
     pub async fn list_column_ids(&self) -> Result<Vec<ColumnId>> {
         let columns_dir = self.columns_dir();
         if !columns_dir.exists() {
             return Ok(Vec::new());
         }
 
-        let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&columns_dir).await?;
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            let ext = path.extension().and_then(|s| s.to_str());
-            if ext == Some("yaml") || ext == Some("json") {
+            if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    if seen.insert(stem.to_string()) {
-                        ids.push(ColumnId::from_string(stem));
-                    }
+                    ids.push(ColumnId::from_string(stem));
                 }
             }
         }
@@ -753,25 +743,24 @@ impl KanbanContext {
     }
 
     /// Read all columns
+    #[deprecated(note = "use entity_context().list(\"column\") instead")]
     pub async fn read_all_columns(&self) -> Result<Vec<Column>> {
+        #[allow(deprecated)]
         let ids = self.list_column_ids().await?;
         let mut columns = Vec::with_capacity(ids.len());
 
         for id in ids {
+            #[allow(deprecated)]
             columns.push(self.read_column(&id).await?);
         }
 
         Ok(columns)
     }
 
-    /// Check if a column exists (checks .yaml and legacy .json)
+    /// Check if a column exists
+    #[deprecated(note = "use entity_context().read(\"column\", id).is_ok() instead")]
     pub async fn column_exists(&self, id: &ColumnId) -> bool {
         self.column_path(id).exists()
-            || self
-                .root
-                .join("columns")
-                .join(format!("{}.json", id))
-                .exists()
     }
 
     // =========================================================================
@@ -1105,10 +1094,12 @@ impl KanbanContext {
         }
 
         // Columns
+        #[allow(deprecated)]
         let col_ids = self.list_column_ids().await?;
         for id in &col_ids {
             let json_path = self.root.join("columns").join(format!("{}.json", id));
             if json_path.exists() {
+                #[allow(deprecated)]
                 self.read_column(id).await?;
                 stats.columns += 1;
             }
@@ -1481,6 +1472,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_column_io() {
         let (_temp, ctx) = setup().await;
 
@@ -1555,6 +1547,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_column_not_found() {
         let (_temp, ctx) = setup().await;
 

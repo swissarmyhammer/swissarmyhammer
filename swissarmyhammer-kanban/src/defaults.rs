@@ -168,14 +168,11 @@ impl EntityLookup for KanbanLookup {
                 })
             }
             "column" => {
-                let col_id = crate::types::ColumnId::from_string(id);
-                ctx.read_column(&col_id).await.ok().map(|c| {
-                    let mut v = serde_json::to_value(&c).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id.to_string()));
-                    }
-                    v
-                })
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.read("column", id).await.ok().map(|e| e.to_json())
+                } else {
+                    None
+                }
             }
             "swimlane" => {
                 let sl_id = crate::types::SwimlaneId::from_string(id);
@@ -237,20 +234,18 @@ impl EntityLookup for KanbanLookup {
                     v
                 })
                 .collect(),
-            "column" => ctx
-                .read_all_columns()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|c| {
-                    let id = c.id.to_string();
-                    let mut v = serde_json::to_value(&c).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id));
-                    }
-                    v
-                })
-                .collect(),
+            "column" => {
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.list("column")
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|e| e.to_json())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
             "swimlane" => ctx
                 .read_all_swimlanes()
                 .await
