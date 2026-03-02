@@ -92,7 +92,7 @@ pub fn load_agent_from_dir(dir: &Path, source: AgentSource) -> Result<Agent, Str
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && path.file_name().map_or(false, |n| n != "AGENT.md") {
+            if path.is_file() && path.file_name().is_some_and(|n| n != "AGENT.md") {
                 if let Ok(file_content) = std::fs::read_to_string(&path) {
                     let filename = path.file_name().unwrap().to_string_lossy().to_string();
                     agent.resources.files.insert(filename, file_content);

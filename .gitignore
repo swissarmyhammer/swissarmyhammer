@@ -206,3 +206,6 @@ swissarmyhammer-config/.swissarmyhammer/
 
 # Frontend build artifacts
 **/ui/dist/
+
+# Shell tool runtime data (SQLite DB, WAL files, logs)
+.shell/

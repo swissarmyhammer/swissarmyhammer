@@ -41,7 +41,7 @@ Follow a zoom-in funnel from broad to specific. Do NOT chain `cd`, `ls`, `cat` c
 
 ### Step 5: Check recent history
 
-- Use `git_changes` to review recent changes to the affected files.
+- Use `git` with `op: "get changes"` to review recent changes to the affected files.
 - This reveals change patterns, active development areas, and potential conflicts.
 
 ## Phase 3: Assess Scope

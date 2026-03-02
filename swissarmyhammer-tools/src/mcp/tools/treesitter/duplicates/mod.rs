@@ -1,15 +1,12 @@
 //! Duplicate code detection tool using semantic similarity
 
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use crate::mcp::tools::treesitter::shared::{
-    build_tool_schema, format_duplicate_clusters, format_similar_chunks, open_workspace,
-    resolve_workspace_path, schema_workspace_path_property,
+    format_duplicate_clusters, format_similar_chunks, open_workspace, resolve_workspace_path,
 };
-use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
-use serde_json::json;
 use std::path::PathBuf;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
@@ -53,20 +50,6 @@ impl Operation for FindDuplicates {
     }
 }
 
-/// MCP tool for detecting duplicate code
-#[derive(Default)]
-pub struct TreesitterDuplicatesTool;
-
-impl TreesitterDuplicatesTool {
-    /// Creates a new instance of the TreesitterDuplicatesTool
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-// No health checks needed
-crate::impl_empty_doctorable!(TreesitterDuplicatesTool);
-
 #[derive(Deserialize)]
 struct DuplicatesRequest {
     /// Minimum similarity threshold 0.0-1.0 (default: 0.85)
@@ -87,46 +70,6 @@ fn default_min_similarity() -> f32 {
 
 fn default_min_chunk_bytes() -> usize {
     DEFAULT_MIN_CHUNK_BYTES
-}
-
-#[async_trait]
-impl McpTool for TreesitterDuplicatesTool {
-    fn name(&self) -> &'static str {
-        "treesitter_duplicates"
-    }
-
-    fn description(&self) -> &'static str {
-        include_str!("description.md")
-    }
-
-    fn schema(&self) -> serde_json::Value {
-        build_tool_schema(
-            vec![
-                (
-                    "min_similarity",
-                    json!({"type": "number", "description": "Minimum cosine similarity threshold 0.0-1.0 (default: 0.85)"}),
-                ),
-                (
-                    "min_chunk_bytes",
-                    json!({"type": "integer", "description": "Minimum chunk size in bytes to consider (default: 100)"}),
-                ),
-                (
-                    "file",
-                    json!({"type": "string", "description": "Optional: find duplicates only for chunks in this specific file"}),
-                ),
-                ("path", schema_workspace_path_property()),
-            ],
-            None,
-        )
-    }
-
-    async fn execute(
-        &self,
-        arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        execute_duplicates(arguments, context).await
-    }
 }
 
 /// Execute a duplicate code detection operation
@@ -175,38 +118,13 @@ pub async fn execute_duplicates(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::tools::treesitter::shared::test_helpers::{
-        assert_execute_succeeds_on_empty_workspace, assert_schema_has_properties,
-        assert_schema_is_object, assert_tool_basics, execute_tool_with_temp_path,
-    };
+    use serde_json::json;
 
     #[test]
     fn test_constants() {
         const { assert!(DEFAULT_MIN_SIMILARITY > 0.0) };
         const { assert!(DEFAULT_MIN_SIMILARITY <= 1.0) };
         const { assert!(DEFAULT_MIN_CHUNK_BYTES > 0) };
-    }
-
-    #[test]
-    fn test_tool_basics() {
-        let tool = TreesitterDuplicatesTool::new();
-        assert_tool_basics(&tool, "treesitter_duplicates", "duplicate");
-    }
-
-    #[test]
-    fn test_tool_default_creates_valid_instance() {
-        let tool = TreesitterDuplicatesTool;
-        assert_tool_basics(&tool, "treesitter_duplicates", "duplicate");
-    }
-
-    #[test]
-    fn test_schema_structure() {
-        let tool = TreesitterDuplicatesTool::new();
-        assert_schema_is_object(&tool);
-        assert_schema_has_properties(
-            &tool,
-            &["min_similarity", "min_chunk_bytes", "file", "path"],
-        );
     }
 
     #[test]
@@ -238,24 +156,6 @@ mod tests {
         assert_eq!(request.min_chunk_bytes, 200);
         assert_eq!(request.file, Some("src/main.rs".to_string()));
         assert_eq!(request.path, Some("/some/project".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_execute_no_leader_running() {
-        let tool = TreesitterDuplicatesTool::new();
-        assert_execute_succeeds_on_empty_workspace(&tool, None).await;
-    }
-
-    #[tokio::test]
-    async fn test_execute_with_nonexistent_file_returns_error() {
-        // When searching for duplicates in a specific file that doesn't exist,
-        // the tool should return an error
-        let tool = TreesitterDuplicatesTool::new();
-        let mut extra_args = serde_json::Map::new();
-        extra_args.insert("file".to_string(), json!("nonexistent/file.rs"));
-        let (result, _temp_dir) = execute_tool_with_temp_path(&tool, Some(extra_args)).await;
-        // Returns error because the file doesn't exist
-        assert!(result.is_err());
     }
 
     #[test]

@@ -93,12 +93,12 @@ fn test_regex_injection_attempts() {
 fn test_deny_patterns_enforced() {
     let filter = ToolFilter::new(
         vec![], // Empty allow list means allow all except denied
-        vec!["^shell_.*".to_string(), "^kanban$".to_string()],
+        vec!["^shell".to_string(), "^kanban$".to_string()],
     )
     .unwrap();
 
     // Denied tools
-    assert!(!filter.is_allowed("shell_execute"));
+    assert!(!filter.is_allowed("shell"));
     assert!(!filter.is_allowed("shell_kill"));
     assert!(!filter.is_allowed("kanban"));
 
@@ -108,15 +108,15 @@ fn test_deny_patterns_enforced() {
 
     // Variations - these should still be blocked or allowed based on pattern matching
     assert!(filter.is_allowed("Shell_execute")); // Case variation doesn't match deny pattern, and no allow patterns, so allowed
-    assert!(!filter.is_allowed("shell_execute ")); // Trailing space still matches ^shell_.* pattern
+    assert!(!filter.is_allowed("shell_execute ")); // Trailing space still matches ^shell pattern
 }
 
 /// Test combined allow and deny with bypass attempts
 #[test]
 fn test_combined_filters_security() {
     let filter = ToolFilter::new(
-        vec!["^files$".to_string()],   // Allow files
-        vec!["^shell_.*".to_string()], // Deny shell tools
+        vec!["^files$".to_string()], // Allow files
+        vec!["^shell".to_string()],  // Deny shell tools
     )
     .unwrap();
 
@@ -126,7 +126,7 @@ fn test_combined_filters_security() {
     // Variations don't match the allow pattern ^files$, so they're denied
     assert!(!filter.is_allowed("files2")); // Suffix - doesn't match ^files$
     assert!(!filter.is_allowed("Files")); // Case - doesn't match ^files$ (case sensitive)
-    assert!(!filter.is_allowed("shell_execute")); // Not in allow list
+    assert!(!filter.is_allowed("shell")); // Not in allow list
 }
 
 /// Test that long tool names are handled correctly

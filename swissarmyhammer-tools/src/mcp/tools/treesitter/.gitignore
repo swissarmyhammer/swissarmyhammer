@@ -1,0 +1,5 @@
+
+# Tree-sitter index database files
+.treesitter-index.db
+.treesitter-index.db-shm
+.treesitter-index.db-wal

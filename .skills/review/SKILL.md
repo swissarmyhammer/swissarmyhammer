@@ -147,12 +147,7 @@ For each blocker or warning, use `kanban` with:
 - `description: "<file path and line numbers>\n\n<what is wrong and why it matters>\n\n<suggestion for how to fix>"`
 - `tags: ["blocker"]` or `tags: ["warning"]`
 
-Then add subtasks that break the fix into concrete steps. Use `kanban` with:
-- `op: "add subtask"`
-- `task_id: "<task-id>"`
-- `title: "<specific fix step>"`
-
-Every card MUST include a subtask for verifying the fix (running tests, re-checking the logic, etc.).
+Include a markdown checklist in the description to break the fix into concrete steps (e.g., `- [ ] step one`). Every card MUST include a checklist item for verifying the fix (running tests, re-checking the logic, etc.).
 
 #### Ordering
 

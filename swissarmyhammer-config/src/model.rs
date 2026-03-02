@@ -216,6 +216,8 @@ pub enum ModelExecutorType {
     ClaudeCode,
     /// Use local LlamaAgent with in-process execution
     LlamaAgent,
+    /// Use local embedding model for semantic search
+    LlamaEmbedding,
 }
 
 /// Complete model configuration with executor-specific settings
@@ -240,6 +242,8 @@ pub enum ModelExecutorConfig {
     ClaudeCode(ClaudeCodeConfig),
     #[serde(rename = "llama-agent")]
     LlamaAgent(LlamaAgentConfig),
+    #[serde(rename = "llama-embedding")]
+    LlamaEmbedding(EmbeddingModelConfig),
 }
 
 /// Configuration for Claude Code CLI execution
@@ -265,6 +269,21 @@ pub struct LlamaAgentConfig {
     /// Repetition detection configuration
     #[serde(default)]
     pub repetition_detection: RepetitionDetectionConfig,
+}
+
+/// Configuration for embedding model execution
+///
+/// Used with the `llama-embedding` executor type for semantic embedding models.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingModelConfig {
+    /// Model source (HuggingFace or local path)
+    pub source: ModelSource,
+    /// Normalize embeddings to unit vectors
+    #[serde(default)]
+    pub normalize: bool,
+    /// Maximum sequence length for tokenization
+    #[serde(default)]
+    pub max_sequence_length: Option<usize>,
 }
 
 /// Configuration for repetition detection in model responses
@@ -407,6 +426,7 @@ impl ModelConfig {
         match &self.executor {
             ModelExecutorConfig::ClaudeCode(_) => ModelExecutorType::ClaudeCode,
             ModelExecutorConfig::LlamaAgent(_) => ModelExecutorType::LlamaAgent,
+            ModelExecutorConfig::LlamaEmbedding(_) => ModelExecutorType::LlamaEmbedding,
         }
     }
 
@@ -1935,7 +1955,7 @@ mod tests {
                 assert!(claude_config.claude_path.is_none());
                 assert!(claude_config.args.is_empty());
             }
-            ModelExecutorConfig::LlamaAgent(_) => panic!("Should be Claude Code config"),
+            _ => panic!("Should be Claude Code config"),
         }
     }
 
@@ -1951,7 +1971,7 @@ mod tests {
             ModelExecutorConfig::LlamaAgent(agent_config) => {
                 assert_eq!(agent_config.mcp_server.timeout_seconds, 30); // Test timeout (DEFAULT_TEST_MCP_TIMEOUT_SECONDS)
             }
-            ModelExecutorConfig::ClaudeCode(_) => panic!("Should be LlamaAgent config"),
+            _ => panic!("Should be LlamaAgent config"),
         }
     }
 

@@ -392,7 +392,7 @@ async fn test_shell_execute_output_size_limit() {
     let mut registry = registry;
     shell::register_shell_tools(&mut registry);
 
-    let tool = registry.get_tool("shell_execute").unwrap();
+    let tool = registry.get_tool("shell").unwrap();
 
     // Test command that produces reasonable output
     let mut arguments = serde_json::Map::new();
@@ -418,7 +418,7 @@ async fn test_shell_execute_handles_large_output() {
     let mut registry = registry;
     shell::register_shell_tools(&mut registry);
 
-    let tool = registry.get_tool("shell_execute").unwrap();
+    let tool = registry.get_tool("shell").unwrap();
 
     // Test command that produces moderately large output
     // Generate 1000 lines of output (~50 KB)
@@ -427,6 +427,7 @@ async fn test_shell_execute_handles_large_output() {
         "command".to_string(),
         json!("for i in {1..1000}; do echo \"Line $i with some content\"; done"),
     );
+    arguments.insert("max_lines".to_string(), json!(-1));
 
     let result = tool.execute(arguments, &context).await;
     assert!(

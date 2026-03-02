@@ -434,6 +434,33 @@ impl FlowTool {
         }
     }
 
+    /// Signal clean termination of the currently running workflow.
+    ///
+    /// Sets `__workflow_exit__` in the process-global JS state, which the workflow executor
+    /// checks after each state execution. When detected, the executor completes the workflow
+    /// cleanly (status: Completed) instead of continuing to the next state.
+    async fn exit_workflow(&self) -> std::result::Result<CallToolResult, McpError> {
+        let js_state = swissarmyhammer_js::JsState::global();
+        js_state
+            .set("__workflow_exit__", "true")
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to set workflow exit flag: {}", e), None)
+            })?;
+
+        tracing::info!("🚪 Workflow exit signal set");
+
+        let output = serde_json::json!({
+            "status": "exit_requested",
+            "message": "Workflow exit signal set. The current workflow will terminate cleanly after the current state completes."
+        });
+        let formatted = serde_json::to_string_pretty(&output).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize result: {}", e), None)
+        })?;
+
+        Ok(BaseToolImpl::create_success_response(formatted))
+    }
+
     /// Execute a workflow
     ///
     /// # Limitations
@@ -908,10 +935,10 @@ impl McpTool for FlowTool {
         let request: FlowToolRequest = BaseToolImpl::parse_arguments(arguments)?;
 
         tracing::info!(
-            "📋 Flow tool request parsed: flow_name={}, parameters={:?}, is_list={}",
+            "📋 Flow tool request parsed: op={:?}, flow_name={}, parameters={:?}",
+            request.op,
             request.flow_name,
             request.parameters,
-            request.is_list()
         );
 
         request
@@ -920,14 +947,21 @@ impl McpTool for FlowTool {
 
         tracing::info!("✅ Request validated successfully");
 
-        if request.is_list() {
-            tracing::info!("📜 Calling list_workflows");
-            self.list_workflows(&request).await
-        } else {
-            tracing::info!("🚀 Calling execute_workflow for '{}'", request.flow_name);
-            let result = self.execute_workflow(&request, context).await;
-            tracing::info!("✨ execute_workflow returned: {}", Pretty(&result.is_ok()));
-            result
+        match request.effective_op() {
+            "list" => {
+                tracing::info!("📜 Calling list_workflows");
+                self.list_workflows(&request).await
+            }
+            "exit" => {
+                tracing::info!("🚪 Calling exit_workflow");
+                self.exit_workflow().await
+            }
+            _ => {
+                tracing::info!("🚀 Calling execute_workflow for '{}'", request.flow_name);
+                let result = self.execute_workflow(&request, context).await;
+                tracing::info!("✨ execute_workflow returned: {}", Pretty(&result.is_ok()));
+                result
+            }
         }
     }
 
@@ -964,14 +998,17 @@ mod tests {
         let schema = tool.schema();
 
         assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["op"].is_object());
         assert!(schema["properties"]["flow_name"].is_object());
         assert!(schema["properties"]["parameters"].is_object());
         assert!(schema["required"].is_array());
 
-        let flow_name_enum = schema["properties"]["flow_name"]["enum"]
+        let op_enum = schema["properties"]["op"]["enum"]
             .as_array()
-            .expect("flow_name should have enum");
-        assert!(flow_name_enum.iter().any(|v| v.as_str() == Some("list")));
+            .expect("op should have enum");
+        assert!(op_enum.iter().any(|v| v.as_str() == Some("run")));
+        assert!(op_enum.iter().any(|v| v.as_str() == Some("exit")));
+        assert!(op_enum.iter().any(|v| v.as_str() == Some("list")));
     }
 
     #[test]

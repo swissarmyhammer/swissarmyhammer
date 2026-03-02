@@ -85,6 +85,12 @@ rand = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
 
+# Embedding model for semantic search
+llama-embedding = { workspace = true }
+
+# SQLite for embedding storage
+rusqlite = { workspace = true }
+
 # Operations pattern
 swissarmyhammer-operations = { workspace = true }
 

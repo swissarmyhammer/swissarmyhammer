@@ -740,7 +740,7 @@ impl ClaudeClient {
                 }
             };
 
-            // Don't forward notifications here — process_stream_response in
+            // Don't forward notifications here — process_stream_chunks in
             // agent_prompt_handling.rs sends its own richer notifications (with tool
             // kind, raw_input, session storage) for each MessageChunk it consumes.
             // Forwarding here would cause every notification to appear twice.

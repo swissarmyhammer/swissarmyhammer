@@ -817,7 +817,7 @@ pub fn tool_call_to_acp(
 /// assert_eq!(infer_tool_kind("fs_read"), ToolKind::Read);
 /// assert_eq!(infer_tool_kind("fs_write"), ToolKind::Edit);
 /// assert_eq!(infer_tool_kind("fs_delete"), ToolKind::Delete);
-/// assert_eq!(infer_tool_kind("shell_execute"), ToolKind::Execute);
+/// assert_eq!(infer_tool_kind("shell"), ToolKind::Execute);
 /// assert_eq!(infer_tool_kind("web"), ToolKind::Fetch);
 /// assert_eq!(infer_tool_kind("some_tool"), ToolKind::Other);
 /// ```
@@ -2333,7 +2333,7 @@ mod tests {
                 server_name: "filesystem".to_string(),
             },
             ToolDefinition {
-                name: "shell_execute".to_string(),
+                name: "shell".to_string(),
                 description: "Execute a command".to_string(),
                 parameters: serde_json::json!({"type": "object"}),
                 server_name: "shell".to_string(),
@@ -2347,7 +2347,7 @@ mod tests {
         assert_eq!(array.len(), 3);
         assert_eq!(array[0]["name"], "fs_read");
         assert_eq!(array[1]["name"], "fs_write");
-        assert_eq!(array[2]["name"], "shell_execute");
+        assert_eq!(array[2]["name"], "shell");
         assert_eq!(array[2]["server"], "shell");
     }
 
@@ -2455,7 +2455,7 @@ mod tests {
     fn test_infer_tool_kind_execute_operations() {
         use agent_client_protocol::ToolKind;
 
-        assert_eq!(infer_tool_kind("shell_execute"), ToolKind::Execute);
+        assert_eq!(infer_tool_kind("shell"), ToolKind::Execute);
         assert_eq!(infer_tool_kind("execute_command"), ToolKind::Execute);
         assert_eq!(infer_tool_kind("terminal_run"), ToolKind::Execute);
         assert_eq!(infer_tool_kind("run_script"), ToolKind::Execute);
@@ -2603,7 +2603,7 @@ mod tests {
             ("fs_read", ToolKind::Read),
             ("fs_write", ToolKind::Edit),
             ("fs_delete", ToolKind::Delete),
-            ("shell_execute", ToolKind::Execute),
+            ("shell", ToolKind::Execute),
             ("web", ToolKind::Fetch),
             ("search_files", ToolKind::Search),
             ("move_file", ToolKind::Move),

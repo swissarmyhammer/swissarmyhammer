@@ -49,7 +49,7 @@
 //! #[async_trait]
 //! impl McpTool for ShellExecuteTool {
 //!     fn name(&self) -> &'static str {
-//!         "shell_execute"
+//!         "shell"
 //!     }
 //!     
 //!     fn description(&self) -> &'static str {
@@ -149,6 +149,7 @@
 //! - Cross-platform compatibility tests
 
 pub mod execute;
+pub mod state;
 
 use crate::mcp::tool_registry::ToolRegistry;
 
@@ -187,7 +188,7 @@ mod tests {
         register_shell_tools(&mut registry);
 
         // Verify shell_execute tool is registered
-        assert!(registry.get_tool("shell_execute").is_some());
+        assert!(registry.get_tool("shell").is_some());
         assert_eq!(registry.len(), 1);
     }
 
@@ -201,10 +202,10 @@ mod tests {
 
         let shell_execute_tool = tools
             .iter()
-            .find(|tool| tool.name == "shell_execute")
+            .find(|tool| tool.name == "shell")
             .expect("shell_execute tool should be registered");
 
-        assert_eq!(shell_execute_tool.name, "shell_execute");
+        assert_eq!(shell_execute_tool.name, "shell");
         assert!(shell_execute_tool.description.is_some());
         assert!(!shell_execute_tool.input_schema.is_empty());
     }
@@ -219,7 +220,7 @@ mod tests {
 
         // Should have only one tool (second registration overwrites)
         assert_eq!(registry.len(), 1);
-        assert!(registry.get_tool("shell_execute").is_some());
+        assert!(registry.get_tool("shell").is_some());
     }
 
     #[test]

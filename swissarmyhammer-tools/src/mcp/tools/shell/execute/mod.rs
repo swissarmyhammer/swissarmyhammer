@@ -2,9 +2,11 @@
 //!
 //! This module provides the ShellExecuteTool for executing shell commands through the MCP protocol.
 
+use super::state::ShellState;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{send_mcp_log, AgentTool, BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use rmcp::model::{
     CallToolResult, LoggingLevel, LoggingMessageNotification, LoggingMessageNotificationParam,
 };
@@ -15,9 +17,30 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
-// Replaced sah_config with local defaults for shell configuration
+use swissarmyhammer_operations::{
+    generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
+};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
+
+/// Global shell state — initialized lazily on first use.
+static SHELL_STATE: Lazy<Arc<Mutex<Option<ShellState>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
+
+/// Get or initialize the global shell state.
+async fn get_shell_state() -> Result<Arc<Mutex<Option<ShellState>>>, McpError> {
+    let state = Arc::clone(&SHELL_STATE);
+    {
+        let mut guard = state.lock().await;
+        if guard.is_none() {
+            let s = ShellState::new().map_err(|e| {
+                McpError::internal_error(format!("Failed to initialize shell state: {}", e), None)
+            })?;
+            *guard = Some(s);
+        }
+    }
+    Ok(state)
+}
 
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
 
@@ -103,6 +126,12 @@ struct ShellExecuteRequest {
     /// The shell command to execute
     command: String,
 
+    /// Timeout in seconds before killing the command
+    timeout: Option<u64>,
+
+    /// Max output lines returned to agent (default: 200, -1 for all, 0 for status-only)
+    max_lines: Option<i64>,
+
     /// Optional working directory for command execution
     working_directory: Option<String>,
 
@@ -113,6 +142,8 @@ struct ShellExecuteRequest {
 /// Result structure for shell command execution
 #[derive(Debug, Serialize)]
 pub struct ShellExecutionResult {
+    /// Command ID for referencing in get_lines, search, grep operations
+    pub command_id: usize,
     /// The command that was executed
     pub command: String,
     /// Exit code returned by the command
@@ -621,10 +652,17 @@ impl AsyncProcessGuard {
         }
     }
 
-    /// Take the child process out of the guard, transferring ownership
-    /// This is useful when you want to handle the process manually
+    /// Take the child process out of the guard, transferring ownership.
+    /// WARNING: After calling this, the guard's Drop will NOT kill the process.
+    /// Only use when you need ownership AND will handle cleanup yourself.
     pub fn take_child(&mut self) -> Option<Child> {
         self.child.take()
+    }
+
+    /// Borrow the child process mutably without removing it from the guard.
+    /// The guard retains ownership, so its Drop will still kill the process.
+    pub fn child_mut(&mut self) -> Option<&mut Child> {
+        self.child.as_mut()
     }
 
     /// Check if the process is still running
@@ -1098,18 +1136,18 @@ async fn stream_output_until_complete(
 }
 
 async fn process_child_output_with_limits(
-    mut child: Child,
+    child: &mut Child,
     output_limits: &OutputLimits,
     peer: Option<&Arc<Peer<RoleServer>>>,
 ) -> Result<(std::process::ExitStatus, OutputBuffer, u32), ShellError> {
-    let mut setup = setup_output_capture(&mut child, output_limits)?;
+    let mut setup = setup_output_capture(child, output_limits)?;
     let mut line_count: u32 = 0;
     let mut binary_notified = false;
 
     let exit_status = stream_output_until_complete(
         &mut setup.stdout_reader,
         &mut setup.stderr_reader,
-        &mut child,
+        child,
         &mut line_count,
         &mut setup.output_buffer,
         &mut binary_notified,
@@ -1143,94 +1181,6 @@ async fn process_child_output_with_limits(
     Ok((exit_status, setup.output_buffer, line_count))
 }
 
-/// Execute a shell command with process management and full output capture
-///
-/// This function provides the core shell command execution logic with comprehensive
-/// process cleanup, handling:
-/// - Process spawning using tokio::process::Command
-/// - Process management using AsyncProcessGuard
-/// - Working directory and environment variable management
-/// - Complete stdout/stderr capture with size limits
-/// - Execution time measurement
-/// - Comprehensive error handling
-///
-/// # Arguments
-///
-/// * `command` - The shell command to execute
-/// * `working_directory` - Optional working directory for execution
-/// * `environment` - Optional environment variables to set
-///
-/// # Returns
-///
-/// Returns a `Result` containing either a `ShellExecutionResult` with complete
-/// execution metadata or a `ShellError` describing the failure mode.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use swissarmyhammer_tools::mcp::tools::shell::execute::execute_shell_command;
-/// use std::collections::HashMap;
-/// use std::path::PathBuf;
-///
-/// # tokio_test::block_on(async {
-/// // Simple command execution
-/// let result = execute_shell_command(
-///     "echo 'Hello World'".to_string(),
-///     None,
-///     30,
-///     None
-/// ).await.unwrap();
-///
-/// assert_eq!(result.exit_code, 0);
-/// assert_eq!(result.stdout.trim(), "Hello World");
-/// assert!(!result.output_truncated);
-///
-/// // Command with working directory
-/// let result = execute_shell_command(
-///     "pwd".to_string(),
-///     Some(PathBuf::from("/tmp")),
-///     30,
-///     None
-/// ).await.unwrap();
-///
-/// assert_eq!(result.working_directory, PathBuf::from("/tmp"));
-///
-/// // Command with environment variables
-/// let mut env = HashMap::new();
-/// env.insert("MY_VAR".to_string(), "test_value".to_string());
-///
-/// let result = execute_shell_command(
-///     "echo $MY_VAR".to_string(),
-///     None,
-///     30,
-///     Some(env)
-/// ).await.unwrap();
-///
-/// assert_eq!(result.stdout.trim(), "test_value");
-///
-/// // Handling command that produces large output
-/// let result = execute_shell_command(
-///     "yes | head -n 100000".to_string(), // Large output
-///     None,
-///     30,
-///     None
-/// ).await.unwrap();
-///
-/// // Output may be truncated if it exceeds limits
-/// if result.output_truncated {
-///     println!("Output truncated at {} bytes", result.total_output_size);
-/// }
-/// # });
-/// ```
-///
-/// # Output Handling
-///
-/// The function provides advanced output management:
-/// - **Size Limits**: Default 10MB limit prevents memory exhaustion
-/// - **Binary Detection**: Binary content is safely formatted as descriptive text
-/// - **Streaming Processing**: Output is processed in real-time, not buffered entirely
-/// - **Metadata**: Results include truncation status, binary detection, and byte counts
-///
 /// Validate and prepare working directory
 fn prepare_working_directory(working_directory: Option<PathBuf>) -> Result<PathBuf, ShellError> {
     let work_dir = working_directory
@@ -1315,6 +1265,7 @@ async fn send_completion_notification(
 
 /// Format execution result from output buffer
 fn format_execution_result(
+    command_id: usize,
     command: String,
     work_dir: PathBuf,
     exit_status: std::process::ExitStatus,
@@ -1347,6 +1298,7 @@ fn format_execution_result(
     );
 
     ShellExecutionResult {
+        command_id,
         command,
         exit_code,
         stdout: output_buffer.get_stdout(),
@@ -1359,24 +1311,36 @@ fn format_execution_result(
     }
 }
 
-async fn execute_shell_command(
-    command: String,
+/// Spawn a shell command and return the guard (with PID available) and working dir.
+/// The guard owns the child process — if dropped, it kills the process.
+fn spawn_shell_command(
+    command: &str,
     working_directory: Option<PathBuf>,
-    environment: Option<std::collections::HashMap<String, String>>,
+    environment: Option<&std::collections::HashMap<String, String>>,
+) -> Result<(AsyncProcessGuard, PathBuf), ShellError> {
+    let work_dir = prepare_working_directory(working_directory)?;
+    let cmd = prepare_shell_command(command, &work_dir, environment);
+    let child = spawn_command_process(cmd, command, &work_dir)?;
+    let process_guard = AsyncProcessGuard::new(child, command.to_string());
+    Ok((process_guard, work_dir))
+}
+
+/// Execute using an already-spawned process guard. The guard retains child ownership,
+/// so if this future is cancelled (e.g., by timeout), the guard's Drop kills the process.
+async fn execute_with_guard(
+    process_guard: &mut AsyncProcessGuard,
+    command_id: usize,
+    command: String,
+    work_dir: PathBuf,
     context: &ToolContext,
 ) -> Result<ShellExecutionResult, ShellError> {
     let start_time = Instant::now();
-    let work_dir = prepare_working_directory(working_directory)?;
-    let cmd = prepare_shell_command(&command, &work_dir, environment.as_ref());
-    let child = spawn_command_process(cmd, &command, &work_dir)?;
-
-    let mut process_guard = AsyncProcessGuard::new(child, command.clone());
     let output_limits = OutputLimits::with_defaults().map_err(|e| ShellError::SystemError {
         message: format!("Invalid output configuration: {e}"),
     })?;
 
     let child = process_guard
-        .take_child()
+        .child_mut()
         .ok_or_else(|| ShellError::SystemError {
             message: "Process guard has no child process".to_string(),
         })?;
@@ -1390,6 +1354,7 @@ async fn execute_shell_command(
     send_completion_notification(context, line_count, exit_code, execution_time_ms).await;
 
     Ok(format_execution_result(
+        command_id,
         command,
         work_dir,
         exit_status,
@@ -1515,6 +1480,204 @@ fn format_error_result(shell_error: ShellError) -> Result<CallToolResult, McpErr
     })
 }
 
+/// Operation metadata for executing shell commands
+#[derive(Debug, Default)]
+pub struct ExecuteCommand;
+
+static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("command")
+        .description("The shell command to execute")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("timeout")
+        .description("Seconds before killing the command (optional, default: none)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("max_lines")
+        .description("Max output lines returned to agent (default: 200). Full output always stored in history. Use -1 for all lines, 0 for status-only.")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("working_directory")
+        .description("Working directory for command execution (optional, defaults to current directory)")
+        .param_type(ParamType::String),
+    ParamMeta::new("environment")
+        .description("Additional environment variables as JSON string (optional, e.g., '{\"KEY1\":\"value1\",\"KEY2\":\"value2\"}')")
+        .param_type(ParamType::String),
+];
+
+impl Operation for ExecuteCommand {
+    fn verb(&self) -> &'static str {
+        "execute"
+    }
+    fn noun(&self) -> &'static str {
+        "command"
+    }
+    fn description(&self) -> &'static str {
+        "Execute a shell command with timeout and environment control"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        EXECUTE_COMMAND_PARAMS
+    }
+}
+
+/// Operation metadata for listing all commands with status and timing
+#[derive(Debug, Default)]
+pub struct ListProcesses;
+
+static LIST_PROCESSES_PARAMS: &[ParamMeta] = &[];
+
+impl Operation for ListProcesses {
+    fn verb(&self) -> &'static str {
+        "list"
+    }
+    fn noun(&self) -> &'static str {
+        "processes"
+    }
+    fn description(&self) -> &'static str {
+        "Show all commands with status, exit code, line count, start/stop times, and duration"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        LIST_PROCESSES_PARAMS
+    }
+}
+
+/// Operation metadata for killing a running command
+#[derive(Debug, Default)]
+pub struct KillProcess;
+
+static KILL_PROCESS_PARAMS: &[ParamMeta] = &[ParamMeta::new("id")
+    .description("Command ID to kill")
+    .param_type(ParamType::Integer)
+    .required()];
+
+impl Operation for KillProcess {
+    fn verb(&self) -> &'static str {
+        "kill"
+    }
+    fn noun(&self) -> &'static str {
+        "process"
+    }
+    fn description(&self) -> &'static str {
+        "Kill a running command by ID. Sends SIGKILL immediately."
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        KILL_PROCESS_PARAMS
+    }
+}
+
+/// Operation metadata for semantic search across command output history
+#[derive(Debug, Default)]
+pub struct SearchHistory;
+
+static SEARCH_HISTORY_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("query")
+        .description("Natural language search query")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("command_id")
+        .description("Filter to a specific command's output (optional)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("limit")
+        .description("Maximum number of results (default: 10)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for SearchHistory {
+    fn verb(&self) -> &'static str {
+        "search"
+    }
+    fn noun(&self) -> &'static str {
+        "history"
+    }
+    fn description(&self) -> &'static str {
+        "Semantic search across all command output using embeddings. Finds content by meaning."
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SEARCH_HISTORY_PARAMS
+    }
+}
+
+/// Operation metadata for regex/literal pattern matching on command output history
+#[derive(Debug, Default)]
+pub struct GrepHistory;
+
+static GREP_HISTORY_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("pattern")
+        .description("Regex pattern to match against command output")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("command_id")
+        .description("Filter to a specific command's output (optional)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("limit")
+        .description("Maximum number of results (default: 50)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GrepHistory {
+    fn verb(&self) -> &'static str {
+        "grep"
+    }
+    fn noun(&self) -> &'static str {
+        "history"
+    }
+    fn description(&self) -> &'static str {
+        "Regex pattern match across command output history. Exact structural search."
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GREP_HISTORY_PARAMS
+    }
+}
+
+/// Operation metadata for retrieving specific lines from a command's output
+#[derive(Debug, Default)]
+pub struct GetLines;
+
+static GET_LINES_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("command_id")
+        .description("Which command's output to retrieve lines from")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("start")
+        .description("Start line number (default: 1)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("end")
+        .description("End line number (default: last line)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GetLines {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "lines"
+    }
+    fn description(&self) -> &'static str {
+        "Retrieve specific lines from a command's output by range"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_LINES_PARAMS
+    }
+}
+
+// Static operation instances for schema generation
+static EXECUTE_CMD: Lazy<ExecuteCommand> = Lazy::new(ExecuteCommand::default);
+static LIST_PROCS: Lazy<ListProcesses> = Lazy::new(ListProcesses::default);
+static KILL_PROC: Lazy<KillProcess> = Lazy::new(KillProcess::default);
+static SEARCH_HIST: Lazy<SearchHistory> = Lazy::new(SearchHistory::default);
+static GREP_HIST: Lazy<GrepHistory> = Lazy::new(GrepHistory::default);
+static GET_LNS: Lazy<GetLines> = Lazy::new(GetLines::default);
+
+pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
+    vec![
+        &*EXECUTE_CMD as &dyn Operation,
+        &*LIST_PROCS as &dyn Operation,
+        &*KILL_PROC as &dyn Operation,
+        &*SEARCH_HIST as &dyn Operation,
+        &*GREP_HIST as &dyn Operation,
+        &*GET_LNS as &dyn Operation,
+    ]
+});
+
 /// Tool for executing shell commands
 #[derive(Default, Clone)]
 pub struct ShellExecuteTool;
@@ -1535,7 +1698,7 @@ impl AgentTool for ShellExecuteTool {}
 #[async_trait]
 impl McpTool for ShellExecuteTool {
     fn name(&self) -> &'static str {
-        "shell_execute"
+        "shell"
     }
 
     fn description(&self) -> &'static str {
@@ -1544,26 +1707,21 @@ impl McpTool for ShellExecuteTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to execute",
-                    "minLength": 1
-                },
-                "working_directory": {
-                    "type": "string",
-                    "description": "Working directory for command execution (optional, defaults to current directory)"
-                },
+        let config = SchemaConfig::new(
+            "Virtual shell with history, process management, and semantic search. Execute commands, search output history, grep patterns, and manage running processes.",
+        );
+        generate_mcp_schema(&SHELL_OPERATIONS, config)
+    }
 
-                "environment": {
-                    "type": "string",
-                    "description": "Additional environment variables as JSON string (optional, e.g., '{\"KEY1\":\"value1\",\"KEY2\":\"value2\"}')"
-                }
-            },
-            "required": ["command"]
-        })
+    fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
+        let ops: &[&'static dyn Operation] = &SHELL_OPERATIONS;
+        // SAFETY: SHELL_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
+        unsafe {
+            std::mem::transmute::<
+                &[&dyn Operation],
+                &'static [&'static dyn swissarmyhammer_operations::Operation],
+            >(ops)
+        }
     }
 
     async fn execute(
@@ -1571,25 +1729,398 @@ impl McpTool for ShellExecuteTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(arguments)?;
+        let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Strip op from arguments before parsing
+        let mut args = arguments.clone();
+        args.remove("op");
+
+        match op_str {
+            "execute command" | "" => {
+                // Default: execute command — falls through to existing logic below
+            }
+            "list processes" => {
+                let state = get_shell_state().await?;
+                let guard = state.lock().await;
+                if let Some(ref s) = *guard {
+                    let commands = s.list_commands();
+                    if commands.is_empty() {
+                        return Ok(BaseToolImpl::create_success_response(
+                            "No commands in history.".to_string(),
+                        ));
+                    }
+                    let mut output = String::from(
+                        "ID  STATUS      EXIT  LINES  STARTED              DURATION  COMMAND\n",
+                    );
+                    for cmd in commands {
+                        let duration = cmd.duration();
+                        let dur_str = if cmd.status == super::state::CommandStatus::Running {
+                            format!("{:.1}s+", duration.as_secs_f64())
+                        } else {
+                            format!("{:.1}s", duration.as_secs_f64())
+                        };
+                        let exit_str = cmd
+                            .exit_code
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "-".to_string());
+                        output.push_str(&format!(
+                            "{:<3} {:<11} {:<5} {:<6} {}  {:<9} {}\n",
+                            cmd.id,
+                            cmd.status,
+                            exit_str,
+                            cmd.line_count,
+                            cmd.started_at_wall.format("%Y-%m-%d %H:%M:%S"),
+                            dur_str,
+                            cmd.command,
+                        ));
+                    }
+                    return Ok(BaseToolImpl::create_success_response(output));
+                }
+                return Ok(BaseToolImpl::create_success_response(
+                    "Shell state not initialized.".to_string(),
+                ));
+            }
+            "kill process" => {
+                let id = args.get("id").and_then(|v| v.as_u64()).ok_or_else(|| {
+                    McpError::invalid_params("'id' parameter is required for kill process", None)
+                })? as usize;
+
+                let state = get_shell_state().await?;
+                let mut guard = state.lock().await;
+                if let Some(ref mut s) = *guard {
+                    match s.kill_process(id) {
+                        Ok(record) => {
+                            return Ok(BaseToolImpl::create_success_response(format!(
+                                "Killed command {} ({}). {} lines captured.",
+                                id, record.command, record.line_count
+                            )));
+                        }
+                        Err(e) => {
+                            return Err(McpError::invalid_params(format!("{}", e), None));
+                        }
+                    }
+                }
+                return Err(McpError::internal_error(
+                    "Shell state not initialized",
+                    None,
+                ));
+            }
+            "search history" => {
+                let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
+                    McpError::invalid_params(
+                        "'query' parameter is required for search history",
+                        None,
+                    )
+                })?;
+                let command_id = args
+                    .get("command_id")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+
+                // Clone search data under lock, then release lock before the expensive async search
+                let state = get_shell_state().await?;
+                let (session_id, db) = {
+                    let guard = state.lock().await;
+                    if let Some(ref s) = *guard {
+                        s.search_handle()
+                    } else {
+                        return Err(McpError::internal_error(
+                            "Shell state not initialized",
+                            None,
+                        ));
+                    }
+                };
+                // Lock is released — search runs without blocking other shell operations
+                match super::state::search(&session_id, &db, query, command_id, limit).await {
+                    Ok(results) => {
+                        if results.is_empty() {
+                            return Ok(BaseToolImpl::create_success_response(
+                                "No matching results found.".to_string(),
+                            ));
+                        }
+                        let mut output = String::new();
+                        for r in &results {
+                            output.push_str(&format!(
+                                "[cmd {}, lines {}-{}] (similarity: {:.2})\n{}\n\n",
+                                r.command_id, r.start_line, r.end_line, r.similarity, r.text
+                            ));
+                        }
+                        return Ok(BaseToolImpl::create_success_response(output));
+                    }
+                    Err(e) => {
+                        return Err(McpError::internal_error(
+                            format!("Search failed: {}", e),
+                            None,
+                        ));
+                    }
+                }
+            }
+            "grep history" => {
+                let pattern = args
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            "'pattern' parameter is required for grep history",
+                            None,
+                        )
+                    })?;
+                let command_id = args
+                    .get("command_id")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+
+                let state = get_shell_state().await?;
+                let guard = state.lock().await;
+                if let Some(ref s) = *guard {
+                    match s.grep(pattern, command_id, limit) {
+                        Ok(results) => {
+                            if results.is_empty() {
+                                return Ok(BaseToolImpl::create_success_response(
+                                    "No matching results found.".to_string(),
+                                ));
+                            }
+                            let mut output = String::new();
+                            for r in &results {
+                                output.push_str(&format!(
+                                    "[cmd {}, line {}] {}\n",
+                                    r.command_id, r.line_number, r.text
+                                ));
+                            }
+                            return Ok(BaseToolImpl::create_success_response(output));
+                        }
+                        Err(e) => {
+                            return Err(McpError::internal_error(
+                                format!("Grep failed: {}", e),
+                                None,
+                            ));
+                        }
+                    }
+                }
+                return Err(McpError::internal_error(
+                    "Shell state not initialized",
+                    None,
+                ));
+            }
+            "get lines" => {
+                let command_id =
+                    args.get("command_id")
+                        .and_then(|v| v.as_u64())
+                        .ok_or_else(|| {
+                            McpError::invalid_params(
+                                "'command_id' parameter is required for get lines",
+                                None,
+                            )
+                        })? as usize;
+                let start = args
+                    .get("start")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let end = args.get("end").and_then(|v| v.as_u64()).map(|v| v as usize);
+
+                let state = get_shell_state().await?;
+                let guard = state.lock().await;
+                if let Some(ref s) = *guard {
+                    match s.get_lines(command_id, start, end) {
+                        Ok(lines) => {
+                            if lines.is_empty() {
+                                return Ok(BaseToolImpl::create_success_response(format!(
+                                    "No output lines found for command {}.",
+                                    command_id
+                                )));
+                            }
+                            let start_line = lines.first().map(|(n, _)| *n).unwrap_or(0);
+                            let end_line = lines.last().map(|(n, _)| *n).unwrap_or(0);
+                            let mut output = format!(
+                                "[cmd {}, lines {}-{}]\n",
+                                command_id, start_line, end_line
+                            );
+                            for (num, text) in &lines {
+                                output.push_str(&format!("{}: {}\n", num, text));
+                            }
+                            return Ok(BaseToolImpl::create_success_response(output));
+                        }
+                        Err(e) => {
+                            return Err(McpError::internal_error(
+                                format!("Get lines failed: {}", e),
+                                None,
+                            ));
+                        }
+                    }
+                }
+                return Err(McpError::internal_error(
+                    "Shell state not initialized",
+                    None,
+                ));
+            }
+            other => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Unknown operation '{}'. Valid operations: execute command, list processes, kill process, search history, grep history, get lines",
+                        other
+                    ),
+                    None,
+                ));
+            }
+        }
+
+        // --- Execute command flow ---
+        let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(args)?;
         tracing::debug!("Executing shell command: {}", Pretty(&request.command));
 
         validate_shell_request(&request)?;
         let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
         let working_directory = request.working_directory.map(PathBuf::from);
 
+        // Register command in shell state (non-fatal — execute works without history)
+        let state = get_shell_state().await.ok();
+        let cmd_id = if let Some(ref state) = state {
+            let mut guard = state.lock().await;
+            if let Some(ref mut s) = *guard {
+                s.start_command(request.command.clone())
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
         send_start_notification(_context, &request.command).await;
 
-        match execute_shell_command(
-            request.command.clone(),
+        // Spawn the process and register its PID for kill support
+        let (mut process_guard, work_dir) = spawn_shell_command(
+            &request.command,
             working_directory,
-            parsed_environment,
-            _context,
+            parsed_environment.as_ref(),
         )
-        .await
-        {
-            Ok(result) => format_success_result(result),
+        .map_err(|e| McpError::internal_error(format!("Failed to spawn command: {}", e), None))?;
+
+        if let Some(ref state) = state {
+            if let Some(pid) = process_guard.child_mut().and_then(|c| c.id()) {
+                let mut guard = state.lock().await;
+                if let Some(ref mut s) = *guard {
+                    s.register_process(cmd_id, pid);
+                }
+            }
+        }
+
+        let result = if let Some(timeout_secs) = request.timeout {
+            match tokio::time::timeout(
+                Duration::from_secs(timeout_secs),
+                execute_with_guard(
+                    &mut process_guard,
+                    cmd_id,
+                    request.command.clone(),
+                    work_dir,
+                    _context,
+                ),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    // Timeout: guard is dropped here, killing the process
+                    if let Some(ref state) = state {
+                        let mut guard = state.lock().await;
+                        if let Some(ref mut s) = *guard {
+                            s.timeout_command(cmd_id);
+                        }
+                    }
+                    return Ok(BaseToolImpl::create_success_response(format!(
+                        "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
+                        cmd_id, timeout_secs, timeout_secs,
+                    )));
+                }
+            }
+        } else {
+            execute_with_guard(
+                &mut process_guard,
+                cmd_id,
+                request.command.clone(),
+                work_dir,
+                _context,
+            )
+            .await
+        };
+
+        match result {
+            Ok(result) => {
+                // Store output in shell state
+                if let Some(ref state) = state {
+                    let mut guard = state.lock().await;
+                    if let Some(ref mut s) = *guard {
+                        let lines: Vec<String> = result.stdout.lines().map(String::from).collect();
+                        if let Err(e) = s.append_lines(cmd_id, &lines) {
+                            tracing::warn!("Failed to store stdout for command {}: {}", cmd_id, e);
+                        }
+                        if !result.stderr.is_empty() {
+                            let stderr_lines: Vec<String> =
+                                result.stderr.lines().map(String::from).collect();
+                            if let Err(e) = s.append_lines(cmd_id, &stderr_lines) {
+                                tracing::warn!(
+                                    "Failed to store stderr for command {}: {}",
+                                    cmd_id,
+                                    e
+                                );
+                            }
+                        }
+                        s.complete_command(cmd_id, Some(result.exit_code));
+                    }
+                }
+
+                // Apply max_lines capping to combined stdout+stderr
+                let max_lines = request.max_lines.unwrap_or(200);
+                if max_lines == 0 {
+                    // Status-only response
+                    let duration = result.execution_time_ms;
+                    let total_lines = result.stdout.lines().count() + result.stderr.lines().count();
+                    return Ok(BaseToolImpl::create_success_response(format!(
+                        "command_id: {}\nstatus: completed\nexit_code: {}\nlines: {}\nduration: {}ms\nUse 'get lines' id={} or 'search history' to retrieve output.",
+                        cmd_id, result.exit_code, total_lines, duration, cmd_id,
+                    )));
+                } else if max_lines > 0 {
+                    let max = max_lines as usize;
+                    let stdout_lines: Vec<&str> = result.stdout.lines().collect();
+                    let stderr_lines: Vec<&str> = result.stderr.lines().collect();
+                    let total = stdout_lines.len() + stderr_lines.len();
+                    if total > max {
+                        // Cap stdout first, then stderr with remaining budget
+                        let stdout_cap = std::cmp::min(stdout_lines.len(), max);
+                        let stderr_cap = max.saturating_sub(stdout_cap);
+                        let truncated_stdout: String = stdout_lines[..stdout_cap].join("\n");
+                        let truncated_stderr: String = stderr_lines
+                            [..std::cmp::min(stderr_lines.len(), stderr_cap)]
+                            .join("\n");
+                        let remaining = total - max;
+                        let mut truncated_result = result;
+                        truncated_result.stdout = format!(
+                            "{}\n\n... {} more lines. Use 'get lines' id={} or 'search history' to find specific content.",
+                            truncated_stdout, remaining, cmd_id
+                        );
+                        truncated_result.stderr = truncated_stderr;
+                        truncated_result.output_truncated = true;
+                        return format_success_result(truncated_result);
+                    }
+                }
+                // max_lines == -1 or output within limits: return full output
+                format_success_result(result)
+            }
             Err(shell_error) => {
+                // Mark command as completed with error in state
+                if let Some(ref state) = state {
+                    let mut guard = state.lock().await;
+                    if let Some(ref mut s) = *guard {
+                        s.complete_command(cmd_id, Some(-1));
+                    }
+                }
                 send_mcp_log(
                     _context,
                     LoggingLevel::Error,
@@ -1840,18 +2371,30 @@ mod tests {
     }
 
     #[test]
+    fn test_shell_tool_has_operations() {
+        let tool = ShellExecuteTool::new();
+        let ops = tool.operations();
+        assert_eq!(ops.len(), 6);
+        assert!(ops.iter().any(|o| o.op_string() == "execute command"));
+        assert!(ops.iter().any(|o| o.op_string() == "list processes"));
+        assert!(ops.iter().any(|o| o.op_string() == "kill process"));
+        assert!(ops.iter().any(|o| o.op_string() == "search history"));
+        assert!(ops.iter().any(|o| o.op_string() == "grep history"));
+        assert!(ops.iter().any(|o| o.op_string() == "get lines"));
+    }
+
+    #[test]
     fn test_tool_properties() {
         let tool = ShellExecuteTool::new();
-        assert_eq!(tool.name(), "shell_execute");
+        assert_eq!(tool.name(), "shell");
         assert!(!tool.description().is_empty());
 
         let schema = tool.schema();
         assert!(schema.is_object());
-        assert!(schema["properties"]["command"]["type"].as_str() == Some("string"));
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::Value::String("command".to_string())));
+        assert!(schema["properties"]["command"].is_object());
+        assert!(schema["properties"]["op"].is_object());
+        assert!(schema["x-operation-schemas"].is_array());
+        assert!(schema["x-operation-groups"].is_object());
     }
 
     #[tokio::test]
@@ -3705,5 +4248,437 @@ mod tests {
         ResultValidator::new(&call_result)
             .assert_exit_code(0)
             .assert_field_exists("execution_time_ms");
+    }
+
+    // =====================================================================
+    // Helper for operations that return plain text (not JSON)
+    // =====================================================================
+
+    fn extract_text(call_result: &CallToolResult) -> String {
+        assert!(
+            !call_result.content.is_empty(),
+            "Content should not be empty"
+        );
+        match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(text_content) => text_content.text.clone(),
+            _ => panic!("Expected text content"),
+        }
+    }
+
+    /// Execute a shell tool operation with the given op and args
+    async fn execute_op(
+        op: &str,
+        extra_args: Vec<(&str, serde_json::Value)>,
+    ) -> Result<CallToolResult, McpError> {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!(op));
+        for (k, v) in extra_args {
+            args.insert(k.to_string(), v);
+        }
+        tool.execute(args, &context).await
+    }
+
+    /// Run a command through the shell tool and return its command_id
+    async fn run_command(command: &str) -> usize {
+        let result = TestCommandBuilder::new(command).execute().await;
+        assert!(result.is_ok(), "Setup command failed: {:?}", result.err());
+        let call_result = result.unwrap();
+        let text = extract_text(&call_result);
+        // Extract command_id from the JSON response
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(id) = json.get("command_id").and_then(|v| v.as_u64()) {
+                return id as usize;
+            }
+        }
+        // Fallback: look for command_id in YAML-like text
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("command_id:") {
+                if let Ok(id) = rest.trim().parse::<usize>() {
+                    return id;
+                }
+            }
+        }
+        panic!("Could not extract command_id from response: {}", text);
+    }
+
+    // =====================================================================
+    // Tests for "list processes" operation
+    // =====================================================================
+
+    #[tokio::test]
+    async fn test_list_processes_shows_completed_commands() {
+        // Run a command first so there's something to list
+        run_command("echo list_test_marker").await;
+
+        let result = execute_op("list processes", vec![]).await;
+        assert!(
+            result.is_ok(),
+            "list processes should succeed: {:?}",
+            result.err()
+        );
+
+        let call_result = result.unwrap();
+        let text = extract_text(&call_result);
+
+        // Should contain table headers
+        assert!(text.contains("ID"), "Should have ID column header");
+        assert!(text.contains("STATUS"), "Should have STATUS column header");
+        assert!(
+            text.contains("COMMAND"),
+            "Should have COMMAND column header"
+        );
+
+        // Should contain our command
+        assert!(
+            text.contains("echo list_test_marker"),
+            "Should list the command we ran"
+        );
+        assert!(
+            text.contains("completed"),
+            "Command should show completed status"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_processes_table_format() {
+        run_command("echo format_check").await;
+
+        let result = execute_op("list processes", vec![]).await;
+        let call_result = result.unwrap();
+        let text = extract_text(&call_result);
+
+        // Verify all expected columns are in the header
+        let header_line = text.lines().next().expect("Should have at least one line");
+        assert!(header_line.contains("ID"));
+        assert!(header_line.contains("STATUS"));
+        assert!(header_line.contains("EXIT"));
+        assert!(header_line.contains("LINES"));
+        assert!(header_line.contains("STARTED"));
+        assert!(header_line.contains("DURATION"));
+        assert!(header_line.contains("COMMAND"));
+    }
+
+    // =====================================================================
+    // Tests for "kill process" operation
+    // =====================================================================
+
+    #[tokio::test]
+    async fn test_kill_process_missing_id_returns_error() {
+        let result = execute_op("kill process", vec![]).await;
+        assert!(result.is_err(), "kill process without id should fail");
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("id"),
+            "Error should mention 'id' parameter: {}",
+            err_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_kill_process_nonexistent_id_returns_error() {
+        let result = execute_op("kill process", vec![("id", json!(99999))]).await;
+        assert!(result.is_err(), "kill process with bad id should fail");
+    }
+
+    #[tokio::test]
+    async fn test_kill_process_stops_running_command() {
+        // Start a long-running command with max_lines=0 so it returns immediately
+        // with command_id, while the process continues running
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert("command".to_string(), json!("sleep 60"));
+        args.insert("timeout".to_string(), json!(1));
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        let text = extract_text(&result.unwrap());
+        // The command should have timed out, giving us a command_id
+        assert!(
+            text.contains("command_id:") || text.contains("command_id"),
+            "Should contain command_id: {}",
+            text
+        );
+    }
+
+    // =====================================================================
+    // Tests for "grep history" operation
+    // =====================================================================
+
+    #[tokio::test]
+    async fn test_grep_history_missing_pattern_returns_error() {
+        let result = execute_op("grep history", vec![]).await;
+        assert!(result.is_err(), "grep history without pattern should fail");
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("pattern"),
+            "Error should mention 'pattern': {}",
+            err_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_history_finds_matching_output() {
+        // Run a command that produces known output
+        run_command("echo UNIQUE_GREP_MARKER_12345").await;
+
+        let result = execute_op(
+            "grep history",
+            vec![("pattern", json!("UNIQUE_GREP_MARKER_12345"))],
+        )
+        .await;
+        assert!(result.is_ok(), "grep should succeed: {:?}", result.err());
+
+        let text = extract_text(&result.unwrap());
+        assert!(
+            text.contains("UNIQUE_GREP_MARKER_12345"),
+            "Should find the marker in results: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_history_no_matches() {
+        let result = execute_op(
+            "grep history",
+            vec![("pattern", json!("ABSOLUTELY_IMPOSSIBLE_PATTERN_XYZZY_999"))],
+        )
+        .await;
+        assert!(result.is_ok(), "grep with no matches should succeed");
+
+        let text = extract_text(&result.unwrap());
+        assert!(
+            text.contains("No matching results"),
+            "Should report no matches: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_history_with_command_id_filter() {
+        let cmd_id = run_command("echo GREP_FILTER_TARGET").await;
+
+        let result = execute_op(
+            "grep history",
+            vec![
+                ("pattern", json!("GREP_FILTER_TARGET")),
+                ("command_id", json!(cmd_id)),
+            ],
+        )
+        .await;
+        assert!(result.is_ok(), "grep with command_id filter should succeed");
+
+        let text = extract_text(&result.unwrap());
+        assert!(
+            text.contains("GREP_FILTER_TARGET"),
+            "Should find match in filtered command: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_history_with_limit() {
+        // Run a command with multiple matching lines
+        run_command("printf 'LIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\n'")
+            .await;
+
+        let result = execute_op(
+            "grep history",
+            vec![("pattern", json!("LIMIT_LINE")), ("limit", json!(2))],
+        )
+        .await;
+        assert!(result.is_ok(), "grep with limit should succeed");
+
+        let text = extract_text(&result.unwrap());
+        // Count occurrences of the pattern marker in results
+        let count = text.matches("LIMIT_LINE").count();
+        assert!(
+            count <= 2,
+            "Should respect limit of 2, got {} matches",
+            count
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_history_regex_pattern() {
+        run_command("echo 'error: something failed at line 42'").await;
+
+        let result = execute_op(
+            "grep history",
+            vec![("pattern", json!("error:.*line \\d+"))],
+        )
+        .await;
+        assert!(result.is_ok(), "regex grep should succeed");
+
+        let text = extract_text(&result.unwrap());
+        assert!(text.contains("error:"), "Should find regex match: {}", text);
+    }
+
+    #[tokio::test]
+    async fn test_grep_history_invalid_regex_returns_error() {
+        let result = execute_op("grep history", vec![("pattern", json!("[invalid regex"))]).await;
+        assert!(result.is_err(), "invalid regex should fail");
+    }
+
+    // =====================================================================
+    // Tests for "get lines" operation
+    // =====================================================================
+
+    #[tokio::test]
+    async fn test_get_lines_missing_command_id_returns_error() {
+        let result = execute_op("get lines", vec![]).await;
+        assert!(result.is_err(), "get lines without command_id should fail");
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("command_id"),
+            "Error should mention 'command_id': {}",
+            err_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_lines_retrieves_output() {
+        let cmd_id = run_command("echo 'GET_LINES_OUTPUT'").await;
+
+        let result = execute_op("get lines", vec![("command_id", json!(cmd_id))]).await;
+        assert!(
+            result.is_ok(),
+            "get lines should succeed: {:?}",
+            result.err()
+        );
+
+        let text = extract_text(&result.unwrap());
+        assert!(
+            text.contains("GET_LINES_OUTPUT"),
+            "Should contain command output: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_lines_with_range() {
+        // Run a command that produces multiple lines
+        let cmd_id = run_command("printf 'line1\\nline2\\nline3\\nline4\\nline5\\n'").await;
+
+        // Get only lines 2-4
+        let result = execute_op(
+            "get lines",
+            vec![
+                ("command_id", json!(cmd_id)),
+                ("start", json!(2)),
+                ("end", json!(4)),
+            ],
+        )
+        .await;
+        assert!(result.is_ok(), "get lines with range should succeed");
+
+        let text = extract_text(&result.unwrap());
+        assert!(text.contains("line2"), "Should contain line2: {}", text);
+        assert!(text.contains("line4"), "Should contain line4: {}", text);
+        // line1 should not be present (before start)
+        assert!(
+            !text.contains("line1"),
+            "Should not contain line1 (before range): {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_lines_nonexistent_command() {
+        let result = execute_op("get lines", vec![("command_id", json!(99999))]).await;
+        assert!(
+            result.is_ok(),
+            "get lines for missing command should succeed with empty"
+        );
+
+        let text = extract_text(&result.unwrap());
+        assert!(
+            text.contains("No output lines"),
+            "Should report no lines: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_lines_shows_line_numbers() {
+        let cmd_id = run_command("printf 'alpha\\nbeta\\ngamma\\n'").await;
+
+        let result = execute_op("get lines", vec![("command_id", json!(cmd_id))]).await;
+        let text = extract_text(&result.unwrap());
+
+        // Should include line numbers in the output
+        assert!(
+            text.contains("1:") || text.contains("1: "),
+            "Should show line numbers: {}",
+            text
+        );
+    }
+
+    // =====================================================================
+    // Tests for "search history" operation
+    // =====================================================================
+
+    #[tokio::test]
+    async fn test_search_history_missing_query_returns_error() {
+        let result = execute_op("search history", vec![]).await;
+        assert!(result.is_err(), "search history without query should fail");
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("query"),
+            "Error should mention 'query': {}",
+            err_str
+        );
+    }
+
+    // =====================================================================
+    // Tests for unknown operations
+    // =====================================================================
+
+    #[tokio::test]
+    async fn test_unknown_operation_returns_error() {
+        let result = execute_op("bogus operation", vec![]).await;
+        assert!(result.is_err(), "Unknown operation should fail");
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("bogus operation"),
+            "Error should echo the bad op: {}",
+            err_str
+        );
+        assert!(
+            err_str.contains("execute command"),
+            "Error should list valid operations: {}",
+            err_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unknown_operation_lists_all_valid_ops() {
+        let result = execute_op("not a real op", vec![]).await;
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+
+        // Should list all valid operations
+        for expected_op in &[
+            "execute command",
+            "list processes",
+            "kill process",
+            "search history",
+            "grep history",
+            "get lines",
+        ] {
+            assert!(
+                err_str.contains(expected_op),
+                "Error should list '{}': {}",
+                expected_op,
+                err_str
+            );
+        }
     }
 }

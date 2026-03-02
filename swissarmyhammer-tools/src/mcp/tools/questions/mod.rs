@@ -57,6 +57,17 @@ impl McpTool for QuestionTool {
         schema::generate_question_mcp_schema(&QUESTION_OPERATIONS)
     }
 
+    fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
+        let ops: &[&'static dyn Operation] = &QUESTION_OPERATIONS;
+        // SAFETY: QUESTION_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
+        unsafe {
+            std::mem::transmute::<
+                &[&dyn Operation],
+                &'static [&'static dyn swissarmyhammer_operations::Operation],
+            >(ops)
+        }
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -118,6 +129,15 @@ pub fn register_questions_tools(registry: &mut ToolRegistry) {
 mod tests {
     use super::*;
     use crate::mcp::tool_registry::ToolRegistry;
+
+    #[test]
+    fn test_question_tool_has_operations() {
+        let tool = QuestionTool::new();
+        let ops = tool.operations();
+        assert_eq!(ops.len(), 2);
+        assert!(ops.iter().any(|o| o.op_string() == "ask question"));
+        assert!(ops.iter().any(|o| o.op_string() == "summarize questions"));
+    }
 
     #[test]
     fn test_question_tool_name() {

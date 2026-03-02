@@ -1303,7 +1303,8 @@ fn test_global_agent_override_all_builtin_agents() {
         // Verify the config is valid for runtime use
         match config.executor_type() {
             swissarmyhammer_config::ModelExecutorType::ClaudeCode
-            | swissarmyhammer_config::ModelExecutorType::LlamaAgent => {
+            | swissarmyhammer_config::ModelExecutorType::LlamaAgent
+            | swissarmyhammer_config::ModelExecutorType::LlamaEmbedding => {
                 // Valid executor type
             }
         }

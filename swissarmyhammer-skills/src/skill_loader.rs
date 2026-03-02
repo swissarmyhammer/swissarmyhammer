@@ -79,7 +79,7 @@ pub fn load_skill_from_dir(dir: &Path, source: SkillSource) -> Result<Skill, Str
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && path.file_name().map_or(false, |n| n != "SKILL.md") {
+            if path.is_file() && path.file_name().is_some_and(|n| n != "SKILL.md") {
                 if let Ok(file_content) = std::fs::read_to_string(&path) {
                     let filename = path.file_name().unwrap().to_string_lossy().to_string();
                     skill.resources.files.insert(filename, file_content);
@@ -98,7 +98,7 @@ pub fn load_skill_from_builtin(_skill_name: &str, files: &[(&str, &str)]) -> Res
         .iter()
         .find(|(name, _)| name.ends_with("/SKILL.md") || *name == "SKILL.md")
         .map(|(_, content)| *content)
-        .ok_or_else(|| format!("no SKILL.md found in builtin files"))?;
+        .ok_or_else(|| "no SKILL.md found in builtin files".to_string())?;
 
     let mut skill = parse_skill_md(skill_md_content, SkillSource::Builtin)?;
 
@@ -144,7 +144,7 @@ mod tests {
         let content = r#"---
 name: plan
 description: Turn specs into plans
-allowed-tools: mcp__sah__flow mcp__sah__files_read
+allowed-tools: mcp__sah__flow mcp__sah__files
 metadata:
   author: swissarmyhammer
   version: "1.0"

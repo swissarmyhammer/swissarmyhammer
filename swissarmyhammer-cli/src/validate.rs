@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use colored::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,7 @@ use swissarmyhammer::validation::{
     Validatable, ValidationConfig, ValidationIssue, ValidationLevel, ValidationManager,
     ValidationResult,
 };
+use swissarmyhammer_skills::SkillResolver;
 use swissarmyhammer_workflow::{
     MemoryWorkflowStorage, MermaidParser, Workflow, WorkflowResolver, WorkflowStorageBackend,
 };
@@ -115,6 +116,9 @@ impl Validator {
         // Validate workflows using WorkflowResolver for consistent loading
         self.validate_all_workflows(&mut result)?;
 
+        // Validate skills from all sources
+        self.validate_all_skills(&mut result)?;
+
         // Validate sah.toml configuration file
         self.validate_sah_config(&mut result)?;
 
@@ -189,6 +193,9 @@ impl Validator {
         // Validate workflows from custom directories
         self.validate_workflows_from_dirs(&mut result, workflow_dirs)?;
 
+        // Validate skills from all sources
+        self.validate_all_skills(&mut result)?;
+
         // Validate sah.toml configuration file
         self.validate_sah_config(&mut result)?;
 
@@ -202,53 +209,71 @@ impl Validator {
 
     /// Validates all workflow files using WorkflowResolver for consistent loading
     ///
-    /// This uses the same loading mechanism as `flow list` to ensure consistency:
-    /// - Builtin workflows (embedded in binary)
-    /// - User workflows (~/.swissarmyhammer/workflows)
-    /// - Local workflows (./.swissarmyhammer/workflows)
-    ///
-    /// Parameters:
-    /// - result: The validation result to accumulate errors into
+    /// This uses `WorkflowResolver::validate_all_sources()` which walks the same
+    /// builtin/user/local tiers as `load_all_workflows` but captures parse failures
+    /// as validation errors instead of silently discarding them.
     fn validate_all_workflows(&mut self, result: &mut ValidationResult) -> Result<()> {
-        // Use WorkflowResolver to load workflows from standard locations
-        let mut storage = MemoryWorkflowStorage::new();
         let mut resolver = WorkflowResolver::new();
+        let issues = resolver.validate_all_sources();
 
-        // Load all workflows using the same logic as flow list
-        // In test environments, this may fail due to missing directories, which is acceptable
-        let load_result = resolver.load_all_workflows(&mut storage);
-        if load_result.is_err() {
-            // In test environment or when directories don't exist, just return without error
-            // This matches the behavior expected by the test
-            return Ok(());
+        // Count each workflow source file as a file checked
+        // (we count via VFS list, so approximate with issues + successfully validated)
+        // Use a simpler approach: count the number of unique file paths in issues
+        // plus workflows that had no issues
+        let mut seen_files = std::collections::HashSet::new();
+        for issue in &issues {
+            seen_files.insert(issue.file_path.clone());
         }
 
-        // Get all loaded workflows
-        let workflows = storage
-            .list_workflows()
-            .context("Failed to retrieve loaded workflows from storage")?;
+        // Also count successfully-loaded workflows via the standard load path
+        let mut storage = MemoryWorkflowStorage::new();
+        let mut count_resolver = WorkflowResolver::new();
+        if count_resolver.load_all_workflows(&mut storage).is_ok() {
+            if let Ok(workflows) = storage.list_workflows() {
+                for workflow in &workflows {
+                    let source_location = match count_resolver.workflow_sources.get(&workflow.name)
+                    {
+                        Some(swissarmyhammer::FileSource::Builtin) => "builtin",
+                        Some(swissarmyhammer::FileSource::User) => "user",
+                        Some(swissarmyhammer::FileSource::Local) => "local",
+                        Some(swissarmyhammer::FileSource::Dynamic) => "dynamic",
+                        None => "unknown",
+                    };
+                    seen_files.insert(PathBuf::from(format!(
+                        "workflow:{source_location}:{}",
+                        workflow.name.as_str()
+                    )));
+                }
+            }
+        }
 
-        // Validate each workflow
-        for workflow in workflows {
-            result.files_checked += 1;
+        result.files_checked += seen_files.len();
 
-            // Get the source location for better error reporting
-            let source_location = match resolver.workflow_sources.get(&workflow.name) {
-                Some(swissarmyhammer::FileSource::Builtin) => "builtin",
-                Some(swissarmyhammer::FileSource::User) => "user",
-                Some(swissarmyhammer::FileSource::Local) => "local",
-                Some(swissarmyhammer::FileSource::Dynamic) => "dynamic",
-                None => "unknown",
-            };
+        for issue in issues {
+            result.add_issue(issue);
+        }
 
-            // Create a path that includes the source location for better debugging
-            let workflow_path = PathBuf::from(format!(
-                "workflow:{source_location}:{}",
-                workflow.name.as_str()
-            ));
+        Ok(())
+    }
 
-            // Validate the workflow structure directly
-            self.validate_workflow_structure(&workflow, &workflow_path, result);
+    /// Validates all skill sources, catching parse/load failures
+    fn validate_all_skills(&self, result: &mut ValidationResult) -> Result<()> {
+        let resolver = SkillResolver::new();
+        let issues = resolver.validate_all_sources();
+
+        // Count successfully-loaded skills for files_checked
+        let loaded_skills = resolver.resolve_all();
+        result.files_checked += loaded_skills.len();
+
+        // Also count any files that produced errors (not already counted)
+        let mut error_files = std::collections::HashSet::new();
+        for issue in &issues {
+            error_files.insert(issue.file_path.clone());
+        }
+        result.files_checked += error_files.len();
+
+        for issue in issues {
+            result.add_issue(issue);
         }
 
         Ok(())

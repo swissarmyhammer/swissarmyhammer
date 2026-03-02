@@ -89,13 +89,13 @@ mod tests {
     fn test_empty_allow_list_allows_all() {
         let filter = ToolFilter::new(
             vec![], // Empty allow list
-            vec!["^shell_.*".to_string()],
+            vec!["^shell".to_string()],
         )
         .unwrap();
 
         assert!(filter.is_allowed("files"));
         assert!(filter.is_allowed("web"));
-        assert!(!filter.is_allowed("shell_execute")); // Denied
+        assert!(!filter.is_allowed("shell")); // Denied
     }
 
     #[test]
@@ -110,7 +110,7 @@ mod tests {
         assert!(filter.is_allowed("treesitter_search"));
         assert!(!filter.is_allowed("kanban"));
         assert!(!filter.is_allowed("web"));
-        assert!(!filter.is_allowed("shell_execute"));
+        assert!(!filter.is_allowed("shell"));
     }
 
     #[test]
@@ -123,7 +123,7 @@ mod tests {
     fn test_complex_patterns() {
         let filter = ToolFilter::new(
             vec!["^(files|web)$".to_string()], // Allow files and web
-            vec!["^shell_.*".to_string()],     // Deny shell tools
+            vec!["^shell".to_string()],        // Deny shell tools
         )
         .unwrap();
 
@@ -131,7 +131,7 @@ mod tests {
         assert!(filter.is_allowed("web"));
         // Allow wins over deny, so these are allowed
         assert!(!filter.is_allowed("kanban")); // Not in allow list
-        assert!(!filter.is_allowed("shell_execute")); // Not in allow list
+        assert!(!filter.is_allowed("shell")); // Not in allow list
     }
 
     #[test]
@@ -139,7 +139,7 @@ mod tests {
         let filter = ToolFilter::new(vec![], vec![]).unwrap();
 
         assert!(filter.is_allowed("files"));
-        assert!(filter.is_allowed("shell_execute"));
+        assert!(filter.is_allowed("shell"));
         assert!(filter.is_allowed("anything"));
     }
 
@@ -153,6 +153,6 @@ mod tests {
 
         assert!(filter.is_allowed("files")); // In allow list
         assert!(!filter.is_allowed("kanban")); // Not in allow list = denied
-        assert!(!filter.is_allowed("shell_execute")); // Not in allow list = denied
+        assert!(!filter.is_allowed("shell")); // Not in allow list = denied
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::{ActorId, SwimlaneId, Task};
+use crate::types::{ActorId, SwimlaneId, TagId, Task};
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -19,6 +19,8 @@ pub struct NextTask {
     pub swimlane: Option<SwimlaneId>,
     /// Filter by assignee
     pub assignee: Option<ActorId>,
+    /// Filter by tag
+    pub tag: Option<TagId>,
 }
 
 impl NextTask {
@@ -27,6 +29,7 @@ impl NextTask {
         Self {
             swimlane: None,
             assignee: None,
+            tag: None,
         }
     }
 
@@ -39,6 +42,12 @@ impl NextTask {
     /// Filter by assignee
     pub fn with_assignee(mut self, assignee: impl Into<ActorId>) -> Self {
         self.assignee = Some(assignee.into());
+        self
+    }
+
+    /// Filter by tag
+    pub fn with_tag(mut self, tag: impl Into<TagId>) -> Self {
+        self.tag = Some(tag.into());
         self
     }
 }
@@ -88,6 +97,13 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                     // Filter by assignee if specified
                     if let Some(ref assignee) = self.assignee {
                         if !t.assignees.contains(assignee) {
+                            return false;
+                        }
+                    }
+
+                    // Filter by tag if specified
+                    if let Some(ref tag) = self.tag {
+                        if !t.tags.contains(tag) {
                             return false;
                         }
                     }
@@ -202,6 +218,56 @@ mod tests {
         // Next should return the blocker (the blocked one isn't ready)
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Blocker");
+    }
+
+    #[tokio::test]
+    async fn test_next_task_filters_by_tag() {
+        use crate::tag::AddTag;
+        use crate::types::TagId;
+
+        let (_temp, ctx) = setup().await;
+
+        // Create a tag
+        AddTag::new("bug", "Bug", "ff0000")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Create tasks - one with the tag, one without
+        AddTask::new("Untagged task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddTask::new("Bug task")
+            .with_tags(vec![TagId::from_string("bug")])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Without tag filter, returns first task (untagged)
+        let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(result["title"], "Untagged task");
+
+        // With tag filter, skips untagged and returns the bug task
+        let result = NextTask::new()
+            .with_tag("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["title"], "Bug task");
+
+        // With non-matching tag, returns null
+        let result = NextTask::new()
+            .with_tag("feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(result.is_null());
     }
 
     #[tokio::test]

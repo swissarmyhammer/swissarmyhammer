@@ -81,15 +81,23 @@ impl CliToolContext {
 
         std::env::set_var("SAH_CLI_MODE", "1");
 
-        // Start MCP server in agent mode — the CliToolContext serves as the
-        // inline MCP server for llama-agent workflows, so it needs agent tools
-        // (file editing, shell, grep, skills) that provide base agent behavior.
+        // Resolve the agent type to decide whether to register agent tools.
+        // Claude Code has native tools (Bash, Read, Write, Edit, skills) so it
+        // does NOT need MCP agent tools (shell, files, skill).
+        // LlamaAgent has no native tools and relies entirely on MCP.
+        use swissarmyhammer_config::model::{ModelExecutorType, ModelManager, ModelPaths};
+        let agent_mode = match ModelManager::resolve_agent_config(&ModelPaths::sah()) {
+            Ok(config) => config.executor_type() != ModelExecutorType::ClaudeCode,
+            Err(_) => false, // Default is ClaudeCode, so no agent tools needed
+        };
+        tracing::info!("Agent mode for MCP server: {agent_mode}");
+
         let mcp_server_handle = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             model_override.map(|s| s.to_string()),
             working_dir,
-            true, // agent_mode: register agent tools for full agent capability
+            agent_mode,
         )
         .await?;
 

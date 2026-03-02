@@ -1,38 +1,52 @@
 # Flow Tool
 
-Execute workflows dynamically via MCP.
+Execute workflows dynamically via MCP. Supports three operations: `run`, `exit`, and `list`.
 
 
-## Examples
+## Operations
 
-### Discover Available Workflows
+### `run` - Execute a Workflow
 
-```json
-{
-  "flow_name": "list",
-  "verbose": true
-}
-```
-
-### Execute Workflow Without Parameters
+Run a named workflow with optional parameters.
 
 ```json
 {
-  "flow_name": "do",
+  "op": "run",
+  "flow_name": "implement",
   "quiet": true
 }
 ```
 
-### Execute Workflow With Parameters
+With parameters:
 
 ```json
 {
+  "op": "run",
   "flow_name": "plan",
   "parameters": {
     "plan_filename": "requirements.md"
-  },
-  "interactive": false,
-  "dry_run": false
+  }
+}
+```
+
+### `exit` - Terminate Current Workflow
+
+Signal clean termination of the currently running workflow. Use this from within an inline prompt action to break out of a workflow loop when a condition is met.
+
+```json
+{
+  "op": "exit"
+}
+```
+
+The workflow will complete cleanly (status: Completed) after the current state finishes.
+
+### `list` - Discover Available Workflows
+
+```json
+{
+  "op": "list",
+  "verbose": true
 }
 ```
 

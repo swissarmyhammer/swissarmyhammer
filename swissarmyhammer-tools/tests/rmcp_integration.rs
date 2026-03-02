@@ -41,8 +41,8 @@ async fn test_mcp_server_with_rmcp_client() {
         "Should have files tool"
     );
     assert!(
-        tool_names.contains(&"shell_execute".to_string()),
-        "Should have shell_execute tool"
+        tool_names.contains(&"shell".to_string()),
+        "Should have shell tool"
     );
 
     // List prompts to verify prompt functionality
