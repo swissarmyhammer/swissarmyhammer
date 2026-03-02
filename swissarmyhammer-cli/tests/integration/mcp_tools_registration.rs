@@ -220,8 +220,8 @@ async fn test_kanban_schema_has_all_operations() {
     let op_count = op_enum.as_array().expect("op enum should be array").len();
 
     assert_eq!(
-        op_count, 46,
-        "Expected 46 operations in op enum, got {}",
+        op_count, 41,
+        "Expected 41 operations in op enum, got {}",
         op_count
     );
 
@@ -233,8 +233,8 @@ async fn test_kanban_schema_has_all_operations() {
         .len();
 
     assert_eq!(
-        op_schemas_count, 46,
-        "Expected 46 operation schemas, got {}",
+        op_schemas_count, 41,
+        "Expected 41 operation schemas, got {}",
         op_schemas_count
     );
 
@@ -257,6 +257,6 @@ async fn test_kanban_schema_has_all_operations() {
         );
     }
 
-    println!("✅ Kanban schema has all 46 operations");
+    println!("✅ Kanban schema has all 41 operations");
     println!("   Including: add attachment");
 }

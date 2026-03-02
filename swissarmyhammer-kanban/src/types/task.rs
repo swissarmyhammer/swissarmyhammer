@@ -1,4 +1,4 @@
-//! Task types: Task, Attachment, Comment
+//! Task types: Task, Attachment (legacy typed structs, being replaced by Entity)
 
 use super::ids::{ActorId, AttachmentId, CommentId, TaskId};
 use super::position::Position;

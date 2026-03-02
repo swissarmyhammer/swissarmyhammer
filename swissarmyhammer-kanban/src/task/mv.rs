@@ -2,6 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::task_helpers::task_entity_to_json;
 use crate::types::{Column, ColumnId, Ordinal, Position, Swimlane, SwimlaneId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -60,7 +61,8 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value, KanbanError> = async {
-            let mut task = ctx.read_task(&self.id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("task", self.id.as_str()).await?;
 
             // Auto-create column if it doesn't exist
             if !ctx.column_exists(&self.position.column).await {
@@ -126,21 +128,24 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
 
             // Calculate ordinal if not specified (default = at end)
             let ordinal = if self.position.ordinal == Ordinal::first() {
-                // Find the last ordinal in the target column/swimlane
-                let task_ids = ctx.list_task_ids().await?;
+                let all_tasks = ectx.list("task").await?;
                 let mut last_ordinal: Option<Ordinal> = None;
 
-                for id in &task_ids {
-                    if id == &self.id {
+                for t in &all_tasks {
+                    if t.id == self.id.as_str() {
                         continue; // Skip the task being moved
                     }
-                    let t = ctx.read_task(id).await?;
-                    if t.position.column == self.position.column
-                        && t.position.swimlane == self.position.swimlane
+                    let t_col = t.get_str("position_column").unwrap_or("");
+                    let t_swim = t.get_str("position_swimlane");
+                    if t_col == self.position.column.as_str()
+                        && t_swim == self.position.swimlane.as_ref().map(|s| s.as_str())
                     {
+                        let ord = Ordinal::from_string(
+                            t.get_str("position_ordinal").unwrap_or("a0"),
+                        );
                         last_ordinal = Some(match last_ordinal {
-                            None => t.position.ordinal.clone(),
-                            Some(ref o) if t.position.ordinal > *o => t.position.ordinal.clone(),
+                            None => ord,
+                            Some(ref o) if ord > *o => ord,
                             Some(o) => o,
                         });
                     }
@@ -154,19 +159,24 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                 self.position.ordinal.clone()
             };
 
-            // Update position
-            task.position = Position {
-                column: self.position.column.clone(),
-                swimlane: self.position.swimlane.clone(),
-                ordinal,
-            };
+            // Update position fields
+            entity.set(
+                "position_column",
+                serde_json::json!(self.position.column.as_str()),
+            );
+            match &self.position.swimlane {
+                Some(s) => entity.set("position_swimlane", serde_json::json!(s.as_str())),
+                None => {
+                    entity.remove("position_swimlane");
+                }
+            }
+            entity.set(
+                "position_ordinal",
+                serde_json::json!(ordinal.as_str()),
+            );
 
-            ctx.write_task(&task).await?;
-            let tags = task.tags();
-            let mut result = serde_json::to_value(&task)?;
-            result["id"] = serde_json::json!(&task.id);
-            result["tags"] = serde_json::to_value(&tags)?;
-            Ok(result)
+            ectx.write(&entity).await?;
+            Ok(task_entity_to_json(&entity))
         }
         .await;
 

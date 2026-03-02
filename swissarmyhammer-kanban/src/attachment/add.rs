@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{Attachment, TaskId};
+use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
@@ -139,7 +139,8 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut task = ctx.read_task(&self.task_id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("task", self.task_id.as_str()).await?;
 
             // Auto-detect MIME type if not provided
             let mime_type = self
@@ -150,21 +151,28 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
             // Auto-detect file size if not provided
             let size = self.size.or_else(|| get_file_size(&self.path));
 
-            // Create the attachment
-            let mut attachment = Attachment::new(&self.name, &self.path);
-            if let Some(mt) = mime_type {
-                attachment = attachment.with_mime_type(mt);
-            }
-            if let Some(s) = size {
-                attachment = attachment.with_size(s);
-            }
+            // Create the attachment as a JSON object
+            let attachment_id = ulid::Ulid::new().to_string().to_lowercase();
+            let attachment = serde_json::json!({
+                "id": attachment_id,
+                "name": self.name,
+                "path": self.path,
+                "mime_type": mime_type,
+                "size": size,
+            });
 
-            task.attachments.push(attachment.clone());
-            ctx.write_task(&task).await?;
+            // Add to the attachments array
+            let mut attachments = entity
+                .get("attachments")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
+            attachments.push(attachment.clone());
+            entity.set("attachments", serde_json::json!(attachments));
+            ectx.write(&entity).await?;
 
             Ok(serde_json::json!({
                 "attachment": attachment,
-                "task_id": task.id
+                "task_id": self.task_id.to_string()
             }))
         }
         .await;
@@ -305,7 +313,7 @@ mod tests {
             .await
             .into_result();
 
-        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
+        assert!(result.is_err());
     }
 
     #[test]

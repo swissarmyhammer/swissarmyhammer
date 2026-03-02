@@ -78,15 +78,16 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
                         }
                     }
 
-                    // Bulk rename #old-name → #new-name in all task descriptions
-                    let task_ids = ctx.list_task_ids().await?;
-                    for tid in task_ids {
-                        let mut task = ctx.read_task(&tid).await?;
-                        let new_desc =
-                            tag_parser::rename_tag(&task.description, &old_name, &normalized);
-                        if new_desc != task.description {
-                            task.description = new_desc;
-                            ctx.write_task(&task).await?;
+                    // Bulk rename #old-name → #new-name in all task bodies
+                    let ectx = ctx.entity_context().await?;
+                    let all_tasks = ectx.list("task").await?;
+                    for mut task in all_tasks {
+                        let body = task.get_str("body").unwrap_or("").to_string();
+                        let new_body =
+                            tag_parser::rename_tag(&body, &old_name, &normalized);
+                        if new_body != body {
+                            task.set("body", serde_json::json!(new_body));
+                            ectx.write(&task).await?;
                         }
                     }
 
@@ -260,20 +261,19 @@ mod tests {
             .into_result()
             .unwrap();
 
-        // Read the task back — description should have #defect not #bug
-        let task = ctx
-            .read_task(&crate::types::TaskId::from_string(&task_id))
-            .await
-            .unwrap();
+        // Read the task back — body should have #defect not #bug
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", &task_id).await.unwrap();
+        let body = task.get_str("body").unwrap_or("");
         assert!(
-            task.description.contains("#defect"),
+            body.contains("#defect"),
             "Expected #defect in: {}",
-            task.description
+            body
         );
         assert!(
-            !task.description.contains("#bug"),
+            !body.contains("#bug"),
             "Should not contain #bug in: {}",
-            task.description
+            body
         );
     }
 

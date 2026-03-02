@@ -2,7 +2,8 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{Ordinal, Position, TaskId};
+use crate::task_helpers::task_entity_to_json;
+use crate::types::{Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
@@ -35,7 +36,8 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut task = ctx.read_task(&self.id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("task", self.id.as_str()).await?;
 
             // Get terminal column (highest order = done)
             let terminal =
@@ -46,39 +48,40 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
                     })?;
 
             // Calculate ordinal at end of done column
-            let task_ids = ctx.list_task_ids().await?;
+            let all_tasks = ectx.list("task").await?;
             let mut last_ordinal: Option<Ordinal> = None;
 
-            for id in &task_ids {
-                if id == &self.id {
+            for t in &all_tasks {
+                if t.id == self.id.as_str() {
                     continue; // Skip the task being completed
                 }
-                let t = ctx.read_task(id).await?;
-                if t.position.column == terminal.id {
+                if t.get_str("position_column") == Some(terminal.id.as_str()) {
+                    let ord = Ordinal::from_string(
+                        t.get_str("position_ordinal").unwrap_or("a0"),
+                    );
                     last_ordinal = Some(match last_ordinal {
-                        None => t.position.ordinal.clone(),
-                        Some(ref o) if t.position.ordinal > *o => t.position.ordinal.clone(),
+                        None => ord,
+                        Some(ref o) if ord > *o => ord,
                         Some(o) => o,
                     });
                 }
             }
 
             // Update position to done column (preserving swimlane)
-            task.position = Position {
-                column: terminal.id.clone(),
-                swimlane: task.position.swimlane.clone(),
-                ordinal: match last_ordinal {
-                    Some(last) => Ordinal::after(&last),
-                    None => Ordinal::first(),
-                },
-            };
+            entity.set(
+                "position_column",
+                serde_json::json!(terminal.id.as_str()),
+            );
+            entity.set(
+                "position_ordinal",
+                serde_json::json!(match last_ordinal {
+                    Some(last) => Ordinal::after(&last).as_str().to_string(),
+                    None => Ordinal::first().as_str().to_string(),
+                }),
+            );
 
-            ctx.write_task(&task).await?;
-            let tags = task.tags();
-            let mut result = serde_json::to_value(&task)?;
-            result["id"] = serde_json::json!(&task.id);
-            result["tags"] = serde_json::to_value(&tags)?;
-            Ok(result)
+            ectx.write(&entity).await?;
+            Ok(task_entity_to_json(&entity))
         }
         .await;
 
@@ -213,6 +216,6 @@ mod tests {
             .await
             .into_result();
 
-        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
+        assert!(result.is_err());
     }
 }

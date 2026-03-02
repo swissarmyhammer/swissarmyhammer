@@ -15,6 +15,7 @@ use swissarmyhammer_fields::{ComputeEngine, EntityLookup};
 
 use crate::context::KanbanContext;
 use crate::tag_parser;
+use crate::task_helpers;
 
 /// Builtin field definition YAML files, embedded at compile time.
 static BUILTIN_DEFINITIONS: Dir =
@@ -78,7 +79,7 @@ pub fn kanban_compute_engine() -> ComputeEngine {
                 .get("body")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let (total, completed) = parse_gfm_tasks(body);
+            let (total, completed) = task_helpers::parse_checklist_counts(body);
             let percent = if total > 0 {
                 (completed as f64 / total as f64 * 100.0).round() as u32
             } else {
@@ -106,31 +107,6 @@ pub fn kanban_compute_engine() -> ComputeEngine {
     );
 
     engine
-}
-
-/// Parse GFM task list items from markdown text.
-///
-/// Returns `(total, completed)` counts. Matches `- [ ]` (unchecked) and
-/// `- [x]` or `- [X]` (checked) patterns.
-fn parse_gfm_tasks(text: &str) -> (u32, u32) {
-    let mut total = 0u32;
-    let mut completed = 0u32;
-
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("- [ ] ") || trimmed == "- [ ]" {
-            total += 1;
-        } else if trimmed.starts_with("- [x] ")
-            || trimmed.starts_with("- [X] ")
-            || trimmed == "- [x]"
-            || trimmed == "- [X]"
-        {
-            total += 1;
-            completed += 1;
-        }
-    }
-
-    (total, completed)
 }
 
 /// Entity lookup backed by kanban file storage.
@@ -162,6 +138,7 @@ impl EntityLookup for KanbanLookup {
         match entity_type {
             "task" => {
                 let task_id = crate::types::TaskId::from_string(id);
+                #[allow(deprecated)]
                 ctx.read_task(&task_id).await.ok().map(|t| {
                     let mut v = serde_json::to_value(&t).unwrap_or_default();
                     if let serde_json::Value::Object(ref mut map) = v {
@@ -217,6 +194,7 @@ impl EntityLookup for KanbanLookup {
     async fn list(&self, entity_type: &str) -> Vec<serde_json::Value> {
         let ctx = KanbanContext::new(&self.root);
         match entity_type {
+            #[allow(deprecated)]
             "task" => ctx
                 .read_all_tasks()
                 .await
@@ -523,27 +501,7 @@ mod tests {
         assert_eq!(result["percent"], 50);
     }
 
-    #[test]
-    fn parse_gfm_tasks_basic() {
-        let (total, completed) = parse_gfm_tasks("- [x] Done\n- [ ] Todo\n- [X] Also done");
-        assert_eq!(total, 3);
-        assert_eq!(completed, 2);
-    }
-
-    #[test]
-    fn parse_gfm_tasks_empty() {
-        let (total, completed) = parse_gfm_tasks("No tasks here");
-        assert_eq!(total, 0);
-        assert_eq!(completed, 0);
-    }
-
-    #[test]
-    fn parse_gfm_tasks_indented() {
-        let (total, completed) =
-            parse_gfm_tasks("  - [x] Indented done\n  - [ ] Indented todo");
-        assert_eq!(total, 2);
-        assert_eq!(completed, 1);
-    }
+    // parse_checklist_counts tests live in task_helpers module
 
     #[test]
     fn all_builtin_computed_fields_have_registered_derivations() {

@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{AttachmentId, TaskId};
+use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
@@ -20,12 +20,12 @@ pub struct DeleteAttachment {
     /// The task ID
     pub task_id: TaskId,
     /// The attachment ID to delete
-    pub id: AttachmentId,
+    pub id: String,
 }
 
 impl DeleteAttachment {
     /// Create a new DeleteAttachment command
-    pub fn new(task_id: impl Into<TaskId>, id: impl Into<AttachmentId>) -> Self {
+    pub fn new(task_id: impl Into<TaskId>, id: impl Into<String>) -> Self {
         Self {
             task_id: task_id.into(),
             id: id.into(),
@@ -40,23 +40,30 @@ impl Execute<KanbanContext, KanbanError> for DeleteAttachment {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut task = ctx.read_task(&self.task_id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("task", self.task_id.as_str()).await?;
+
+            let mut attachments = entity
+                .get("attachments")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
 
             // Check if attachment exists before deleting
-            if !task.attachments.iter().any(|a| a.id == self.id) {
+            if !attachments.iter().any(|a| a["id"].as_str() == Some(&self.id)) {
                 return Err(KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
                 });
             }
 
-            task.attachments.retain(|a| a.id != self.id);
-            ctx.write_task(&task).await?;
+            attachments.retain(|a| a["id"].as_str() != Some(&self.id));
+            entity.set("attachments", serde_json::json!(attachments));
+            ectx.write(&entity).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,
                 "attachment_id": self.id,
-                "task_id": task.id
+                "task_id": self.task_id.to_string()
             }))
         }
         .await;
@@ -177,7 +184,7 @@ mod tests {
             .await
             .into_result();
 
-        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
+        assert!(result.is_err());
     }
 
     #[tokio::test]

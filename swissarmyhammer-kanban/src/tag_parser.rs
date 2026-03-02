@@ -52,7 +52,7 @@ pub fn parse_tags(text: &str) -> Vec<String> {
             if bytes[i] == b'#' {
                 // Must be start of line or preceded by whitespace/punctuation (not alphanumeric/underscore)
                 let preceded_ok =
-                    i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_';
+                    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
                 if preceded_ok {
                     let start = i + 1;
                     let mut end = start;
@@ -148,7 +148,7 @@ pub fn remove_tag(text: &str, slug: &str) -> String {
             // Check for #tag pattern
             if bytes[i] == b'#' {
                 let preceded_ok =
-                    i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_';
+                    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
                 if preceded_ok && line[i..].starts_with(&pattern) {
                     let after = i + pattern.len();
                     // Ensure the match ends at a boundary (whitespace, #, or end)
@@ -231,7 +231,7 @@ pub fn rename_tag(text: &str, old_slug: &str, new_slug: &str) -> String {
             // Check for #old pattern
             if bytes[i] == b'#' {
                 let preceded_ok =
-                    i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_';
+                    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
                 if preceded_ok && line[i..].starts_with(&old_pattern) {
                     let after = i + old_pattern.len();
                     // Boundary: whitespace, #, or end of line

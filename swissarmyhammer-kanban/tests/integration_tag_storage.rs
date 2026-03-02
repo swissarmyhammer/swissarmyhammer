@@ -183,13 +183,12 @@ async fn test_tag_rename_via_update() {
     // Same ULID
     assert_eq!(result["id"], tag_id);
 
-    // Verify task description was updated
-    let task = ctx
-        .read_task(&swissarmyhammer_kanban::TaskId::from_string(task_id))
-        .await
-        .unwrap();
-    assert!(task.description.contains("#new-name"));
-    assert!(!task.description.contains("#old-name"));
+    // Verify task body was updated
+    let ectx = ctx.entity_context().await.unwrap();
+    let task = ectx.read("task", task_id).await.unwrap();
+    let body = task.get_str("body").unwrap_or("");
+    assert!(body.contains("#new-name"));
+    assert!(!body.contains("#old-name"));
 
     // Tag file should still exist at same ULID path
     let tag_file = kanban_dir.join("tags").join(format!("{}.yaml", tag_id));

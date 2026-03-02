@@ -2,6 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::task_helpers::{task_entity_to_rich_json, task_is_ready, task_tags};
 use crate::types::{ActorId, ColumnId, SwimlaneId};
 use serde::Deserialize;
 use serde_json::Value;
@@ -74,8 +75,9 @@ impl ListTasks {
 impl Execute<KanbanContext, KanbanError> for ListTasks {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
+            let ectx = ctx.entity_context().await?;
             let all_columns = ctx.read_all_columns().await?;
-            let all_tasks = ctx.read_all_tasks().await?;
+            let all_tasks = ectx.list("task").await?;
 
             let terminal_column = all_columns
                 .iter()
@@ -89,35 +91,35 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                 .filter(|t| {
                     // Filter by column
                     if let Some(ref col) = self.column {
-                        if &t.position.column != col {
+                        if t.get_str("position_column") != Some(col.as_str()) {
                             return false;
                         }
                     }
 
                     // Filter by swimlane
                     if let Some(ref swimlane) = self.swimlane {
-                        if t.position.swimlane.as_ref() != Some(swimlane) {
+                        if t.get_str("position_swimlane") != Some(swimlane.as_str()) {
                             return false;
                         }
                     }
 
-                    // Filter by tag name (computed from description)
+                    // Filter by tag name (computed from body)
                     if let Some(ref tag_name) = self.tag {
-                        if !t.tags().iter().any(|t| t == tag_name) {
+                        if !task_tags(t).iter().any(|tag| tag == tag_name) {
                             return false;
                         }
                     }
 
                     // Filter by assignee
                     if let Some(ref assignee) = self.assignee {
-                        if !t.assignees.contains(assignee) {
+                        if !t.get_string_list("assignees").contains(&assignee.to_string()) {
                             return false;
                         }
                     }
 
                     // Filter by readiness
                     if let Some(ready) = self.ready {
-                        let is_ready = t.is_ready(&all_tasks, terminal_column);
+                        let is_ready = task_is_ready(t, &all_tasks, terminal_column);
                         if is_ready != ready {
                             return false;
                         }
@@ -125,20 +127,7 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
 
                     true
                 })
-                .map(|t| {
-                    let ready = t.is_ready(&all_tasks, terminal_column);
-                    let blocked_by = t.blocked_by(&all_tasks, terminal_column);
-                    let progress = t.progress();
-                    let tags = t.tags();
-
-                    let mut result = serde_json::to_value(t).unwrap_or(Value::Null);
-                    result["id"] = serde_json::json!(&t.id);
-                    result["ready"] = serde_json::json!(ready);
-                    result["blocked_by"] = serde_json::to_value(&blocked_by).unwrap_or(Value::Null);
-                    result["progress"] = serde_json::json!(progress);
-                    result["tags"] = serde_json::to_value(&tags).unwrap_or(Value::Null);
-                    result
-                })
+                .map(|t| task_entity_to_rich_json(t, &all_tasks, terminal_column))
                 .collect();
 
             Ok(serde_json::json!({

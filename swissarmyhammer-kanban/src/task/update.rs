@@ -3,7 +3,8 @@
 use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, Attachment, SwimlaneId, Tag, TaskId};
+use crate::task_helpers::{task_entity_to_json, task_tags};
+use crate::types::{ActorId, SwimlaneId, Tag, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
@@ -29,8 +30,8 @@ pub struct UpdateTask {
     pub assignees: Option<Vec<ActorId>>,
     /// Replace all dependencies
     pub depends_on: Option<Vec<TaskId>>,
-    /// Replace all attachments
-    pub attachments: Option<Vec<Attachment>>,
+    /// Replace all attachments (JSON array)
+    pub attachments: Option<Value>,
 }
 
 impl UpdateTask {
@@ -76,12 +77,6 @@ impl UpdateTask {
         self.depends_on = Some(deps);
         self
     }
-
-    /// Set the attachments (replaces all existing attachments)
-    pub fn with_attachments(mut self, attachments: Vec<Attachment>) -> Self {
-        self.attachments = Some(attachments);
-        self
-    }
 }
 
 #[async_trait]
@@ -91,32 +86,38 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut task = ctx.read_task(&self.id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("task", self.id.as_str()).await?;
 
             // Apply updates
             if let Some(title) = &self.title {
-                task.title = title.clone();
+                entity.set("title", serde_json::json!(title));
             }
             if let Some(desc) = &self.description {
-                task.description = desc.clone();
+                entity.set("body", serde_json::json!(desc));
             }
             if let Some(swimlane) = &self.swimlane {
-                task.position.swimlane = swimlane.clone();
+                match swimlane {
+                    Some(s) => entity.set("position_swimlane", serde_json::json!(s)),
+                    None => {
+                        entity.remove("position_swimlane");
+                    }
+                }
             }
             if let Some(assignees) = &self.assignees {
-                task.assignees = assignees.clone();
+                entity.set("assignees", serde_json::to_value(assignees)?);
             }
             if let Some(deps) = &self.depends_on {
-                task.depends_on = deps.clone();
+                entity.set("depends_on", serde_json::to_value(deps)?);
             }
             if let Some(attachments) = &self.attachments {
-                task.attachments = attachments.clone();
+                entity.set("attachments", attachments.clone());
             }
 
-            ctx.write_task(&task).await?;
+            ectx.write(&entity).await?;
 
             // Auto-create Tag objects for any new #tag patterns in description
-            let tags = task.tags();
+            let tags = task_tags(&entity);
             for tag_name in &tags {
                 if !ctx.tag_name_exists(tag_name).await? {
                     let color = auto_color::auto_color(tag_name).to_string();
@@ -125,10 +126,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
                 }
             }
 
-            let mut result = serde_json::to_value(&task)?;
-            result["id"] = serde_json::json!(&task.id);
-            result["tags"] = serde_json::to_value(&tags)?;
-            Ok(result)
+            Ok(task_entity_to_json(&entity))
         }
         .await;
 

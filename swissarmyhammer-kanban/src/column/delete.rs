@@ -42,6 +42,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteColumn {
             }
 
             // Check for tasks in this column
+            #[allow(deprecated)]
             let tasks = ctx.read_all_tasks().await?;
             let task_count = tasks
                 .iter()

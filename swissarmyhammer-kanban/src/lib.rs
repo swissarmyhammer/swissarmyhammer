@@ -68,6 +68,7 @@ mod error;
 pub mod parse;
 mod processor;
 pub mod tag_parser;
+pub mod task_helpers;
 pub mod types;
 
 // Command modules
@@ -76,7 +77,6 @@ pub mod actor;
 pub mod attachment;
 pub mod board;
 pub mod column;
-pub mod comment;
 pub mod schema;
 pub mod swimlane;
 pub mod tag;
@@ -98,7 +98,7 @@ pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
 
 // Re-export commonly used types
 pub use types::{
-    Actor, ActorId, Attachment, Board, Column, ColumnId, Comment, CommentId, LogEntry, Noun,
+    Actor, ActorId, Attachment, Board, Column, ColumnId, LogEntry, Noun,
     Operation as KanbanOperation, OperationResult, Ordinal, Position, Swimlane, SwimlaneId, Tag,
     TagId, Task, TaskId, Verb,
 };

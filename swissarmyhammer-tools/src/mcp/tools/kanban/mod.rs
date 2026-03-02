@@ -29,7 +29,7 @@ use swissarmyhammer_kanban::{
     },
     board::{GetBoard, InitBoard, UpdateBoard},
     column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn},
-    comment::{AddComment, DeleteComment, GetComment, ListComments, UpdateComment},
+
     parse::parse_input,
     swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
     tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
@@ -85,12 +85,6 @@ static UPDATE_TAG: Lazy<UpdateTag> = Lazy::new(|| UpdateTag::new(""));
 static DELETE_TAG: Lazy<DeleteTag> = Lazy::new(|| DeleteTag::new(""));
 static LIST_TAGS: Lazy<ListTags> = Lazy::new(ListTags::default);
 
-static ADD_COMMENT: Lazy<AddComment> = Lazy::new(|| AddComment::new("", "", ""));
-static GET_COMMENT: Lazy<GetComment> = Lazy::new(|| GetComment::new("", ""));
-static UPDATE_COMMENT: Lazy<UpdateComment> = Lazy::new(|| UpdateComment::new("", ""));
-static DELETE_COMMENT: Lazy<DeleteComment> = Lazy::new(|| DeleteComment::new("", ""));
-static LIST_COMMENTS: Lazy<ListComments> = Lazy::new(|| ListComments::new(""));
-
 static LIST_ACTIVITY: Lazy<ListActivity> = Lazy::new(ListActivity::default);
 
 static ADD_ATTACHMENT: Lazy<AddAttachment> = Lazy::new(|| AddAttachment::new("", "", ""));
@@ -143,12 +137,6 @@ static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*UPDATE_TAG as &dyn Operation,
         &*DELETE_TAG as &dyn Operation,
         &*LIST_TAGS as &dyn Operation,
-        // Comment operations
-        &*ADD_COMMENT as &dyn Operation,
-        &*GET_COMMENT as &dyn Operation,
-        &*UPDATE_COMMENT as &dyn Operation,
-        &*DELETE_COMMENT as &dyn Operation,
-        &*LIST_COMMENTS as &dyn Operation,
         // Attachment operations
         &*ADD_ATTACHMENT as &dyn Operation,
         &*GET_ATTACHMENT as &dyn Operation,
@@ -725,76 +713,6 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             processor.process(&DeleteTag::new(id), ctx).await
         }
         (Verb::List, Noun::Tags) => processor.process(&ListTags::default(), ctx).await,
-
-        // Comment operations
-        // Note: For comments, we need both task_id and comment_id. The parser aliases
-        // task_id->id, so we use different param names to avoid collision.
-        (Verb::Add, Noun::Comment) => {
-            // task_id gets aliased to id by parser, so check both
-            let task_id = op
-                .get_string("task_id")
-                .or_else(|| op.get_string("id"))
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let body = op
-                .get_string("body")
-                .or_else(|| op.get_string("description"))
-                .ok_or_else(|| McpError::invalid_params("missing required field: body", None))?;
-            let author = op
-                .get_string("author")
-                .ok_or_else(|| McpError::invalid_params("missing required field: author", None))?;
-            processor
-                .process(&AddComment::new(task_id, body, author), ctx)
-                .await
-        }
-        (Verb::Get, Noun::Comment) => {
-            let task_id = op
-                .get_string("task_id")
-                .or_else(|| op.get_string("id"))
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let comment_id = op.get_string("comment_id").ok_or_else(|| {
-                McpError::invalid_params("missing required field: comment_id", None)
-            })?;
-            processor
-                .process(&GetComment::new(task_id, comment_id), ctx)
-                .await
-        }
-        (Verb::Update, Noun::Comment) => {
-            let task_id = op
-                .get_string("task_id")
-                .or_else(|| op.get_string("id"))
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let comment_id = op.get_string("comment_id").ok_or_else(|| {
-                McpError::invalid_params("missing required field: comment_id", None)
-            })?;
-
-            let mut cmd = UpdateComment::new(task_id, comment_id);
-            if let Some(body) = op
-                .get_string("body")
-                .or_else(|| op.get_string("description"))
-            {
-                cmd = cmd.with_body(body);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Comment) => {
-            let task_id = op
-                .get_string("task_id")
-                .or_else(|| op.get_string("id"))
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            let comment_id = op.get_string("comment_id").ok_or_else(|| {
-                McpError::invalid_params("missing required field: comment_id", None)
-            })?;
-            processor
-                .process(&DeleteComment::new(task_id, comment_id), ctx)
-                .await
-        }
-        (Verb::List, Noun::Comments) => {
-            let task_id = op
-                .get_string("task_id")
-                .or_else(|| op.get_string("id"))
-                .ok_or_else(|| McpError::invalid_params("missing required field: task_id", None))?;
-            processor.process(&ListComments::new(task_id), ctx).await
-        }
 
         // Activity operations
         (Verb::List, Noun::Activity) => {
@@ -1763,163 +1681,6 @@ mod tests {
     }
 
     // =========================================================================
-    // Comment operations
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_add_comment() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add a task first
-        let mut task_args = serde_json::Map::new();
-        task_args.insert("op".to_string(), json!("add task"));
-        task_args.insert("title".to_string(), json!("Task with comment"));
-        let result = tool.execute(task_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        // Add a comment
-        let mut comment_args = serde_json::Map::new();
-        comment_args.insert("op".to_string(), json!("add comment"));
-        comment_args.insert("task_id".to_string(), json!(task_id));
-        comment_args.insert("body".to_string(), json!("This is a comment"));
-        comment_args.insert("author".to_string(), json!("alice"));
-
-        let result = tool.execute(comment_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        assert_eq!(data["body"], "This is a comment");
-        assert_eq!(data["author"], "alice");
-        assert!(data["id"].is_string());
-    }
-
-    #[tokio::test]
-    async fn test_get_comment() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add a task
-        let mut task_args = serde_json::Map::new();
-        task_args.insert("op".to_string(), json!("add task"));
-        task_args.insert("title".to_string(), json!("Task with comment"));
-        let result = tool.execute(task_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        // Add a comment
-        let mut comment_args = serde_json::Map::new();
-        comment_args.insert("op".to_string(), json!("add comment"));
-        comment_args.insert("task_id".to_string(), json!(task_id));
-        comment_args.insert("body".to_string(), json!("Test comment"));
-        comment_args.insert("author".to_string(), json!("alice"));
-        let add_result = tool.execute(comment_args, &context).await.unwrap();
-        let comment_id = extract_id(&add_result);
-
-        // Get the comment
-        let mut get_args = serde_json::Map::new();
-        get_args.insert("op".to_string(), json!("get comment"));
-        get_args.insert("task_id".to_string(), json!(task_id));
-        get_args.insert("comment_id".to_string(), json!(comment_id));
-
-        let result = tool.execute(get_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        assert_eq!(data["id"], comment_id);
-        assert_eq!(data["body"], "Test comment");
-    }
-
-    #[tokio::test]
-    async fn test_list_comments() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add a task
-        let mut task_args = serde_json::Map::new();
-        task_args.insert("op".to_string(), json!("add task"));
-        task_args.insert("title".to_string(), json!("Task with comments"));
-        let result = tool.execute(task_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        // Add comments
-        for body in ["Comment 1", "Comment 2"] {
-            let mut comment_args = serde_json::Map::new();
-            comment_args.insert("op".to_string(), json!("add comment"));
-            comment_args.insert("task_id".to_string(), json!(task_id));
-            comment_args.insert("body".to_string(), json!(body));
-            comment_args.insert("author".to_string(), json!("alice"));
-            tool.execute(comment_args, &context).await.unwrap();
-        }
-
-        // List comments
-        let mut list_args = serde_json::Map::new();
-        list_args.insert("op".to_string(), json!("list comments"));
-        list_args.insert("task_id".to_string(), json!(task_id));
-
-        let result = tool.execute(list_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        // Response format: {"comments": [...], "count": N}
-        assert_eq!(data["count"], 2);
-        assert!(data["comments"].is_array());
-        assert_eq!(data["comments"].as_array().unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_delete_comment() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add a task
-        let mut task_args = serde_json::Map::new();
-        task_args.insert("op".to_string(), json!("add task"));
-        task_args.insert("title".to_string(), json!("Task with comment"));
-        let result = tool.execute(task_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        // Add a comment
-        let mut comment_args = serde_json::Map::new();
-        comment_args.insert("op".to_string(), json!("add comment"));
-        comment_args.insert("task_id".to_string(), json!(task_id));
-        comment_args.insert("body".to_string(), json!("Test comment"));
-        comment_args.insert("author".to_string(), json!("alice"));
-        let add_result = tool.execute(comment_args, &context).await.unwrap();
-        let comment_id = extract_id(&add_result);
-
-        // Delete the comment
-        let mut delete_args = serde_json::Map::new();
-        delete_args.insert("op".to_string(), json!("delete comment"));
-        delete_args.insert("task_id".to_string(), json!(task_id));
-        delete_args.insert("comment_id".to_string(), json!(comment_id));
-
-        let result = tool.execute(delete_args, &context).await;
-        assert!(result.is_ok());
-
-        // Verify it's gone
-        let mut get_args = serde_json::Map::new();
-        get_args.insert("op".to_string(), json!("get comment"));
-        get_args.insert("task_id".to_string(), json!(task_id));
-        get_args.insert("comment_id".to_string(), json!(comment_id));
-
-        let get_result = tool.execute(get_args, &context).await;
-        assert!(get_result.is_err());
-    }
-
-    // =========================================================================
     // Activity operations
     // =========================================================================
 
@@ -2318,45 +2079,6 @@ mod tests {
 
         assert_eq!(data["id"], tag_id);
         assert_eq!(data["color"], "ff5500");
-    }
-
-    #[tokio::test]
-    async fn test_update_comment() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add a task
-        let mut task_args = serde_json::Map::new();
-        task_args.insert("op".to_string(), json!("add task"));
-        task_args.insert("title".to_string(), json!("Task with comment"));
-        let result = tool.execute(task_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        // Add a comment
-        let mut comment_args = serde_json::Map::new();
-        comment_args.insert("op".to_string(), json!("add comment"));
-        comment_args.insert("task_id".to_string(), json!(task_id));
-        comment_args.insert("body".to_string(), json!("Original comment"));
-        comment_args.insert("author".to_string(), json!("alice"));
-        let add_result = tool.execute(comment_args, &context).await.unwrap();
-        let comment_id = extract_id(&add_result);
-
-        // Update the comment
-        let mut update_args = serde_json::Map::new();
-        update_args.insert("op".to_string(), json!("update comment"));
-        update_args.insert("task_id".to_string(), json!(task_id));
-        update_args.insert("comment_id".to_string(), json!(comment_id));
-        update_args.insert("body".to_string(), json!("Updated comment"));
-
-        let result = tool.execute(update_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        assert_eq!(data["id"], comment_id);
-        assert_eq!(data["body"], "Updated comment");
     }
 
     // =========================================================================

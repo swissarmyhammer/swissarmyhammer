@@ -49,13 +49,15 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
                 ctx.write_tag(&tag).await?;
             }
 
-            let mut task = ctx.read_task(&self.id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("task", self.id.as_str()).await?;
 
-            // Append #tag to description if not already present
-            let new_desc = tag_parser::append_tag(&task.description, &slug);
-            if new_desc != task.description {
-                task.description = new_desc;
-                ctx.write_task(&task).await?;
+            // Append #tag to body if not already present
+            let body = entity.get_str("body").unwrap_or("").to_string();
+            let new_body = tag_parser::append_tag(&body, &slug);
+            if new_body != body {
+                entity.set("body", serde_json::json!(new_body));
+                ectx.write(&entity).await?;
             }
 
             Ok(serde_json::json!({

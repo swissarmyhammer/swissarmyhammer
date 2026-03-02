@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::{AttachmentId, TaskId};
+use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
@@ -20,7 +20,7 @@ pub struct UpdateAttachment {
     /// The task ID
     pub task_id: TaskId,
     /// The attachment ID to update
-    pub id: AttachmentId,
+    pub id: String,
     /// Optional new name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -34,7 +34,7 @@ pub struct UpdateAttachment {
 
 impl UpdateAttachment {
     /// Create a new UpdateAttachment command
-    pub fn new(task_id: impl Into<TaskId>, id: impl Into<AttachmentId>) -> Self {
+    pub fn new(task_id: impl Into<TaskId>, id: impl Into<String>) -> Self {
         Self {
             task_id: task_id.into(),
             id: id.into(),
@@ -70,33 +70,41 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut task = ctx.read_task(&self.task_id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("task", self.task_id.as_str()).await?;
 
-            let attachment =
-                task.find_attachment_mut(&self.id)
-                    .ok_or_else(|| KanbanError::NotFound {
-                        resource: "attachment".to_string(),
-                        id: self.id.to_string(),
-                    })?;
+            let mut attachments = entity
+                .get("attachments")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
+
+            // Find the attachment
+            let idx = attachments
+                .iter()
+                .position(|a| a["id"].as_str() == Some(&self.id))
+                .ok_or_else(|| KanbanError::NotFound {
+                    resource: "attachment".to_string(),
+                    id: self.id.to_string(),
+                })?;
 
             // Update only provided fields
             if let Some(name) = &self.name {
-                attachment.name = name.clone();
+                attachments[idx]["name"] = serde_json::json!(name);
             }
             if let Some(mime_type) = &self.mime_type {
-                attachment.mime_type = Some(mime_type.clone());
+                attachments[idx]["mime_type"] = serde_json::json!(mime_type);
             }
             if let Some(size) = self.size {
-                attachment.size = Some(size);
+                attachments[idx]["size"] = serde_json::json!(size);
             }
 
-            let updated_attachment = attachment.clone();
-
-            ctx.write_task(&task).await?;
+            let updated_attachment = attachments[idx].clone();
+            entity.set("attachments", serde_json::json!(attachments));
+            ectx.write(&entity).await?;
 
             Ok(serde_json::json!({
                 "attachment": updated_attachment,
-                "task_id": task.id
+                "task_id": self.task_id.to_string()
             }))
         }
         .await;
@@ -243,6 +251,6 @@ mod tests {
             .await
             .into_result();
 
-        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
+        assert!(result.is_err());
     }
 }

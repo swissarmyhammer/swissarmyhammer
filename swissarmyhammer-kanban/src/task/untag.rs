@@ -3,6 +3,7 @@
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::tag_parser;
+use crate::task_helpers::task_tags;
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,16 +44,18 @@ impl Execute<KanbanContext, KanbanError> for UntagTask {
 
         let result: Result<Value> = async {
             let slug = tag_parser::normalize_slug(&self.tag);
-            let mut task = ctx.read_task(&self.id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("task", self.id.as_str()).await?;
 
-            // Check if tag is present in description
-            let was_present = task.tags().iter().any(|t| t == &slug);
+            // Check if tag is present in body
+            let was_present = task_tags(&entity).iter().any(|t| t == &slug);
 
-            // Remove #tag from description
-            let new_desc = tag_parser::remove_tag(&task.description, &slug);
-            if new_desc != task.description {
-                task.description = new_desc;
-                ctx.write_task(&task).await?;
+            // Remove #tag from body
+            let body = entity.get_str("body").unwrap_or("").to_string();
+            let new_body = tag_parser::remove_tag(&body, &slug);
+            if new_body != body {
+                entity.set("body", serde_json::json!(new_body));
+                ectx.write(&entity).await?;
             }
 
             Ok(serde_json::json!({

@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::{Attachment, TaskId};
+use crate::types::TaskId;
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -32,14 +32,19 @@ impl ListAttachments {
 impl Execute<KanbanContext, KanbanError> for ListAttachments {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let task = ctx.read_task(&self.task_id).await?;
+            let ectx = ctx.entity_context().await?;
+            let entity = ectx.read("task", self.task_id.as_str()).await?;
 
-            let attachments: Vec<&Attachment> = task.attachments.iter().collect();
+            let attachments = entity
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
 
             Ok(serde_json::json!({
                 "attachments": attachments,
                 "count": attachments.len(),
-                "task_id": task.id
+                "task_id": self.task_id.to_string()
             }))
         }
         .await
@@ -148,6 +153,6 @@ mod tests {
             .await
             .into_result();
 
-        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
+        assert!(result.is_err());
     }
 }

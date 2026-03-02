@@ -39,14 +39,15 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
             let tag = ctx.read_tag(&self.id).await?;
             let tag_name = &tag.name;
 
-            // Remove #name text from all task descriptions
-            let task_ids = ctx.list_task_ids().await?;
-            for id in task_ids {
-                let mut task = ctx.read_task(&id).await?;
-                let new_desc = tag_parser::remove_tag(&task.description, tag_name);
-                if new_desc != task.description {
-                    task.description = new_desc;
-                    ctx.write_task(&task).await?;
+            // Remove #name text from all task bodies
+            let ectx = ctx.entity_context().await?;
+            let all_tasks = ectx.list("task").await?;
+            for mut task in all_tasks {
+                let body = task.get_str("body").unwrap_or("").to_string();
+                let new_body = tag_parser::remove_tag(&body, tag_name);
+                if new_body != body {
+                    task.set("body", serde_json::json!(new_body));
+                    ectx.write(&task).await?;
                 }
             }
 

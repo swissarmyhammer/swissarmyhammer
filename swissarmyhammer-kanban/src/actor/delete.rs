@@ -42,12 +42,14 @@ impl Execute<KanbanContext, KanbanError> for DeleteActor {
             }
 
             // Remove actor from all task assignee lists
-            let task_ids = ctx.list_task_ids().await?;
-            for id in task_ids {
-                let mut task = ctx.read_task(&id).await?;
-                if task.assignees.contains(&self.id) {
-                    task.assignees.retain(|a| a != &self.id);
-                    ctx.write_task(&task).await?;
+            let ectx = ctx.entity_context().await?;
+            let all_tasks = ectx.list("task").await?;
+            for mut task in all_tasks {
+                let mut assignees = task.get_string_list("assignees");
+                if assignees.contains(&self.id.to_string()) {
+                    assignees.retain(|a| a != self.id.as_str());
+                    task.set("assignees", serde_json::to_value(&assignees)?);
+                    ectx.write(&task).await?;
                 }
             }
 
@@ -168,8 +170,9 @@ mod tests {
             .unwrap();
 
         // Verify assignment
-        let task = ctx.read_task(&task_id.into()).await.unwrap();
-        assert!(task.assignees.contains(&"assistant".into()));
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id).await.unwrap();
+        assert!(task.get_string_list("assignees").contains(&"assistant".to_string()));
 
         // Delete actor
         DeleteActor::new("assistant")
@@ -179,7 +182,7 @@ mod tests {
             .unwrap();
 
         // Verify task no longer has assignment
-        let task = ctx.read_task(&task_id.into()).await.unwrap();
-        assert!(!task.assignees.contains(&"assistant".into()));
+        let task = ectx.read("task", task_id).await.unwrap();
+        assert!(!task.get_string_list("assignees").contains(&"assistant".to_string()));
     }
 }

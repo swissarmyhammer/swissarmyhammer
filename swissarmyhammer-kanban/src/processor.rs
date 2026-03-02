@@ -1,6 +1,5 @@
 //! Kanban operation processor
 
-use crate::types::{ActorId, ColumnId, SwimlaneId, TagId, TaskId};
 use crate::{KanbanContext, KanbanError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -81,63 +80,10 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         &self,
         ctx: &KanbanContext,
         log_entry: &LogEntry,
-        affected_resources: &[String],
+        _affected_resources: &[String],
     ) -> Result<()> {
-        // Global activity log (all operations)
+        // Global activity log only — per-entity logging is handled by EntityContext
         ctx.append_activity(log_entry).await?;
-
-        // Per-task logs (for operations that affect specific tasks)
-        for resource_id in affected_resources {
-            let task_id = TaskId::from_string(resource_id);
-            ctx.append_task_log(&task_id, log_entry).await?;
-        }
-
-        // Per-entity logs based on operation noun
-        let noun = log_entry.op.split_whitespace().nth(1).unwrap_or("");
-        let entity_id = log_entry
-            .output
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        match noun {
-            "tag" => {
-                if let Some(id) = entity_id {
-                    ctx.append_tag_log(&TagId::from_string(&id), log_entry)
-                        .await?;
-                }
-            }
-            "column" => {
-                if let Some(id) = entity_id {
-                    ctx.append_column_log(&ColumnId::from_string(&id), log_entry)
-                        .await?;
-                }
-            }
-            "swimlane" => {
-                if let Some(id) = entity_id {
-                    ctx.append_swimlane_log(&SwimlaneId::from_string(&id), log_entry)
-                        .await?;
-                }
-            }
-            "actor" => {
-                let id = entity_id.or_else(|| {
-                    log_entry
-                        .output
-                        .get("actor")
-                        .and_then(|a| a.get("id"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                });
-                if let Some(id) = id {
-                    ctx.append_actor_log(&ActorId::from_string(&id), log_entry)
-                        .await?;
-                }
-            }
-            "board" => {
-                ctx.append_board_log(log_entry).await?;
-            }
-            _ => {}
-        }
 
         Ok(())
     }
@@ -154,6 +100,7 @@ mod tests {
     use super::*;
     use crate::board::InitBoard;
     use crate::task::AddTask;
+    use crate::types::TaskId;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -186,7 +133,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_processor_writes_per_task_log() {
+    async fn test_processor_writes_entity_changelog() {
         let (_temp, ctx) = setup().await;
         let processor = KanbanOperationProcessor::new();
 
@@ -195,12 +142,13 @@ mod tests {
         let result = processor.process(&cmd, &ctx).await.unwrap();
         let task_id = result["id"].as_str().unwrap();
 
-        // Check per-task log
+        // Check entity changelog (written by EntityContext::write)
         let task_log_path = ctx.task_log_path(&TaskId::from_string(task_id));
         let content = std::fs::read_to_string(task_log_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
 
-        assert_eq!(lines.len(), 1); // Just add
+        // Only entity changelog entry (processor no longer writes per-entity logs)
+        assert_eq!(lines.len(), 1);
     }
 
     #[tokio::test]

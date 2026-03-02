@@ -18,6 +18,7 @@ use swissarmyhammer_entity::{Entity, EntityContext};
 use swissarmyhammer_fields::{load_yaml_dir, FieldsContext};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::OnceCell;
 
 /// Context passed to every command - provides access, not logic
 pub struct KanbanContext {
@@ -25,8 +26,8 @@ pub struct KanbanContext {
     root: PathBuf,
     /// Field registry (populated via `open()`, None when created via `new()`)
     fields: Option<Arc<FieldsContext>>,
-    /// Entity I/O coordinator (populated via `open()`, None when created via `new()`)
-    entities: Option<EntityContext>,
+    /// Entity I/O coordinator — lazy-initialized on first access
+    entities: OnceCell<EntityContext>,
 }
 
 impl KanbanContext {
@@ -38,7 +39,7 @@ impl KanbanContext {
         Self {
             root: root.into(),
             fields: None,
-            entities: None,
+            entities: OnceCell::new(),
         }
     }
 
@@ -48,45 +49,20 @@ impl KanbanContext {
     /// then merges with any local overrides from `.kanban/fields/`.
     pub async fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
-        let fields_root = root.join("fields");
 
         // Ensure fields directory structure exists for local overrides
+        let fields_root = root.join("fields");
         fs::create_dir_all(fields_root.join("definitions")).await?;
         fs::create_dir_all(fields_root.join("entities")).await?;
 
-        // Start with builtins (embedded at compile time)
-        let builtin_defs = builtin_field_definitions();
-        let builtin_entities = builtin_entity_definitions();
-
-        // Load local overrides from .kanban/fields/definitions/ and .kanban/fields/entities/
-        let local_defs = load_yaml_dir(&fields_root.join("definitions"));
-        let local_entities = load_yaml_dir(&fields_root.join("entities"));
-
-        // Merge: builtins first, then locals (locals override builtins by name)
-        let mut all_defs: Vec<(&str, &str)> = builtin_defs.clone();
-        let local_def_refs: Vec<(&str, &str)> = local_defs
-            .iter()
-            .map(|(n, c)| (n.as_str(), c.as_str()))
-            .collect();
-        all_defs.extend(local_def_refs);
-
-        let mut all_entities: Vec<(&str, &str)> = builtin_entities.clone();
-        let local_entity_refs: Vec<(&str, &str)> = local_entities
-            .iter()
-            .map(|(n, c)| (n.as_str(), c.as_str()))
-            .collect();
-        all_entities.extend(local_entity_refs);
-
-        let fields = Arc::new(
-            FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
-                .map_err(|e| KanbanError::FieldsError(e.to_string()))?,
-        );
-        let entities = EntityContext::new(&root, Arc::clone(&fields));
+        let (fields, entities) = Self::build_entity_context(&root)?;
+        let cell = OnceCell::new();
+        cell.set(entities).ok();
 
         Ok(Self {
             root,
             fields: Some(fields),
-            entities: Some(entities),
+            entities: cell,
         })
     }
 
@@ -368,6 +344,8 @@ impl KanbanContext {
     /// Read a task file, auto-migrating legacy formats.
     ///
     /// Tries `.md` (YAML frontmatter + markdown body) first, falls back to `.json`.
+    #[deprecated(note = "Use entity_context().await?.read(\"task\", id) instead")]
+    #[allow(deprecated)]
     pub async fn read_task(&self, id: &TaskId) -> Result<Task> {
         let md_path = self.task_path(id); // .md
         let path = if md_path.exists() {
@@ -408,6 +386,7 @@ impl KanbanContext {
     }
 
     /// Write a task file as YAML frontmatter + markdown body
+    #[deprecated(note = "Use entity_context().await?.write(&entity) instead")]
     pub async fn write_task(&self, task: &Task) -> Result<()> {
         let path = self.task_path(&task.id);
         let meta = TaskMeta::from_task(task);
@@ -462,6 +441,8 @@ impl KanbanContext {
     }
 
     /// Read all tasks
+    #[deprecated(note = "Use entity_context().await?.list(\"task\") instead")]
+    #[allow(deprecated)]
     pub async fn read_all_tasks(&self) -> Result<Vec<Task>> {
         let ids = self.list_task_ids().await?;
         let mut tasks = Vec::with_capacity(ids.len());
@@ -998,31 +979,71 @@ impl KanbanContext {
 
     /// Get the EntityContext for generic entity operations.
     ///
-    /// Returns an error if the context is not initialized (use `open()`).
-    pub fn entity_context(&self) -> Result<&EntityContext> {
-        self.entities.as_ref().ok_or_else(|| {
-            KanbanError::FieldsError("entity context not initialized (use open())".into())
-        })
+    /// Lazy-initialized on first access from builtin + local field definitions.
+    pub async fn entity_context(&self) -> Result<&EntityContext> {
+        self.entities
+            .get_or_try_init(|| async {
+                let (_fields, entities) = Self::build_entity_context(&self.root)?;
+                Ok(entities)
+            })
+            .await
+    }
+
+    /// Build a FieldsContext + EntityContext from builtin and local field definitions.
+    ///
+    /// Loads builtin YAML definitions (embedded at compile time), then merges
+    /// with any local overrides from `.kanban/fields/`. Does NOT create directories
+    /// — callers that need dirs should ensure them beforehand.
+    fn build_entity_context(root: &Path) -> Result<(Arc<FieldsContext>, EntityContext)> {
+        let fields_root = root.join("fields");
+
+        let builtin_defs = builtin_field_definitions();
+        let builtin_entities = builtin_entity_definitions();
+
+        // Load local overrides (returns empty vec if dirs don't exist)
+        let local_defs = load_yaml_dir(&fields_root.join("definitions"));
+        let local_entities = load_yaml_dir(&fields_root.join("entities"));
+
+        let mut all_defs: Vec<(&str, &str)> = builtin_defs.clone();
+        let local_def_refs: Vec<(&str, &str)> = local_defs
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        all_defs.extend(local_def_refs);
+
+        let mut all_entities: Vec<(&str, &str)> = builtin_entities.clone();
+        let local_entity_refs: Vec<(&str, &str)> = local_entities
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        all_entities.extend(local_entity_refs);
+
+        let fields = Arc::new(
+            FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
+                .map_err(|e| KanbanError::FieldsError(e.to_string()))?,
+        );
+        let entities = EntityContext::new(root, Arc::clone(&fields));
+        Ok((fields, entities))
     }
 
     /// Read a single entity by type and ID.
     pub async fn read_entity_generic(&self, entity_type: &str, id: &str) -> Result<Entity> {
-        Ok(self.entity_context()?.read(entity_type, id).await?)
+        Ok(self.entity_context().await?.read(entity_type, id).await?)
     }
 
     /// Write an entity with automatic changelog.
     pub async fn write_entity_generic(&self, entity: &Entity) -> Result<()> {
-        Ok(self.entity_context()?.write(entity).await?)
+        Ok(self.entity_context().await?.write(entity).await?)
     }
 
     /// Delete an entity by type and ID.
     pub async fn delete_entity_generic(&self, entity_type: &str, id: &str) -> Result<()> {
-        Ok(self.entity_context()?.delete(entity_type, id).await?)
+        Ok(self.entity_context().await?.delete(entity_type, id).await?)
     }
 
     /// List all entities of a given type.
     pub async fn list_entities_generic(&self, entity_type: &str) -> Result<Vec<Entity>> {
-        Ok(self.entity_context()?.list(entity_type).await?)
+        Ok(self.entity_context().await?.list(entity_type).await?)
     }
 
     /// Read the changelog for an entity.
@@ -1031,7 +1052,7 @@ impl KanbanContext {
         entity_type: &str,
         id: &str,
     ) -> Result<Vec<ChangeEntry>> {
-        Ok(self.entity_context()?.read_changelog(entity_type, id).await?)
+        Ok(self.entity_context().await?.read_changelog(entity_type, id).await?)
     }
 
     // =========================================================================
@@ -1053,6 +1074,7 @@ impl KanbanContext {
     /// - `actors/*.json` → `actors/*.yaml`
     ///
     /// Returns counts of migrated entities. Safe to run multiple times (idempotent).
+    #[allow(deprecated)]
     pub async fn migrate_storage(&self) -> Result<MigrationStats> {
         let mut stats = MigrationStats::default();
 
@@ -1269,8 +1291,8 @@ async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
         fs::create_dir_all(parent).await?;
     }
 
-    // Write to temp file in same directory
-    let temp_path = path.with_extension("tmp");
+    // Write to temp file in same directory (PID-scoped to avoid concurrent collisions)
+    let temp_path = path.with_extension(format!("tmp.{}", std::process::id()));
     fs::write(&temp_path, content).await?;
 
     // Rename (atomic on same filesystem)
@@ -1316,6 +1338,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_task_io() {
         use crate::types::{ColumnId, Ordinal, Position};
 
@@ -1680,13 +1703,15 @@ type:
     #[tokio::test]
     async fn test_entity_context_available_after_open() {
         let (_temp, ctx) = setup_with_fields().await;
-        assert!(ctx.entity_context().is_ok());
+        assert!(ctx.entity_context().await.is_ok());
     }
 
     #[tokio::test]
-    async fn test_entity_context_unavailable_without_open() {
-        let (_temp, ctx) = setup().await; // setup() uses new(), not open()
-        assert!(ctx.entity_context().is_err());
+    async fn test_entity_context_lazy_init() {
+        let (_temp, ctx) = setup().await;
+        ctx.create_directories().await.unwrap();
+        // entity_context() lazy-initializes even without explicit open()
+        assert!(ctx.entity_context().await.is_ok());
     }
 
     #[tokio::test]

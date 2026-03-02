@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::{ColumnId, SwimlaneId};
+use crate::task_helpers::{task_is_ready, task_tags};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -65,41 +65,43 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 }));
             }
 
-            // Read all tasks once for efficiency
-            let all_tasks = ctx.read_all_tasks().await?;
+            // Read all tasks as entities
+            let ectx = ctx.entity_context().await?;
+            let all_tasks = ectx.list("task").await?;
             let terminal = all_columns.iter().max_by_key(|c| c.order);
             let terminal_id = terminal
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
             // Count tasks by column
-            let mut column_counts: HashMap<&ColumnId, usize> = HashMap::new();
-            let mut column_ready_counts: HashMap<&ColumnId, usize> = HashMap::new();
+            let mut column_counts: HashMap<String, usize> = HashMap::new();
+            let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
 
             for task in &all_tasks {
-                *column_counts.entry(&task.position.column).or_insert(0) += 1;
+                let col = task.get_str("position_column").unwrap_or("todo").to_string();
+                *column_counts.entry(col.clone()).or_insert(0) += 1;
 
-                if task.is_ready(&all_tasks, terminal_id) {
-                    *column_ready_counts
-                        .entry(&task.position.column)
-                        .or_insert(0) += 1;
+                if task_is_ready(task, &all_tasks, terminal_id) {
+                    *column_ready_counts.entry(col).or_insert(0) += 1;
                 }
             }
 
             // Count tasks by swimlane
-            let mut swimlane_counts: HashMap<&SwimlaneId, usize> = HashMap::new();
+            let mut swimlane_counts: HashMap<String, usize> = HashMap::new();
             for task in &all_tasks {
-                if let Some(ref swimlane) = task.position.swimlane {
-                    *swimlane_counts.entry(swimlane).or_insert(0) += 1;
+                if let Some(swimlane) = task.get_str("position_swimlane") {
+                    if !swimlane.is_empty() {
+                        *swimlane_counts.entry(swimlane.to_string()).or_insert(0) += 1;
+                    }
                 }
             }
 
-            // Count tasks by tag name (computed from description)
-            let task_tags: Vec<Vec<String>> = all_tasks.iter().map(|t| t.tags()).collect();
-            let mut tag_counts: HashMap<&str, usize> = HashMap::new();
-            for tags in &task_tags {
+            // Count tasks by tag name (computed from body)
+            let all_task_tags: Vec<Vec<String>> = all_tasks.iter().map(task_tags).collect();
+            let mut tag_counts: HashMap<String, usize> = HashMap::new();
+            for tags in &all_task_tags {
                 for tag_name in tags {
-                    *tag_counts.entry(tag_name.as_str()).or_insert(0) += 1;
+                    *tag_counts.entry(tag_name.clone()).or_insert(0) += 1;
                 }
             }
 
@@ -107,8 +109,8 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             let columns: Vec<Value> = all_columns
                 .iter()
                 .map(|col| {
-                    let count = column_counts.get(&col.id).copied().unwrap_or(0);
-                    let ready = column_ready_counts.get(&col.id).copied().unwrap_or(0);
+                    let count = column_counts.get(col.id.as_str()).copied().unwrap_or(0);
+                    let ready = column_ready_counts.get(col.id.as_str()).copied().unwrap_or(0);
 
                     json!({
                         "id": col.id,
@@ -124,7 +126,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             let swimlanes: Vec<Value> = all_swimlanes
                 .iter()
                 .map(|sl| {
-                    let count = swimlane_counts.get(&sl.id).copied().unwrap_or(0);
+                    let count = swimlane_counts.get(sl.id.as_str()).copied().unwrap_or(0);
 
                     json!({
                         "id": sl.id,
@@ -156,7 +158,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             let total_tasks = all_tasks.len();
             let ready_tasks = all_tasks
                 .iter()
-                .filter(|t| t.is_ready(&all_tasks, terminal_id))
+                .filter(|t| task_is_ready(t, &all_tasks, terminal_id))
                 .count();
             let blocked_tasks = total_tasks - ready_tasks;
             let total_actors = ctx.list_actor_ids().await?.len();

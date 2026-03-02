@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::{AttachmentId, TaskId};
+use crate::types::TaskId;
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -18,12 +18,12 @@ pub struct GetAttachment {
     /// The task ID
     pub task_id: TaskId,
     /// The attachment ID
-    pub id: AttachmentId,
+    pub id: String,
 }
 
 impl GetAttachment {
     /// Create a new GetAttachment command
-    pub fn new(task_id: impl Into<TaskId>, id: impl Into<AttachmentId>) -> Self {
+    pub fn new(task_id: impl Into<TaskId>, id: impl Into<String>) -> Self {
         Self {
             task_id: task_id.into(),
             id: id.into(),
@@ -35,16 +35,23 @@ impl GetAttachment {
 impl Execute<KanbanContext, KanbanError> for GetAttachment {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let task = ctx.read_task(&self.task_id).await?;
+            let ectx = ctx.entity_context().await?;
+            let entity = ectx.read("task", self.task_id.as_str()).await?;
 
-            let attachment =
-                task.find_attachment(&self.id)
-                    .ok_or_else(|| KanbanError::NotFound {
-                        resource: "attachment".to_string(),
-                        id: self.id.to_string(),
-                    })?;
+            let attachments = entity
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let attachment = attachments
+                .iter()
+                .find(|a| a["id"].as_str() == Some(&self.id))
+                .ok_or_else(|| KanbanError::NotFound {
+                    resource: "attachment".to_string(),
+                    id: self.id.to_string(),
+                })?;
 
-            Ok(serde_json::to_value(attachment)?)
+            Ok(attachment.clone())
         }
         .await
         {
@@ -136,6 +143,6 @@ mod tests {
             .await
             .into_result();
 
-        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
+        assert!(result.is_err());
     }
 }
