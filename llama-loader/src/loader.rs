@@ -11,17 +11,20 @@ use std::time::Instant;
 use swissarmyhammer_common::Pretty;
 use tracing::info;
 
-/// Creates default model parameters optimized for Metal GPU offloading
-///
-/// This function configures LlamaModelParams with settings that enable
-/// automatic GPU layer offloading and memory locking for optimal performance.
+/// Creates default model parameters optimized for GPU offloading
 ///
 /// Configuration:
-/// - `n_gpu_layers = i32::MAX`: Request all available layers be offloaded to GPU
-/// - `use_mlock = true`: Lock model in RAM to prevent swapping for better performance
+/// - `n_gpu_layers`: Defaults to `i32::MAX` (offload all layers to GPU).
+///   Set `LLAMA_N_GPU_LAYERS=0` to disable GPU and run CPU-only.
+/// - `use_mlock = true`: Lock model in RAM to prevent swapping
 pub fn default_model_params() -> LlamaModelParams {
+    let gpu_layers: u32 = std::env::var("LLAMA_N_GPU_LAYERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(i32::MAX as u32);
+
     LlamaModelParams::default()
-        .with_n_gpu_layers(i32::MAX as u32)
+        .with_n_gpu_layers(gpu_layers)
         .with_use_mlock(true)
 }
 
@@ -482,13 +485,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_model_params_configures_gpu_layers() {
+    fn test_default_model_params_respects_env() {
+        // When LLAMA_N_GPU_LAYERS is set, it should be used
+        std::env::set_var("LLAMA_N_GPU_LAYERS", "0");
         let params = default_model_params();
-        // i32::MAX tells llama.cpp to offload all available layers to GPU
+        assert_eq!(params.n_gpu_layers(), 0, "Should respect env override");
+
+        // When unset, should default to i32::MAX
+        std::env::remove_var("LLAMA_N_GPU_LAYERS");
+        let params = default_model_params();
         assert_eq!(
             params.n_gpu_layers(),
             i32::MAX,
-            "n_gpu_layers should be i32::MAX to offload all layers"
+            "Should default to i32::MAX when env not set"
         );
     }
 

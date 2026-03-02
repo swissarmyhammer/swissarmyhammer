@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  LLAMA_N_GPU_LAYERS: "0"
 
 jobs:
   test:
