@@ -63,6 +63,7 @@
 
 pub mod auto_color;
 mod context;
+pub mod defaults;
 mod error;
 pub mod parse;
 mod processor;
@@ -87,6 +88,7 @@ pub use swissarmyhammer_operations::{
 };
 
 pub use context::{KanbanContext, KanbanLock, MigrationStats};
+pub use defaults::{kanban_defaults, KanbanLookup};
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
 

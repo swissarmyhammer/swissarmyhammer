@@ -1407,8 +1407,10 @@ mod tests {
         let result = tool.execute(args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "bug");
+        assert_eq!(data["name"], "bug");
         assert_eq!(data["color"], "ff0000");
+        // id is now an auto-generated ULID
+        assert!(data["id"].as_str().is_some());
     }
 
     #[tokio::test]
@@ -1425,17 +1427,20 @@ mod tests {
         add_args.insert("op".to_string(), json!("add tag"));
         add_args.insert("id".to_string(), json!("bug"));
         add_args.insert("color".to_string(), json!("ff0000"));
-        tool.execute(add_args, &context).await.unwrap();
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let add_data = parse_json(&add_result);
+        let tag_id = add_data["id"].as_str().unwrap().to_string();
 
-        // Get the tag
+        // Get the tag by its generated id
         let mut get_args = serde_json::Map::new();
         get_args.insert("op".to_string(), json!("get tag"));
-        get_args.insert("id".to_string(), json!("bug"));
+        get_args.insert("id".to_string(), json!(tag_id));
 
         let result = tool.execute(get_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "bug");
+        assert_eq!(data["id"], tag_id);
+        assert_eq!(data["name"], "bug");
         assert_eq!(data["color"], "ff0000");
     }
 
@@ -1484,12 +1489,14 @@ mod tests {
         add_args.insert("op".to_string(), json!("add tag"));
         add_args.insert("id".to_string(), json!("bug"));
         add_args.insert("color".to_string(), json!("ff0000"));
-        tool.execute(add_args, &context).await.unwrap();
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let add_data = parse_json(&add_result);
+        let tag_id = add_data["id"].as_str().unwrap().to_string();
 
         // Delete it
         let mut delete_args = serde_json::Map::new();
         delete_args.insert("op".to_string(), json!("delete tag"));
-        delete_args.insert("id".to_string(), json!("bug"));
+        delete_args.insert("id".to_string(), json!(tag_id));
 
         let result = tool.execute(delete_args, &context).await;
         assert!(result.is_ok());
@@ -1497,7 +1504,7 @@ mod tests {
         // Verify it's gone
         let mut get_args = serde_json::Map::new();
         get_args.insert("op".to_string(), json!("get tag"));
-        get_args.insert("id".to_string(), json!("bug"));
+        get_args.insert("id".to_string(), json!(tag_id));
 
         let get_result = tool.execute(get_args, &context).await;
         assert!(get_result.is_err());
@@ -1521,7 +1528,9 @@ mod tests {
         tag_args.insert("op".to_string(), json!("add tag"));
         tag_args.insert("id".to_string(), json!("bug"));
         tag_args.insert("color".to_string(), json!("ff0000"));
-        tool.execute(tag_args, &context).await.unwrap();
+        let tag_result = tool.execute(tag_args, &context).await.unwrap();
+        let tag_data = parse_json(&tag_result);
+        let tag_id = tag_data["id"].as_str().unwrap().to_string();
 
         // Add a task
         let mut task_args = serde_json::Map::new();
@@ -1530,7 +1539,7 @@ mod tests {
         let result = tool.execute(task_args, &context).await.unwrap();
         let task_id = extract_task_id(&result);
 
-        // Tag the task
+        // Tag the task (use tag name, which is "bug")
         let mut tag_task_args = serde_json::Map::new();
         tag_task_args.insert("op".to_string(), json!("tag task"));
         tag_task_args.insert("id".to_string(), json!(task_id));
@@ -1539,10 +1548,10 @@ mod tests {
         let result = tool.execute(tag_task_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        // Response format: {"tagged": true, "task_id": ..., "tag_id": ...}
+        // Response format: {"tagged": true, "task_id": ..., "tag": ...}
         assert_eq!(data["tagged"], true);
         assert_eq!(data["task_id"], task_id);
-        assert_eq!(data["tag_id"], "bug");
+        assert_eq!(data["tag"], "bug");
 
         // Verify by getting the task
         let mut get_args = serde_json::Map::new();
@@ -1571,7 +1580,9 @@ mod tests {
         tag_args.insert("op".to_string(), json!("add tag"));
         tag_args.insert("id".to_string(), json!("bug"));
         tag_args.insert("color".to_string(), json!("ff0000"));
-        tool.execute(tag_args, &context).await.unwrap();
+        let tag_result = tool.execute(tag_args, &context).await.unwrap();
+        let tag_data = parse_json(&tag_result);
+        let tag_id = tag_data["id"].as_str().unwrap().to_string();
 
         // Add a task
         let mut task_args = serde_json::Map::new();
@@ -1596,10 +1607,10 @@ mod tests {
         let result = tool.execute(untag_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        // Response format: {"untagged": true, "task_id": ..., "tag_id": ...}
+        // Response format: {"untagged": true, "task_id": ..., "tag": ...}
         assert_eq!(data["untagged"], true);
         assert_eq!(data["task_id"], task_id);
-        assert_eq!(data["tag_id"], "bug");
+        assert_eq!(data["tag"], "bug");
 
         // Verify by getting the task
         let mut get_args = serde_json::Map::new();
@@ -2293,18 +2304,20 @@ mod tests {
         add_args.insert("op".to_string(), json!("add tag"));
         add_args.insert("id".to_string(), json!("bug"));
         add_args.insert("color".to_string(), json!("ff0000"));
-        tool.execute(add_args, &context).await.unwrap();
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let add_data = parse_json(&add_result);
+        let tag_id = add_data["id"].as_str().unwrap().to_string();
 
-        // Update it
+        // Update it using the generated id
         let mut update_args = serde_json::Map::new();
         update_args.insert("op".to_string(), json!("update tag"));
-        update_args.insert("id".to_string(), json!("bug"));
+        update_args.insert("id".to_string(), json!(tag_id));
         update_args.insert("color".to_string(), json!("ff5500"));
 
         let result = tool.execute(update_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "bug");
+        assert_eq!(data["id"], tag_id);
         assert_eq!(data["color"], "ff5500");
     }
 

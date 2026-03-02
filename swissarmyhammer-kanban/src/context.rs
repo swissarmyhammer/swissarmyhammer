@@ -3,6 +3,7 @@
 //! The context provides access to storage and utilities. No business logic methods,
 //! just data access primitives. Commands do all the work.
 
+use crate::defaults::kanban_defaults;
 use crate::error::{KanbanError, Result};
 use crate::types::{
     Actor, ActorId, Attachment, Board, Column, ColumnId, Comment, LogEntry, Position, Swimlane,
@@ -11,6 +12,7 @@ use crate::types::{
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use swissarmyhammer_fields::FieldsContext;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -18,12 +20,37 @@ use tokio::io::AsyncWriteExt;
 pub struct KanbanContext {
     /// Path to the .kanban directory
     root: PathBuf,
+    /// Field registry (populated via `open()`, None when created via `new()`)
+    fields: Option<FieldsContext>,
 }
 
 impl KanbanContext {
-    /// Create a new context for the given .kanban directory
+    /// Create a new context for the given .kanban directory.
+    ///
+    /// This is a lightweight synchronous constructor. The field registry is
+    /// not initialized — use `open()` for a fully-initialized context.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            fields: None,
+        }
+    }
+
+    /// Create a fully-initialized context with field registry.
+    ///
+    /// Opens (or creates) the `fields/` directory under root and seeds
+    /// built-in kanban field definitions and entity templates.
+    pub async fn open(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        let fields = FieldsContext::open(root.join("fields"))
+            .with_defaults(kanban_defaults())
+            .build()
+            .await
+            .map_err(|e| KanbanError::FieldsError(e.to_string()))?;
+        Ok(Self {
+            root,
+            fields: Some(fields),
+        })
     }
 
     /// Create a context by finding the .kanban directory from a starting path
@@ -42,6 +69,11 @@ impl KanbanContext {
                 });
             }
         }
+    }
+
+    /// Access the field registry, if initialized.
+    pub fn fields(&self) -> Option<&FieldsContext> {
+        self.fields.as_ref()
     }
 
     // =========================================================================
@@ -1437,5 +1469,109 @@ mod tests {
         ctx.ensure_directories().await.unwrap();
         assert!(ctx.directories_exist());
         assert!(ctx.actors_dir().exists());
+    }
+
+    #[tokio::test]
+    async fn test_open_creates_fields_directory() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+
+        // fields/ directory should exist
+        assert!(kanban_dir.join("fields").exists());
+        assert!(kanban_dir.join("fields/definitions").exists());
+        assert!(kanban_dir.join("fields/entities").exists());
+
+        // fields() should return Some
+        assert!(ctx.fields().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_open_seeds_defaults() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        let fields = ctx.fields().unwrap();
+
+        // Should have all 16 built-in fields
+        assert_eq!(fields.all_fields().len(), 16);
+
+        // Should have all 5 entity templates
+        assert_eq!(fields.all_entities().len(), 5);
+
+        // Check a specific field
+        let status = fields.get_field_by_name("status").unwrap();
+        assert_eq!(status.name, "status");
+    }
+
+    #[tokio::test]
+    async fn test_open_preserves_customizations() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // First open — seeds defaults
+        {
+            let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+            let fields = ctx.fields().unwrap();
+            assert_eq!(fields.all_fields().len(), 16);
+        }
+
+        // Manually add a custom field to definitions/
+        let custom_yaml = r#"id: 0000000000000000000000ZZZZ
+name: sprint
+type:
+  kind: text
+  single_line: true
+"#;
+        tokio::fs::write(
+            kanban_dir.join("fields/definitions/sprint.yaml"),
+            custom_yaml,
+        )
+        .await
+        .unwrap();
+
+        // Re-open — should have 16 built-in + 1 custom = 17
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        let fields = ctx.fields().unwrap();
+        assert_eq!(fields.all_fields().len(), 17);
+
+        // Custom field should be present
+        let sprint = fields.get_field_by_name("sprint").unwrap();
+        assert_eq!(sprint.name, "sprint");
+    }
+
+    #[tokio::test]
+    async fn test_new_has_no_fields() {
+        let (_, ctx) = setup().await;
+        assert!(ctx.fields().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fields_accessor() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        let fields = ctx.fields().unwrap();
+
+        // Should be able to look up fields by name
+        assert!(fields.get_field_by_name("title").is_some());
+        assert!(fields.get_field_by_name("status").is_some());
+        assert!(fields.get_field_by_name("nonexistent").is_none());
+
+        // Should be able to get entity templates
+        assert!(fields.get_entity("task").is_some());
+        assert!(fields.get_entity("tag").is_some());
+        assert!(fields.get_entity("nonexistent").is_none());
+
+        // Entity fields should resolve to field definitions
+        let task_fields = fields.fields_for_entity("task");
+        assert!(task_fields.len() >= 7); // title, status, priority, tags, assignees, due, depends_on, body
     }
 }

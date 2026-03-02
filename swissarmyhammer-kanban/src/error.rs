@@ -96,6 +96,10 @@ pub enum KanbanError {
     /// YAML serialization error
     #[error("YAML error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+
+    /// Field registry error
+    #[error("fields error: {0}")]
+    FieldsError(String),
 }
 
 impl KanbanError {

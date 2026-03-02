@@ -8044,6 +8044,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-fields"
+version = "0.8.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "swissarmyhammer-js",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "swissarmyhammer-git"
 version = "0.8.0"
 dependencies = [
@@ -8071,6 +8088,7 @@ dependencies = [
  "serde_json",
  "swissarmyhammer-operations",
  "swissarmyhammer-operations-macros",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
@@ -8088,6 +8106,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "swissarmyhammer-common",
+ "swissarmyhammer-fields",
  "swissarmyhammer-operations",
  "tempfile",
  "thiserror 1.0.69",

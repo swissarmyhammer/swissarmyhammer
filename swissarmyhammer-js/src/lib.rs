@@ -46,6 +46,7 @@ pub use swissarmyhammer_operations::{Execute, Operation, OperationProcessor};
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tokio::sync::oneshot;
 
@@ -63,6 +64,58 @@ enum JsRequest {
     GetAllVariables {
         reply: oneshot::Sender<Result<HashMap<String, serde_json::Value>, String>>,
     },
+    SetModuleBase {
+        path: PathBuf,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+/// Module resolver that sandboxes imports to a base directory.
+///
+/// Resolves module specifiers (e.g. `"helpers/text.js"`) relative to a
+/// configured base path. Rejects any resolution that would escape the
+/// base directory via `..` traversal.
+struct SandboxedResolver {
+    base: PathBuf,
+}
+
+impl SandboxedResolver {
+    fn new(base: PathBuf) -> Self {
+        Self { base }
+    }
+}
+
+impl rquickjs::loader::Resolver for SandboxedResolver {
+    fn resolve<'js>(
+        &mut self,
+        _ctx: &rquickjs::Ctx<'js>,
+        _base: &str,
+        name: &str,
+    ) -> rquickjs::Result<String> {
+        // Reject absolute paths and obvious traversal
+        if name.starts_with('/') || name.starts_with('\\') {
+            return Err(rquickjs::Error::new_resolving(_base, name));
+        }
+
+        let requested = self.base.join(name);
+
+        // Canonicalize to resolve any .. or symlinks
+        let canonical = requested
+            .canonicalize()
+            .map_err(|_| rquickjs::Error::new_resolving(_base, name))?;
+
+        // Verify the resolved path is within the sandbox
+        let base_canonical = self
+            .base
+            .canonicalize()
+            .map_err(|_| rquickjs::Error::new_resolving(_base, name))?;
+
+        if !canonical.starts_with(&base_canonical) {
+            return Err(rquickjs::Error::new_resolving(_base, name));
+        }
+
+        Ok(canonical.to_string_lossy().to_string())
+    }
 }
 
 /// Handle to the JS worker thread
@@ -95,6 +148,20 @@ impl JsWorker {
         rt.set_max_stack_size(512 * 1024); // 512 KB
 
         let ctx = Context::full(&rt).expect("Failed to create JS context");
+
+        /// Drain all pending microtasks/Promise jobs from the runtime.
+        fn drain_pending_jobs(rt: &Runtime) {
+            loop {
+                match rt.execute_pending_job() {
+                    Ok(false) => break,
+                    Ok(true) => continue,
+                    Err(e) => {
+                        tracing::warn!("error executing pending JS job: {:?}", e);
+                        break;
+                    }
+                }
+            }
+        }
 
         // Tracked variables (mirrored from JS globals)
         let mut variables: HashMap<String, serde_json::Value> = HashMap::new();
@@ -163,6 +230,9 @@ impl JsWorker {
                         Ok(json_result)
                     });
 
+                    // Drain pending jobs (Promise resolution, microtasks)
+                    drain_pending_jobs(&rt);
+
                     if let Ok(ref json_result) = result {
                         variables.insert(name, json_result.clone());
 
@@ -220,11 +290,21 @@ impl JsWorker {
                         bridge::js_to_json(&ctx, eval_result).map_err(|e| e.to_string())
                     });
 
+                    // Drain pending jobs (Promise resolution, microtasks)
+                    drain_pending_jobs(&rt);
+
                     let _ = reply.send(result);
                 }
 
                 JsRequest::GetAllVariables { reply } => {
                     let _ = reply.send(Ok(variables.clone()));
+                }
+
+                JsRequest::SetModuleBase { path, reply } => {
+                    let resolver = SandboxedResolver::new(path);
+                    let loader = rquickjs::loader::ScriptLoader::default();
+                    rt.set_loader(resolver, loader);
+                    let _ = reply.send(Ok(()));
                 }
             }
         }
@@ -308,6 +388,30 @@ impl JsState {
         let expression = expression.to_string();
         self.send_request(|reply| JsRequest::Get { expression, reply })
             .await
+    }
+
+    /// Configure the module base path for ES module imports.
+    ///
+    /// After calling this, JS code evaluated via `set()` or `get()` can use
+    /// dynamic `import()` to load `.js` modules from the specified directory.
+    /// Imports are sandboxed — path traversal outside the base directory is rejected.
+    pub async fn set_module_base(&self, path: impl Into<PathBuf>) -> Result<(), String> {
+        let path = path.into();
+        let (tx, rx) = oneshot::channel();
+        let request = JsRequest::SetModuleBase { path, reply: tx };
+
+        {
+            let worker = GLOBAL_JS_WORKER
+                .lock()
+                .map_err(|e| format!("Worker lock error: {}", e))?;
+            worker
+                .sender
+                .send(request)
+                .map_err(|_| "JS worker thread has stopped".to_string())?;
+        }
+
+        rx.await
+            .map_err(|_| "JS worker did not respond".to_string())?
     }
 
     /// Get all tracked variables as a HashMap
@@ -490,5 +594,93 @@ mod tests {
 
         let result = state.get("totally_undefined_var_xyz_123").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_promise_resolve_chain() {
+        let state = JsState::global();
+
+        // Promise.resolve sets a global via .then — requires job draining
+        let _ = state
+            .set(
+                "promise_test",
+                "(function() { Promise.resolve(42).then(v => { globalThis.promise_result = v; }); return 'started'; })()",
+            )
+            .await;
+
+        let result = state.get("promise_result").await;
+        assert!(result.is_ok(), "promise_result should exist: {:?}", result);
+        assert_eq!(result.unwrap(), serde_json::json!(42));
+    }
+
+    #[tokio::test]
+    async fn test_promise_chain_multiple_then() {
+        let state = JsState::global();
+
+        let _ = state
+            .set(
+                "chain_test",
+                "(function() { Promise.resolve(10).then(v => v * 2).then(v => { globalThis.chain_result = v; }); return 'ok'; })()",
+            )
+            .await;
+
+        let result = state.get("chain_result").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!(20));
+    }
+
+    #[tokio::test]
+    async fn test_module_import_and_sandbox() {
+        let state = JsState::global();
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Create a helper module inside the sandbox
+        let lib_dir = tmp.path().join("sandbox").join("helpers");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        std::fs::write(
+            lib_dir.join("math.js"),
+            "export function double(x) { return x * 2; }",
+        )
+        .unwrap();
+
+        // Create a file outside the sandbox
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.js"), "export const x = 'secret';").unwrap();
+
+        // Set module base to the sandbox directory
+        let base = tmp.path().join("sandbox");
+        let result = state.set_module_base(&base).await;
+        assert!(result.is_ok(), "set_module_base failed: {:?}", result);
+
+        // Test 1: Dynamic import from within the sandbox should work
+        let _ = state
+            .set(
+                "mod_import_test",
+                "(function() { import('helpers/math.js').then(m => { globalThis.mod_import_result = m.double(21); }).catch(e => { globalThis.mod_import_err = e.message; }); return 'started'; })()",
+            )
+            .await;
+
+        let result = state.get("mod_import_result").await;
+        assert!(result.is_ok(), "mod_import_result should exist: {:?}", result);
+        assert_eq!(result.unwrap(), serde_json::json!(42));
+
+        // Test 2: Import from outside the sandbox via path traversal should be rejected
+        let _ = state
+            .set(
+                "escape_test",
+                "(function() { import('../outside/secret.js').then(m => { globalThis.escape_ok = m.x; }).catch(e => { globalThis.escape_err = e.message || 'failed'; }); return 'tried'; })()",
+            )
+            .await;
+
+        let error_result = state.get("escape_err").await;
+        assert!(
+            error_result.is_ok(),
+            "escape_err should be set from catch: {:?}",
+            error_result
+        );
+        // escape_ok should NOT exist (import should have failed)
+        let ok_result = state.get("escape_ok").await;
+        assert!(ok_result.is_err(), "escape_ok should not exist — import should have been rejected");
     }
 }

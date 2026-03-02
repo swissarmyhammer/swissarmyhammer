@@ -1,29 +1,23 @@
 [package]
-name = "swissarmyhammer-kanban"
+name = "swissarmyhammer-fields"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Kanban board engine with file-backed storage for task management"
+description = "Field registry and entity template system for SwissArmyHammer"
 
 [dependencies]
 # Workspace dependencies
 serde = { workspace = true }
-serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
-chrono = { workspace = true }
-fs2 = { workspace = true }
 async-trait = { workspace = true }
-
-# Local workspace dependencies
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
-swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
