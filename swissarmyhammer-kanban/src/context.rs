@@ -189,7 +189,10 @@ impl KanbanContext {
 
     /// Check if the board is initialized (checks board.yaml or legacy board.json)
     pub fn is_initialized(&self) -> bool {
-        self.board_path().exists() || self.root.join("board.json").exists()
+        // Check new entity location first, then legacy
+        self.root.join("boards").join("board.yaml").exists()
+            || self.board_path().exists()
+            || self.root.join("board.json").exists()
     }
 
     /// Check if all required directories exist
@@ -241,68 +244,22 @@ impl KanbanContext {
     /// Tries board.yaml first, falls back to legacy board.json.
     /// If the board contains embedded columns/swimlanes (old format),
     /// they are extracted to individual files and board is rewritten.
+    #[deprecated(note = "use entity_context().read(\"board\", \"board\") instead")]
     pub async fn read_board(&self) -> Result<Board> {
-        let yaml_path = self.board_path(); // board.yaml
-        let path = if yaml_path.exists() {
-            yaml_path
-        } else {
-            let json_path = self.root.join("board.json");
-            if !json_path.exists() {
-                return Err(KanbanError::NotInitialized {
-                    path: self.root.clone(),
-                });
-            }
-            json_path
-        };
+        let path = self.board_path();
+        if !path.exists() {
+            return Err(KanbanError::NotInitialized {
+                path: self.root.clone(),
+            });
+        }
 
         let content = fs::read_to_string(&path).await?;
-        // serde_yaml can parse both YAML and JSON
         let board: Board = serde_yaml::from_str(&content)?;
-
-        // Migrate legacy embedded columns/swimlanes to individual files
-        if !board.columns.is_empty() || !board.swimlanes.is_empty() {
-            self.ensure_directories().await?;
-
-            #[allow(deprecated)]
-            for column in &board.columns {
-                if !self.column_exists(&column.id).await {
-                    self.write_column(column).await?;
-                }
-            }
-            #[allow(deprecated)]
-            for swimlane in &board.swimlanes {
-                if !self.swimlane_exists(&swimlane.id).await {
-                    self.write_swimlane(swimlane).await?;
-                }
-            }
-
-            // Rewrite as board.yaml without embedded columns/swimlanes
-            let slim_board = Board::new(&board.name);
-            let slim_board = if let Some(ref desc) = board.description {
-                slim_board.with_description(desc)
-            } else {
-                slim_board
-            };
-            self.write_board(&slim_board).await?;
-
-            // Remove legacy board.json if we migrated from it
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                let _ = fs::remove_file(&path).await;
-            }
-
-            return Ok(slim_board);
-        }
-
-        // Auto-migrate legacy .json to .yaml
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            self.write_board(&board).await?;
-            let _ = fs::remove_file(&path).await;
-        }
-
         Ok(board)
     }
 
     /// Write the board file as YAML (atomic write via temp file)
+    #[deprecated(note = "use entity_context().write(&entity) instead")]
     pub async fn write_board(&self, board: &Board) -> Result<()> {
         let path = self.board_path();
         let content = serde_yaml::to_string(board)?;
@@ -1013,91 +970,6 @@ impl KanbanContext {
     // =========================================================================
 
     // =========================================================================
-    // Storage migration
-    // =========================================================================
-
-    /// Migrate all entity files from legacy JSON format to YAML/Markdown.
-    ///
-    /// This triggers a read+write cycle on every entity, which auto-converts:
-    /// - `board.json` → `board.yaml`
-    /// - `tasks/*.json` → `tasks/*.md` (YAML frontmatter + markdown body)
-    /// - `tags/*.json` → `tags/*.yaml`
-    /// - `columns/*.json` → `columns/*.yaml`
-    /// - `swimlanes/*.json` → `swimlanes/*.yaml`
-    /// - `actors/*.json` → `actors/*.yaml`
-    ///
-    /// Returns counts of migrated entities. Safe to run multiple times (idempotent).
-    #[allow(deprecated)]
-    pub async fn migrate_storage(&self) -> Result<MigrationStats> {
-        let mut stats = MigrationStats::default();
-
-        // Board
-        if self.root.join("board.json").exists() {
-            self.read_board().await?;
-            stats.board = true;
-        }
-
-        // Tasks
-        let task_ids = self.list_task_ids().await?;
-        for id in &task_ids {
-            let json_path = self.root.join("tasks").join(format!("{}.json", id));
-            if json_path.exists() {
-                self.read_task(id).await?;
-                stats.tasks += 1;
-            }
-        }
-
-        // Tags
-        #[allow(deprecated)]
-        let tag_ids = self.list_tag_ids().await?;
-        for id in &tag_ids {
-            let json_path = self.root.join("tags").join(format!("{}.json", id));
-            if json_path.exists() {
-                #[allow(deprecated)]
-                self.read_tag(id).await?;
-                stats.tags += 1;
-            }
-        }
-
-        // Columns
-        #[allow(deprecated)]
-        let col_ids = self.list_column_ids().await?;
-        for id in &col_ids {
-            let json_path = self.root.join("columns").join(format!("{}.json", id));
-            if json_path.exists() {
-                #[allow(deprecated)]
-                self.read_column(id).await?;
-                stats.columns += 1;
-            }
-        }
-
-        // Swimlanes
-        #[allow(deprecated)]
-        let sl_ids = self.list_swimlane_ids().await?;
-        for id in &sl_ids {
-            let json_path = self.root.join("swimlanes").join(format!("{}.json", id));
-            if json_path.exists() {
-                #[allow(deprecated)]
-                self.read_swimlane(id).await?;
-                stats.swimlanes += 1;
-            }
-        }
-
-        // Actors
-        #[allow(deprecated)]
-        let actor_ids = self.list_actor_ids().await?;
-        for id in &actor_ids {
-            let json_path = self.root.join("actors").join(format!("{}.json", id));
-            if json_path.exists() {
-                #[allow(deprecated)]
-                self.read_actor(id).await?;
-                stats.actors += 1;
-            }
-        }
-
-        Ok(stats)
-    }
-
     // =========================================================================
     // Locking
     // =========================================================================
@@ -1119,65 +991,15 @@ impl KanbanContext {
 
         // Non-blocking lock attempt
         match file.try_lock_exclusive() {
-            Ok(()) => Ok(KanbanLock {
-                file,
-                path: lock_path,
-            }),
+            Ok(()) => Ok(KanbanLock { file }),
             Err(_) => Err(KanbanError::LockBusy),
         }
-    }
-}
-
-/// Statistics from a storage migration run
-#[derive(Debug, Default)]
-pub struct MigrationStats {
-    /// Whether the board was migrated
-    pub board: bool,
-    /// Number of tasks migrated
-    pub tasks: usize,
-    /// Number of tags migrated
-    pub tags: usize,
-    /// Number of columns migrated
-    pub columns: usize,
-    /// Number of swimlanes migrated
-    pub swimlanes: usize,
-    /// Number of actors migrated
-    pub actors: usize,
-}
-
-impl MigrationStats {
-    /// Total number of entities migrated
-    pub fn total(&self) -> usize {
-        (if self.board { 1 } else { 0 })
-            + self.tasks
-            + self.tags
-            + self.columns
-            + self.swimlanes
-            + self.actors
-    }
-}
-
-impl std::fmt::Display for MigrationStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Migrated {} entities (board: {}, tasks: {}, tags: {}, columns: {}, swimlanes: {}, actors: {})",
-            self.total(),
-            self.board,
-            self.tasks,
-            self.tags,
-            self.columns,
-            self.swimlanes,
-            self.actors,
-        )
     }
 }
 
 /// RAII lock guard - releases on drop
 pub struct KanbanLock {
     file: std::fs::File,
-    #[allow(dead_code)]
-    path: PathBuf,
 }
 
 impl Drop for KanbanLock {
@@ -1288,6 +1110,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_board_io() {
         let (_temp, ctx) = setup().await;
 

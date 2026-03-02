@@ -52,11 +52,12 @@ async fn test_tag_file_based_storage() {
         "Tag file should be created with ULID name"
     );
 
-    // Verify board.yaml does NOT contain tags array
-    let board_content = std::fs::read_to_string(kanban_dir.join("board.yaml")).unwrap();
+    // Verify board entity file does NOT contain tags array
+    let board_content =
+        std::fs::read_to_string(kanban_dir.join("boards").join("board.yaml")).unwrap();
     assert!(
         !board_content.contains("tags"),
-        "Board.yaml should not contain tags field"
+        "Board entity file should not contain tags field"
     );
 
     // List tags - should read from file

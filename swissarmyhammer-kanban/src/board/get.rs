@@ -40,8 +40,14 @@ fn default_include_counts() -> bool {
 impl Execute<KanbanContext, KanbanError> for GetBoard {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let board = ctx.read_board().await?;
             let ectx = ctx.entity_context().await?;
+            let board = ectx.read("board", "board").await.map_err(|_| {
+                KanbanError::NotInitialized {
+                    path: ctx.root().to_path_buf(),
+                }
+            })?;
+            let board_name = board.get_str("name").unwrap_or("");
+            let board_description = board.get_str("description");
             let mut all_columns = ectx.list("column").await?;
             all_columns.sort_by_key(|c| {
                 c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
@@ -65,8 +71,8 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                     .map(tag_entity_to_json)
                     .collect();
                 return Ok(json!({
-                    "name": board.name,
-                    "description": board.description,
+                    "name": board_name,
+                    "description": board_description,
                     "columns": columns_json,
                     "swimlanes": swimlanes_json,
                     "tags": tags_json,
@@ -173,8 +179,8 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             let total_actors = ectx.list("actor").await?.len();
 
             Ok(json!({
-                "name": board.name,
-                "description": board.description,
+                "name": board_name,
+                "description": board_description,
                 "columns": columns,
                 "swimlanes": swimlanes,
                 "tags": tags,

@@ -42,10 +42,10 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         // Auto-initialize board if not present (idempotent)
         // Skip auto-init if the operation is InitBoard itself
         if !ctx.is_initialized() && operation.op_string() != "init board" {
-            let board = crate::types::Board::new("Untitled Board");
-            ctx.write_board(&board).await?;
-            // Write default columns as entities
             let ectx = ctx.entity_context().await?;
+            let mut board_entity = swissarmyhammer_entity::Entity::new("board", "board");
+            board_entity.set("name", serde_json::json!("Untitled Board"));
+            ectx.write(&board_entity).await?;
             for (id, name, order) in [("todo", "To Do", 0), ("doing", "Doing", 1), ("done", "Done", 2)] {
                 let mut entity = swissarmyhammer_entity::Entity::new("column", id);
                 entity.set("name", serde_json::json!(name));

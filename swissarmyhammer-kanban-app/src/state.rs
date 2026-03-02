@@ -130,8 +130,14 @@ impl AppState {
 
         // Read board name for MRU
         let board_name = if handle.ctx.is_initialized() {
-            match handle.ctx.read_board().await {
-                Ok(board) => board.name.clone(),
+            match handle.ctx.entity_context().await {
+                Ok(ectx) => match ectx.read("board", "board").await {
+                    Ok(entity) => entity
+                        .get_str("name")
+                        .unwrap_or("")
+                        .to_string(),
+                    Err(_) => canonical.display().to_string(),
+                },
                 Err(_) => canonical.display().to_string(),
             }
         } else {

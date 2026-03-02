@@ -2,7 +2,6 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::Board;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
@@ -62,17 +61,16 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             // Create directory structure
             ctx.create_directories().await?;
 
-            // Build board metadata (slim - no columns/swimlanes)
-            let mut board = Board::new(&self.name);
+            // Build board entity
+            let ectx = ctx.entity_context().await?;
+            let mut board_entity = Entity::new("board", "board");
+            board_entity.set("name", json!(self.name));
             if let Some(desc) = &self.description {
-                board = board.with_description(desc);
+                board_entity.set("description", json!(desc));
             }
-
-            // Write board file
-            ctx.write_board(&board).await?;
+            ectx.write(&board_entity).await?;
 
             // Write default columns as entities
-            let ectx = ctx.entity_context().await?;
             let mut columns_json: Vec<Value> = Vec::new();
             for (id, name, order) in default_columns() {
                 let mut entity = Entity::new("column", id);
@@ -83,10 +81,12 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             }
 
             // Return board with columns in response (for API compatibility)
-            let mut result = serde_json::to_value(&board)?;
-            result["columns"] = json!(columns_json);
-            result["swimlanes"] = json!([]);
-            Ok(result)
+            Ok(json!({
+                "name": self.name,
+                "description": self.description,
+                "columns": columns_json,
+                "swimlanes": [],
+            }))
         }
         .await;
 
