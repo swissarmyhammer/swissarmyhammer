@@ -106,16 +106,29 @@ fn block_lexer<'src>(
         just("~~~").map(|_| BlockToken::InvisibleArrow),
     ));
 
-    // Block with rounded rect label: A["Label"]
-    let block_rounded = text::ident()
+    // Block with rhombus/diamond label: A{{"Label"}}
+    let block_rhombus = text::ident()
+        .then_ignore(just('{'))
+        .then_ignore(just('{'))
+        .then_ignore(just('"'))
+        .then(none_of('"').repeated().collect::<String>())
+        .then_ignore(just('"'))
+        .then_ignore(just('}'))
+        .then_ignore(just('}'))
+        .map(|(id, label)| (id, label, BlockShape::Rhombus));
+
+    // Block with stadium label: A(["Label"])
+    let block_stadium = text::ident()
+        .then_ignore(just('('))
         .then_ignore(just('['))
         .then_ignore(just('"'))
         .then(none_of('"').repeated().collect::<String>())
         .then_ignore(just('"'))
         .then_ignore(just(']'))
-        .map(|(id, label)| (id, label, BlockShape::RoundedRect));
+        .then_ignore(just(')'))
+        .map(|(id, label)| (id, label, BlockShape::Stadium));
 
-    // Block with circle/cylinder label: A(("Label"))
+    // Block with circle label: A(("Label"))
     let block_circle = text::ident()
         .then_ignore(just('('))
         .then_ignore(just('('))
@@ -126,10 +139,34 @@ fn block_lexer<'src>(
         .then_ignore(just(')'))
         .map(|(id, label)| (id, label, BlockShape::Circle));
 
+    // Block with cylinder label: A[("Label")]
+    let block_cylinder = text::ident()
+        .then_ignore(just('['))
+        .then_ignore(just('('))
+        .then_ignore(just('"'))
+        .then(none_of('"').repeated().collect::<String>())
+        .then_ignore(just('"'))
+        .then_ignore(just(')'))
+        .then_ignore(just(']'))
+        .map(|(id, label)| (id, label, BlockShape::Cylinder));
+
+    // Block with rounded rect label: A["Label"]
+    let block_rounded = text::ident()
+        .then_ignore(just('['))
+        .then_ignore(just('"'))
+        .then(none_of('"').repeated().collect::<String>())
+        .then_ignore(just('"'))
+        .then_ignore(just(']'))
+        .map(|(id, label)| (id, label, BlockShape::RoundedRect));
+
     // Simple identifier (must come after more specific patterns)
     let identifier = text::ident().map(|s: &str| BlockToken::BlockId(s.to_string()));
 
     let newline = text::newline().map(|_| BlockToken::NewLine);
+
+    let shape_token = |t: (&str, String, BlockShape)| {
+        BlockToken::BlockLabel(format!("{}:{}:{:?}", t.0, t.1, t.2))
+    };
 
     let token = choice((
         comment,
@@ -139,12 +176,12 @@ fn block_lexer<'src>(
         block_end,
         space,
         arrows,
-        block_rounded.map(|(id, label, shape)| {
-            BlockToken::BlockLabel(format!("{}:{}:{:?}", id, label, shape))
-        }),
-        block_circle.map(|(id, label, shape)| {
-            BlockToken::BlockLabel(format!("{}:{}:{:?}", id, label, shape))
-        }),
+        // Shape parsers ordered most-specific first to avoid ambiguity
+        block_rhombus.map(shape_token),
+        block_stadium.map(shape_token),
+        block_circle.map(shape_token),
+        block_cylinder.map(shape_token),
+        block_rounded.map(shape_token),
         identifier,
     ))
     .padded();
@@ -230,7 +267,10 @@ fn block_parser<'tokens, 'src: 'tokens>(
                     if parts.len() >= 3 {
                         let shape = match parts[2] {
                             "RoundedRect" => BlockShape::RoundedRect,
+                            "Stadium" => BlockShape::Stadium,
+                            "Rhombus" => BlockShape::Rhombus,
                             "Circle" => BlockShape::Circle,
+                            "Cylinder" => BlockShape::Cylinder,
                             _ => BlockShape::Rectangle,
                         };
                         blocks.push(Block::Simple {

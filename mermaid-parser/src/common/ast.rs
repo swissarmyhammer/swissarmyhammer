@@ -1111,12 +1111,13 @@ pub enum Block {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockShape {
-    Rectangle,      // Basic block
-    RoundedRect,    // Rounded corners
-    Rhombus,        // Diamond shape
-    Circle,         // Circular
+    Rectangle,      // Basic block: id or id["Label"]
+    RoundedRect,    // Rounded corners: id["Label"]
+    Stadium,        // Stadium/pill: id(["Label"])
+    Rhombus,        // Diamond shape: id{{"Label"}}
+    Circle,         // Circular: id(("Label"))
     Ellipse,        // Oval
-    Cylinder,       // Database-style
+    Cylinder,       // Database-style: id[("Label")]
     Custom(String), // Custom shape definition
 }
 

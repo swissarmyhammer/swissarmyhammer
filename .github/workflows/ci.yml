@@ -19,6 +19,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install dependencies
         run: cargo install --locked cargo-nextest
+      - name: Ensure Chromium is available
+        run: |
+          if ! command -v chromium &>/dev/null && ! [ -d "/Applications/Chromium.app" ] && ! [ -d "/Applications/Google Chrome.app" ]; then
+            brew install --cask chromium --no-quarantine
+          fi
       - name: Run tests
         run: cargo nextest run --no-fail-fast
 
@@ -43,7 +48,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Linting
-        run: cargo clippy
+        run: cargo clippy -- -D warnings
 
   examples:
     name: Run all examples

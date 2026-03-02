@@ -2009,6 +2009,7 @@ fn write_block(printer: &mut PrettyPrinter, block: &Block) {
             let shape_str = match shape {
                 BlockShape::Rectangle => "",
                 BlockShape::RoundedRect => "()",
+                BlockShape::Stadium => "([])",
                 BlockShape::Rhombus => "{{}}",
                 BlockShape::Circle => "(())",
                 BlockShape::Ellipse => "([])",

@@ -89,11 +89,10 @@ fn test_block_connections() {
     }
 }
 
-// TODO: Re-enable this test when the parser supports complex shape syntax
-// The parser doesn't yet support shapes like B(["Stadium"]), C(("Circle")), etc.
-#[ignore]
 #[test]
 fn test_block_shapes() {
+    use mermaid_parser::common::ast::{Block, BlockShape};
+
     let input = r#"block-beta
   A["Rectangle"]
   B(["Stadium"])
@@ -108,8 +107,19 @@ fn test_block_shapes() {
         mermaid_parser::DiagramType::Block(diagram) => {
             assert_eq!(diagram.blocks.len(), 4);
 
-            // Verify we can parse different block shapes
-            // Note: The exact shape validation would depend on the parser implementation
+            let shapes: Vec<_> = diagram
+                .blocks
+                .iter()
+                .map(|b| match b {
+                    Block::Simple { id, shape, .. } => (id.as_str(), shape.clone()),
+                    _ => panic!("Expected Simple block"),
+                })
+                .collect();
+
+            assert_eq!(shapes[0], ("A", BlockShape::RoundedRect));
+            assert_eq!(shapes[1], ("B", BlockShape::Stadium));
+            assert_eq!(shapes[2], ("C", BlockShape::Circle));
+            assert_eq!(shapes[3], ("D", BlockShape::Rhombus));
         }
         _ => panic!("Expected Block diagram"),
     }

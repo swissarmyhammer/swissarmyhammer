@@ -1,9 +1,7 @@
 //! Integration tests for web search functionality
 //!
 //! These tests verify that the unified web tool's search operation works end-to-end
-//! with real Chrome/Chromium browser.
-//! Tests are marked with #[ignore] by default since they require Chrome to be installed.
-//! Run with: `cargo test --test integration web_search -- --ignored`
+//! with real Chrome/Chromium browser. Chrome/Chromium must be installed in CI.
 
 use serde_json::json;
 use std::sync::Arc;
@@ -49,20 +47,15 @@ fn test_chrome_detection_on_system() {
     );
 }
 
-/// Test web search with real Chrome (ignored by default)
-///
-/// This test requires Chrome to be installed and will launch a real browser.
-/// Run with: `cargo test --test integration test_web_search_real_chrome -- --ignored --nocapture`
+/// Test web search with real Chrome
 #[tokio::test]
-#[ignore]
 async fn test_web_search_real_chrome() {
-    // First check if Chrome is available
     let chrome_result = chrome::detect_chrome();
-    if !chrome_result.found {
-        println!("SKIPPED: Chrome not found on this system");
-        println!("{}", chrome_result.installation_instructions());
-        return;
-    }
+    assert!(
+        chrome_result.found,
+        "Chrome/Chromium must be installed: {}",
+        chrome_result.installation_instructions()
+    );
 
     println!(
         "Testing web search with Chrome at: {}",
@@ -118,18 +111,15 @@ async fn test_web_search_real_chrome() {
     println!("Search time: {}ms", response["metadata"]["search_time_ms"]);
 }
 
-/// Test web search with content fetching (ignored by default - slower)
-///
-/// Run with: `cargo test --test integration test_web_search_with_content -- --ignored --nocapture`
+/// Test web search with content fetching
 #[tokio::test]
-#[ignore]
 async fn test_web_search_with_content() {
-    // First check if Chrome is available
     let chrome_result = chrome::detect_chrome();
-    if !chrome_result.found {
-        println!("SKIPPED: Chrome not found on this system");
-        return;
-    }
+    assert!(
+        chrome_result.found,
+        "Chrome/Chromium must be installed: {}",
+        chrome_result.installation_instructions()
+    );
 
     let tool = WebTool::new();
     let context = create_test_context().await;
@@ -177,13 +167,13 @@ async fn test_web_search_with_content() {
 
 /// Test web search error handling when Chrome launches but search fails
 #[tokio::test]
-#[ignore]
 async fn test_web_search_error_handling() {
     let chrome_result = chrome::detect_chrome();
-    if !chrome_result.found {
-        println!("SKIPPED: Chrome not found");
-        return;
-    }
+    assert!(
+        chrome_result.found,
+        "Chrome/Chromium must be installed: {}",
+        chrome_result.installation_instructions()
+    );
 
     let tool = WebTool::new();
     let context = create_test_context().await;
