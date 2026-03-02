@@ -416,7 +416,7 @@ impl IsolatedTestEnvironment {
         }
 
         // NOTE: We do NOT change the current working directory to allow parallel test execution
-        // Tests should pass temp_dir() to CliToolContext::new_with_dir() for proper isolation
+        // Tests should use CliToolContext::new_isolated() for proper isolation
 
         Ok(Self {
             _home_guard: home_guard,

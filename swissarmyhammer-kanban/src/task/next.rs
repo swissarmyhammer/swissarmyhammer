@@ -103,7 +103,7 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
 
                     // Filter by tag if specified
                     if let Some(ref tag) = self.tag {
-                        if !t.tags.contains(tag) {
+                        if !t.tags().contains(&tag.to_string()) {
                             return false;
                         }
                     }
@@ -222,26 +222,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_next_task_filters_by_tag() {
-        use crate::tag::AddTag;
-        use crate::types::TagId;
-
         let (_temp, ctx) = setup().await;
 
-        // Create a tag
-        AddTag::new("bug", "Bug", "ff0000")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Create tasks - one with the tag, one without
+        // Create tasks - one with a #bug tag in description, one without
         AddTask::new("Untagged task")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
         AddTask::new("Bug task")
-            .with_tags(vec![TagId::from_string("bug")])
+            .with_description("#bug")
             .execute(&ctx)
             .await
             .into_result()

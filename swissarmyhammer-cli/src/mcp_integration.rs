@@ -10,6 +10,7 @@ use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
+use swissarmyhammer_tools::mcp::server::McpServer;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server_with_options, McpServerMode};
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
@@ -24,6 +25,8 @@ pub struct CliToolContext {
     tool_registry: Arc<RwLock<ToolRegistry>>,
     /// MCP server handle (must be kept alive for LlamaAgent to work)
     mcp_server_handle: Option<swissarmyhammer_tools::mcp::unified_server::McpServerHandle>,
+    /// In-process server for isolated execution (no HTTP, no env var mutation)
+    server: Option<Arc<McpServer>>,
 }
 
 impl CliToolContext {
@@ -33,12 +36,33 @@ impl CliToolContext {
         Self::new_with_config(&current_dir, None).await
     }
 
-    /// Create a new CLI tool context with a specific working directory
-    #[allow(dead_code)] // Used in tests
-    pub async fn new_with_dir(
+    /// Create a fully isolated context with no HTTP server and no env var mutation.
+    ///
+    /// Creates an in-process `McpServer` with agent_mode=true (all tools registered)
+    /// using only the provided working directory. Safe for parallel test execution.
+    pub async fn new_isolated(
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::new_with_config(working_dir, None).await
+        use swissarmyhammer_prompts::PromptLibrary;
+
+        let mcp_server = McpServer::new_with_work_dir(
+            PromptLibrary::default(),
+            working_dir.to_path_buf(),
+            None,
+            true,
+        )
+        .await?;
+        mcp_server.initialize().await?;
+        let server_arc = Arc::new(mcp_server);
+
+        let tool_registry = Self::create_tool_registry().await;
+        let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
+
+        Ok(Self {
+            tool_registry: tool_registry_arc,
+            mcp_server_handle: None,
+            server: Some(server_arc),
+        })
     }
 
     /// Create a new CLI tool context with optional model override
@@ -66,10 +90,11 @@ impl CliToolContext {
         Ok(Self {
             tool_registry: tool_registry_arc,
             mcp_server_handle: Some(mcp_server_handle),
+            server: None,
         })
     }
 
-    /// Initialize MCP HTTP server
+    /// Initialize MCP HTTP server, resolving agent mode from model config.
     async fn initialize_mcp_server(
         model_override: Option<&str>,
         working_dir: Option<std::path::PathBuf>,
@@ -77,10 +102,6 @@ impl CliToolContext {
         swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
         Box<dyn std::error::Error>,
     > {
-        tracing::info!("Starting MCP HTTP server for CLI tool context");
-
-        std::env::set_var("SAH_CLI_MODE", "1");
-
         // Resolve the agent type to decide whether to register agent tools.
         // Claude Code has native tools (Bash, Read, Write, Edit, skills) so it
         // does NOT need MCP agent tools (shell, files, skill).
@@ -90,6 +111,26 @@ impl CliToolContext {
             Ok(config) => config.executor_type() != ModelExecutorType::ClaudeCode,
             Err(_) => false, // Default is ClaudeCode, so no agent tools needed
         };
+
+        Self::initialize_mcp_server_with_agent_mode(model_override, working_dir, agent_mode).await
+    }
+
+    /// Initialize MCP HTTP server with an explicit agent mode setting.
+    ///
+    /// When `agent_mode` is true, agent-specific tools (files, shell, skill) are
+    /// registered in addition to the always-available domain tools.
+    async fn initialize_mcp_server_with_agent_mode(
+        model_override: Option<&str>,
+        working_dir: Option<std::path::PathBuf>,
+        agent_mode: bool,
+    ) -> Result<
+        swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
+        Box<dyn std::error::Error>,
+    > {
+        tracing::info!("Starting MCP HTTP server for CLI tool context");
+
+        std::env::set_var("SAH_CLI_MODE", "1");
+
         tracing::info!("Agent mode for MCP server: {agent_mode}");
 
         let mcp_server_handle = start_mcp_server_with_options(
@@ -126,35 +167,37 @@ impl CliToolContext {
         tool_registry
     }
 
+    /// Resolve the McpServer instance from either the isolated server or the HTTP handle
+    fn resolve_server(&self) -> Result<Arc<McpServer>, McpError> {
+        if let Some(ref server) = self.server {
+            return Ok(server.clone());
+        }
+        self.mcp_server_handle
+            .as_ref()
+            .and_then(|h| h.server())
+            .ok_or_else(|| {
+                McpError::internal_error("MCP server instance not available".to_string(), None)
+            })
+    }
+
     /// Execute an MCP tool with the given arguments
     pub async fn execute_tool(
         &self,
         tool_name: &str,
         arguments: Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
-        // Call tool through the MCP server instance to ensure consistent context
-        let server = self
-            .mcp_server_handle
-            .as_ref()
-            .and_then(|h| h.server())
-            .ok_or_else(|| {
-                McpError::internal_error("MCP server instance not available".to_string(), None)
-            })?;
-
+        let server = self.resolve_server()?;
         server
             .execute_tool(tool_name, serde_json::Value::Object(arguments))
             .await
     }
 
-    /// Helper to convert CLI arguments to MCP tool arguments
-    ///
     /// Get an Arc to the tool registry for dynamic CLI generation
     pub fn get_tool_registry_arc(&self) -> Arc<RwLock<ToolRegistry>> {
         self.tool_registry.clone()
     }
 
-    /// Create arguments map from vector of key-value pairs for testing
-    #[allow(dead_code)]
+    /// Create arguments map from vector of key-value pairs
     pub fn create_arguments(&self, args: Vec<(&str, Value)>) -> Map<String, Value> {
         args.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
     }
@@ -167,7 +210,6 @@ pub mod response_formatting {
 
     /// Format successful tool result for display
     /// This is the ONE PLACE where we convert JSON output to YAML for display
-    #[allow(dead_code)]
     pub fn format_success_response(result: &CallToolResult) -> String {
         // First check if there's structured content - serialize it to YAML
         if let Some(ref data) = result.structured_content {
@@ -194,7 +236,6 @@ pub mod response_formatting {
     }
 
     /// Format error tool result for display
-    #[allow(dead_code)]
     pub fn format_error_response(result: &CallToolResult) -> String {
         extract_text_content(result).unwrap_or_else(|| "Operation failed".to_string())
     }
@@ -211,7 +252,6 @@ pub mod response_formatting {
     }
 
     /// Extract JSON data from CallToolResult
-    #[allow(dead_code)]
     pub fn extract_json_data(result: &CallToolResult) -> Result<Value, Box<dyn std::error::Error>> {
         let text = extract_text_content(result).ok_or("No text content found in result")?;
         Ok(serde_json::from_str(&text)?)
@@ -238,9 +278,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_arguments() {
-        let mut args = Map::new();
-        args.insert("name".to_string(), json!("test"));
-        args.insert("count".to_string(), json!(42));
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = CliToolContext::new_isolated(temp.path()).await.unwrap();
+
+        let args = context.create_arguments(vec![
+            ("name", json!("test")),
+            ("count", json!(42)),
+        ]);
 
         assert_eq!(args.get("name"), Some(&json!("test")));
         assert_eq!(args.get("count"), Some(&json!(42)));
@@ -265,39 +309,28 @@ mod tests {
 
         let formatted = response_formatting::format_success_response(&success_result);
         assert!(formatted.contains("Operation successful"));
+
+        // Verify extract_json_data works on non-JSON text
+        let result = response_formatting::extract_json_data(&success_result);
+        assert!(result.is_err(), "Non-JSON text should fail to parse");
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_integration() {
-        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+    async fn test_isolated_tool_execution() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = CliToolContext::new_isolated(temp.path()).await.unwrap();
 
-        let env = IsolatedTestEnvironment::new().unwrap();
-        let temp_path = env.temp_dir();
-        let context = CliToolContext::new_with_dir(&temp_path).await.unwrap();
+        let args = context.create_arguments(vec![
+            ("op", json!("add task")),
+            ("title", json!("Test task")),
+            ("description", json!("Test context")),
+        ]);
 
-        // Test that rate limiter is properly created and functional
-        // We can verify this by checking that the CliToolContext was created successfully
-        // which means all components including the rate limiter were initialized
-        // Context creation successful means tools are available
-
-        // Test that the rate limiter allows normal operations
-        // by checking that we can execute a tool (this will use the rate limiter internally)
-        let mut args = Map::new();
-        args.insert("op".to_string(), json!("add task"));
-        args.insert("title".to_string(), json!("Test task"));
-        args.insert("description".to_string(), json!("Test context"));
-
-        // This should succeed if rate limiter is working properly
         let result = context.execute_tool("kanban", args).await;
 
-        // We expect this to either succeed or fail with a normal error (not a rate limit error)
-        // Rate limit errors would be specific MCP errors about rate limiting
         match result {
-            Ok(_) => {
-                // Success - rate limiter allowed the operation
-            }
+            Ok(_) => {}
             Err(e) => {
-                // Ensure it's not a rate limiting error
                 let error_str = e.to_string();
                 assert!(
                     !error_str.contains("rate limit"),

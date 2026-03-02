@@ -2,28 +2,28 @@
 //!
 //! These tests verify that the CLI can successfully call MCP tools directly
 //! without going through the MCP protocol layer.
+//!
+//! All tests use `new_isolated` which creates an in-process McpServer with
+//! no HTTP server and no env var mutation, safe for parallel execution.
 
 use serde_json::json;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
 
 use crate::test_utils::setup_git_repo;
 
-// Test helper functions to reduce code duplication
+/// Creates a fully isolated test context.
+///
+/// No HTTP server, no env var mutation, all tools registered (agent_mode=true).
+async fn setup_isolated_context() -> (tempfile::TempDir, CliToolContext) {
+    let temp = tempfile::TempDir::new().unwrap();
+    let temp_path = temp.path().to_path_buf();
 
-/// Creates a test context with an isolated environment.
-/// Returns the environment (which must be kept alive) and the context.
-async fn setup_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
-    let env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = env.temp_dir();
-
-    // Set up git repository for tests that need it
     setup_git_repo(&temp_path).expect("Failed to set up git repository");
 
-    let context = CliToolContext::new_with_dir(&temp_path)
+    let context = CliToolContext::new_isolated(&temp_path)
         .await
-        .expect("Failed to create CliToolContext");
-    (env, context)
+        .expect("Failed to create isolated CliToolContext");
+    (temp, context)
 }
 
 /// Creates a CallToolResult for testing purposes.
@@ -58,20 +58,17 @@ fn assert_cli_error_conversion(mcp_error: rmcp::ErrorData, expected_text: &str) 
 
 #[tokio::test]
 async fn test_cli_can_call_mcp_tools() {
-    let (_env, _context) = setup_test_context().await;
+    let (_temp, _context) = setup_isolated_context().await;
 
     // Context creation successful means the tool registry is working
-    // We can't directly access the registry methods anymore, but
-    // successful initialization means tools are available
 }
 
 #[tokio::test]
-#[serial_test::serial]
 async fn test_files_read_tool_integration() {
-    let (env, context) = setup_test_context().await;
+    let (temp, context) = setup_isolated_context().await;
 
     // Create a test file to read
-    let test_file = env.temp_dir().join("test_file.txt");
+    let test_file = temp.path().join("test_file.txt");
     std::fs::write(&test_file, "Test content for files read").unwrap();
 
     // Test calling unified files tool with read operation
@@ -101,7 +98,7 @@ async fn test_files_read_tool_integration() {
 
 #[tokio::test]
 async fn test_nonexistent_tool_error() {
-    let (_env, context) = setup_test_context().await;
+    let (_temp, context) = setup_isolated_context().await;
 
     // Test calling a nonexistent tool
     let args = context.create_arguments(vec![]);
@@ -119,9 +116,8 @@ async fn test_nonexistent_tool_error() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
 async fn test_invalid_arguments_error() {
-    let (_env, context) = setup_test_context().await;
+    let (_temp, context) = setup_isolated_context().await;
 
     // Test calling files with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
@@ -145,9 +141,6 @@ fn test_response_formatting_utilities() {
 
     let formatted_error = response_formatting::format_error_response(&error_result);
     assert!(formatted_error.contains("Something went wrong"));
-
-    // Only test the functions that still exist
-    // The table formatting and status message functions have been removed as they were dead code
 }
 
 #[test]
@@ -165,7 +158,7 @@ fn test_error_conversion() {
 
 #[tokio::test]
 async fn test_create_arguments_helper() {
-    let (_env, context) = setup_test_context().await;
+    let (_temp, context) = setup_isolated_context().await;
 
     // Test the create_arguments helper method
     let args = context.create_arguments(vec![

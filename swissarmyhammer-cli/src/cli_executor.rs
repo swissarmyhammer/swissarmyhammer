@@ -60,7 +60,7 @@ pub struct CliExecutor {
 impl CliExecutor {
     /// Create a new CLI executor with the given working directory
     pub async fn new(working_dir: &Path) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        let cli_tool_context = CliToolContext::new_with_dir(working_dir)
+        let cli_tool_context = CliToolContext::new_with_config(working_dir, None)
             .await
             .map_err(|e| Box::<dyn Error + Send + Sync>::from(e.to_string()))?;
         let tool_registry = cli_tool_context.get_tool_registry_arc();
