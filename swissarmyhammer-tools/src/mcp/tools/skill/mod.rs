@@ -359,18 +359,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_skill_use_renders_partials() {
+    async fn test_skill_use_renders_test_skill_body() {
         let library = Arc::new(RwLock::new(SkillLibrary::new()));
         {
             let mut lib = library.write().await;
             lib.load_defaults();
         }
 
-        // Use a default prompt library — render_text() loads all builtins including partials
         let tool = SkillTool::new(library, default_prompt_library());
         let ctx = crate::test_utils::create_test_context().await;
 
-        // The "test" skill includes {% include "_partials/test-driven-development" %}
+        // The "test" skill is now a thin dispatcher that delegates to a tester subagent
         let args: serde_json::Map<String, serde_json::Value> =
             serde_json::from_value(serde_json::json!({"op": "use skill", "name": "test"})).unwrap();
         let result = tool
@@ -385,13 +384,13 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap_or("");
 
-        // "TDD Cycle" only exists in the _partials/test-driven-development partial
+        // The test skill body should contain its dispatcher instructions
         assert!(
-            content.contains("TDD Cycle"),
-            "Rendered instructions should contain partial content 'TDD Cycle'"
+            content.contains("tester"),
+            "Test skill should reference tester subagent"
         );
 
-        // Raw {% include %} tags should be resolved, not passed through
+        // Raw {% include %} tags should not be present in rendered output
         assert!(
             !content.contains("{% include"),
             "Rendered output should not contain raw Liquid include tags"

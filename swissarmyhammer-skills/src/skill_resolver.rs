@@ -85,6 +85,9 @@ impl SkillResolver {
     }
 
     /// Validate builtin skills, capturing load failures
+    ///
+    /// Directories without a SKILL.md are skipped silently — they are resource
+    /// directories (e.g. partials) rather than standalone skills.
     fn validate_builtins(&self, issues: &mut Vec<ValidationIssue>) {
         let builtin_files = get_builtin_skills();
 
@@ -102,6 +105,15 @@ impl SkillResolver {
         }
 
         for (skill_name, files) in &skill_groups {
+            // Skip groups that don't contain a SKILL.md — they are resource
+            // directories (partials, supporting docs) rather than skills.
+            let has_skill_md = files
+                .iter()
+                .any(|(name, _)| name.ends_with("/SKILL.md") || *name == "SKILL.md");
+            if !has_skill_md {
+                continue;
+            }
+
             if let Err(e) = load_skill_from_builtin(skill_name, files) {
                 issues.push(ValidationIssue {
                     level: ValidationLevel::Error,

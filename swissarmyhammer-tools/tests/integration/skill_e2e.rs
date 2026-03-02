@@ -286,11 +286,10 @@ async fn test_skill_invoke_by_name_returns_body_content() {
     teardown(server, client).await;
 }
 
-/// Verify that skill templates with {% include %} partials are rendered through
-/// the Liquid template engine. The test skill includes `_partials/test-driven-development`
-/// which contains "TDD Cycle" — content that only exists in the partial, not the skill body.
+/// Verify that the test skill returns its body content through the MCP pipeline.
+/// The test skill is now a thin dispatcher that delegates to a tester subagent.
 #[tokio::test]
-async fn test_skill_partials_are_rendered() {
+async fn test_skill_test_returns_body_content() {
     let (server, client) = setup(true).await;
 
     let result = client
@@ -312,17 +311,16 @@ async fn test_skill_partials_are_rendered() {
         .map(|t| t.text.as_str())
         .unwrap_or("");
 
-    // "TDD Cycle" only exists in the _partials/test-driven-development partial.
-    // Finding it here proves the Liquid {% include %} was resolved.
+    // The test skill is a dispatcher that references the tester subagent
     assert!(
-        content_text.contains("TDD Cycle"),
-        "Skill instructions should contain rendered partial content 'TDD Cycle', got: {}",
+        content_text.contains("tester"),
+        "Test skill should reference tester subagent, got: {}",
         &content_text[..content_text.len().min(500)]
     );
 
-    // Also verify the skill's own body content is present
+    // Verify the skill's own body content is present
     assert!(
-        content_text.contains("cargo clippy"),
+        content_text.contains("Zero failures"),
         "Skill instructions should contain own body content"
     );
 
