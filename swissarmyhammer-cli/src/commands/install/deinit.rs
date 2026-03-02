@@ -30,6 +30,9 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
     // Always remove builtin agents from .agents/ store and agent dirs
     uninstall_builtin_agents(global)?;
 
+    // Clean up lockfile entries for builtin skills and agents
+    uninstall_lockfile_entries()?;
+
     // Remove directories if requested
     if remove_directory {
         let cwd = std::env::current_dir()
@@ -217,43 +220,30 @@ fn uninstall_builtin_skills(global: bool) -> Result<(), String> {
     let builtins = resolver.resolve_builtins();
     let builtin_names: Vec<String> = builtins.keys().cloned().collect();
 
-    for name in &builtin_names {
-        let store_path = store_dir.join(name);
-
-        // Remove only symlinks from each agent's skill directory
-        for agent in &agents {
-            let link_name = mirdan::store::symlink_name(name, &agent.def.symlink_policy);
-            let agent_skill_dir = if global {
+    // Collect link directories from detected agents
+    let link_dirs: Vec<std::path::PathBuf> = agents
+        .iter()
+        .map(|agent| {
+            if global {
                 mirdan::agents::agent_global_skill_dir(&agent.def)
             } else {
                 mirdan::agents::agent_project_skill_dir(&agent.def)
-            };
-            let link_path = agent_skill_dir.join(&link_name);
-            remove_if_symlink(&link_path);
-        }
-
-        // Remove skill from the .skills/ store
-        if store_path.exists() {
-            if let Err(e) = fs::remove_dir_all(&store_path) {
-                eprintln!(
-                    "Warning: failed to remove store entry {}: {}",
-                    store_path.display(),
-                    e
-                );
-            } else {
-                println!("Removed skill store: {}", store_path.display());
             }
-        }
-    }
+        })
+        .collect();
 
-    // Remove the .skills/ directory if empty
-    if store_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&store_dir) {
-            if entries.count() == 0 {
-                let _ = fs::remove_dir(&store_dir);
-            }
-        }
-    }
+    let symlink_policies: Vec<_> = agents
+        .iter()
+        .map(|agent| agent.def.symlink_policy.clone())
+        .collect();
+
+    remove_store_entries(
+        &store_dir,
+        &builtin_names,
+        &link_dirs,
+        &symlink_policies,
+        "skill",
+    );
 
     Ok(())
 }
@@ -274,24 +264,56 @@ fn uninstall_builtin_agents(global: bool) -> Result<(), String> {
     let builtins = resolver.resolve_builtins();
     let builtin_names: Vec<String> = builtins.keys().cloned().collect();
 
-    for name in &builtin_names {
+    // Collect link directories from detected agents (filtering out agents without agent dirs)
+    let mut link_dirs: Vec<std::path::PathBuf> = Vec::new();
+    let mut symlink_policies: Vec<mirdan::agents::SymlinkPolicy> = Vec::new();
+
+    for agent in &agents {
+        let agent_dir = if global {
+            mirdan::agents::agent_global_agent_dir(&agent.def)
+        } else {
+            mirdan::agents::agent_project_agent_dir(&agent.def)
+        };
+        if let Some(dir) = agent_dir {
+            link_dirs.push(dir);
+            symlink_policies.push(agent.def.symlink_policy.clone());
+        }
+    }
+
+    remove_store_entries(
+        &store_dir,
+        &builtin_names,
+        &link_dirs,
+        &symlink_policies,
+        "agent",
+    );
+
+    Ok(())
+}
+
+/// Remove named entries from a store directory and their symlinks from link directories.
+///
+/// This is the shared filesystem logic for both skill and agent uninstall.
+/// Extracted for testability — the caller resolves names and directories,
+/// this function does the filesystem work.
+fn remove_store_entries(
+    store_dir: &std::path::Path,
+    names: &[String],
+    link_dirs: &[std::path::PathBuf],
+    symlink_policies: &[mirdan::agents::SymlinkPolicy],
+    kind: &str,
+) {
+    for name in names {
         let store_path = store_dir.join(name);
 
-        // Remove only symlinks from each coding agent's agent directory
-        for agent in &agents {
-            let link_name = mirdan::store::symlink_name(name, &agent.def.symlink_policy);
-            let agent_agent_dir = if global {
-                mirdan::agents::agent_global_agent_dir(&agent.def)
-            } else {
-                mirdan::agents::agent_project_agent_dir(&agent.def)
-            };
-            if let Some(agent_agent_dir) = agent_agent_dir {
-                let link_path = agent_agent_dir.join(&link_name);
-                remove_if_symlink(&link_path);
-            }
+        // Remove symlinks from each link directory
+        for (dir, policy) in link_dirs.iter().zip(symlink_policies.iter()) {
+            let link_name = mirdan::store::symlink_name(name, policy);
+            let link_path = dir.join(&link_name);
+            remove_if_symlink(&link_path);
         }
 
-        // Remove agent from the .agents/ store
+        // Remove entry from the store
         if store_path.exists() {
             if let Err(e) = fs::remove_dir_all(&store_path) {
                 eprintln!(
@@ -300,20 +322,55 @@ fn uninstall_builtin_agents(global: bool) -> Result<(), String> {
                     e
                 );
             } else {
-                println!("Removed agent store: {}", store_path.display());
+                println!("Removed {} store: {}", kind, store_path.display());
             }
         }
     }
 
-    // Remove the .agents/ directory if empty
+    // Remove the store directory if empty
     if store_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&store_dir) {
+        if let Ok(entries) = fs::read_dir(store_dir) {
             if entries.count() == 0 {
-                let _ = fs::remove_dir(&store_dir);
+                let _ = fs::remove_dir(store_dir);
             }
         }
     }
+}
 
+/// Remove lockfile entries for all builtin skills and agents.
+///
+/// init writes entries to mirdan-lock.json; deinit must clean them up
+/// so that the lockfile doesn't contain stale references.
+fn uninstall_lockfile_entries() -> Result<(), String> {
+    use swissarmyhammer_agents::AgentResolver;
+    use swissarmyhammer_skills::SkillResolver;
+
+    let project_root =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+
+    let lockfile_path = project_root.join("mirdan-lock.json");
+    if !lockfile_path.exists() {
+        return Ok(());
+    }
+
+    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
+        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+
+    let skill_resolver = SkillResolver::new();
+    for name in skill_resolver.resolve_builtins().keys() {
+        lockfile.remove_package(name);
+    }
+
+    let agent_resolver = AgentResolver::new();
+    for name in agent_resolver.resolve_builtins().keys() {
+        lockfile.remove_package(name);
+    }
+
+    lockfile
+        .save(&project_root)
+        .map_err(|e| format!("Failed to save lockfile: {}", e))?;
+
+    println!("Lockfile entries cleaned up");
     Ok(())
 }
 
@@ -497,6 +554,175 @@ mod tests {
         assert!(
             std::fs::symlink_metadata(&link_path).is_err(),
             "Dangling symlink should be gone"
+        );
+    }
+
+    // ── remove_store_entries tests ──────────────────────────────────────
+
+    /// Set up a store + link directory structure for testing remove_store_entries.
+    fn setup_store_structure(
+        root: &Path,
+        store_name: &str,
+        link_dir_name: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let store_dir = root.join(store_name);
+        let link_dir = root.join(link_dir_name);
+        fs::create_dir_all(&store_dir).unwrap();
+        fs::create_dir_all(&link_dir).unwrap();
+        (store_dir, link_dir)
+    }
+
+    /// Create an entry in the store and symlink it into the link directory.
+    fn create_store_entry_with_symlink(
+        store_dir: &Path,
+        link_dir: &Path,
+        name: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let store_path = store_dir.join(name);
+        fs::create_dir_all(&store_path).unwrap();
+        fs::write(store_path.join("AGENT.md"), "# Test agent").unwrap();
+
+        let link_path = link_dir.join(name);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&store_path, &link_path).unwrap();
+
+        (store_path, link_path)
+    }
+
+    #[test]
+    fn test_remove_store_entries_removes_symlinks_and_store() {
+        let tmp = TempDir::new().unwrap();
+        let (store_dir, link_dir) = setup_store_structure(tmp.path(), ".agents", ".agents-links");
+
+        let (store_path, link_path) =
+            create_store_entry_with_symlink(&store_dir, &link_dir, "tester");
+
+        assert!(store_path.exists());
+        assert!(link_path.exists());
+
+        let names = vec!["tester".to_string()];
+        let link_dirs = vec![link_dir.clone()];
+        let policies = vec![mirdan::agents::SymlinkPolicy::LastSegment];
+
+        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+
+        assert!(!link_path.exists(), "Symlink should be removed");
+        assert!(!store_path.exists(), "Store entry should be removed");
+        assert!(
+            !store_dir.exists(),
+            "Empty store directory should be removed"
+        );
+    }
+
+    #[test]
+    fn test_remove_store_entries_preserves_unrelated_store_entries() {
+        let tmp = TempDir::new().unwrap();
+        let (store_dir, link_dir) = setup_store_structure(tmp.path(), ".agents", ".agents-links");
+
+        // Create two entries: one we'll remove, one we won't
+        create_store_entry_with_symlink(&store_dir, &link_dir, "tester");
+        let (unrelated_store, _unrelated_link) =
+            create_store_entry_with_symlink(&store_dir, &link_dir, "custom-agent");
+
+        // Only remove "tester"
+        let names = vec!["tester".to_string()];
+        let link_dirs = vec![link_dir.clone()];
+        let policies = vec![mirdan::agents::SymlinkPolicy::LastSegment];
+
+        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+
+        assert!(
+            unrelated_store.exists(),
+            "Unrelated store entry must not be removed"
+        );
+        assert!(
+            store_dir.exists(),
+            "Store directory should remain when non-empty"
+        );
+    }
+
+    #[test]
+    fn test_remove_store_entries_handles_multiple_link_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let store_dir = tmp.path().join(".agents");
+        let link_dir_a = tmp.path().join("agent-a");
+        let link_dir_b = tmp.path().join("agent-b");
+        fs::create_dir_all(&store_dir).unwrap();
+        fs::create_dir_all(&link_dir_a).unwrap();
+        fs::create_dir_all(&link_dir_b).unwrap();
+
+        // Create store entry and symlinks in both link dirs
+        let store_path = store_dir.join("reviewer");
+        fs::create_dir_all(&store_path).unwrap();
+        fs::write(store_path.join("AGENT.md"), "# Reviewer").unwrap();
+
+        let link_a = link_dir_a.join("reviewer");
+        let link_b = link_dir_b.join("reviewer");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&store_path, &link_a).unwrap();
+            std::os::unix::fs::symlink(&store_path, &link_b).unwrap();
+        }
+
+        let names = vec!["reviewer".to_string()];
+        let link_dirs = vec![link_dir_a.clone(), link_dir_b.clone()];
+        let policies = vec![
+            mirdan::agents::SymlinkPolicy::LastSegment,
+            mirdan::agents::SymlinkPolicy::LastSegment,
+        ];
+
+        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+
+        assert!(!link_a.exists(), "Symlink A should be removed");
+        assert!(!link_b.exists(), "Symlink B should be removed");
+        assert!(!store_path.exists(), "Store entry should be removed");
+    }
+
+    #[test]
+    fn test_remove_store_entries_handles_missing_symlinks_gracefully() {
+        let tmp = TempDir::new().unwrap();
+        let (store_dir, link_dir) = setup_store_structure(tmp.path(), ".agents", ".agents-links");
+
+        // Create store entry but NO symlink
+        let store_path = store_dir.join("implementer");
+        fs::create_dir_all(&store_path).unwrap();
+        fs::write(store_path.join("AGENT.md"), "# Implementer").unwrap();
+
+        let names = vec!["implementer".to_string()];
+        let link_dirs = vec![link_dir.clone()];
+        let policies = vec![mirdan::agents::SymlinkPolicy::LastSegment];
+
+        // Should not panic — gracefully handles missing symlinks
+        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+
+        assert!(!store_path.exists(), "Store entry should still be removed");
+    }
+
+    #[test]
+    fn test_remove_store_entries_preserves_real_dirs_in_link_dir() {
+        let tmp = TempDir::new().unwrap();
+        let (store_dir, link_dir) = setup_store_structure(tmp.path(), ".agents", ".agents-links");
+
+        create_store_entry_with_symlink(&store_dir, &link_dir, "tester");
+
+        // Also create a real directory in the link dir (not a symlink)
+        let real_dir = link_dir.join("custom-real-agent");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::write(real_dir.join("AGENT.md"), "# Custom").unwrap();
+
+        let names = vec!["tester".to_string()];
+        let link_dirs = vec![link_dir.clone()];
+        let policies = vec![mirdan::agents::SymlinkPolicy::LastSegment];
+
+        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+
+        assert!(
+            real_dir.exists(),
+            "Real directory in link dir must not be removed"
+        );
+        assert!(
+            real_dir.join("AGENT.md").exists(),
+            "Real directory contents must be intact"
         );
     }
 }
