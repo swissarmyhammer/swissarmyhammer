@@ -29,6 +29,10 @@ pub enum FieldsError {
     #[error("validation error on field '{field}': {message}")]
     ValidationFailed { field: String, message: String },
 
+    /// Computed field derivation error
+    #[error("compute error on field '{field}': {message}")]
+    ComputeError { field: String, message: String },
+
     /// Fields directory not found
     #[error("fields directory not found: {path}")]
     NotInitialized { path: PathBuf },

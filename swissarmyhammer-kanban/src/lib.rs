@@ -88,7 +88,7 @@ pub use swissarmyhammer_operations::{
 };
 
 pub use context::{KanbanContext, KanbanLock, MigrationStats};
-pub use defaults::KanbanLookup;
+pub use defaults::{kanban_compute_engine, KanbanLookup};
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
 

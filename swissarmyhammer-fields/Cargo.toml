@@ -18,7 +18,6 @@ tracing = { workspace = true }
 ulid = { workspace = true }
 async-trait = { workspace = true }
 swissarmyhammer-js = { path = "../swissarmyhammer-js" }
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

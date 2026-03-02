@@ -8051,7 +8051,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "swissarmyhammer-directory",
  "swissarmyhammer-js",
  "tempfile",
  "thiserror 1.0.69",

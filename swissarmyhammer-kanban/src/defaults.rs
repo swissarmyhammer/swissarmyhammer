@@ -11,9 +11,10 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use include_dir::{include_dir, Dir};
-use swissarmyhammer_fields::EntityLookup;
+use swissarmyhammer_fields::{ComputeEngine, EntityLookup};
 
 use crate::context::KanbanContext;
+use crate::tag_parser;
 
 /// Builtin field definition YAML files, embedded at compile time.
 static BUILTIN_DEFINITIONS: Dir =
@@ -45,6 +46,91 @@ pub fn builtin_entity_definitions() -> Vec<(&'static str, &'static str)> {
             Some((name, content))
         })
         .collect()
+}
+
+/// Build a ComputeEngine with all kanban derivation functions registered.
+pub fn kanban_compute_engine() -> ComputeEngine {
+    let mut engine = ComputeEngine::new();
+
+    // parse-body-tags: extract #tag patterns from the body field
+    engine.register(
+        "parse-body-tags",
+        Box::new(|fields| {
+            let body = fields
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let tags = tag_parser::parse_tags(body);
+            let value = serde_json::Value::Array(
+                tags.into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            );
+            Box::pin(async move { value })
+        }),
+    );
+
+    // parse-body-progress: parse GFM task lists from body
+    engine.register(
+        "parse-body-progress",
+        Box::new(|fields| {
+            let body = fields
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let (total, completed) = parse_gfm_tasks(body);
+            let percent = if total > 0 {
+                (completed as f64 / total as f64 * 100.0).round() as u32
+            } else {
+                0
+            };
+            let value = serde_json::json!({
+                "total": total,
+                "completed": completed,
+                "percent": percent,
+            });
+            Box::pin(async move { value })
+        }),
+    );
+
+    // attachment-mime-type: stub — actual detection requires filesystem access
+    engine.register(
+        "attachment-mime-type",
+        Box::new(|_fields| Box::pin(async { serde_json::Value::Null })),
+    );
+
+    // attachment-file-size: stub — actual computation requires filesystem access
+    engine.register(
+        "attachment-file-size",
+        Box::new(|_fields| Box::pin(async { serde_json::Value::Null })),
+    );
+
+    engine
+}
+
+/// Parse GFM task list items from markdown text.
+///
+/// Returns `(total, completed)` counts. Matches `- [ ]` (unchecked) and
+/// `- [x]` or `- [X]` (checked) patterns.
+fn parse_gfm_tasks(text: &str) -> (u32, u32) {
+    let mut total = 0u32;
+    let mut completed = 0u32;
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("- [ ] ") || trimmed == "- [ ]" {
+            total += 1;
+        } else if trimmed.starts_with("- [x] ")
+            || trimmed.starts_with("- [X] ")
+            || trimmed == "- [x]"
+            || trimmed == "- [X]"
+        {
+            total += 1;
+            completed += 1;
+        }
+    }
+
+    (total, completed)
 }
 
 /// Entity lookup backed by kanban file storage.
@@ -209,6 +295,7 @@ impl EntityLookup for KanbanLookup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use swissarmyhammer_fields::{EntityDef, FieldDef};
 
     #[test]
@@ -364,5 +451,141 @@ mod tests {
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
         assert_eq!(ctx.fields_for_entity("task").len(), 11);
+    }
+
+    #[test]
+    fn kanban_compute_engine_registers_all_derivations() {
+        let engine = kanban_compute_engine();
+        assert!(engine.has("parse-body-tags"));
+        assert!(engine.has("parse-body-progress"));
+        assert!(engine.has("attachment-mime-type"));
+        assert!(engine.has("attachment-file-size"));
+    }
+
+    #[tokio::test]
+    async fn parse_body_tags_derivation() {
+        let engine = kanban_compute_engine();
+        let field = swissarmyhammer_fields::FieldDef {
+            id: ulid::Ulid::new(),
+            name: "tags".to_string(),
+            description: None,
+            type_: swissarmyhammer_fields::FieldType::Computed {
+                derive: "parse-body-tags".to_string(),
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            filter: None,
+            group: None,
+            validate: None,
+        };
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "body".to_string(),
+            serde_json::json!("Fix the #bug in #login module"),
+        );
+
+        let result = engine.derive(&field, &fields).await.unwrap();
+        let tags: Vec<String> = serde_json::from_value(result).unwrap();
+        assert_eq!(tags, vec!["bug", "login"]);
+    }
+
+    #[tokio::test]
+    async fn parse_body_progress_derivation() {
+        let engine = kanban_compute_engine();
+        let field = swissarmyhammer_fields::FieldDef {
+            id: ulid::Ulid::new(),
+            name: "progress".to_string(),
+            description: None,
+            type_: swissarmyhammer_fields::FieldType::Computed {
+                derive: "parse-body-progress".to_string(),
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            filter: None,
+            group: None,
+            validate: None,
+        };
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "body".to_string(),
+            serde_json::json!("Tasks:\n- [x] First\n- [ ] Second\n- [x] Third\n- [ ] Fourth"),
+        );
+
+        let result = engine.derive(&field, &fields).await.unwrap();
+        assert_eq!(result["total"], 4);
+        assert_eq!(result["completed"], 2);
+        assert_eq!(result["percent"], 50);
+    }
+
+    #[test]
+    fn parse_gfm_tasks_basic() {
+        let (total, completed) = parse_gfm_tasks("- [x] Done\n- [ ] Todo\n- [X] Also done");
+        assert_eq!(total, 3);
+        assert_eq!(completed, 2);
+    }
+
+    #[test]
+    fn parse_gfm_tasks_empty() {
+        let (total, completed) = parse_gfm_tasks("No tasks here");
+        assert_eq!(total, 0);
+        assert_eq!(completed, 0);
+    }
+
+    #[test]
+    fn parse_gfm_tasks_indented() {
+        let (total, completed) =
+            parse_gfm_tasks("  - [x] Indented done\n  - [ ] Indented todo");
+        assert_eq!(total, 2);
+        assert_eq!(completed, 1);
+    }
+
+    #[test]
+    fn all_builtin_computed_fields_have_registered_derivations() {
+        let engine = kanban_compute_engine();
+        let defs = builtin_field_definitions();
+
+        for (filename, yaml) in &defs {
+            let field: swissarmyhammer_fields::FieldDef = serde_yaml::from_str(yaml).unwrap();
+            if let swissarmyhammer_fields::FieldType::Computed { derive } = &field.type_ {
+                assert!(
+                    engine.has(derive),
+                    "Builtin computed field '{}' (file: {}) references derive '{}' which is not registered in kanban_compute_engine()",
+                    field.name, filename, derive
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_body_progress_empty_body() {
+        let engine = kanban_compute_engine();
+        let field = swissarmyhammer_fields::FieldDef {
+            id: ulid::Ulid::new(),
+            name: "progress".to_string(),
+            description: None,
+            type_: swissarmyhammer_fields::FieldType::Computed {
+                derive: "parse-body-progress".to_string(),
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            filter: None,
+            group: None,
+            validate: None,
+        };
+
+        let fields = HashMap::new(); // No body field
+
+        let result = engine.derive(&field, &fields).await.unwrap();
+        assert_eq!(result["total"], 0);
+        assert_eq!(result["completed"], 0);
+        assert_eq!(result["percent"], 0);
     }
 }

@@ -11,11 +11,13 @@
 //! - **Consumer-agnostic**: Takes a `Path`, consumers decide where it lives
 //! - **VFS loading**: `from_yaml_sources()` loads from pre-resolved YAML entries (builtin + local)
 
+pub mod compute;
 pub mod context;
 pub mod error;
 pub mod types;
 pub mod validation;
 
+pub use compute::{ComputeEngine, DeriveFn};
 pub use context::{load_yaml_dir, FieldsContext, FieldsContextBuilder};
 pub use error::{FieldsError, Result};
 pub use types::{Display, Editor, EntityDef, FieldDef, FieldType, SelectOption, SortKind};
