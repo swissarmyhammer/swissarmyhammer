@@ -1,0 +1,4 @@
+name: actor
+fields:
+  - name
+  - actor_type

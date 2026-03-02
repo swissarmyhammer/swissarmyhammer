@@ -1,0 +1,8 @@
+id: "0000000000000000000000000P"
+name: attachment_mime_type
+description: MIME type of the attachment
+type:
+  kind: text
+  single_line: true
+editor: none
+display: text

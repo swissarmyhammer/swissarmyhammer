@@ -93,7 +93,6 @@ static LIST_COMMENTS: Lazy<ListComments> = Lazy::new(|| ListComments::new(""));
 
 static LIST_ACTIVITY: Lazy<ListActivity> = Lazy::new(ListActivity::default);
 
-
 static ADD_ATTACHMENT: Lazy<AddAttachment> = Lazy::new(|| AddAttachment::new("", "", ""));
 static GET_ATTACHMENT: Lazy<GetAttachment> = Lazy::new(|| GetAttachment::new("", ""));
 static UPDATE_ATTACHMENT: Lazy<UpdateAttachment> = Lazy::new(|| UpdateAttachment::new("", ""));

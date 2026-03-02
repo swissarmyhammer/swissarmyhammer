@@ -1,0 +1,9 @@
+id: "0000000000000000000000000H"
+name: position_column
+description: Column this task is in
+type:
+  kind: reference
+  entity: column
+  multiple: false
+editor: select
+display: badge

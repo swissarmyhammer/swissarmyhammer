@@ -281,10 +281,7 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let context = CliToolContext::new_isolated(temp.path()).await.unwrap();
 
-        let args = context.create_arguments(vec![
-            ("name", json!("test")),
-            ("count", json!(42)),
-        ]);
+        let args = context.create_arguments(vec![("name", json!("test")), ("count", json!(42))]);
 
         assert_eq!(args.get("name"), Some(&json!("test")));
         assert_eq!(args.get("count"), Some(&json!(42)));

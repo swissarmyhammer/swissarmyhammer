@@ -8,7 +8,10 @@ use swissarmyhammer_kanban::{
 };
 
 #[derive(Parser)]
-#[command(name = "swissarmyhammer-kanban-app", about = "Kanban board desktop app and CLI")]
+#[command(
+    name = "swissarmyhammer-kanban-app",
+    about = "Kanban board desktop app and CLI"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,

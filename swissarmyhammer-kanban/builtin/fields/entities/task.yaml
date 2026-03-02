@@ -1,0 +1,14 @@
+name: task
+body_field: body
+fields:
+  - title
+  - tags
+  - progress
+  - assignees
+  - due
+  - depends_on
+  - body
+  - position_column
+  - position_swimlane
+  - position_ordinal
+  - attachments

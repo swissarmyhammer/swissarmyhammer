@@ -138,9 +138,9 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
 mod tests {
     use super::*;
     use crate::board::InitBoard;
+    use crate::context::KanbanContext;
     use crate::tag::AddTag;
     use crate::task::{AddTask, UpdateTask};
-    use crate::context::KanbanContext;
     use swissarmyhammer_operations::Execute;
     use tempfile::TempDir;
 
@@ -261,9 +261,20 @@ mod tests {
             .unwrap();
 
         // Read the task back — description should have #defect not #bug
-        let task = ctx.read_task(&crate::types::TaskId::from_string(&task_id)).await.unwrap();
-        assert!(task.description.contains("#defect"), "Expected #defect in: {}", task.description);
-        assert!(!task.description.contains("#bug"), "Should not contain #bug in: {}", task.description);
+        let task = ctx
+            .read_task(&crate::types::TaskId::from_string(&task_id))
+            .await
+            .unwrap();
+        assert!(
+            task.description.contains("#defect"),
+            "Expected #defect in: {}",
+            task.description
+        );
+        assert!(
+            !task.description.contains("#bug"),
+            "Should not contain #bug in: {}",
+            task.description
+        );
     }
 
     #[tokio::test]
@@ -290,7 +301,10 @@ mod tests {
             .await
             .into_result();
 
-        assert!(result.is_err(), "Should fail when renaming to existing tag name");
+        assert!(
+            result.is_err(),
+            "Should fail when renaming to existing tag name"
+        );
     }
 
     #[tokio::test]

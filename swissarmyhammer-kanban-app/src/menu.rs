@@ -2,8 +2,12 @@
 
 use crate::state::{resolve_kanban_path, AppConfig, AppState, RecentBoard};
 use std::path::PathBuf;
-use swissarmyhammer_kanban::{board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor};
-use tauri::menu::{CheckMenuItem, IconMenuItem, Menu, MenuItem, NativeIcon, PredefinedMenuItem, Submenu};
+use swissarmyhammer_kanban::{
+    board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
+};
+use tauri::menu::{
+    CheckMenuItem, IconMenuItem, Menu, MenuItem, NativeIcon, PredefinedMenuItem, Submenu,
+};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
@@ -11,13 +15,27 @@ use tauri_plugin_dialog::DialogExt;
 ///
 /// On macOS the first submenu is always the application menu, so we
 /// prepend a proper app menu to keep File in the right position.
-pub fn build_menu(app: &AppHandle, recent: &[RecentBoard], keymap_mode: &str) -> tauri::Result<Menu<tauri::Wry>> {
+pub fn build_menu(
+    app: &AppHandle,
+    recent: &[RecentBoard],
+    keymap_mode: &str,
+) -> tauri::Result<Menu<tauri::Wry>> {
     // File menu items — standard macOS labels with native icons
     let new_board = IconMenuItem::with_id_and_native_icon(
-        app, "new_board", "New", true, Some(NativeIcon::Add), Some("CmdOrCtrl+N"),
+        app,
+        "new_board",
+        "New",
+        true,
+        Some(NativeIcon::Add),
+        Some("CmdOrCtrl+N"),
     )?;
     let open_board = IconMenuItem::with_id_and_native_icon(
-        app, "open_board", "Open...", true, Some(NativeIcon::Folder), Some("CmdOrCtrl+O"),
+        app,
+        "open_board",
+        "Open...",
+        true,
+        Some(NativeIcon::Folder),
+        Some("CmdOrCtrl+O"),
     )?;
 
     // Open Recent submenu (disabled when empty)
@@ -59,13 +77,28 @@ pub fn build_menu(app: &AppHandle, recent: &[RecentBoard], keymap_mode: &str) ->
 
     // Settings menu with Editor Keymap radio items
     let keymap_cua = CheckMenuItem::with_id(
-        app, "keymap_cua", "CUA (Standard)", true, keymap_mode == "cua", None::<&str>,
+        app,
+        "keymap_cua",
+        "CUA (Standard)",
+        true,
+        keymap_mode == "cua",
+        None::<&str>,
     )?;
     let keymap_vim = CheckMenuItem::with_id(
-        app, "keymap_vim", "Vim", true, keymap_mode == "vim", None::<&str>,
+        app,
+        "keymap_vim",
+        "Vim",
+        true,
+        keymap_mode == "vim",
+        None::<&str>,
     )?;
     let keymap_emacs = CheckMenuItem::with_id(
-        app, "keymap_emacs", "Emacs", true, keymap_mode == "emacs", None::<&str>,
+        app,
+        "keymap_emacs",
+        "Emacs",
+        true,
+        keymap_mode == "emacs",
+        None::<&str>,
     )?;
 
     let settings_submenu = Submenu::with_items(
@@ -141,11 +174,14 @@ fn handle_tag_menu(app: &AppHandle, action: &str) {
         let state = handle.state::<AppState>();
         let context = state.context_tag.read().await.clone();
         if let Some((tag_id, task_id)) = context {
-            let _ = handle.emit("tag-context-menu", serde_json::json!({
-                "action": action,
-                "tag_id": tag_id,
-                "task_id": task_id,
-            }));
+            let _ = handle.emit(
+                "tag-context-menu",
+                serde_json::json!({
+                    "action": action,
+                    "tag_id": tag_id,
+                    "task_id": task_id,
+                }),
+            );
         }
     });
 }

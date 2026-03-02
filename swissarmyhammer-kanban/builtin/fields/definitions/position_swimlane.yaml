@@ -1,0 +1,9 @@
+id: "0000000000000000000000000J"
+name: position_swimlane
+description: Swimlane this task is in
+type:
+  kind: reference
+  entity: swimlane
+  multiple: false
+editor: select
+display: badge

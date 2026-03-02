@@ -47,7 +47,10 @@ async fn test_tag_file_based_storage() {
 
     // Verify tag file was created with ULID filename
     let tag_file = kanban_dir.join("tags").join(format!("{}.yaml", tag_id));
-    assert!(tag_file.exists(), "Tag file should be created with ULID name");
+    assert!(
+        tag_file.exists(),
+        "Tag file should be created with ULID name"
+    );
 
     // Verify board.yaml does NOT contain tags array
     let board_content = std::fs::read_to_string(kanban_dir.join("board.yaml")).unwrap();
@@ -136,9 +139,7 @@ async fn test_tag_validation() {
     assert!(result.is_ok(), "TagTask should auto-create missing tags");
 
     // Verify tag was auto-created
-    let tag_result = processor
-        .process(&GetTag::new("auto-created"), &ctx)
-        .await;
+    let tag_result = processor.process(&GetTag::new("auto-created"), &ctx).await;
     assert!(tag_result.is_ok(), "Auto-created tag should be retrievable");
     assert_eq!(tag_result.unwrap()["name"], "auto-created");
 }

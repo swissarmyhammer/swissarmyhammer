@@ -209,3 +209,4 @@ swissarmyhammer-config/.swissarmyhammer/
 
 # Shell tool runtime data (SQLite DB, WAL files, logs)
 .shell/
+.kanban.zip

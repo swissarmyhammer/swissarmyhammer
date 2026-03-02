@@ -662,7 +662,11 @@ mod tests {
             .await;
 
         let result = state.get("mod_import_result").await;
-        assert!(result.is_ok(), "mod_import_result should exist: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "mod_import_result should exist: {:?}",
+            result
+        );
         assert_eq!(result.unwrap(), serde_json::json!(42));
 
         // Test 2: Import from outside the sandbox via path traversal should be rejected
@@ -681,6 +685,9 @@ mod tests {
         );
         // escape_ok should NOT exist (import should have failed)
         let ok_result = state.get("escape_ok").await;
-        assert!(ok_result.is_err(), "escape_ok should not exist — import should have been rejected");
+        assert!(
+            ok_result.is_err(),
+            "escape_ok should not exist — import should have been rejected"
+        );
     }
 }

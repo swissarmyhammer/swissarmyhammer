@@ -1,0 +1,9 @@
+id: "00000000000000000000000001"
+name: title
+description: Task title
+type:
+  kind: markdown
+  single_line: true
+editor: markdown
+display: markdown
+sort: alphanumeric

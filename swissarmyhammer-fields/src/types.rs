@@ -136,7 +136,9 @@ impl FieldDef {
             FieldType::Select { .. } => Editor::Select,
             FieldType::MultiSelect { .. } => Editor::MultiSelect,
             FieldType::Reference { multiple: true, .. } => Editor::MultiSelect,
-            FieldType::Reference { multiple: false, .. } => Editor::Select,
+            FieldType::Reference {
+                multiple: false, ..
+            } => Editor::Select,
             FieldType::Computed { .. } => Editor::None,
         }
     }
@@ -155,7 +157,9 @@ impl FieldDef {
             FieldType::Select { .. } => Display::Badge,
             FieldType::MultiSelect { .. } => Display::BadgeList,
             FieldType::Reference { multiple: true, .. } => Display::BadgeList,
-            FieldType::Reference { multiple: false, .. } => Display::Badge,
+            FieldType::Reference {
+                multiple: false, ..
+            } => Display::Badge,
             FieldType::Computed { .. } => Display::Text,
         }
     }
@@ -341,11 +345,7 @@ mod tests {
         let entity = EntityDef {
             name: "tag".into(),
             body_field: None,
-            fields: vec![
-                "tag_name".into(),
-                "color".into(),
-                "description".into(),
-            ],
+            fields: vec!["tag_name".into(), "color".into(), "description".into()],
         };
         let yaml = serde_yaml::to_string(&entity).unwrap();
         assert!(!yaml.contains("body_field"));
@@ -574,7 +574,11 @@ validate: |
         let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "tag_name");
         assert!(field.validate.is_some());
-        assert!(field.validate.as_ref().unwrap().contains("tag_name cannot be empty"));
+        assert!(field
+            .validate
+            .as_ref()
+            .unwrap()
+            .contains("tag_name cannot be empty"));
     }
 
     #[test]

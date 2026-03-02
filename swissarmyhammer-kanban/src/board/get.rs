@@ -487,8 +487,14 @@ mod tests {
             .unwrap();
 
         let tags = result["tags"].as_array().unwrap();
-        let bug_tag = tags.iter().find(|t| t["id"].as_str() == Some(&*bug_id)).unwrap();
-        let feature_tag = tags.iter().find(|t| t["id"].as_str() == Some(&*feature_id)).unwrap();
+        let bug_tag = tags
+            .iter()
+            .find(|t| t["id"].as_str() == Some(&*bug_id))
+            .unwrap();
+        let feature_tag = tags
+            .iter()
+            .find(|t| t["id"].as_str() == Some(&*feature_id))
+            .unwrap();
 
         assert_eq!(bug_tag["task_count"], 2);
         assert_eq!(bug_tag["description"], "Something isn't working");

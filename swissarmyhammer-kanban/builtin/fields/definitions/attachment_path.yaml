@@ -1,0 +1,8 @@
+id: "0000000000000000000000000N"
+name: attachment_path
+description: File path to attachment content
+type:
+  kind: text
+  single_line: true
+editor: none
+display: text

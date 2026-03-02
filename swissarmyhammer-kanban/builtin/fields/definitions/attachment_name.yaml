@@ -1,0 +1,9 @@
+id: "0000000000000000000000000M"
+name: attachment_name
+description: Attachment display name
+type:
+  kind: text
+  single_line: true
+editor: markdown
+display: text
+sort: alphanumeric

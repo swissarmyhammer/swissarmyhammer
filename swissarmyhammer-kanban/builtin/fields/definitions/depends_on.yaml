@@ -1,0 +1,10 @@
+id: "00000000000000000000000007"
+name: depends_on
+description: Task dependencies
+type:
+  kind: reference
+  entity: task
+  multiple: true
+editor: multi-select
+display: badge-list
+filter: substring

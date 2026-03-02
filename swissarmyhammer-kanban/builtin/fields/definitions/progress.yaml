@@ -1,0 +1,8 @@
+id: "0000000000000000000000000T"
+name: progress
+description: Progress derived from GFM task lists in body
+type:
+  kind: computed
+  derive: parse-body-progress
+editor: none
+display: number

@@ -38,12 +38,12 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
             let mut task = ctx.read_task(&self.id).await?;
 
             // Get terminal column (highest order = done)
-            let terminal = ctx
-                .terminal_column()
-                .await?
-                .ok_or_else(|| KanbanError::ColumnNotFound {
-                    id: "done".to_string(),
-                })?;
+            let terminal =
+                ctx.terminal_column()
+                    .await?
+                    .ok_or_else(|| KanbanError::ColumnNotFound {
+                        id: "done".to_string(),
+                    })?;
 
             // Calculate ordinal at end of done column
             let task_ids = ctx.list_task_ids().await?;

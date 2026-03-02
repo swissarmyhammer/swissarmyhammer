@@ -1,0 +1,9 @@
+id: "0000000000000000000000000S"
+name: attachments
+description: Attached files
+type:
+  kind: reference
+  entity: attachment
+  multiple: true
+editor: multi-select
+display: badge-list

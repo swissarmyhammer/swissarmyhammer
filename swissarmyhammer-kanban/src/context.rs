@@ -533,7 +533,11 @@ impl KanbanContext {
     /// Check if an actor exists (checks .yaml and legacy .json)
     pub async fn actor_exists(&self, id: &ActorId) -> bool {
         self.actor_path(id).exists()
-            || self.root.join("actors").join(format!("{}.json", id)).exists()
+            || self
+                .root
+                .join("actors")
+                .join(format!("{}.json", id))
+                .exists()
     }
 
     // =========================================================================
@@ -632,8 +636,7 @@ impl KanbanContext {
 
     /// Check if a tag exists by ULID (checks .yaml and legacy .json)
     pub async fn tag_exists(&self, id: &TagId) -> bool {
-        self.tag_path(id).exists()
-            || self.root.join("tags").join(format!("{}.json", id)).exists()
+        self.tag_path(id).exists() || self.root.join("tags").join(format!("{}.json", id)).exists()
     }
 
     /// Find a tag by its human-readable name (slug).
@@ -746,7 +749,11 @@ impl KanbanContext {
     /// Check if a column exists (checks .yaml and legacy .json)
     pub async fn column_exists(&self, id: &ColumnId) -> bool {
         self.column_path(id).exists()
-            || self.root.join("columns").join(format!("{}.json", id)).exists()
+            || self
+                .root
+                .join("columns")
+                .join(format!("{}.json", id))
+                .exists()
     }
 
     // =========================================================================
@@ -1385,7 +1392,10 @@ mod tests {
         ctx.write_column(&column).await.unwrap();
 
         // Read
-        let loaded = ctx.read_column(&ColumnId::from_string("todo")).await.unwrap();
+        let loaded = ctx
+            .read_column(&ColumnId::from_string("todo"))
+            .await
+            .unwrap();
         assert_eq!(loaded.name, "To Do");
         assert_eq!(loaded.order, 0);
 
@@ -1399,7 +1409,9 @@ mod tests {
         assert_eq!(all.len(), 1);
 
         // Delete
-        ctx.delete_column_file(&ColumnId::from_string("todo")).await.unwrap();
+        ctx.delete_column_file(&ColumnId::from_string("todo"))
+            .await
+            .unwrap();
         let ids = ctx.list_column_ids().await.unwrap();
         assert!(ids.is_empty());
     }
@@ -1418,7 +1430,10 @@ mod tests {
         ctx.write_swimlane(&swimlane).await.unwrap();
 
         // Read
-        let loaded = ctx.read_swimlane(&SwimlaneId::from_string("backend")).await.unwrap();
+        let loaded = ctx
+            .read_swimlane(&SwimlaneId::from_string("backend"))
+            .await
+            .unwrap();
         assert_eq!(loaded.name, "Backend");
 
         // List
@@ -1430,7 +1445,9 @@ mod tests {
         assert_eq!(all.len(), 1);
 
         // Delete
-        ctx.delete_swimlane_file(&SwimlaneId::from_string("backend")).await.unwrap();
+        ctx.delete_swimlane_file(&SwimlaneId::from_string("backend"))
+            .await
+            .unwrap();
         let ids = ctx.list_swimlane_ids().await.unwrap();
         assert!(ids.is_empty());
     }
@@ -1447,7 +1464,9 @@ mod tests {
     async fn test_swimlane_not_found() {
         let (_temp, ctx) = setup().await;
 
-        let result = ctx.read_swimlane(&SwimlaneId::from_string("nonexistent")).await;
+        let result = ctx
+            .read_swimlane(&SwimlaneId::from_string("nonexistent"))
+            .await;
         assert!(result.is_err());
     }
 

@@ -1,0 +1,14 @@
+id: "00000000000000000000000009"
+name: tag_name
+description: Tag identifier
+type:
+  kind: text
+  single_line: true
+editor: markdown
+display: text
+sort: alphanumeric
+validate: |
+  const { value } = ctx;
+  let v = value.trim().replace(/ +/g, "_").replace(/\0/g, "");
+  if (v.length === 0) throw new Error("tag_name cannot be empty");
+  return v;

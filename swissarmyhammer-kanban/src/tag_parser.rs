@@ -26,8 +26,7 @@ pub fn parse_tags(text: &str) -> Vec<String> {
         }
 
         // Skip headings (lines starting with #)
-        if trimmed.starts_with('#') && trimmed.chars().nth(1).is_none_or(|c| c == '#' || c == ' ')
-        {
+        if trimmed.starts_with('#') && trimmed.chars().nth(1).is_none_or(|c| c == '#' || c == ' ') {
             continue;
         }
 
@@ -57,10 +56,7 @@ pub fn parse_tags(text: &str) -> Vec<String> {
                 if preceded_ok {
                     let start = i + 1;
                     let mut end = start;
-                    while end < len
-                        && bytes[end] != b'#'
-                        && !bytes[end].is_ascii_whitespace()
-                    {
+                    while end < len && bytes[end] != b'#' && !bytes[end].is_ascii_whitespace() {
                         end += 1;
                     }
                     if end > start {
@@ -156,9 +152,8 @@ pub fn remove_tag(text: &str, slug: &str) -> String {
                 if preceded_ok && line[i..].starts_with(&pattern) {
                     let after = i + pattern.len();
                     // Ensure the match ends at a boundary (whitespace, #, or end)
-                    let at_boundary = after >= len
-                        || bytes[after] == b'#'
-                        || bytes[after].is_ascii_whitespace();
+                    let at_boundary =
+                        after >= len || bytes[after] == b'#' || bytes[after].is_ascii_whitespace();
                     if at_boundary {
                         // Skip the tag and any trailing space
                         i = after;
@@ -240,9 +235,8 @@ pub fn rename_tag(text: &str, old_slug: &str, new_slug: &str) -> String {
                 if preceded_ok && line[i..].starts_with(&old_pattern) {
                     let after = i + old_pattern.len();
                     // Boundary: whitespace, #, or end of line
-                    let at_boundary = after >= len
-                        || bytes[after] == b'#'
-                        || bytes[after].is_ascii_whitespace();
+                    let at_boundary =
+                        after >= len || bytes[after] == b'#' || bytes[after].is_ascii_whitespace();
                     if at_boundary {
                         result.push_str(&new_pattern);
                         i = after;
@@ -381,10 +375,7 @@ mod tests {
 
     #[test]
     fn test_remove_tag_not_present() {
-        assert_eq!(
-            remove_tag("no tags here", "bug"),
-            "no tags here"
-        );
+        assert_eq!(remove_tag("no tags here", "bug"), "no tags here");
     }
 
     #[test]
@@ -405,7 +396,10 @@ mod tests {
     #[test]
     fn test_rename_tag_preserves_code() {
         let input = "#old outside `#old` inside";
-        assert_eq!(rename_tag(input, "old", "new"), "#new outside `#old` inside");
+        assert_eq!(
+            rename_tag(input, "old", "new"),
+            "#new outside `#old` inside"
+        );
     }
 
     #[test]

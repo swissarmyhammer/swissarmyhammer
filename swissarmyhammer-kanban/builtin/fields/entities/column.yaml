@@ -1,0 +1,4 @@
+name: column
+fields:
+  - name
+  - order

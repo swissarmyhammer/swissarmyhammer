@@ -316,8 +316,7 @@ mod tests {
 
     #[test]
     fn test_task_tags_computed_from_description() {
-        let task = Task::new("Test", test_position())
-            .with_description("Fix the #bug in #login");
+        let task = Task::new("Test", test_position()).with_description("Fix the #bug in #login");
         let tags = task.tags();
         assert_eq!(tags.len(), 2);
         assert!(tags.iter().any(|t| t == "bug"));

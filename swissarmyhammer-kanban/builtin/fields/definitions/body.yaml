@@ -1,0 +1,8 @@
+id: "00000000000000000000000008"
+name: body
+description: Task body content
+type:
+  kind: markdown
+  single_line: false
+editor: markdown
+display: markdown

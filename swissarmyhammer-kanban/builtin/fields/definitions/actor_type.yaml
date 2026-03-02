@@ -1,0 +1,12 @@
+id: "0000000000000000000000000G"
+name: actor_type
+description: Whether this actor is human or agent
+type:
+  kind: select
+  options:
+    - value: human
+      order: 0
+    - value: agent
+      order: 1
+editor: select
+display: badge

@@ -1,0 +1,9 @@
+id: "00000000000000000000000004"
+name: tags
+description: Tags derived from #tag patterns in body
+type:
+  kind: computed
+  derive: parse-body-tags
+editor: none
+display: badge-list
+filter: substring

@@ -1,0 +1,7 @@
+id: "0000000000000000000000000A"
+name: color
+description: Display color
+type:
+  kind: color
+editor: color-palette
+display: color-swatch

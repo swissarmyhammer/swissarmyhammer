@@ -104,14 +104,12 @@ impl ValidationEngine {
             validate_body = validate_fn.trim(),
         );
 
-        let result = self
-            .js
-            .get(&js_code)
-            .await
-            .map_err(|e| crate::error::FieldsError::ValidationFailed {
+        let result = self.js.get(&js_code).await.map_err(|e| {
+            crate::error::FieldsError::ValidationFailed {
                 field: field_name.to_string(),
                 message: e,
-            })?;
+            }
+        })?;
 
         Ok(result)
     }
@@ -206,10 +204,7 @@ mod tests {
         }
 
         async fn list(&self, entity_type: &str) -> Vec<serde_json::Value> {
-            self.entities
-                .get(entity_type)
-                .cloned()
-                .unwrap_or_default()
+            self.entities.get(entity_type).cloned().unwrap_or_default()
         }
     }
 
@@ -296,10 +291,7 @@ mod tests {
         let value = serde_json::json!(["task_001", "task_002", "task_003"]);
         let result = engine.validate(&field, value, &HashMap::new()).await;
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            serde_json::json!(["task_001", "task_003"])
-        );
+        assert_eq!(result.unwrap(), serde_json::json!(["task_001", "task_003"]));
     }
 
     #[tokio::test]
@@ -346,7 +338,9 @@ mod tests {
         );
 
         let value = serde_json::json!(["task_001", "task_002"]);
-        let result = engine.validate(&field, value.clone(), &HashMap::new()).await;
+        let result = engine
+            .validate(&field, value.clone(), &HashMap::new())
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), value);
     }
@@ -415,7 +409,9 @@ mod tests {
         );
 
         let value = serde_json::json!(["any", "ids", "pass"]);
-        let result = engine.validate(&field, value.clone(), &HashMap::new()).await;
+        let result = engine
+            .validate(&field, value.clone(), &HashMap::new())
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), value);
     }

@@ -603,7 +603,11 @@ mod tests {
     #[test]
     fn kanban_defaults_entity_names() {
         let defaults = kanban_defaults();
-        let names: Vec<&str> = defaults.entities().iter().map(|e| e.name.as_str()).collect();
+        let names: Vec<&str> = defaults
+            .entities()
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
 
         assert!(names.contains(&"task"));
         assert!(names.contains(&"tag"));
@@ -642,5 +646,192 @@ mod tests {
         deduped.sort();
         deduped.dedup();
         assert_eq!(ids.len(), deduped.len(), "duplicate ULIDs in defaults");
+    }
+
+    #[test]
+    fn builtin_field_yamls_parse() {
+        use swissarmyhammer_fields::FieldDef;
+
+        let builtin_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("builtin/fields/definitions");
+        assert!(
+            builtin_dir.is_dir(),
+            "builtin/fields/definitions/ directory must exist"
+        );
+
+        let mut count = 0;
+        for entry in std::fs::read_dir(&builtin_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).unwrap();
+            let result: Result<FieldDef, _> = serde_yaml::from_str(&content);
+            assert!(
+                result.is_ok(),
+                "Failed to parse {}: {}",
+                path.display(),
+                result.unwrap_err()
+            );
+            count += 1;
+        }
+        assert_eq!(count, 24, "expected 24 builtin field definitions");
+    }
+
+    #[test]
+    fn builtin_entity_yamls_parse() {
+        use swissarmyhammer_fields::EntityDef;
+
+        let builtin_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("builtin/fields/entities");
+        assert!(
+            builtin_dir.is_dir(),
+            "builtin/fields/entities/ directory must exist"
+        );
+
+        let mut count = 0;
+        for entry in std::fs::read_dir(&builtin_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).unwrap();
+            let result: Result<EntityDef, _> = serde_yaml::from_str(&content);
+            assert!(
+                result.is_ok(),
+                "Failed to parse {}: {}",
+                path.display(),
+                result.unwrap_err()
+            );
+            count += 1;
+        }
+        assert_eq!(count, 7, "expected 7 builtin entity definitions");
+    }
+
+    #[test]
+    fn builtin_field_ulids_are_unique() {
+        use swissarmyhammer_fields::FieldDef;
+
+        let builtin_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("builtin/fields/definitions");
+
+        let mut ids = Vec::new();
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(&builtin_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).unwrap();
+            let def: FieldDef = serde_yaml::from_str(&content).unwrap();
+            ids.push(def.id);
+            names.push(def.name.clone());
+        }
+        let mut id_deduped = ids.clone();
+        id_deduped.sort();
+        id_deduped.dedup();
+        assert_eq!(
+            ids.len(),
+            id_deduped.len(),
+            "duplicate ULIDs in builtin fields"
+        );
+
+        names.sort();
+        let orig_len = names.len();
+        names.dedup();
+        assert_eq!(orig_len, names.len(), "duplicate names in builtin fields");
+    }
+
+    #[test]
+    fn builtin_task_entity_has_expected_fields() {
+        use swissarmyhammer_fields::EntityDef;
+
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("builtin/fields/entities/task.yaml");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let entity: EntityDef = serde_yaml::from_str(&content).unwrap();
+
+        assert_eq!(entity.name, "task");
+        assert_eq!(entity.body_field, Some("body".into()));
+        assert!(entity.fields.contains(&"title".to_string()));
+        assert!(entity.fields.contains(&"position_column".to_string()));
+        assert!(entity.fields.contains(&"position_swimlane".to_string()));
+        assert!(entity.fields.contains(&"position_ordinal".to_string()));
+        assert!(entity.fields.contains(&"attachments".to_string()));
+        assert!(entity.fields.contains(&"progress".to_string()));
+    }
+
+    #[test]
+    fn builtin_board_entity_exists() {
+        use swissarmyhammer_fields::EntityDef;
+
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("builtin/fields/entities/board.yaml");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let entity: EntityDef = serde_yaml::from_str(&content).unwrap();
+
+        assert_eq!(entity.name, "board");
+        assert!(entity.fields.contains(&"name".to_string()));
+        assert!(entity.fields.contains(&"description".to_string()));
+    }
+
+    #[test]
+    fn builtin_attachment_entity_exists() {
+        use swissarmyhammer_fields::EntityDef;
+
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("builtin/fields/entities/attachment.yaml");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let entity: EntityDef = serde_yaml::from_str(&content).unwrap();
+
+        assert_eq!(entity.name, "attachment");
+        assert!(entity.fields.contains(&"attachment_name".to_string()));
+        assert!(entity.fields.contains(&"attachment_path".to_string()));
+        assert!(entity.fields.contains(&"attachment_mime_type".to_string()));
+        assert!(entity.fields.contains(&"attachment_size".to_string()));
+        assert!(entity.fields.contains(&"attachment_task".to_string()));
+    }
+
+    #[test]
+    fn builtin_entity_fields_reference_existing_field_defs() {
+        use swissarmyhammer_fields::{EntityDef, FieldDef};
+
+        let defs_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("builtin/fields/definitions");
+        let entities_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("builtin/fields/entities");
+
+        let mut field_names: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&defs_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).unwrap();
+            let def: FieldDef = serde_yaml::from_str(&content).unwrap();
+            field_names.push(def.name);
+        }
+
+        for entry in std::fs::read_dir(&entities_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).unwrap();
+            let entity: EntityDef = serde_yaml::from_str(&content).unwrap();
+            for field_ref in &entity.fields {
+                assert!(
+                    field_names.contains(field_ref),
+                    "Entity '{}' references field '{}' which has no builtin definition",
+                    entity.name,
+                    field_ref
+                );
+            }
+        }
     }
 }

@@ -1,0 +1,9 @@
+id: "0000000000000000000000000F"
+name: order
+description: Sort position
+type:
+  kind: number
+  min: 0.0
+editor: number
+display: number
+sort: numeric

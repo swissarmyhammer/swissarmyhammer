@@ -1,0 +1,9 @@
+id: "0000000000000000000000000K"
+name: position_ordinal
+description: Fractional index for ordering within a column
+type:
+  kind: text
+  single_line: true
+editor: none
+display: text
+sort: alphanumeric

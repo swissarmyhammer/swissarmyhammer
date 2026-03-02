@@ -17,18 +17,16 @@ use tauri::{AppHandle, State, Window};
 
 /// Get the board metadata for the active (or specified) board.
 #[tauri::command]
-pub async fn get_board(
-    state: State<'_, AppState>,
-    path: Option<String>,
-) -> Result<Value, String> {
+pub async fn get_board(state: State<'_, AppState>, path: Option<String>) -> Result<Value, String> {
     let handle = if let Some(p) = path {
         let canonical = PathBuf::from(&p)
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from(&p));
         let boards = state.boards.read().await;
-        boards.get(&canonical).cloned().ok_or_else(|| {
-            format!("Board not open: {}", p)
-        })?
+        boards
+            .get(&canonical)
+            .cloned()
+            .ok_or_else(|| format!("Board not open: {}", p))?
     } else {
         state.active_handle().await.ok_or("No active board")?
     };
@@ -44,18 +42,16 @@ pub async fn get_board(
 
 /// List tasks for the active (or specified) board.
 #[tauri::command]
-pub async fn list_tasks(
-    state: State<'_, AppState>,
-    path: Option<String>,
-) -> Result<Value, String> {
+pub async fn list_tasks(state: State<'_, AppState>, path: Option<String>) -> Result<Value, String> {
     let handle = if let Some(p) = path {
         let canonical = PathBuf::from(&p)
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from(&p));
         let boards = state.boards.read().await;
-        boards.get(&canonical).cloned().ok_or_else(|| {
-            format!("Board not open: {}", p)
-        })?
+        boards
+            .get(&canonical)
+            .cloned()
+            .ok_or_else(|| format!("Board not open: {}", p))?
     } else {
         state.active_handle().await.ok_or("No active board")?
     };
@@ -71,14 +67,14 @@ pub async fn list_tasks(
 
 /// Open a board at the given path, resolving to its .kanban directory.
 #[tauri::command]
-pub async fn open_board(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<Value, String> {
+pub async fn open_board(state: State<'_, AppState>, path: String) -> Result<Value, String> {
     let canonical = state.open_board(&PathBuf::from(&path)).await?;
 
     // Return the board data
-    let handle = state.active_handle().await.ok_or("Failed to get board after open")?;
+    let handle = state
+        .active_handle()
+        .await
+        .ok_or("Failed to get board after open")?;
     let board = handle
         .processor
         .process(&GetBoard::default(), &handle.ctx)
@@ -93,9 +89,7 @@ pub async fn open_board(
 
 /// List all currently open boards.
 #[tauri::command]
-pub async fn list_open_boards(
-    state: State<'_, AppState>,
-) -> Result<Value, String> {
+pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
     let boards = state.boards.read().await;
     let active = state.active_board.read().await;
 
@@ -115,10 +109,7 @@ pub async fn list_open_boards(
 
 /// Set the active board to the specified path.
 #[tauri::command]
-pub async fn set_active_board(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<Value, String> {
+pub async fn set_active_board(state: State<'_, AppState>, path: String) -> Result<Value, String> {
     let canonical = PathBuf::from(&path)
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(&path));
@@ -295,7 +286,8 @@ pub async fn show_tag_context_menu(
         .build()
         .map_err(|e| e.to_string())?;
 
-    menu.popup(window).map_err(|e: tauri::Error| e.to_string())?;
+    menu.popup(window)
+        .map_err(|e: tauri::Error| e.to_string())?;
 
     Ok(())
 }
@@ -348,18 +340,14 @@ pub struct ColumnOrder {
 
 /// Get the MRU list of recently opened boards.
 #[tauri::command]
-pub async fn get_recent_boards(
-    state: State<'_, AppState>,
-) -> Result<Value, String> {
+pub async fn get_recent_boards(state: State<'_, AppState>) -> Result<Value, String> {
     let config = state.config.read().await;
     serde_json::to_value(&config.recent_boards).map_err(|e| e.to_string())
 }
 
 /// Get the current editor keymap mode.
 #[tauri::command]
-pub async fn get_keymap_mode(
-    state: State<'_, AppState>,
-) -> Result<String, String> {
+pub async fn get_keymap_mode(state: State<'_, AppState>) -> Result<String, String> {
     let config = state.config.read().await;
     Ok(config.keymap_mode.clone())
 }
