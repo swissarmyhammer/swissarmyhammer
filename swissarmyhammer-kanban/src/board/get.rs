@@ -3,6 +3,7 @@
 use crate::column::column_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::swimlane::swimlane_entity_to_json;
 use crate::task_helpers::{task_is_ready, task_tags};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -44,7 +45,10 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             all_columns.sort_by_key(|c| {
                 c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
             });
-            let all_swimlanes = ctx.read_all_swimlanes().await?;
+            let mut all_swimlanes = ectx.list("swimlane").await?;
+            all_swimlanes.sort_by_key(|s| {
+                s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
+            });
 
             // If counts are not requested, return basic board structure
             if !self.include_counts {
@@ -53,7 +57,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                     all_columns.iter().map(column_entity_to_json).collect();
                 let swimlanes_json: Vec<Value> = all_swimlanes
                     .iter()
-                    .map(|s| json!({"id": s.id, "name": s.name, "order": s.order}))
+                    .map(swimlane_entity_to_json)
                     .collect();
                 let tags_json: Vec<Value> = tags
                     .iter()
@@ -133,8 +137,8 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
 
                     json!({
                         "id": sl.id,
-                        "name": sl.name,
-                        "order": sl.order,
+                        "name": sl.get_str("name").unwrap_or(""),
+                        "order": sl.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
                         "task_count": count
                     })
                 })

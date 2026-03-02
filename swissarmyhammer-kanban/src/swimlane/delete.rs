@@ -34,19 +34,20 @@ impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
+            let ectx = ctx.entity_context().await?;
+
             // Check swimlane exists
-            if !ctx.swimlane_exists(&self.id).await {
-                return Err(KanbanError::SwimlaneNotFound {
+            ectx.read("swimlane", self.id.as_str()).await.map_err(|_| {
+                KanbanError::SwimlaneNotFound {
                     id: self.id.to_string(),
-                });
-            }
+                }
+            })?;
 
             // Check for tasks in this swimlane
-            #[allow(deprecated)]
-            let tasks = ctx.read_all_tasks().await?;
+            let tasks = ectx.list("task").await?;
             let task_count = tasks
                 .iter()
-                .filter(|t| t.position.swimlane.as_ref() == Some(&self.id))
+                .filter(|t| t.get_str("position_swimlane") == Some(self.id.as_str()))
                 .count();
 
             if task_count > 0 {
@@ -56,7 +57,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
                 });
             }
 
-            ctx.delete_swimlane_file(&self.id).await?;
+            ectx.delete("swimlane", self.id.as_str()).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,

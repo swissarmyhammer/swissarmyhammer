@@ -97,21 +97,19 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
 
             // Auto-create swimlane if it doesn't exist
             if let Some(ref swimlane_id) = self.position.swimlane {
-                if !ctx.swimlane_exists(swimlane_id).await {
-                    let swimlanes = ctx.read_all_swimlanes().await?;
+                if ectx.read("swimlane", swimlane_id.as_str()).await.is_err() {
+                    let swimlanes = ectx.list("swimlane").await?;
                     let order = swimlanes
                         .iter()
-                        .map(|s| s.order)
+                        .filter_map(|s| s.get("order").and_then(|v| v.as_u64()))
                         .max()
-                        .map(|o| o + 1)
+                        .map(|o| o as usize + 1)
                         .unwrap_or(0);
                     let name = slug_to_name(swimlane_id.as_str());
-                    ctx.write_swimlane(&crate::types::Swimlane {
-                        id: swimlane_id.clone(),
-                        name,
-                        order,
-                    })
-                    .await?;
+                    let mut sl_entity = Entity::new("swimlane", swimlane_id.as_str());
+                    sl_entity.set("name", json!(name));
+                    sl_entity.set("order", json!(order));
+                    ectx.write(&sl_entity).await?;
                 }
             }
 

@@ -175,14 +175,11 @@ impl EntityLookup for KanbanLookup {
                 }
             }
             "swimlane" => {
-                let sl_id = crate::types::SwimlaneId::from_string(id);
-                ctx.read_swimlane(&sl_id).await.ok().map(|s| {
-                    let mut v = serde_json::to_value(&s).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id.to_string()));
-                    }
-                    v
-                })
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.read("swimlane", id).await.ok().map(|e| e.to_json())
+                } else {
+                    None
+                }
             }
             _ => None,
         }
@@ -246,20 +243,18 @@ impl EntityLookup for KanbanLookup {
                     Vec::new()
                 }
             }
-            "swimlane" => ctx
-                .read_all_swimlanes()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|s| {
-                    let id = s.id.to_string();
-                    let mut v = serde_json::to_value(&s).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id));
-                    }
-                    v
-                })
-                .collect(),
+            "swimlane" => {
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.list("swimlane")
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|e| e.to_json())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
             _ => Vec::new(),
         }
     }

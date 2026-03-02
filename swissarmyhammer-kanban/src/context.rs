@@ -269,6 +269,7 @@ impl KanbanContext {
                     self.write_column(column).await?;
                 }
             }
+            #[allow(deprecated)]
             for swimlane in &board.swimlanes {
                 if !self.swimlane_exists(&swimlane.id).await {
                     self.write_swimlane(swimlane).await?;
@@ -336,6 +337,8 @@ impl KanbanContext {
     }
 
     /// Find a swimlane by ID from file-based storage
+    #[deprecated(note = "use entity_context().read(\"swimlane\", id) instead")]
+    #[allow(deprecated)]
     pub async fn find_swimlane(&self, id: &SwimlaneId) -> Result<Option<Swimlane>> {
         match self.read_swimlane(id).await {
             Ok(sl) => Ok(Some(sl)),
@@ -767,50 +770,36 @@ impl KanbanContext {
     // Swimlane I/O
     // =========================================================================
 
-    /// Read a swimlane file (YAML, with JSON fallback)
+    /// Read a swimlane file (YAML)
+    #[deprecated(note = "use entity_context().read(\"swimlane\", id) instead")]
     pub async fn read_swimlane(&self, id: &SwimlaneId) -> Result<Swimlane> {
-        let yaml_path = self.swimlane_path(id); // .yaml
-        let path = if yaml_path.exists() {
-            yaml_path
-        } else {
-            let json_path = self.root.join("swimlanes").join(format!("{}.json", id));
-            if !json_path.exists() {
-                return Err(KanbanError::SwimlaneNotFound { id: id.to_string() });
-            }
-            json_path
-        };
-
-        let content = fs::read_to_string(&path).await?;
-        let mut swimlane: Swimlane = serde_yaml::from_str(&content)?;
-        swimlane.id = id.clone();
-
-        // Auto-migrate legacy .json to .yaml
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            self.write_swimlane(&swimlane).await?;
-            let _ = fs::remove_file(&path).await;
+        let yaml_path = self.swimlane_path(id);
+        if !yaml_path.exists() {
+            return Err(KanbanError::SwimlaneNotFound { id: id.to_string() });
         }
 
+        let content = fs::read_to_string(&yaml_path).await?;
+        let mut swimlane: Swimlane = serde_yaml::from_str(&content)?;
+        swimlane.id = id.clone();
         Ok(swimlane)
     }
 
     /// Write a swimlane file as YAML (atomic write via temp file)
+    #[deprecated(note = "use entity_context().write(&entity) instead")]
     pub async fn write_swimlane(&self, swimlane: &Swimlane) -> Result<()> {
         let path = self.swimlane_path(&swimlane.id);
         let content = serde_yaml::to_string(swimlane)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete a swimlane file and its log (handles both .yaml and legacy .json)
+    /// Delete a swimlane file and its log
+    #[deprecated(note = "use entity_context().delete(\"swimlane\", id) instead")]
     pub async fn delete_swimlane_file(&self, id: &SwimlaneId) -> Result<()> {
         let yaml_path = self.swimlane_path(id);
-        let json_path = self.root.join("swimlanes").join(format!("{}.json", id));
         let log_path = self.swimlane_log_path(id);
 
         if yaml_path.exists() {
             fs::remove_file(&yaml_path).await?;
-        }
-        if json_path.exists() {
-            fs::remove_file(&json_path).await?;
         }
         if log_path.exists() {
             fs::remove_file(&log_path).await?;
@@ -819,25 +808,22 @@ impl KanbanContext {
         Ok(())
     }
 
-    /// List all swimlane IDs by reading the swimlanes directory (accepts .yaml and legacy .json)
+    /// List all swimlane IDs by reading the swimlanes directory
+    #[deprecated(note = "use entity_context().list(\"swimlane\") instead")]
     pub async fn list_swimlane_ids(&self) -> Result<Vec<SwimlaneId>> {
         let swimlanes_dir = self.swimlanes_dir();
         if !swimlanes_dir.exists() {
             return Ok(Vec::new());
         }
 
-        let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&swimlanes_dir).await?;
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            let ext = path.extension().and_then(|s| s.to_str());
-            if ext == Some("yaml") || ext == Some("json") {
+            if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    if seen.insert(stem.to_string()) {
-                        ids.push(SwimlaneId::from_string(stem));
-                    }
+                    ids.push(SwimlaneId::from_string(stem));
                 }
             }
         }
@@ -846,6 +832,8 @@ impl KanbanContext {
     }
 
     /// Read all swimlanes
+    #[deprecated(note = "use entity_context().list(\"swimlane\") instead")]
+    #[allow(deprecated)]
     pub async fn read_all_swimlanes(&self) -> Result<Vec<Swimlane>> {
         let ids = self.list_swimlane_ids().await?;
         let mut swimlanes = Vec::with_capacity(ids.len());
@@ -857,14 +845,10 @@ impl KanbanContext {
         Ok(swimlanes)
     }
 
-    /// Check if a swimlane exists (checks .yaml and legacy .json)
+    /// Check if a swimlane exists
+    #[deprecated(note = "use entity_context().read(\"swimlane\", id).is_ok() instead")]
     pub async fn swimlane_exists(&self, id: &SwimlaneId) -> bool {
         self.swimlane_path(id).exists()
-            || self
-                .root
-                .join("swimlanes")
-                .join(format!("{}.json", id))
-                .exists()
     }
 
     // =========================================================================
@@ -1106,10 +1090,12 @@ impl KanbanContext {
         }
 
         // Swimlanes
+        #[allow(deprecated)]
         let sl_ids = self.list_swimlane_ids().await?;
         for id in &sl_ids {
             let json_path = self.root.join("swimlanes").join(format!("{}.json", id));
             if json_path.exists() {
+                #[allow(deprecated)]
                 self.read_swimlane(id).await?;
                 stats.swimlanes += 1;
             }
@@ -1511,6 +1497,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_swimlane_io() {
         let (_temp, ctx) = setup().await;
 
@@ -1556,6 +1543,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_swimlane_not_found() {
         let (_temp, ctx) = setup().await;
 

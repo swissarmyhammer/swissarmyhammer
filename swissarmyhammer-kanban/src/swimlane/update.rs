@@ -2,9 +2,10 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
+use crate::swimlane::swimlane_entity_to_json;
 use crate::types::SwimlaneId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -52,19 +53,18 @@ impl Execute<KanbanContext, KanbanError> for UpdateSwimlane {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let mut swimlane = ctx.read_swimlane(&self.id).await?;
+            let ectx = ctx.entity_context().await?;
+            let mut entity = ectx.read("swimlane", self.id.as_str()).await?;
 
             if let Some(name) = &self.name {
-                swimlane.name = name.clone();
+                entity.set("name", json!(name));
             }
             if let Some(order) = self.order {
-                swimlane.order = order;
+                entity.set("order", json!(order));
             }
 
-            ctx.write_swimlane(&swimlane).await?;
-            let mut result = serde_json::to_value(&swimlane)?;
-            result["id"] = serde_json::json!(&swimlane.id);
-            Ok(result)
+            ectx.write(&entity).await?;
+            Ok(swimlane_entity_to_json(&entity))
         }
         .await;
 
