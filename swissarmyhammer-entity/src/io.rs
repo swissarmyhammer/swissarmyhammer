@@ -142,22 +142,32 @@ pub async fn read_entity_dir(
     Ok(entities)
 }
 
-/// Delete an entity's data file and optional log file.
+/// Move an entity's data file and changelog to a trash directory.
 ///
-/// Silently succeeds if files don't exist (no TOCTOU race).
-pub async fn delete_entity_files(path: &Path) -> Result<()> {
-    // Attempt removal, ignore NotFound
-    if let Err(e) = fs::remove_file(path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(EntityError::Io(e));
-        }
+/// Moves both the data file (.yaml/.md) and the changelog (.jsonl)
+/// to the corresponding trash directory, preserving the full history.
+/// Creates the trash directory if it doesn't exist.
+/// Silently succeeds if source files don't exist.
+pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
+    fs::create_dir_all(trash_dir).await?;
+
+    // Move data file
+    if path.exists() {
+        let filename = path
+            .file_name()
+            .expect("entity path must have a filename");
+        let dest = trash_dir.join(filename);
+        fs::rename(path, &dest).await?;
     }
 
+    // Move changelog
     let log_path = path.with_extension("jsonl");
-    if let Err(e) = fs::remove_file(&log_path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(EntityError::Io(e));
-        }
+    if log_path.exists() {
+        let log_filename = log_path
+            .file_name()
+            .expect("changelog path must have a filename");
+        let log_dest = trash_dir.join(log_filename);
+        fs::rename(&log_path, &log_dest).await?;
     }
 
     Ok(())
@@ -517,11 +527,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_entity_files_removes_data_and_log() {
+    async fn trash_entity_files_moves_data_and_log() {
         let dir = tempfile::tempdir().unwrap();
         let entity_def = tag_entity_def();
         let path = entity_file_path(dir.path(), "bug", &entity_def);
         let log_path = path.with_extension("jsonl");
+        let trash_dir = dir.path().join(".trash").join("tags");
 
         // Create data and log files
         let mut entity = Entity::new("tag", "bug");
@@ -532,18 +543,25 @@ mod tests {
         assert!(path.exists());
         assert!(log_path.exists());
 
-        delete_entity_files(&path).await.unwrap();
+        trash_entity_files(&path, &trash_dir).await.unwrap();
 
+        // Originals gone
         assert!(!path.exists());
         assert!(!log_path.exists());
+
+        // Moved to trash
+        assert!(trash_dir.join("bug.yaml").exists());
+        assert!(trash_dir.join("bug.jsonl").exists());
     }
 
     #[tokio::test]
-    async fn delete_entity_files_nonexistent_is_ok() {
+    async fn trash_entity_files_nonexistent_is_ok() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nonexistent.yaml");
-        // Should not error
-        delete_entity_files(&path).await.unwrap();
+        let trash_dir = dir.path().join(".trash").join("tags");
+        // Should not error — creates trash dir but nothing to move
+        trash_entity_files(&path, &trash_dir).await.unwrap();
+        assert!(trash_dir.exists());
     }
 
     #[tokio::test]

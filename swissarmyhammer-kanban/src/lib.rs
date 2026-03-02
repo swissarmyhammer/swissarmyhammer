@@ -92,6 +92,10 @@ pub use defaults::{kanban_compute_engine, KanbanLookup};
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
 
+// Re-export entity types for dynamic entity access
+pub use swissarmyhammer_entity::Entity;
+pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
+
 // Re-export commonly used types
 pub use types::{
     Actor, ActorId, Attachment, Board, Column, ColumnId, Comment, CommentId, LogEntry, Noun,

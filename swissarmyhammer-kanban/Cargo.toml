@@ -23,6 +23,7 @@ async-trait = { workspace = true }
 # Local workspace dependencies
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
+swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
 swissarmyhammer-operations = { workspace = true }
 
 include_dir = { workspace = true }

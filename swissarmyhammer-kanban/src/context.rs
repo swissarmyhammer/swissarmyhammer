@@ -12,6 +12,9 @@ use crate::types::{
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use swissarmyhammer_entity::changelog::ChangeEntry;
+use swissarmyhammer_entity::{Entity, EntityContext};
 use swissarmyhammer_fields::{load_yaml_dir, FieldsContext};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -21,7 +24,9 @@ pub struct KanbanContext {
     /// Path to the .kanban directory
     root: PathBuf,
     /// Field registry (populated via `open()`, None when created via `new()`)
-    fields: Option<FieldsContext>,
+    fields: Option<Arc<FieldsContext>>,
+    /// Entity I/O coordinator (populated via `open()`, None when created via `new()`)
+    entities: Option<EntityContext>,
 }
 
 impl KanbanContext {
@@ -33,6 +38,7 @@ impl KanbanContext {
         Self {
             root: root.into(),
             fields: None,
+            entities: None,
         }
     }
 
@@ -71,12 +77,16 @@ impl KanbanContext {
             .collect();
         all_entities.extend(local_entity_refs);
 
-        let fields = FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
-            .map_err(|e| KanbanError::FieldsError(e.to_string()))?;
+        let fields = Arc::new(
+            FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
+                .map_err(|e| KanbanError::FieldsError(e.to_string()))?,
+        );
+        let entities = EntityContext::new(&root, Arc::clone(&fields));
 
         Ok(Self {
             root,
             fields: Some(fields),
+            entities: Some(entities),
         })
     }
 
@@ -100,7 +110,7 @@ impl KanbanContext {
 
     /// Access the field registry, if initialized.
     pub fn fields(&self) -> Option<&FieldsContext> {
-        self.fields.as_ref()
+        self.fields.as_deref()
     }
 
     // =========================================================================
@@ -983,6 +993,48 @@ impl KanbanContext {
     }
 
     // =========================================================================
+    // Generic Entity I/O (delegates to EntityContext)
+    // =========================================================================
+
+    /// Get the EntityContext for generic entity operations.
+    ///
+    /// Returns an error if the context is not initialized (use `open()`).
+    pub fn entity_context(&self) -> Result<&EntityContext> {
+        self.entities.as_ref().ok_or_else(|| {
+            KanbanError::FieldsError("entity context not initialized (use open())".into())
+        })
+    }
+
+    /// Read a single entity by type and ID.
+    pub async fn read_entity_generic(&self, entity_type: &str, id: &str) -> Result<Entity> {
+        Ok(self.entity_context()?.read(entity_type, id).await?)
+    }
+
+    /// Write an entity with automatic changelog.
+    pub async fn write_entity_generic(&self, entity: &Entity) -> Result<()> {
+        Ok(self.entity_context()?.write(entity).await?)
+    }
+
+    /// Delete an entity by type and ID.
+    pub async fn delete_entity_generic(&self, entity_type: &str, id: &str) -> Result<()> {
+        Ok(self.entity_context()?.delete(entity_type, id).await?)
+    }
+
+    /// List all entities of a given type.
+    pub async fn list_entities_generic(&self, entity_type: &str) -> Result<Vec<Entity>> {
+        Ok(self.entity_context()?.list(entity_type).await?)
+    }
+
+    /// Read the changelog for an entity.
+    pub async fn read_entity_changelog(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> Result<Vec<ChangeEntry>> {
+        Ok(self.entity_context()?.read_changelog(entity_type, id).await?)
+    }
+
+    // =========================================================================
     // Locking
     // =========================================================================
 
@@ -1610,5 +1662,100 @@ type:
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
         assert_eq!(task_fields.len(), 11); // title, tags, progress, assignees, due, depends_on, body, position_column, position_swimlane, position_ordinal, attachments
+    }
+
+    // =========================================================================
+    // Generic Entity I/O tests (integration with EntityContext)
+    // =========================================================================
+
+    async fn setup_with_fields() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        ctx.create_directories().await.unwrap();
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn test_entity_context_available_after_open() {
+        let (_temp, ctx) = setup_with_fields().await;
+        assert!(ctx.entity_context().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_entity_context_unavailable_without_open() {
+        let (_temp, ctx) = setup().await; // setup() uses new(), not open()
+        assert!(ctx.entity_context().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_generic_entity_round_trip_plain_yaml() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let mut tag = swissarmyhammer_entity::Entity::new("tag", "bug");
+        tag.set("tag_name", serde_json::json!("Bug"));
+        tag.set("color", serde_json::json!("#ff0000"));
+
+        ctx.write_entity_generic(&tag).await.unwrap();
+
+        let loaded = ctx.read_entity_generic("tag", "bug").await.unwrap();
+        assert_eq!(loaded.get_str("tag_name"), Some("Bug"));
+        assert_eq!(loaded.get_str("color"), Some("#ff0000"));
+    }
+
+    #[tokio::test]
+    async fn test_generic_entity_round_trip_with_body() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let mut task = swissarmyhammer_entity::Entity::new("task", "01ABC");
+        task.set("title", serde_json::json!("Fix the bug"));
+        task.set("body", serde_json::json!("This needs fixing.\n\n- [ ] Step 1\n- [ ] Step 2"));
+
+        ctx.write_entity_generic(&task).await.unwrap();
+
+        let loaded = ctx.read_entity_generic("task", "01ABC").await.unwrap();
+        assert_eq!(loaded.get_str("title"), Some("Fix the bug"));
+        assert!(loaded.get_str("body").unwrap().contains("Step 1"));
+    }
+
+    #[tokio::test]
+    async fn test_generic_entity_list_and_delete() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let mut t1 = swissarmyhammer_entity::Entity::new("tag", "bug");
+        t1.set("tag_name", serde_json::json!("Bug"));
+        let mut t2 = swissarmyhammer_entity::Entity::new("tag", "feature");
+        t2.set("tag_name", serde_json::json!("Feature"));
+
+        ctx.write_entity_generic(&t1).await.unwrap();
+        ctx.write_entity_generic(&t2).await.unwrap();
+        assert_eq!(ctx.list_entities_generic("tag").await.unwrap().len(), 2);
+
+        ctx.delete_entity_generic("tag", "bug").await.unwrap();
+        assert_eq!(ctx.list_entities_generic("tag").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_generic_entity_changelog_on_create_and_update() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let mut tag = swissarmyhammer_entity::Entity::new("tag", "bug");
+        tag.set("tag_name", serde_json::json!("Bug"));
+        ctx.write_entity_generic(&tag).await.unwrap();
+
+        tag.set("tag_name", serde_json::json!("Bug Report"));
+        ctx.write_entity_generic(&tag).await.unwrap();
+
+        let log = ctx.read_entity_changelog("tag", "bug").await.unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].op, "create");
+        assert_eq!(log[1].op, "update");
+    }
+
+    #[tokio::test]
+    async fn test_entity_error_for_unknown_type() {
+        let (_temp, ctx) = setup_with_fields().await;
+        assert!(ctx.read_entity_generic("unicorn", "xyz").await.is_err());
     }
 }

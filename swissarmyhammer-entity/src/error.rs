@@ -24,6 +24,10 @@ pub enum EntityError {
         source: serde_yaml::Error,
     },
 
+    /// Unknown entity type (not defined in FieldsContext).
+    #[error("unknown entity type: {entity_type}")]
+    UnknownEntityType { entity_type: String },
+
     /// A text diff patch could not be parsed or applied.
     #[error("patch apply error: {0}")]
     PatchApply(String),

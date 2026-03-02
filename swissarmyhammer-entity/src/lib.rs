@@ -16,13 +16,15 @@
 //! Writes are atomic (temp file + rename).
 
 pub mod changelog;
+pub mod context;
 pub mod entity;
 pub mod error;
 pub mod io;
 
+pub use context::EntityContext;
 pub use entity::Entity;
 pub use error::{EntityError, Result};
 pub use io::{
-    delete_entity_files, entity_extension, entity_file_path, read_entity, read_entity_dir,
+    entity_extension, entity_file_path, read_entity, read_entity_dir, trash_entity_files,
     write_entity,
 };

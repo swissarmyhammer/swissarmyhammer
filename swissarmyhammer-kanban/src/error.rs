@@ -100,6 +100,10 @@ pub enum KanbanError {
     /// Field registry error
     #[error("fields error: {0}")]
     FieldsError(String),
+
+    /// Entity I/O error
+    #[error("entity error: {0}")]
+    EntityError(#[from] swissarmyhammer_entity::EntityError),
 }
 
 impl KanbanError {
