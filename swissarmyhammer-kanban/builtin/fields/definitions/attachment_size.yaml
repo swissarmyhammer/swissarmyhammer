@@ -1,9 +1,9 @@
 id: "0000000000000000000000000Q"
 name: attachment_size
-description: File size in bytes
+description: File size in bytes, derived from attachment path
 type:
-  kind: number
-  min: 0.0
+  kind: computed
+  derive: attachment-file-size
 editor: none
 display: number
 sort: numeric

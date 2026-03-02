@@ -3,5 +3,3 @@ fields:
   - tag_name
   - color
   - description
-  - usage
-  - last_used

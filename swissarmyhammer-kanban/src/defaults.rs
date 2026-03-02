@@ -676,7 +676,7 @@ mod tests {
             );
             count += 1;
         }
-        assert_eq!(count, 24, "expected 24 builtin field definitions");
+        assert_eq!(count, 21, "expected 21 builtin field definitions");
     }
 
     #[test]
@@ -792,7 +792,7 @@ mod tests {
         assert!(entity.fields.contains(&"attachment_path".to_string()));
         assert!(entity.fields.contains(&"attachment_mime_type".to_string()));
         assert!(entity.fields.contains(&"attachment_size".to_string()));
-        assert!(entity.fields.contains(&"attachment_task".to_string()));
+        assert!(!entity.fields.contains(&"attachment_task".to_string()));
     }
 
     #[test]
