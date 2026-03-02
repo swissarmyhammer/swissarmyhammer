@@ -468,50 +468,37 @@ impl KanbanContext {
     // Actor I/O
     // =========================================================================
 
-    /// Read an actor file (YAML, with JSON fallback)
+    /// Read an actor file (YAML only)
+    #[deprecated(note = "use entity_context().read(\"actor\", id) instead")]
     pub async fn read_actor(&self, id: &ActorId) -> Result<Actor> {
-        let yaml_path = self.actor_path(id); // .yaml
-        let path = if yaml_path.exists() {
-            yaml_path
-        } else {
-            let json_path = self.root.join("actors").join(format!("{}.json", id));
-            if !json_path.exists() {
-                return Err(KanbanError::ActorNotFound { id: id.to_string() });
-            }
-            json_path
-        };
+        let path = self.actor_path(id);
+        if !path.exists() {
+            return Err(KanbanError::ActorNotFound { id: id.to_string() });
+        }
 
         let content = fs::read_to_string(&path).await?;
         let mut actor: Actor = serde_yaml::from_str(&content)?;
         actor.set_id(id.clone());
 
-        // Auto-migrate legacy .json to .yaml
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            self.write_actor(&actor).await?;
-            let _ = fs::remove_file(&path).await;
-        }
-
         Ok(actor)
     }
 
     /// Write an actor file as YAML (atomic write via temp file)
+    #[deprecated(note = "use entity_context().write(&entity) instead")]
     pub async fn write_actor(&self, actor: &Actor) -> Result<()> {
         let path = self.actor_path(actor.id());
         let content = serde_yaml::to_string(actor)?;
         atomic_write(&path, content.as_bytes()).await
     }
 
-    /// Delete an actor file and its log (handles both .yaml and legacy .json)
+    /// Delete an actor file and its log
+    #[deprecated(note = "use entity_context().delete(\"actor\", id) instead")]
     pub async fn delete_actor_file(&self, id: &ActorId) -> Result<()> {
         let yaml_path = self.actor_path(id);
-        let json_path = self.root.join("actors").join(format!("{}.json", id));
         let log_path = self.actor_log_path(id);
 
         if yaml_path.exists() {
             fs::remove_file(&yaml_path).await?;
-        }
-        if json_path.exists() {
-            fs::remove_file(&json_path).await?;
         }
         if log_path.exists() {
             fs::remove_file(&log_path).await?;
@@ -521,6 +508,7 @@ impl KanbanContext {
     }
 
     /// List all actor IDs by reading the actors directory (accepts .yaml and legacy .json)
+    #[deprecated(note = "use entity_context().list(\"actor\") instead")]
     pub async fn list_actor_ids(&self) -> Result<Vec<ActorId>> {
         let actors_dir = self.actors_dir();
         if !actors_dir.exists() {
@@ -534,7 +522,7 @@ impl KanbanContext {
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             let ext = path.extension().and_then(|s| s.to_str());
-            if ext == Some("yaml") || ext == Some("json") {
+            if ext == Some("yaml") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     if seen.insert(stem.to_string()) {
                         ids.push(ActorId::from_string(stem));
@@ -547,6 +535,8 @@ impl KanbanContext {
     }
 
     /// Read all actors
+    #[deprecated(note = "use entity_context().list(\"actor\") instead")]
+    #[allow(deprecated)]
     pub async fn read_all_actors(&self) -> Result<Vec<Actor>> {
         let ids = self.list_actor_ids().await?;
         let mut actors = Vec::with_capacity(ids.len());
@@ -558,14 +548,10 @@ impl KanbanContext {
         Ok(actors)
     }
 
-    /// Check if an actor exists (checks .yaml and legacy .json)
+    /// Check if an actor exists
+    #[deprecated(note = "use entity_context().read(\"actor\", id).is_ok() instead")]
     pub async fn actor_exists(&self, id: &ActorId) -> bool {
         self.actor_path(id).exists()
-            || self
-                .root
-                .join("actors")
-                .join(format!("{}.json", id))
-                .exists()
     }
 
     // =========================================================================
@@ -1098,10 +1084,12 @@ impl KanbanContext {
         }
 
         // Actors
+        #[allow(deprecated)]
         let actor_ids = self.list_actor_ids().await?;
         for id in &actor_ids {
             let json_path = self.root.join("actors").join(format!("{}.json", id));
             if json_path.exists() {
+                #[allow(deprecated)]
                 self.read_actor(id).await?;
                 stats.actors += 1;
             }

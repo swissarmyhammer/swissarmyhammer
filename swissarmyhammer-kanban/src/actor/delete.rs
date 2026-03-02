@@ -33,16 +33,17 @@ impl Execute<KanbanContext, KanbanError> for DeleteActor {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
 
-        let result = async {
+        let result: crate::error::Result<Value> = async {
+            let ectx = ctx.entity_context().await?;
+
             // Check actor exists
-            if !ctx.actor_exists(&self.id).await {
-                return Err(KanbanError::ActorNotFound {
+            ectx.read("actor", self.id.as_str())
+                .await
+                .map_err(|_| KanbanError::ActorNotFound {
                     id: self.id.to_string(),
-                });
-            }
+                })?;
 
             // Remove actor from all task assignee lists
-            let ectx = ctx.entity_context().await?;
             let all_tasks = ectx.list("task").await?;
             for mut task in all_tasks {
                 let mut assignees = task.get_string_list("assignees");
@@ -53,8 +54,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteActor {
                 }
             }
 
-            // Delete the actor file
-            ctx.delete_actor_file(&self.id).await?;
+            // Delete the actor entity
+            ectx.delete("actor", self.id.as_str()).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,
@@ -129,7 +130,8 @@ mod tests {
         assert_eq!(result["id"], "alice");
 
         // Verify actor is gone
-        assert!(!ctx.actor_exists(&"alice".into()).await);
+        let ectx = ctx.entity_context().await.unwrap();
+        assert!(ectx.read("actor", "alice").await.is_err());
     }
 
     #[tokio::test]

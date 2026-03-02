@@ -155,14 +155,11 @@ impl EntityLookup for KanbanLookup {
                 }
             }
             "actor" => {
-                let actor_id = crate::types::ActorId::from_string(id);
-                ctx.read_actor(&actor_id).await.ok().map(|a| {
-                    let mut v = serde_json::to_value(&a).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id.to_string()));
-                    }
-                    v
-                })
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.read("actor", id).await.ok().map(|e| e.to_json())
+                } else {
+                    None
+                }
             }
             "column" => {
                 if let Ok(ectx) = ctx.entity_context().await {
@@ -212,20 +209,18 @@ impl EntityLookup for KanbanLookup {
                     Vec::new()
                 }
             }
-            "actor" => ctx
-                .read_all_actors()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|a| {
-                    let id = a.id().to_string();
-                    let mut v = serde_json::to_value(&a).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id));
-                    }
-                    v
-                })
-                .collect(),
+            "actor" => {
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.list("actor")
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|e| e.to_json())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
             "column" => {
                 if let Ok(ectx) = ctx.entity_context().await {
                     ectx.list("column")

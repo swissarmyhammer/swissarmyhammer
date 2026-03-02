@@ -43,8 +43,8 @@ impl Execute<KanbanContext, KanbanError> for AssignTask {
             let ectx = ctx.entity_context().await?;
             let mut entity = ectx.read("task", self.id.as_str()).await?;
 
-            // Verify the actor exists using file-based storage
-            if !ctx.actor_exists(&self.assignee).await {
+            // Verify the actor exists
+            if ectx.read("actor", self.assignee.as_str()).await.is_err() {
                 return Err(KanbanError::ActorNotFound {
                     id: self.assignee.to_string(),
                 });

@@ -170,7 +170,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .filter(|t| task_is_ready(t, &all_tasks, terminal_id))
                 .count();
             let blocked_tasks = total_tasks - ready_tasks;
-            let total_actors = ctx.list_actor_ids().await?.len();
+            let total_actors = ectx.list("actor").await?.len();
 
             Ok(json!({
                 "name": board.name,
