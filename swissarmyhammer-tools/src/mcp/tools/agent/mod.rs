@@ -291,7 +291,8 @@ mod tests {
         let ctx = crate::test_utils::create_test_context().await;
 
         let args: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_value(serde_json::json!({"op": "use agent", "name": "tester"})).unwrap();
+            serde_json::from_value(serde_json::json!({"op": "use agent", "name": "tester"}))
+                .unwrap();
         let result = tool.execute(args, &ctx).await;
         assert!(result.is_ok());
     }
