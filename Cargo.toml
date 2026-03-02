@@ -45,6 +45,7 @@ members = [
     "mirdan-cli",
     "swissarmyhammer-kanban-app",
     "swissarmyhammer-fields",
+    "swissarmyhammer-entity",
 ]
 resolver = "2"
 

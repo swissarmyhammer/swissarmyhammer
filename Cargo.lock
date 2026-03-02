@@ -8044,6 +8044,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-entity"
+version = "0.8.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "swissarmyhammer-fields",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-fields"
 version = "0.8.0"
 dependencies = [
