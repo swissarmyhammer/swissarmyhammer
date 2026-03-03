@@ -32,7 +32,7 @@ pub struct UpdateTask {
     pub assignees: Option<Vec<ActorId>>,
     /// Replace all dependencies
     pub depends_on: Option<Vec<TaskId>>,
-    /// Replace all attachments (JSON array)
+    /// Replace all attachment IDs (array of entity ID strings)
     pub attachments: Option<Value>,
 }
 

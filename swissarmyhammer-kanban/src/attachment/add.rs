@@ -4,10 +4,23 @@ use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
+
+/// Convert an attachment Entity to its JSON API representation.
+pub(crate) fn attachment_entity_to_json(entity: &Entity) -> Value {
+    json!({
+        "id": entity.id,
+        "name": entity.get_str("attachment_name").unwrap_or(""),
+        "path": entity.get_str("attachment_path").unwrap_or(""),
+        "mime_type": entity.get_str("attachment_mime_type"),
+        "size": entity.get("attachment_size").and_then(|v| v.as_u64()),
+        "task_id": entity.get_str("attachment_task").unwrap_or(""),
+    })
+}
 
 /// Add an attachment to an existing task
 #[operation(
@@ -140,7 +153,9 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("task", self.task_id.as_str()).await?;
+
+            // Verify the task exists
+            let mut task = ectx.read("task", self.task_id.as_str()).await?;
 
             // Auto-detect MIME type if not provided
             let mime_type = self
@@ -151,27 +166,28 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
             // Auto-detect file size if not provided
             let size = self.size.or_else(|| get_file_size(&self.path));
 
-            // Create the attachment as a JSON object
+            // Create standalone attachment entity
             let attachment_id = ulid::Ulid::new().to_string().to_lowercase();
-            let attachment = serde_json::json!({
-                "id": attachment_id,
-                "name": self.name,
-                "path": self.path,
-                "mime_type": mime_type,
-                "size": size,
-            });
+            let mut attachment = Entity::new("attachment", &attachment_id);
+            attachment.set("attachment_name", json!(self.name));
+            attachment.set("attachment_path", json!(self.path));
+            attachment.set("attachment_task", json!(self.task_id.to_string()));
+            if let Some(mime) = &mime_type {
+                attachment.set("attachment_mime_type", json!(mime));
+            }
+            if let Some(s) = size {
+                attachment.set("attachment_size", json!(s));
+            }
+            ectx.write(&attachment).await?;
 
-            // Add to the attachments array
-            let mut attachments = entity
-                .get("attachments")
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default();
-            attachments.push(attachment.clone());
-            entity.set("attachments", serde_json::json!(attachments));
-            ectx.write(&entity).await?;
+            // Add attachment ID to the task's attachments reference list
+            let mut attachment_ids = task.get_string_list("attachments");
+            attachment_ids.push(attachment_id.clone());
+            task.set("attachments", json!(attachment_ids));
+            ectx.write(&task).await?;
 
-            Ok(serde_json::json!({
-                "attachment": attachment,
+            Ok(json!({
+                "attachment": attachment_entity_to_json(&attachment),
                 "task_id": self.task_id.to_string()
             }))
         }
@@ -191,7 +207,7 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
                     log_entry: Some(LogEntry::new(
                         self.op_string(),
                         input,
-                        serde_json::json!({"error": error_msg}),
+                        json!({"error": error_msg}),
                         None,
                         duration_ms,
                     )),
@@ -228,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_attachment() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         // Create a task
         let task_result = AddTask::new("Task with attachments")
@@ -249,15 +265,21 @@ mod tests {
         assert_eq!(result["attachment"]["path"], "./docs/screenshot.png");
         assert_eq!(result["task_id"], task_id);
 
-        // Verify the task has the attachment
-        use crate::task::GetTask;
-        let task = GetTask::new(task_id)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        assert_eq!(task["attachments"].as_array().unwrap().len(), 1);
-        assert_eq!(task["attachments"][0]["name"], "screenshot.png");
+        // Verify standalone entity file was created
+        let attachment_id = result["attachment"]["id"].as_str().unwrap();
+        let attachment_file = temp
+            .path()
+            .join(".kanban")
+            .join("attachments")
+            .join(format!("{}.yaml", attachment_id));
+        assert!(attachment_file.exists(), "Attachment entity file should exist");
+
+        // Verify the task's attachments list contains the ID
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id).await.unwrap();
+        let ids = task.get_string_list("attachments");
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], attachment_id);
     }
 
     #[tokio::test]

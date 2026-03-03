@@ -15,6 +15,7 @@ use serde_json::Value;
 use swissarmyhammer_fields::EntityDef;
 use tokio::fs;
 use tracing::warn;
+use ulid::Ulid;
 
 use crate::entity::Entity;
 use crate::error::{EntityError, Result};
@@ -79,7 +80,10 @@ pub async fn read_entity(
 
 /// Write an entity to a file.
 ///
-/// Uses atomic write (temp file + rename) for safety.
+/// Uses atomic write (ULID-named temp file + rename) for safety.
+/// Each write gets a unique temp filename, so concurrent writes
+/// to the same entity won't collide. The temp file is cleaned up
+/// if the rename step fails.
 pub async fn write_entity(
     path: &Path,
     entity: &Entity,
@@ -95,11 +99,19 @@ pub async fn write_entity(
         format_plain_yaml(entity)?
     };
 
-    // Use PID in temp extension to avoid collisions with concurrent writers
-    let temp_ext = format!("tmp.{}", std::process::id());
-    let temp_path = path.with_extension(temp_ext);
+    // Use a ULID-based temp filename to avoid collisions with concurrent writers.
+    // The temp file lives in the same directory as the target for atomic rename.
+    let temp_path = path
+        .parent()
+        .expect("entity path must have a parent directory")
+        .join(format!(".tmp_{}", Ulid::new()));
     fs::write(&temp_path, content.as_bytes()).await?;
-    fs::rename(&temp_path, path).await?;
+
+    // If rename fails, clean up the temp file before propagating the error.
+    if let Err(e) = fs::rename(&temp_path, path).await {
+        let _ = fs::remove_file(&temp_path).await;
+        return Err(e.into());
+    }
 
     Ok(())
 }
@@ -620,5 +632,82 @@ mod tests {
         assert_eq!(loaded.get_string_list("assignees"), vec!["actor1", "actor2"]);
         assert_eq!(loaded.get_string_list("depends_on"), vec!["task1"]);
         assert_eq!(loaded.get_str("body"), Some("Body with #tags"));
+    }
+
+    #[tokio::test]
+    async fn write_entity_concurrent_writes_do_not_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let entity_def = tag_entity_def();
+        let path = entity_file_path(dir.path(), "shared", &entity_def);
+
+        // Spawn 10 concurrent writes to the same entity path
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let p = path.clone();
+            let def = entity_def.clone();
+            handles.push(tokio::spawn(async move {
+                let mut entity = Entity::new("tag", "shared");
+                entity.set("tag_name", Value::String(format!("variant_{i}")));
+                entity.set("color", Value::String("ff0000".into()));
+                write_entity(&p, &entity, &def).await.unwrap();
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // The file should exist and be valid (one of the writes won)
+        let loaded = read_entity(&path, "tag", "shared", &entity_def)
+            .await
+            .unwrap();
+        assert_eq!(loaded.entity_type, "tag");
+        assert_eq!(loaded.id, "shared");
+        // tag_name should be one of the variants, not corrupted
+        let tag_name = loaded.get_str("tag_name").unwrap();
+        assert!(tag_name.starts_with("variant_"), "tag_name was: {tag_name}");
+
+        // No leftover temp files should remain
+        let mut entries = fs::read_dir(dir.path()).await.unwrap();
+        let mut count = 0;
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                !name.contains("tmp"),
+                "leftover temp file found: {name}"
+            );
+            count += 1;
+        }
+        assert_eq!(count, 1, "should have exactly one entity file");
+    }
+
+    #[tokio::test]
+    async fn write_entity_cleans_up_temp_on_rename_failure() {
+        // We test cleanup indirectly: write to a path where the parent dir exists
+        // but the final target is a directory (rename will fail).
+        let dir = tempfile::tempdir().unwrap();
+        let entity_def = tag_entity_def();
+
+        // Create a directory where the entity file should be — rename onto a dir fails
+        let path = dir.path().join("blocker.yaml");
+        fs::create_dir_all(&path).await.unwrap();
+
+        let mut entity = Entity::new("tag", "blocker");
+        entity.set("tag_name", Value::String("bug".into()));
+
+        let result = write_entity(&path, &entity, &entity_def).await;
+        assert!(result.is_err(), "write should fail when target is a directory");
+
+        // No temp files should be left behind
+        let mut entries = fs::read_dir(dir.path()).await.unwrap();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name != "blocker.yaml" {
+                assert!(
+                    !name.contains("tmp"),
+                    "leftover temp file found: {name}"
+                );
+            }
+        }
     }
 }

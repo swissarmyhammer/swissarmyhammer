@@ -4,3 +4,4 @@ fields:
   - attachment_path
   - attachment_mime_type
   - attachment_size
+  - attachment_task

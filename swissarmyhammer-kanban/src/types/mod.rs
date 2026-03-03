@@ -13,4 +13,5 @@ pub use ids::{ActorId, AttachmentId, ColumnId, CommentId, LogEntryId, SwimlaneId
 pub use log::{LogEntry, OperationResult};
 pub use operation::{is_valid_operation, Noun, Operation, Verb};
 pub use position::{Ordinal, Position};
+#[allow(deprecated)]
 pub use task::{Attachment, Comment, Task};

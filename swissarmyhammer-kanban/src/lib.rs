@@ -98,7 +98,7 @@ pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
 
 // Re-export commonly used types
 pub use types::{
-    Actor, ActorId, Attachment, Board, Column, ColumnId, LogEntry, Noun,
+    Actor, ActorId, Board, Column, ColumnId, LogEntry, Noun,
     Operation as KanbanOperation, OperationResult, Ordinal, Position, Swimlane, SwimlaneId, Tag,
     TagId, Task, TaskId, Verb,
 };

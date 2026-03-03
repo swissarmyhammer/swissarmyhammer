@@ -1,10 +1,11 @@
 //! UpdateAttachment command
 
+use crate::attachment::attachment_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -71,39 +72,40 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("task", self.task_id.as_str()).await?;
 
-            let mut attachments = entity
-                .get("attachments")
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default();
+            // Read the attachment entity
+            let mut attachment =
+                ectx.read("attachment", &self.id)
+                    .await
+                    .map_err(|_| KanbanError::NotFound {
+                        resource: "attachment".to_string(),
+                        id: self.id.to_string(),
+                    })?;
 
-            // Find the attachment
-            let idx = attachments
-                .iter()
-                .position(|a| a["id"].as_str() == Some(&self.id))
-                .ok_or_else(|| KanbanError::NotFound {
+            // Verify it belongs to the specified task
+            let owner = attachment.get_str("attachment_task").unwrap_or("");
+            if owner != self.task_id.as_str() {
+                return Err(KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
-                })?;
+                });
+            }
 
             // Update only provided fields
             if let Some(name) = &self.name {
-                attachments[idx]["name"] = serde_json::json!(name);
+                attachment.set("attachment_name", json!(name));
             }
             if let Some(mime_type) = &self.mime_type {
-                attachments[idx]["mime_type"] = serde_json::json!(mime_type);
+                attachment.set("attachment_mime_type", json!(mime_type));
             }
             if let Some(size) = self.size {
-                attachments[idx]["size"] = serde_json::json!(size);
+                attachment.set("attachment_size", json!(size));
             }
 
-            let updated_attachment = attachments[idx].clone();
-            entity.set("attachments", serde_json::json!(attachments));
-            ectx.write(&entity).await?;
+            ectx.write(&attachment).await?;
 
-            Ok(serde_json::json!({
-                "attachment": updated_attachment,
+            Ok(json!({
+                "attachment": attachment_entity_to_json(&attachment),
                 "task_id": self.task_id.to_string()
             }))
         }
@@ -123,7 +125,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
                     log_entry: Some(LogEntry::new(
                         self.op_string(),
                         input,
-                        serde_json::json!({"error": error_msg}),
+                        json!({"error": error_msg}),
                         None,
                         duration_ms,
                     )),

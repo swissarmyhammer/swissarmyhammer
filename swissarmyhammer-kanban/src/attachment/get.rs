@@ -1,5 +1,6 @@
 //! GetAttachment command
 
+use crate::attachment::attachment_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::TaskId;
@@ -15,7 +16,7 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 )]
 #[derive(Debug, Deserialize)]
 pub struct GetAttachment {
-    /// The task ID
+    /// The task ID (kept for API compatibility; used to verify ownership)
     pub task_id: TaskId,
     /// The attachment ID
     pub id: String,
@@ -36,22 +37,25 @@ impl Execute<KanbanContext, KanbanError> for GetAttachment {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("task", self.task_id.as_str()).await?;
 
-            let attachments = entity
-                .get("attachments")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let attachment = attachments
-                .iter()
-                .find(|a| a["id"].as_str() == Some(&self.id))
-                .ok_or_else(|| KanbanError::NotFound {
+            // Read the attachment entity directly
+            let attachment = ectx.read("attachment", &self.id).await.map_err(|_| {
+                KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
-                })?;
+                }
+            })?;
 
-            Ok(attachment.clone())
+            // Verify it belongs to the specified task
+            let owner = attachment.get_str("attachment_task").unwrap_or("");
+            if owner != self.task_id.as_str() {
+                return Err(KanbanError::NotFound {
+                    resource: "attachment".to_string(),
+                    id: self.id.to_string(),
+                });
+            }
+
+            Ok(attachment_entity_to_json(&attachment))
         }
         .await
         {
@@ -113,6 +117,7 @@ mod tests {
         assert_eq!(result["id"], attachment_id);
         assert_eq!(result["name"], "file.txt");
         assert_eq!(result["path"], "./file.txt");
+        assert_eq!(result["task_id"], task_id);
     }
 
     #[tokio::test]

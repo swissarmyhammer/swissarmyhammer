@@ -1,4 +1,5 @@
 //! Task types: Task, Attachment (legacy typed structs, being replaced by Entity)
+#![allow(deprecated)]
 
 use super::ids::{ActorId, AttachmentId, CommentId, TaskId};
 use super::position::Position;
@@ -227,12 +228,12 @@ impl Task {
         self.comments.iter_mut().find(|c| &c.id == id)
     }
 
-    /// Find an attachment by ID
+    #[deprecated(note = "Use attachment entity CRUD instead")]
     pub fn find_attachment(&self, id: &AttachmentId) -> Option<&Attachment> {
         self.attachments.iter().find(|a| &a.id == id)
     }
 
-    /// Find an attachment by ID (mutable)
+    #[deprecated(note = "Use attachment entity CRUD instead")]
     pub fn find_attachment_mut(&mut self, id: &AttachmentId) -> Option<&mut Attachment> {
         self.attachments.iter_mut().find(|a| &a.id == id)
     }
@@ -259,6 +260,7 @@ impl Comment {
 }
 
 /// An attachment on a task
+#[deprecated(note = "Attachments are now standalone entities; use attachment entity CRUD")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Attachment {
     pub id: AttachmentId,
