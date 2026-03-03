@@ -1,8 +1,7 @@
 ---
+position_column: done
+position_ordinal: e3
 title: 'BLOCKER: reverse_unified_diff produces malformed headers'
-position:
-  column: todo
-  ordinal: b0
 ---
 `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-entity/src/changelog.rs` lines 240-253
 
