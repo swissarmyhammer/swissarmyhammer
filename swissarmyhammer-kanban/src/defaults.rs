@@ -134,112 +134,30 @@ impl KanbanLookup {
 #[async_trait]
 impl EntityLookup for KanbanLookup {
     async fn get(&self, entity_type: &str, id: &str) -> Option<serde_json::Value> {
-        let ctx = KanbanContext::new(&self.root);
-        match entity_type {
-            "task" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.read("task", id).await.ok().map(|e| e.to_json())
-                } else {
-                    None
-                }
-            }
-            "tag" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.read("tag", id).await.ok().map(|e| e.to_json())
-                } else {
-                    None
-                }
-            }
-            "actor" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.read("actor", id).await.ok().map(|e| e.to_json())
-                } else {
-                    None
-                }
-            }
-            "column" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.read("column", id).await.ok().map(|e| e.to_json())
-                } else {
-                    None
-                }
-            }
-            "swimlane" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.read("swimlane", id).await.ok().map(|e| e.to_json())
-                } else {
-                    None
-                }
-            }
-            _ => None,
+        const KNOWN_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane"];
+        if !KNOWN_TYPES.contains(&entity_type) {
+            return None;
         }
+        let ctx = KanbanContext::new(&self.root);
+        let ectx = ctx.entity_context().await.ok()?;
+        ectx.read(entity_type, id).await.ok().map(|e| e.to_json())
     }
 
     async fn list(&self, entity_type: &str) -> Vec<serde_json::Value> {
-        let ctx = KanbanContext::new(&self.root);
-        match entity_type {
-            "task" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.list("task")
-                        .await
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|e| e.to_json())
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            }
-            "tag" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.list("tag")
-                        .await
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|e| e.to_json())
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            }
-            "actor" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.list("actor")
-                        .await
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|e| e.to_json())
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            }
-            "column" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.list("column")
-                        .await
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|e| e.to_json())
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            }
-            "swimlane" => {
-                if let Ok(ectx) = ctx.entity_context().await {
-                    ectx.list("swimlane")
-                        .await
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|e| e.to_json())
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            }
-            _ => Vec::new(),
+        const KNOWN_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane"];
+        if !KNOWN_TYPES.contains(&entity_type) {
+            return Vec::new();
         }
+        let ctx = KanbanContext::new(&self.root);
+        let Ok(ectx) = ctx.entity_context().await else {
+            return Vec::new();
+        };
+        ectx.list(entity_type)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|e| e.to_json())
+            .collect()
     }
 }
 
