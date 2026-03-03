@@ -43,6 +43,8 @@ fn main() {
             commands::get_recent_boards,
             commands::get_keymap_mode,
             commands::set_keymap_mode,
+            commands::get_entity_schema,
+            commands::update_entity_field,
         ])
         .setup(|app| {
             menu::rebuild_menu(app.handle());

@@ -367,3 +367,61 @@ pub async fn set_keymap_mode(
     menu::rebuild_menu(&app);
     Ok(json!({ "keymap_mode": mode }))
 }
+
+/// Get the field+entity schema for a given entity type.
+///
+/// Returns the EntityDef plus each resolved FieldDef, serialized as JSON.
+#[tauri::command]
+pub async fn get_entity_schema(
+    state: State<'_, AppState>,
+    entity_type: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
+    let fields_ctx = ectx.fields();
+
+    let entity_def = fields_ctx
+        .get_entity(&entity_type)
+        .ok_or_else(|| format!("Unknown entity type: {}", entity_type))?;
+
+    let field_defs: Vec<Value> = fields_ctx
+        .fields_for_entity(&entity_type)
+        .iter()
+        .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
+        .collect();
+
+    Ok(json!({
+        "entity": serde_json::to_value(entity_def).map_err(|e| e.to_string())?,
+        "fields": field_defs,
+    }))
+}
+
+/// Update a single field on an entity.
+///
+/// Generic command that works with any entity type.
+#[tauri::command]
+pub async fn update_entity_field(
+    state: State<'_, AppState>,
+    entity_type: String,
+    id: String,
+    field_name: String,
+    value: Value,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
+
+    let mut entity = ectx
+        .read(&entity_type, &id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if value.is_null() {
+        entity.remove(&field_name);
+    } else {
+        entity.set(&field_name, value);
+    }
+
+    ectx.write(&entity).await.map_err(|e| e.to_string())?;
+
+    Ok(entity.to_json())
+}
