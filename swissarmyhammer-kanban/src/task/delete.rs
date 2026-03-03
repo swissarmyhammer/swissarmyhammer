@@ -59,6 +59,11 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
                 }
             }
 
+            // Delete associated attachments (moves to trash)
+            for att_id in entity.get_string_list("attachments") {
+                let _ = ectx.delete("attachment", &att_id).await;
+            }
+
             // Delete the task (moves to trash)
             ectx.delete("task", self.id.as_str()).await?;
 
@@ -105,6 +110,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attachment::AddAttachment;
     use crate::board::InitBoard;
     use crate::task::AddTask;
     use tempfile::TempDir;
@@ -181,5 +187,40 @@ mod tests {
         let ectx = ctx.entity_context().await.unwrap();
         let task2 = ectx.read("task", id2).await.unwrap();
         assert!(task2.get_string_list("depends_on").is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_task_removes_attachments() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Task with attachment")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        // Add an attachment
+        let att_result = AddAttachment::new(task_id, "file.txt", "./file.txt")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let att_id = att_result["attachment"]["id"].as_str().unwrap().to_string();
+
+        // Verify attachment exists
+        let ectx = ctx.entity_context().await.unwrap();
+        assert!(ectx.read("attachment", &att_id).await.is_ok());
+
+        // Delete the task
+        DeleteTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Verify attachment is also gone
+        let ectx = ctx.entity_context().await.unwrap();
+        assert!(ectx.read("attachment", &att_id).await.is_err());
     }
 }
