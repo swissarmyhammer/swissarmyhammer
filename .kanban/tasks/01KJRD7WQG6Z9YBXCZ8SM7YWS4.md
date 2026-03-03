@@ -1,7 +1,6 @@
 ---
+position_column: done
+position_ordinal: f9
 title: KanbanLookup task branch still uses deprecated read_task/read_all_tasks
-position:
-  column: todo
-  ordinal: c7
 ---
-**File:** `swissarmyhammer-kanban/src/defaults.rs` lines 142, 187\n\n**What:** The `KanbanLookup` implementation of `EntityLookup` still uses the deprecated `ctx.read_task()` and `ctx.read_all_tasks()` methods for the \"task\" entity type, while all other entity types (tag, actor, column, swimlane) correctly use `ctx.entity_context().await?.read()` / `.list()`. This is an inconsistency left over from the migration.\n\n**Why it matters:** The deprecated methods have different serialization behavior (they produce typed `Task` structs serialized via serde, not `Entity::to_json()`). If the legacy `read_task` path is ever removed, this code silently breaks. It also means task lookup produces different JSON shape than other entity types.\n\n**Suggestion:**\n- [ ] Replace the `read_task` call with `ctx.entity_context().await?.read(\"task\", id)` and use `task_entity_to_json()` for consistent output\n- [ ] Replace the `read_all_tasks` call with `ctx.entity_context().await?.list(\"task\")` and map through `task_entity_to_json()`\n- [ ] Remove the `#[allow(deprecated)]` annotations\n- [ ] Verify tests still pass after migration\n\n#warning #warning
+**Resolution:** Already done. The legacy read_task/read_all_tasks were removed in commit dc3fe41a, and KanbanLookup was collapsed to generic entity_context() calls in commit 83d3fc9e. All entity types now use the same unified code path.\n\n- [x] Replace read_task with entity_context().read()\n- [x] Replace read_all_tasks with entity_context().list()\n- [x] Remove #[allow(deprecated)] annotations\n- [x] Tests pass

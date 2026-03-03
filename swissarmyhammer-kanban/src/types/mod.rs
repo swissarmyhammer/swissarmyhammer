@@ -9,8 +9,8 @@ mod task;
 
 // Re-export all types
 pub use board::{Actor, Board, Column, Swimlane, Tag};
-pub use ids::{ActorId, ColumnId, CommentId, LogEntryId, SwimlaneId, TagId, TaskId};
+pub use ids::{ActorId, ColumnId, LogEntryId, SwimlaneId, TagId, TaskId};
 pub use log::{LogEntry, OperationResult};
 pub use operation::{is_valid_operation, Noun, Operation, Verb};
 pub use position::{Ordinal, Position};
-pub use task::{Comment, Task};
+pub use task::Task;
