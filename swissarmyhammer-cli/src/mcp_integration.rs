@@ -87,6 +87,7 @@ impl CliToolContext {
         Ok(Self {
             tool_registry: tool_registry_arc,
             mcp_server_handle: Some(mcp_server_handle),
+            server: None,
         })
     }
 
