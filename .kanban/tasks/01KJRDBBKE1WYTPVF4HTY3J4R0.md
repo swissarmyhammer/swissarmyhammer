@@ -1,7 +1,6 @@
 ---
+position_column: done
+position_ordinal: g4
 title: MoveTask uses Ordinal::first() as sentinel, conflating explicit a0 with auto-calculate
-position:
-  column: todo
-  ordinal: d2
 ---
-**File:** `swissarmyhammer-kanban/src/task/mv.rs` line 116\n\n**What:** `MoveTask::execute()` uses the condition `self.position.ordinal == Ordinal::first()` as a sentinel to mean \"auto-calculate ordinal (append at end)\". But `Ordinal::first()` returns the valid ordinal \"a0\". This means:\n1. `MoveTask::to_column(id, \"doing\")` creates a `Position` with `ordinal: Ordinal::first()` (= \"a0\")\n2. The execute method sees `ordinal == Ordinal::first()` and auto-calculates a new ordinal at the end\n3. If a caller explicitly passes `ordinal: Ordinal::first()` to place the task *first* in a column, the task is instead placed *last*\n\nThe same pattern exists in `CompleteTask::execute()` and `AddTask::execute()` (though AddTask uses `self.ordinal: Option<String>` correctly).\n\n**Why it matters:** It is impossible to explicitly move a task to the first position in a column using `MoveTask`. The sentinel-based detection is fragile and inverts the intended behavior.\n\n**Suggestion:**\n- [ ] Change `MoveTask.position.ordinal` to be `Option<Ordinal>` where `None` means auto-calculate\n- [ ] Or change `Position::in_column()` to use a dedicated sentinel like `Ordinal::auto()` that is not a valid display ordinal\n- [ ] Update `CompleteTask` similarly\n- [ ] Add a test that verifies `MoveTask` with an explicit \"a0\" ordinal places the task first\n\n#warning #warning
+**Done.** Replaced Position-based sentinel with explicit Option<String> ordinal field.\n\n- [x] Changed MoveTask to use flat column/swimlane/ordinal fields instead of Position\n- [x] ordinal: Option<String> where None = auto-calculate (append at end)\n- [x] Updated MCP dispatch to pass swimlane and ordinal from input\n- [x] Updated Tauri app command\n- [x] Updated CompleteTask test\n- [x] 216 tests pass, clippy clean across kanban + tools + app

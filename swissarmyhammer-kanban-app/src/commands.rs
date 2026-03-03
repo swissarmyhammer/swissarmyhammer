@@ -139,17 +139,11 @@ pub async fn move_task(
 ) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
 
-    let position = Position::new(
-        column.into(),
-        swimlane.map(|s| s.into()),
-        if ordinal.is_empty() {
-            Ordinal::first()
-        } else {
-            Ordinal::from_string(&ordinal)
-        },
-    );
-
-    let cmd = MoveTask::new(id, position);
+    let mut cmd = MoveTask::to_column(id, column);
+    cmd.swimlane = swimlane.map(|s| s.into());
+    if !ordinal.is_empty() {
+        cmd.ordinal = Some(ordinal);
+    }
     let result = handle
         .processor
         .process(&cmd, &handle.ctx)

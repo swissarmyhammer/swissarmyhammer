@@ -502,9 +502,14 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .get_string("column")
                 .ok_or_else(|| McpError::invalid_params("missing required field: column", None))?;
 
-            processor
-                .process(&MoveTask::to_column(id, column), ctx)
-                .await
+            let mut cmd = MoveTask::to_column(id, column);
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd.swimlane = Some(swimlane.into());
+            }
+            if let Some(ordinal) = op.get_string("ordinal") {
+                cmd.ordinal = Some(ordinal.to_string());
+            }
+            processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Task) => {
             let id = op

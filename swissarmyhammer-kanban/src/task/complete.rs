@@ -186,12 +186,8 @@ mod tests {
 
         // Move to doing column with swimlane
         use crate::task::MoveTask;
-        use crate::types::Position;
-        MoveTask::new(
-            task_id,
-            Position::new("doing".into(), Some("feature".into()), Ordinal::first()),
-        )
-        .execute(&ctx)
+        MoveTask::to_column_and_swimlane(task_id, "doing", "feature")
+            .execute(&ctx)
         .await
         .into_result()
         .unwrap();
