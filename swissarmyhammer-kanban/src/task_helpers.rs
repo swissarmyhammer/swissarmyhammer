@@ -1,30 +1,38 @@
 //! Task-specific logic for Entity-based tasks.
 //!
-//! These free functions replace methods that were previously on the `Task` struct.
-//! They work with `Entity` and raw field values, providing computed fields
-//! (progress, readiness, dependency graph) and JSON serialization that matches
-//! the API contract expected by the frontend.
+//! These free functions work with `Entity` and raw field values, providing
+//! computed fields (progress, readiness, dependency graph) and JSON serialization
+//! that matches the API contract expected by the frontend.
+//!
+//! Tags and progress are populated by `ComputeEngine` during `EntityContext::read()`.
+//! The functions here simply read those pre-computed fields.
 
-use crate::tag_parser;
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
 
-/// Compute tag names from `#tag` patterns in the task body.
+/// Read tag names from the entity's pre-computed `tags` field.
+///
+/// Tags are derived by `ComputeEngine` (parse-body-tags) on read.
 pub fn task_tags(entity: &Entity) -> Vec<String> {
-    let body = entity.get_str("body").unwrap_or("");
-    tag_parser::parse_tags(body)
+    entity.get_string_list("tags")
 }
 
-/// Calculate progress as fraction of completed markdown checklist items.
+/// Read progress as fraction of completed checklist items.
 ///
-/// Parses `- [ ]` (incomplete) and `- [x]`/`- [X]` (complete) from the body.
-/// Returns 0.0 if no checklist items are found.
+/// Progress is derived by `ComputeEngine` (parse-body-progress) on read.
+/// Returns 0.0 if no progress data or no checklist items.
 pub fn task_progress(entity: &Entity) -> f64 {
-    let body = entity.get_str("body").unwrap_or("");
-    let (total, completed) = parse_checklist_counts(body);
+    let Some(progress) = entity.get("progress") else {
+        return 0.0;
+    };
+    let total = progress.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
     if total == 0 {
         return 0.0;
     }
+    let completed = progress
+        .get("completed")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     completed as f64 / total as f64
 }
 
@@ -170,9 +178,36 @@ mod tests {
         e
     }
 
+    /// Make a task with pre-computed fields (as ComputeEngine would populate).
+    fn make_task_computed(
+        id: &str,
+        title: &str,
+        body: &str,
+        column: &str,
+        tags: Vec<&str>,
+        total: u32,
+        completed: u32,
+    ) -> Entity {
+        let mut e = make_task(id, title, body, column);
+        e.set(
+            "tags",
+            json!(tags),
+        );
+        let percent = if total > 0 {
+            (completed as f64 / total as f64 * 100.0).round() as u32
+        } else {
+            0
+        };
+        e.set(
+            "progress",
+            json!({"total": total, "completed": completed, "percent": percent}),
+        );
+        e
+    }
+
     #[test]
-    fn test_task_tags_from_body() {
-        let e = make_task("t1", "Test", "Fix the #bug in #login", "todo");
+    fn test_task_tags_from_computed_field() {
+        let e = make_task_computed("t1", "Test", "Fix the #bug in #login", "todo", vec!["bug", "login"], 0, 0);
         let tags = task_tags(&e);
         assert_eq!(tags.len(), 2);
         assert!(tags.contains(&"bug".to_string()));
@@ -180,20 +215,34 @@ mod tests {
     }
 
     #[test]
-    fn test_task_tags_empty_body() {
+    fn test_task_tags_empty() {
+        let e = make_task_computed("t1", "Test", "", "todo", vec![], 0, 0);
+        assert!(task_tags(&e).is_empty());
+    }
+
+    #[test]
+    fn test_task_tags_no_field() {
+        // No tags field set at all (bare entity without compute)
         let e = make_task("t1", "Test", "", "todo");
         assert!(task_tags(&e).is_empty());
     }
 
     #[test]
     fn test_task_progress() {
-        let e = make_task("t1", "Test", "- [ ] one\n- [x] two", "todo");
+        let e = make_task_computed("t1", "Test", "- [ ] one\n- [x] two", "todo", vec![], 2, 1);
         assert_eq!(task_progress(&e), 0.5);
     }
 
     #[test]
     fn test_task_progress_no_checklist() {
-        let e = make_task("t1", "Test", "No checklist here", "todo");
+        let e = make_task_computed("t1", "Test", "No checklist here", "todo", vec![], 0, 0);
+        assert_eq!(task_progress(&e), 0.0);
+    }
+
+    #[test]
+    fn test_task_progress_no_field() {
+        // No progress field at all
+        let e = make_task("t1", "Test", "", "todo");
         assert_eq!(task_progress(&e), 0.0);
     }
 
@@ -256,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_task_entity_to_json() {
-        let mut e = make_task("t1", "Test Task", "Some #bug description", "todo");
+        let mut e = make_task_computed("t1", "Test Task", "Some #bug description", "todo", vec!["bug"], 0, 0);
         e.set("position_swimlane", json!("feature"));
         e.set("position_ordinal", json!("a1"));
         e.set("assignees", json!(["alice"]));

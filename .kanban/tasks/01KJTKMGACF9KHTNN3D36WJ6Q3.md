@@ -1,0 +1,6 @@
+---
+position_column: todo
+position_ordinal: b7
+title: Hoist entity.fields.clone() out of validation loop
+---
+**File:** `swissarmyhammer-entity/src/context.rs:273-285`\n\nIn `apply_validation()`, `entity.fields.clone()` is called on every iteration of the validation loop (line 276). For an entity with N validated fields, the entire `HashMap<String, Value>` is cloned N times, making this O(N*M) where M is the total number of fields.\n\n**Why it matters:** While kanban entities currently have ~11 fields, this is library code in `swissarmyhammer-entity` that could be used with larger entity schemas. The clone is needed because `engine.validate()` takes `&HashMap`, but it can be hoisted before the loop since validated values are set back *after* the validate call and the engine does not observe the mutation.\n\n**Fix:** Clone `entity.fields` once before the loop and pass the snapshot to each `validate()` call. Only update `entity` after each validation.\n\n**Subtasks:**\n- [ ] Move `let siblings = entity.fields.clone()` before the for loop\n- [ ] Verify tests still pass: `cargo nextest run -p swissarmyhammer-entity`" #review-finding #warning

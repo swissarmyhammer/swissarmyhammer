@@ -1,6 +1,6 @@
 //! Kanban operation processor
 
-use crate::types::Board;
+use crate::types::default_column_entities;
 use crate::{KanbanContext, KanbanError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -47,7 +47,7 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
             let mut board_entity = swissarmyhammer_entity::Entity::new("board", "board");
             board_entity.set("name", serde_json::json!("Untitled Board"));
             ectx.write(&board_entity).await?;
-            for entity in &Board::default_column_entities() {
+            for entity in &default_column_entities() {
                 ectx.write(entity).await?;
             }
         }

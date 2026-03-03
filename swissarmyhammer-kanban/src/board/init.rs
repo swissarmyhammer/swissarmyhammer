@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::Board;
+use crate::types::default_column_entities;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
@@ -67,7 +67,7 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             ectx.write(&board_entity).await?;
 
             // Write default columns as entities
-            let default_cols = Board::default_column_entities();
+            let default_cols = default_column_entities();
             let mut columns_json: Vec<Value> = Vec::new();
             for entity in &default_cols {
                 ectx.write(entity).await?;

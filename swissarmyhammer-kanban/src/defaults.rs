@@ -8,12 +8,13 @@
 //! enabling reference field validation to prune dangling IDs.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use include_dir::{include_dir, Dir};
-use swissarmyhammer_fields::{ComputeEngine, EntityLookup};
+use swissarmyhammer_entity::EntityContext;
+use swissarmyhammer_fields::{ComputeEngine, EntityLookup, FieldsContext};
 
-use crate::context::KanbanContext;
 use crate::tag_parser;
 use crate::task_helpers;
 
@@ -109,49 +110,48 @@ pub fn kanban_compute_engine() -> ComputeEngine {
     engine
 }
 
+/// Entity types supported by kanban lookup.
+const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane", "attachment"];
+
 /// Entity lookup backed by kanban file storage.
 ///
-/// Reads entities from the `.kanban/` directory structure. Each entity type
-/// dispatches to the appropriate subdirectory (tasks/, tags/, actors/, etc.).
+/// Uses a bare `EntityContext` (no engines) to avoid circular dependency:
+/// engines → lookup → engines. Validation lookups use raw I/O only.
 pub struct KanbanLookup {
     root: PathBuf,
+    fields: Arc<FieldsContext>,
 }
 
 impl KanbanLookup {
-    /// Create a lookup for a kanban root directory.
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+    /// Create a lookup from a root path and fields context.
+    pub fn new(root: impl Into<PathBuf>, fields: Arc<FieldsContext>) -> Self {
+        Self {
+            root: root.into(),
+            fields,
+        }
     }
 
-    /// Create a lookup from a KanbanContext.
-    pub fn from_context(ctx: &KanbanContext) -> Self {
-        Self {
-            root: ctx.root().to_path_buf(),
-        }
+    /// Build a bare EntityContext (no engines) for raw I/O.
+    fn bare_entity_context(&self) -> EntityContext {
+        EntityContext::new(&self.root, Arc::clone(&self.fields))
     }
 }
 
 #[async_trait]
 impl EntityLookup for KanbanLookup {
     async fn get(&self, entity_type: &str, id: &str) -> Option<serde_json::Value> {
-        const KNOWN_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane"];
-        if !KNOWN_TYPES.contains(&entity_type) {
+        if !KNOWN_ENTITY_TYPES.contains(&entity_type) {
             return None;
         }
-        let ctx = KanbanContext::new(&self.root);
-        let ectx = ctx.entity_context().await.ok()?;
+        let ectx = self.bare_entity_context();
         ectx.read(entity_type, id).await.ok().map(|e| e.to_json())
     }
 
     async fn list(&self, entity_type: &str) -> Vec<serde_json::Value> {
-        const KNOWN_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane"];
-        if !KNOWN_TYPES.contains(&entity_type) {
+        if !KNOWN_ENTITY_TYPES.contains(&entity_type) {
             return Vec::new();
         }
-        let ctx = KanbanContext::new(&self.root);
-        let Ok(ectx) = ctx.entity_context().await else {
-            return Vec::new();
-        };
+        let ectx = self.bare_entity_context();
         ectx.list(entity_type)
             .await
             .unwrap_or_default()

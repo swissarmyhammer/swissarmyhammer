@@ -5,12 +5,10 @@ mod ids;
 mod log;
 mod operation;
 mod position;
-mod task;
 
 // Re-export all types
-pub use board::{Actor, Board, Column, Swimlane, Tag};
+pub use board::default_column_entities;
 pub use ids::{ActorId, ColumnId, LogEntryId, SwimlaneId, TagId, TaskId};
 pub use log::{LogEntry, OperationResult};
 pub use operation::{is_valid_operation, Noun, Operation, Verb};
 pub use position::{Ordinal, Position};
-pub use task::Task;

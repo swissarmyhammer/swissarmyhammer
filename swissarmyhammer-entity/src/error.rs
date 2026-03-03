@@ -28,6 +28,14 @@ pub enum EntityError {
     #[error("unknown entity type: {entity_type}")]
     UnknownEntityType { entity_type: String },
 
+    /// Field validation failed.
+    #[error("validation failed for field '{field}': {message}")]
+    ValidationFailed { field: String, message: String },
+
+    /// Computed field derivation failed.
+    #[error("compute error for field '{field}': {message}")]
+    ComputeError { field: String, message: String },
+
     /// A text diff patch could not be parsed or applied.
     #[error("patch apply error: {0}")]
     PatchApply(String),

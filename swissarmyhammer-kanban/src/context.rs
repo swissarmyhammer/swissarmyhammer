@@ -3,7 +3,9 @@
 //! The context provides access to storage and utilities. No business logic methods,
 //! just data access primitives. Commands do all the work.
 
-use crate::defaults::{builtin_entity_definitions, builtin_field_definitions};
+use crate::defaults::{
+    builtin_entity_definitions, builtin_field_definitions, kanban_compute_engine, KanbanLookup,
+};
 use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, ColumnId, LogEntry, SwimlaneId, TagId, TaskId};
 use fs2::FileExt;
@@ -11,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityContext};
-use swissarmyhammer_fields::{load_yaml_dir, FieldsContext};
+use swissarmyhammer_fields::{load_yaml_dir, FieldsContext, ValidationEngine};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::OnceCell;
@@ -375,7 +377,15 @@ impl KanbanContext {
             FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
                 .map_err(|e| KanbanError::FieldsError(e.to_string()))?,
         );
-        let entities = EntityContext::new(root, Arc::clone(&fields));
+
+        // Build engines — KanbanLookup uses a bare EntityContext (no engines)
+        // to avoid circular dependency.
+        let lookup = KanbanLookup::new(root, Arc::clone(&fields));
+        let compute = Arc::new(kanban_compute_engine());
+        let validation = Arc::new(ValidationEngine::new().with_lookup(lookup));
+        let entities = EntityContext::new(root, Arc::clone(&fields))
+            .with_compute(compute)
+            .with_validation(validation);
         Ok((fields, entities))
     }
 

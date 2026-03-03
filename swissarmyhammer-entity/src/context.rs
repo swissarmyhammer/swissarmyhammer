@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use swissarmyhammer_fields::{EntityDef, FieldsContext};
+use swissarmyhammer_fields::{ComputeEngine, EntityDef, FieldType, FieldsContext, ValidationEngine};
 
 use crate::changelog::{self, ChangeEntry, FieldChange};
 use crate::entity::Entity;
@@ -21,6 +21,8 @@ use crate::io;
 pub struct EntityContext {
     root: PathBuf,
     fields: Arc<FieldsContext>,
+    validation: Option<Arc<ValidationEngine>>,
+    compute: Option<Arc<ComputeEngine>>,
 }
 
 impl EntityContext {
@@ -32,7 +34,21 @@ impl EntityContext {
         Self {
             root: root.into(),
             fields,
+            validation: None,
+            compute: None,
         }
+    }
+
+    /// Attach a validation engine. Enables field validation on write.
+    pub fn with_validation(mut self, engine: Arc<ValidationEngine>) -> Self {
+        self.validation = Some(engine);
+        self
+    }
+
+    /// Attach a compute engine. Enables computed field derivation on read.
+    pub fn with_compute(mut self, engine: Arc<ComputeEngine>) -> Self {
+        self.compute = Some(engine);
+        self
     }
 
     /// Get the storage root path.
@@ -84,19 +100,31 @@ impl EntityContext {
     }
 
     /// Read a single entity by type and ID.
+    ///
+    /// If a `ComputeEngine` is attached, computed fields are derived after reading.
     pub async fn read(&self, entity_type: &str, id: &str) -> Result<Entity> {
         let def = self.entity_def(entity_type)?;
         let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
-        io::read_entity(&path, entity_type, id, def).await
+        let mut entity = io::read_entity(&path, entity_type, id, def).await?;
+        self.apply_compute(entity_type, &mut entity).await?;
+        Ok(entity)
     }
 
     /// Write an entity, automatically computing and logging field-level changes.
     ///
+    /// If a `ValidationEngine` is attached, fields are validated/transformed
+    /// before writing. Computed fields are stripped (they are derived on read).
     /// If a previous version exists, diffs against it and appends a changelog
     /// entry. On creation (no previous version), all fields are logged as `Set`.
     pub async fn write(&self, entity: &Entity) -> Result<()> {
         let def = self.entity_def(&entity.entity_type)?;
         let dir = self.entity_dir(&entity.entity_type);
+
+        // Apply validation and strip computed fields
+        let mut entity = entity.clone();
+        let entity_type = entity.entity_type.clone();
+        self.apply_validation(&entity_type, &mut entity).await?;
+
         let path = io::entity_file_path(&dir, &entity.id, def);
 
         // Read previous state for diffing (if it exists)
@@ -106,11 +134,11 @@ impl EntityContext {
                 .ok();
 
         // Write the entity
-        io::write_entity(&path, entity, def).await?;
+        io::write_entity(&path, &entity, def).await?;
 
         // Compute and append changelog
         let changes = match &previous {
-            Some(old) => changelog::diff_entities(old, entity),
+            Some(old) => changelog::diff_entities(old, &entity),
             None => {
                 // Creation — all fields are Set
                 let mut changes: Vec<_> = entity
@@ -173,16 +201,116 @@ impl EntityContext {
     }
 
     /// List all entities of a given type.
+    ///
+    /// If a `ComputeEngine` is attached, computed fields are derived for each entity.
     pub async fn list(&self, entity_type: &str) -> Result<Vec<Entity>> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
-        io::read_entity_dir(&dir, entity_type, def).await
+        let mut entities = io::read_entity_dir(&dir, entity_type, def).await?;
+        for entity in &mut entities {
+            self.apply_compute(entity_type, entity).await?;
+        }
+        Ok(entities)
     }
 
     /// Read the changelog for an entity.
     pub async fn read_changelog(&self, entity_type: &str, id: &str) -> Result<Vec<ChangeEntry>> {
         let log_path = self.changelog_path(entity_type, id)?;
         changelog::read_changelog(&log_path).await
+    }
+
+    // =========================================================================
+    // Internal: validation and computation
+    // =========================================================================
+
+    /// Validate fields on write and strip computed fields.
+    ///
+    /// For each field defined on the entity type:
+    /// - Skip `Computed` fields (remove from entity — they are derived on read).
+    /// - If a validation engine is present, validate and possibly transform the value.
+    /// - If a field has a default and is missing from the entity, insert the default.
+    async fn apply_validation(&self, entity_type: &str, entity: &mut Entity) -> Result<()> {
+        let field_defs = self.fields.fields_for_entity(entity_type);
+        if field_defs.is_empty() {
+            return Ok(());
+        }
+
+        // Strip computed fields — they must never be persisted.
+        for fd in &field_defs {
+            if matches!(&fd.type_, FieldType::Computed { .. }) {
+                entity.fields.remove(&fd.name);
+            }
+        }
+
+        // Apply defaults for missing fields
+        for fd in &field_defs {
+            if matches!(&fd.type_, FieldType::Computed { .. }) {
+                continue;
+            }
+            if !entity.fields.contains_key(&fd.name) {
+                if let Some(ref default) = fd.default {
+                    entity.set(
+                        fd.name.clone(),
+                        serde_json::Value::String(default.clone()),
+                    );
+                }
+            }
+        }
+
+        // Validate fields
+        let Some(ref engine) = self.validation else {
+            return Ok(());
+        };
+
+        // Collect field names to validate (avoid borrowing entity.fields while mutating)
+        let names_to_validate: Vec<String> = field_defs
+            .iter()
+            .filter(|fd| !matches!(&fd.type_, FieldType::Computed { .. }))
+            .filter(|fd| entity.fields.contains_key(&fd.name))
+            .map(|fd| fd.name.clone())
+            .collect();
+
+        // Snapshot sibling fields once before the loop — validation functions
+        // see a consistent view of the entity, not partially-validated state.
+        let siblings = entity.fields.clone();
+
+        for name in &names_to_validate {
+            let fd = field_defs.iter().find(|f| &f.name == name).unwrap();
+            let value = entity.fields.get(name).cloned().unwrap();
+            let validated = engine
+                .validate(fd, value, &siblings)
+                .await
+                .map_err(|e| EntityError::ValidationFailed {
+                    field: name.clone(),
+                    message: e.to_string(),
+                })?;
+            entity.set(name.clone(), validated);
+        }
+
+        Ok(())
+    }
+
+    /// Derive computed fields after reading.
+    async fn apply_compute(&self, entity_type: &str, entity: &mut Entity) -> Result<()> {
+        let Some(ref engine) = self.compute else {
+            return Ok(());
+        };
+        let field_defs = self.fields.fields_for_entity(entity_type);
+        let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+        engine
+            .derive_all(&mut entity.fields, &owned_defs)
+            .await
+            .map_err(|e| {
+                // Extract field name from the inner FieldsError if available
+                let (field, message) = match &e {
+                    swissarmyhammer_fields::FieldsError::ComputeError { field, message } => {
+                        (field.clone(), message.clone())
+                    }
+                    other => (String::new(), other.to_string()),
+                };
+                EntityError::ComputeError { field, message }
+            })?;
+        Ok(())
     }
 }
 
