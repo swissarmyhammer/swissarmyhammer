@@ -656,6 +656,33 @@ mod tests {
         assert!(entries.is_empty());
     }
 
+    #[tokio::test]
+    async fn read_changelog_skips_malformed_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test.jsonl");
+
+        // Write a valid entry, a malformed line, and another valid entry
+        let entry = ChangeEntry::new(
+            "create",
+            vec![(
+                "title".to_string(),
+                FieldChange::Set {
+                    value: Value::String("Hello".into()),
+                },
+            )],
+        );
+        let valid_line = serde_json::to_string(&entry).unwrap();
+
+        let content = format!("{}\nNOT VALID JSON\n{}\n", valid_line, valid_line);
+        fs::write(&log_path, content).await.unwrap();
+
+        let entries = read_changelog(&log_path).await.unwrap();
+        // Should have 2 valid entries, skipping the malformed line
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].op, "create");
+        assert_eq!(entries[1].op, "create");
+    }
+
     #[test]
     fn diff_entities_sorted_deterministically() {
         let mut old = Entity::new("task", "01ABC");
