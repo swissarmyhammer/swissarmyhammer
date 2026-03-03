@@ -1,7 +1,6 @@
-//! Task types: Task, Attachment (legacy typed structs, being replaced by Entity)
-#![allow(deprecated)]
+//! Task types (legacy typed structs, being replaced by Entity)
 
-use super::ids::{ActorId, AttachmentId, CommentId, TaskId};
+use super::ids::{ActorId, CommentId, TaskId};
 use super::position::Position;
 use serde::{Deserialize, Serialize};
 
@@ -13,11 +12,6 @@ pub struct Task {
     pub title: String,
     #[serde(default)]
     pub description: String,
-
-    /// Legacy tags field — accepted on read for backward compat, never written.
-    /// Tags are now computed from `#tag` patterns in the description.
-    #[serde(default, skip_serializing)]
-    _legacy_tags: Vec<String>,
 
     /// Position = column + swimlane + ordinal
     pub position: Position,
@@ -33,15 +27,6 @@ pub struct Task {
     /// Comments/discussion thread
     #[serde(default)]
     pub comments: Vec<Comment>,
-
-    /// Legacy subtasks field - ignored on read, never written.
-    /// Kept for backward compatibility with existing task JSON files.
-    #[serde(default, skip_serializing, rename = "subtasks")]
-    _legacy_subtasks: Vec<serde_json::Value>,
-
-    /// Attachments
-    #[serde(default)]
-    pub attachments: Vec<Attachment>,
 }
 
 impl Task {
@@ -51,13 +36,10 @@ impl Task {
             id: TaskId::new(),
             title: title.into(),
             description: String::new(),
-            _legacy_tags: Vec::new(),
             position,
             depends_on: Vec::new(),
             assignees: Vec::new(),
             comments: Vec::new(),
-            _legacy_subtasks: Vec::new(),
-            attachments: Vec::new(),
         }
     }
 
@@ -69,19 +51,15 @@ impl Task {
         depends_on: Vec<TaskId>,
         assignees: Vec<ActorId>,
         comments: Vec<Comment>,
-        attachments: Vec<Attachment>,
     ) -> Self {
         Self {
             id: TaskId::new(),
             title,
             description,
-            _legacy_tags: Vec::new(),
             position,
             depends_on,
             assignees,
             comments,
-            _legacy_subtasks: Vec::new(),
-            attachments,
         }
     }
 
@@ -108,53 +86,7 @@ impl Task {
         self
     }
 
-    /// Check if this task has legacy subtask data that needs migration.
-    pub fn has_legacy_subtasks(&self) -> bool {
-        !self._legacy_subtasks.is_empty()
-    }
-
-    /// Migrate legacy subtasks into markdown checklist lines in the description.
-    /// Returns true if migration occurred.
-    pub fn migrate_legacy_subtasks(&mut self) -> bool {
-        if self._legacy_subtasks.is_empty() {
-            return false;
-        }
-
-        let mut checklist_lines = Vec::new();
-        for subtask in &self._legacy_subtasks {
-            let title = subtask
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("untitled");
-            let completed = subtask
-                .get("completed")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if completed {
-                checklist_lines.push(format!("- [x] {}", title));
-            } else {
-                checklist_lines.push(format!("- [ ] {}", title));
-            }
-        }
-
-        if !checklist_lines.is_empty() {
-            if !self.description.is_empty() && !self.description.ends_with('\n') {
-                self.description.push('\n');
-            }
-            if !self.description.is_empty() {
-                self.description.push('\n');
-            }
-            self.description.push_str(&checklist_lines.join("\n"));
-        }
-
-        self._legacy_subtasks.clear();
-        true
-    }
-
     /// Calculate progress as fraction of completed markdown checklist items.
-    ///
-    /// Parses `- [ ]` (incomplete) and `- [x]`/`- [X]` (complete) from the description.
-    /// Returns 0.0 if no checklist items are found.
     pub fn progress(&self) -> f64 {
         let (total, completed) = Self::parse_checklist_counts(&self.description);
         if total == 0 {
@@ -227,16 +159,6 @@ impl Task {
     pub fn find_comment_mut(&mut self, id: &CommentId) -> Option<&mut Comment> {
         self.comments.iter_mut().find(|c| &c.id == id)
     }
-
-    #[deprecated(note = "Use attachment entity CRUD instead")]
-    pub fn find_attachment(&self, id: &AttachmentId) -> Option<&Attachment> {
-        self.attachments.iter().find(|a| &a.id == id)
-    }
-
-    #[deprecated(note = "Use attachment entity CRUD instead")]
-    pub fn find_attachment_mut(&mut self, id: &AttachmentId) -> Option<&mut Attachment> {
-        self.attachments.iter_mut().find(|a| &a.id == id)
-    }
 }
 
 /// A comment on a task - part of the discussion thread
@@ -245,7 +167,6 @@ pub struct Comment {
     pub id: CommentId,
     pub body: String,
     pub author: ActorId,
-    // Timestamps are derived from the per-task operation log
 }
 
 impl Comment {
@@ -256,45 +177,6 @@ impl Comment {
             body: body.into(),
             author,
         }
-    }
-}
-
-/// An attachment on a task
-#[deprecated(note = "Attachments are now standalone entities; use attachment entity CRUD")]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Attachment {
-    pub id: AttachmentId,
-    pub name: String,
-    pub path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mime_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<u64>,
-    // created_at is derived from the per-task operation log
-}
-
-impl Attachment {
-    /// Create a new attachment
-    pub fn new(name: impl Into<String>, path: impl Into<String>) -> Self {
-        Self {
-            id: AttachmentId::new(),
-            name: name.into(),
-            path: path.into(),
-            mime_type: None,
-            size: None,
-        }
-    }
-
-    /// Set the MIME type
-    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
-        self.mime_type = Some(mime_type.into());
-        self
-    }
-
-    /// Set the file size
-    pub fn with_size(mut self, size: u64) -> Self {
-        self.size = Some(size);
-        self
     }
 }
 
@@ -344,11 +226,9 @@ mod tests {
             Task::parse_checklist_counts("- [ ] one\n- [x] two\n- [X] three\n- [ ] four");
         assert_eq!((total, completed), (4, 2));
 
-        // Indented checklists
         let (total, completed) = Task::parse_checklist_counts("  - [ ] indented\n  - [x] done");
         assert_eq!((total, completed), (2, 1));
 
-        // Non-checklist lines ignored
         let (total, completed) =
             Task::parse_checklist_counts("plain text\n- regular bullet\n- [ ] real item");
         assert_eq!((total, completed), (1, 0));
@@ -383,49 +263,5 @@ mod tests {
         let parsed: Task = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.title, task.title);
         assert_eq!(parsed.description, task.description);
-    }
-
-    #[test]
-    fn test_legacy_subtask_migration() {
-        // Simulate reading a task JSON with old-style subtasks and tags
-        let json = r#"{
-            "id": "test",
-            "title": "Test",
-            "description": "Some work",
-            "tags": ["bug"],
-            "position": {"column": "todo", "ordinal": "a0"},
-            "depends_on": [],
-            "assignees": [],
-            "comments": [],
-            "subtasks": [
-                {"id": "s1", "title": "Write tests", "completed": false},
-                {"id": "s2", "title": "Implement feature", "completed": true}
-            ],
-            "attachments": []
-        }"#;
-
-        let mut task: Task = serde_json::from_str(json).unwrap();
-        assert!(task.has_legacy_subtasks());
-        assert!(task.migrate_legacy_subtasks());
-        assert!(!task.has_legacy_subtasks());
-
-        // Description should now contain checklist
-        assert!(task.description.contains("- [ ] Write tests"));
-        assert!(task.description.contains("- [x] Implement feature"));
-        assert!(task.description.starts_with("Some work"));
-
-        // Progress should work from the migrated checklist
-        assert_eq!(task.progress(), 0.5);
-
-        // Serialized output should NOT contain subtasks
-        let serialized = serde_json::to_string_pretty(&task).unwrap();
-        assert!(!serialized.contains("\"subtasks\""));
-    }
-
-    #[test]
-    fn test_no_migration_without_subtasks() {
-        let mut task = Task::new("Test", test_position());
-        assert!(!task.has_legacy_subtasks());
-        assert!(!task.migrate_legacy_subtasks());
     }
 }

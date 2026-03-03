@@ -43,15 +43,9 @@ impl Execute<KanbanContext, KanbanError> for DeleteAttachment {
             let ectx = ctx.entity_context().await?;
 
             // Verify the attachment exists and belongs to this task
-            let attachment = ectx.read("attachment", &self.id).await.map_err(|_| {
-                KanbanError::NotFound {
-                    resource: "attachment".to_string(),
-                    id: self.id.to_string(),
-                }
-            })?;
-
-            let owner = attachment.get_str("attachment_task").unwrap_or("");
-            if owner != self.task_id.as_str() {
+            // Read the task and verify it owns this attachment
+            let mut task = ectx.read("task", self.task_id.as_str()).await?;
+            if !task.get_string_list("attachments").contains(&self.id) {
                 return Err(KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
@@ -62,7 +56,6 @@ impl Execute<KanbanContext, KanbanError> for DeleteAttachment {
             ectx.delete("attachment", &self.id).await?;
 
             // Remove the attachment ID from the task's attachments list
-            let mut task = ectx.read("task", self.task_id.as_str()).await?;
             let mut attachment_ids = task.get_string_list("attachments");
             attachment_ids.retain(|id| id != &self.id);
             task.set("attachments", json!(attachment_ids));

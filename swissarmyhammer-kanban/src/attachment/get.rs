@@ -38,22 +38,22 @@ impl Execute<KanbanContext, KanbanError> for GetAttachment {
         match async {
             let ectx = ctx.entity_context().await?;
 
-            // Read the attachment entity directly
+            // Verify the task owns this attachment
+            let task = ectx.read("task", self.task_id.as_str()).await?;
+            if !task.get_string_list("attachments").contains(&self.id) {
+                return Err(KanbanError::NotFound {
+                    resource: "attachment".to_string(),
+                    id: self.id.to_string(),
+                });
+            }
+
+            // Read the attachment entity
             let attachment = ectx.read("attachment", &self.id).await.map_err(|_| {
                 KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
                 }
             })?;
-
-            // Verify it belongs to the specified task
-            let owner = attachment.get_str("attachment_task").unwrap_or("");
-            if owner != self.task_id.as_str() {
-                return Err(KanbanError::NotFound {
-                    resource: "attachment".to_string(),
-                    id: self.id.to_string(),
-                });
-            }
 
             Ok(attachment_entity_to_json(&attachment))
         }
@@ -117,7 +117,6 @@ mod tests {
         assert_eq!(result["id"], attachment_id);
         assert_eq!(result["name"], "file.txt");
         assert_eq!(result["path"], "./file.txt");
-        assert_eq!(result["task_id"], task_id);
     }
 
     #[tokio::test]

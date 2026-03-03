@@ -5,10 +5,9 @@
 
 use crate::defaults::{builtin_entity_definitions, builtin_field_definitions};
 use crate::error::{KanbanError, Result};
-#[allow(deprecated)]
 use crate::types::{
-    Actor, ActorId, Attachment, Board, Column, ColumnId, Comment, LogEntry, Position, Swimlane,
-    SwimlaneId, Tag, TagId, Task, TaskId,
+    Actor, ActorId, Board, Column, ColumnId, Comment, LogEntry, Position, Swimlane, SwimlaneId,
+    Tag, TagId, Task, TaskId,
 };
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -337,11 +336,6 @@ impl KanbanContext {
         };
 
         task.id = id.clone();
-
-        // Migrate legacy subtasks to markdown checklists in description
-        if task.migrate_legacy_subtasks() {
-            self.write_task(&task).await?;
-        }
 
         // Auto-migrate legacy .json to .md
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
@@ -1010,12 +1004,9 @@ impl Drop for KanbanLock {
 }
 
 /// Helper for YAML frontmatter serialization (everything except description and id)
-#[allow(deprecated)]
 #[derive(Serialize, Deserialize)]
 struct TaskMeta {
     pub title: String,
-    #[serde(default, skip_serializing)]
-    _legacy_tags: Vec<String>,
     pub position: Position,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<TaskId>,
@@ -1023,23 +1014,16 @@ struct TaskMeta {
     pub assignees: Vec<ActorId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
-    #[serde(default, skip_serializing, rename = "subtasks")]
-    _legacy_subtasks: Vec<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<Attachment>,
 }
 
 impl TaskMeta {
     fn from_task(task: &Task) -> Self {
         Self {
             title: task.title.clone(),
-            _legacy_tags: Vec::new(),
             position: task.position.clone(),
             depends_on: task.depends_on.clone(),
             assignees: task.assignees.clone(),
             comments: task.comments.clone(),
-            _legacy_subtasks: Vec::new(),
-            attachments: task.attachments.clone(),
         }
     }
 }
@@ -1065,7 +1049,6 @@ fn parse_task_markdown(content: &str) -> Result<Task> {
         meta.depends_on,
         meta.assignees,
         meta.comments,
-        meta.attachments,
     ))
 }
 
@@ -1408,8 +1391,8 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 22 built-in fields
-        assert_eq!(fields.all_fields().len(), 22);
+        // Should have all 21 built-in fields
+        assert_eq!(fields.all_fields().len(), 21);
 
         // Should have all 7 entity templates
         assert_eq!(fields.all_entities().len(), 7);
@@ -1437,10 +1420,10 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 22 built-in + 1 custom = 23
+        // Open — should have 21 built-in + 1 custom = 22
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 23);
+        assert_eq!(fields.all_fields().len(), 22);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();

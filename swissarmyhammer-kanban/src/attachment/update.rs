@@ -73,6 +73,15 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
 
+            // Verify the task owns this attachment
+            let task = ectx.read("task", self.task_id.as_str()).await?;
+            if !task.get_string_list("attachments").contains(&self.id) {
+                return Err(KanbanError::NotFound {
+                    resource: "attachment".to_string(),
+                    id: self.id.to_string(),
+                });
+            }
+
             // Read the attachment entity
             let mut attachment =
                 ectx.read("attachment", &self.id)
@@ -81,15 +90,6 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
                         resource: "attachment".to_string(),
                         id: self.id.to_string(),
                     })?;
-
-            // Verify it belongs to the specified task
-            let owner = attachment.get_str("attachment_task").unwrap_or("");
-            if owner != self.task_id.as_str() {
-                return Err(KanbanError::NotFound {
-                    resource: "attachment".to_string(),
-                    id: self.id.to_string(),
-                });
-            }
 
             // Update only provided fields
             if let Some(name) = &self.name {

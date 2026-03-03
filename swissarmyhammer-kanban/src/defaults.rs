@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 22, "expected 22 builtin field definitions");
+        assert_eq!(defs.len(), 21, "expected 21 builtin field definitions");
     }
 
     #[test]
@@ -364,7 +364,7 @@ mod tests {
         assert!(entity.fields.contains(&"attachment_path".to_string()));
         assert!(entity.fields.contains(&"attachment_mime_type".to_string()));
         assert!(entity.fields.contains(&"attachment_size".to_string()));
-        assert!(entity.fields.contains(&"attachment_task".to_string()));
+        assert!(!entity.fields.contains(&"attachment_task".to_string()));
     }
 
     #[test]
@@ -404,7 +404,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 22);
+        assert_eq!(ctx.all_fields().len(), 21);
         assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());

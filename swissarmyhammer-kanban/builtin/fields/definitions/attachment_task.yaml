@@ -1,8 +1,0 @@
-id: "0000000000000000000000000R"
-name: attachment_task
-description: Task this attachment belongs to
-type:
-  kind: reference
-  entity: task
-editor: none
-display: text

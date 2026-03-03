@@ -18,7 +18,6 @@ pub(crate) fn attachment_entity_to_json(entity: &Entity) -> Value {
         "path": entity.get_str("attachment_path").unwrap_or(""),
         "mime_type": entity.get_str("attachment_mime_type"),
         "size": entity.get("attachment_size").and_then(|v| v.as_u64()),
-        "task_id": entity.get_str("attachment_task").unwrap_or(""),
     })
 }
 
@@ -171,7 +170,6 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
             let mut attachment = Entity::new("attachment", &attachment_id);
             attachment.set("attachment_name", json!(self.name));
             attachment.set("attachment_path", json!(self.path));
-            attachment.set("attachment_task", json!(self.task_id.to_string()));
             if let Some(mime) = &mime_type {
                 attachment.set("attachment_mime_type", json!(mime));
             }
