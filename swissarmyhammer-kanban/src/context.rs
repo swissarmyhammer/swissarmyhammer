@@ -6,11 +6,9 @@
 use crate::defaults::{builtin_entity_definitions, builtin_field_definitions};
 use crate::error::{KanbanError, Result};
 use crate::types::{
-    Actor, ActorId, Board, Column, ColumnId, Comment, LogEntry, Position, Swimlane, SwimlaneId,
-    Tag, TagId, Task, TaskId,
+    Actor, ActorId, Board, Column, ColumnId, LogEntry, Swimlane, SwimlaneId, Tag, TagId, TaskId,
 };
 use fs2::FileExt;
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_entity::changelog::ChangeEntry;
@@ -302,118 +300,6 @@ impl KanbanContext {
             Err(KanbanError::SwimlaneNotFound { .. }) => Ok(None),
             Err(e) => Err(e),
         }
-    }
-
-    // =========================================================================
-    // Task I/O
-    // =========================================================================
-
-    /// Read a task file, auto-migrating legacy formats.
-    ///
-    /// Tries `.md` (YAML frontmatter + markdown body) first, falls back to `.json`.
-    #[deprecated(note = "Use entity_context().await?.read(\"task\", id) instead")]
-    #[allow(deprecated)]
-    pub async fn read_task(&self, id: &TaskId) -> Result<Task> {
-        let md_path = self.task_path(id); // .md
-        let path = if md_path.exists() {
-            md_path
-        } else {
-            // Fall back to legacy .json
-            let json_path = self.root.join("tasks").join(format!("{}.json", id));
-            if !json_path.exists() {
-                return Err(KanbanError::TaskNotFound { id: id.to_string() });
-            }
-            json_path
-        };
-
-        let content = fs::read_to_string(&path).await?;
-
-        let mut task = if path.extension().and_then(|s| s.to_str()) == Some("md") {
-            parse_task_markdown(&content)?
-        } else {
-            // Legacy JSON
-            serde_json::from_str(&content)?
-        };
-
-        task.id = id.clone();
-
-        // Auto-migrate legacy .json to .md
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            self.write_task(&task).await?;
-            // Remove old .json file after successful .md write
-            let _ = fs::remove_file(&path).await;
-        }
-
-        Ok(task)
-    }
-
-    /// Write a task file as YAML frontmatter + markdown body
-    #[deprecated(note = "Use entity_context().await?.write(&entity) instead")]
-    pub async fn write_task(&self, task: &Task) -> Result<()> {
-        let path = self.task_path(&task.id);
-        let meta = TaskMeta::from_task(task);
-        let frontmatter = serde_yaml::to_string(&meta)?;
-        let content = format!("---\n{}---\n{}", frontmatter, task.description);
-        atomic_write(&path, content.as_bytes()).await
-    }
-
-    /// Delete a task file and its log (handles both .md and legacy .json)
-    pub async fn delete_task_file(&self, id: &TaskId) -> Result<()> {
-        let md_path = self.task_path(id); // .md
-        let json_path = self.root.join("tasks").join(format!("{}.json", id));
-        let log_path = self.task_log_path(id);
-
-        if md_path.exists() {
-            fs::remove_file(&md_path).await?;
-        }
-        if json_path.exists() {
-            fs::remove_file(&json_path).await?;
-        }
-        if log_path.exists() {
-            fs::remove_file(&log_path).await?;
-        }
-
-        Ok(())
-    }
-
-    /// List all task IDs by reading the tasks directory (accepts .md and legacy .json)
-    pub async fn list_task_ids(&self) -> Result<Vec<TaskId>> {
-        let tasks_dir = self.tasks_dir();
-        if !tasks_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut seen = std::collections::HashSet::new();
-        let mut ids = Vec::new();
-        let mut entries = fs::read_dir(&tasks_dir).await?;
-
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            let ext = path.extension().and_then(|s| s.to_str());
-            if ext == Some("md") || ext == Some("json") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    if seen.insert(stem.to_string()) {
-                        ids.push(TaskId::from_string(stem));
-                    }
-                }
-            }
-        }
-
-        Ok(ids)
-    }
-
-    /// Read all tasks
-    #[deprecated(note = "Use entity_context().await?.list(\"task\") instead")]
-    #[allow(deprecated)]
-    pub async fn read_all_tasks(&self) -> Result<Vec<Task>> {
-        let ids = self.list_task_ids().await?;
-        let mut tasks = Vec::with_capacity(ids.len());
-
-        for id in ids {
-            tasks.push(self.read_task(&id).await?);
-        }
-
-        Ok(tasks)
     }
 
     // =========================================================================
@@ -1003,55 +889,6 @@ impl Drop for KanbanLock {
     }
 }
 
-/// Helper for YAML frontmatter serialization (everything except description and id)
-#[derive(Serialize, Deserialize)]
-struct TaskMeta {
-    pub title: String,
-    pub position: Position,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub depends_on: Vec<TaskId>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assignees: Vec<ActorId>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub comments: Vec<Comment>,
-}
-
-impl TaskMeta {
-    fn from_task(task: &Task) -> Self {
-        Self {
-            title: task.title.clone(),
-            position: task.position.clone(),
-            depends_on: task.depends_on.clone(),
-            assignees: task.assignees.clone(),
-            comments: task.comments.clone(),
-        }
-    }
-}
-
-/// Parse a task from YAML frontmatter + markdown body format
-fn parse_task_markdown(content: &str) -> Result<Task> {
-    // Split on "---" delimiters
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    // parts[0] = "" (before first ---), parts[1] = frontmatter, parts[2] = body
-    if parts.len() < 3 {
-        return Err(KanbanError::parse(
-            "invalid task markdown: missing frontmatter delimiters",
-        ));
-    }
-    let frontmatter = parts[1].trim();
-    let body = parts[2].strip_prefix('\n').unwrap_or(parts[2]);
-
-    let meta: TaskMeta = serde_yaml::from_str(frontmatter)?;
-    Ok(Task::from_parts(
-        meta.title,
-        body.to_string(),
-        meta.position,
-        meta.depends_on,
-        meta.assignees,
-        meta.comments,
-    ))
-}
-
 /// Atomic write via temp file and rename
 async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     // Ensure parent directory exists
@@ -1107,36 +944,30 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)]
     async fn test_task_io() {
-        use crate::types::{ColumnId, Ordinal, Position};
+        let (_temp, ctx) = setup_with_fields().await;
 
-        let (_temp, ctx) = setup().await;
+        // Write a task via entity context
+        let mut task = swissarmyhammer_entity::Entity::new("task", "01TESTTASK");
+        task.set("title", serde_json::json!("Test Task"));
+        task.set("position_column", serde_json::json!("todo"));
+        task.set("position_ordinal", serde_json::json!("a0"));
 
-        // Initialize board first
-        let board = Board::new("Test");
-        ctx.write_board(&board).await.unwrap();
+        let ectx = ctx.entity_context().await.unwrap();
+        ectx.write(&task).await.unwrap();
 
-        let task = Task::new(
-            "Test Task",
-            Position::new(ColumnId::from_string("todo"), None, Ordinal::first()),
-        );
-        let task_id = task.id.clone();
-
-        ctx.write_task(&task).await.unwrap();
-
-        let loaded = ctx.read_task(&task_id).await.unwrap();
-        assert_eq!(loaded.title, "Test Task");
+        // Read back
+        let loaded = ectx.read("task", "01TESTTASK").await.unwrap();
+        assert_eq!(loaded.get_str("title"), Some("Test Task"));
 
         // List tasks
-        let ids = ctx.list_task_ids().await.unwrap();
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], task_id);
+        let tasks = ectx.list("task").await.unwrap();
+        assert_eq!(tasks.len(), 1);
 
         // Delete
-        ctx.delete_task_file(&task_id).await.unwrap();
-        let ids = ctx.list_task_ids().await.unwrap();
-        assert!(ids.is_empty());
+        ectx.delete("task", "01TESTTASK").await.unwrap();
+        let tasks = ectx.list("task").await.unwrap();
+        assert!(tasks.is_empty());
     }
 
     #[tokio::test]

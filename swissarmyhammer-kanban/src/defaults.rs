@@ -137,15 +137,11 @@ impl EntityLookup for KanbanLookup {
         let ctx = KanbanContext::new(&self.root);
         match entity_type {
             "task" => {
-                let task_id = crate::types::TaskId::from_string(id);
-                #[allow(deprecated)]
-                ctx.read_task(&task_id).await.ok().map(|t| {
-                    let mut v = serde_json::to_value(&t).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id.to_string()));
-                    }
-                    v
-                })
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.read("task", id).await.ok().map(|e| e.to_json())
+                } else {
+                    None
+                }
             }
             "tag" => {
                 if let Ok(ectx) = ctx.entity_context().await {
@@ -182,21 +178,18 @@ impl EntityLookup for KanbanLookup {
     async fn list(&self, entity_type: &str) -> Vec<serde_json::Value> {
         let ctx = KanbanContext::new(&self.root);
         match entity_type {
-            #[allow(deprecated)]
-            "task" => ctx
-                .read_all_tasks()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|t| {
-                    let id = t.id.to_string();
-                    let mut v = serde_json::to_value(&t).unwrap_or_default();
-                    if let serde_json::Value::Object(ref mut map) = v {
-                        map.insert("id".into(), serde_json::Value::String(id));
-                    }
-                    v
-                })
-                .collect(),
+            "task" => {
+                if let Ok(ectx) = ctx.entity_context().await {
+                    ectx.list("task")
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|e| e.to_json())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
             "tag" => {
                 if let Ok(ectx) = ctx.entity_context().await {
                     ectx.list("tag")
