@@ -19,12 +19,12 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Initialize a new board
 //! let ctx = KanbanContext::new("/path/to/repo/.kanban");
-//! InitBoard::new("My Project").execute(&ctx).await?;
+//! InitBoard::new("My Project").execute(&ctx).await.into_result()?;
 //!
 //! // Add a task
 //! let result = AddTask::new("Implement feature X")
 //!     .with_description("Add the new feature")
-//!     .execute(&ctx).await?;
+//!     .execute(&ctx).await.into_result()?;
 //!
 //! println!("Created task: {}", result["id"]);
 //! # Ok(())

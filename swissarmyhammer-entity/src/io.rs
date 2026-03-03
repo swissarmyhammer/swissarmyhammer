@@ -214,12 +214,27 @@ fn parse_frontmatter_body(
 
     let mut entity = Entity::new(entity_type, id);
     for (k, v) in yaml_map {
-        entity.set(k, v);
+        flatten_into(&mut entity, &k, v);
     }
     // Body field comes from the markdown body, not the frontmatter
     entity.set(body_field, Value::String(body.to_string()));
 
     Ok(entity)
+}
+
+/// Flatten nested objects into underscore-separated keys.
+///
+/// If `key` maps to a JSON object, each sub-key is expanded to `key_subkey`.
+/// Non-object values are inserted as-is. Only one level of nesting is flattened.
+fn flatten_into(entity: &mut Entity, key: &str, value: Value) {
+    if let Value::Object(map) = &value {
+        for (sub_key, sub_value) in map {
+            let flat_key = format!("{}_{}", key, sub_key);
+            entity.set(flat_key, sub_value.clone());
+        }
+    } else {
+        entity.set(key, value);
+    }
 }
 
 /// Parse a plain YAML file into an Entity.
@@ -237,7 +252,7 @@ fn parse_plain_yaml(
 
     let mut entity = Entity::new(entity_type, id);
     for (k, v) in yaml_map {
-        entity.set(k, v);
+        flatten_into(&mut entity, &k, v);
     }
 
     Ok(entity)
@@ -632,6 +647,51 @@ mod tests {
         assert_eq!(loaded.get_string_list("assignees"), vec!["actor1", "actor2"]);
         assert_eq!(loaded.get_string_list("depends_on"), vec!["task1"]);
         assert_eq!(loaded.get_str("body"), Some("Body with #tags"));
+    }
+
+    #[test]
+    fn parse_frontmatter_flattens_nested_objects() {
+        // Legacy task files have nested position: {column, ordinal}
+        // The parser should flatten them to position_column, position_ordinal
+        let content = "---\ntitle: My Task\nposition:\n  column: todo\n  ordinal: a0\n  swimlane: feature\nassignees: []\n---\nBody text\n";
+
+        let parsed =
+            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md"))
+                .unwrap();
+
+        assert_eq!(parsed.get_str("title"), Some("My Task"));
+        assert_eq!(parsed.get_str("position_column"), Some("todo"));
+        assert_eq!(parsed.get_str("position_ordinal"), Some("a0"));
+        assert_eq!(parsed.get_str("position_swimlane"), Some("feature"));
+        // The nested "position" key should NOT exist as a field
+        assert!(parsed.get("position").is_none());
+        assert_eq!(parsed.get_str("body"), Some("Body text\n"));
+    }
+
+    #[test]
+    fn parse_frontmatter_flat_fields_unchanged() {
+        // New-format task files with flat position_column, position_ordinal
+        let content = "---\ntitle: My Task\nposition_column: todo\nposition_ordinal: a0\n---\nBody\n";
+
+        let parsed =
+            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md"))
+                .unwrap();
+
+        assert_eq!(parsed.get_str("position_column"), Some("todo"));
+        assert_eq!(parsed.get_str("position_ordinal"), Some("a0"));
+    }
+
+    #[test]
+    fn parse_plain_yaml_flattens_nested_objects() {
+        let content = "name: To Do\norder: 0\nmetadata:\n  color: red\n  icon: star\n";
+
+        let parsed =
+            parse_plain_yaml(content, "column", "todo", Path::new("test.yaml"))
+                .unwrap();
+
+        assert_eq!(parsed.get_str("name"), Some("To Do"));
+        assert_eq!(parsed.get_str("metadata_color"), Some("red"));
+        assert_eq!(parsed.get_str("metadata_icon"), Some("star"));
     }
 
     #[tokio::test]
