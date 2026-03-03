@@ -171,7 +171,6 @@ mod tests {
         let agents = resolver.resolve_builtins();
 
         assert!(agents.contains_key("default"), "should have default agent");
-        assert!(agents.contains_key("test"), "should have test agent");
         assert!(agents.contains_key("tester"), "should have tester agent");
         assert!(agents.contains_key("planner"), "should have planner agent");
         assert!(
@@ -190,11 +189,10 @@ mod tests {
         let resolver = AgentResolver::new();
         let agents = resolver.resolve_builtins();
 
-        let test = agents.get("test").unwrap();
-        assert_eq!(test.name.as_str(), "test");
-        assert!(!test.description.is_empty());
-        assert!(!test.instructions.is_empty());
-        assert_eq!(test.source, AgentSource::Builtin);
-        assert_eq!(test.max_turns, Some(25));
+        let tester = agents.get("tester").unwrap();
+        assert_eq!(tester.name.as_str(), "tester");
+        assert!(!tester.description.is_empty());
+        assert!(!tester.instructions.is_empty());
+        assert_eq!(tester.source, AgentSource::Builtin);
     }
 }

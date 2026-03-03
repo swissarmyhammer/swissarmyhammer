@@ -8,6 +8,7 @@
 
 use serde_json::json;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 use crate::test_utils::setup_git_repo;
 
@@ -24,6 +25,23 @@ async fn setup_isolated_context() -> (tempfile::TempDir, CliToolContext) {
         .await
         .expect("Failed to create isolated CliToolContext");
     (temp, context)
+}
+
+/// Creates a test context with agent mode enabled.
+///
+/// Agent mode registers additional tools (files, shell, skill) that are
+/// normally omitted when running alongside Claude Code.
+async fn setup_agent_mode_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = env.temp_dir();
+
+    // Set up git repository for tests that need it
+    setup_git_repo(&temp_path).expect("Failed to set up git repository");
+
+    let context = CliToolContext::new_with_agent_mode(&temp_path)
+        .await
+        .expect("Failed to create CliToolContext with agent mode");
+    (env, context)
 }
 
 /// Creates a CallToolResult for testing purposes.
@@ -65,10 +83,11 @@ async fn test_cli_can_call_mcp_tools() {
 
 #[tokio::test]
 async fn test_files_read_tool_integration() {
-    let (temp, context) = setup_isolated_context().await;
+    // The files tool is only registered in agent mode
+    let (env, context) = setup_agent_mode_test_context().await;
 
     // Create a test file to read
-    let test_file = temp.path().join("test_file.txt");
+    let test_file = env.temp_dir().join("test_file.txt");
     std::fs::write(&test_file, "Test content for files read").unwrap();
 
     // Test calling unified files tool with read operation
@@ -117,7 +136,8 @@ async fn test_nonexistent_tool_error() {
 
 #[tokio::test]
 async fn test_invalid_arguments_error() {
-    let (_temp, context) = setup_isolated_context().await;
+    // The files tool is only registered in agent mode
+    let (_env, context) = setup_agent_mode_test_context().await;
 
     // Test calling files with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);

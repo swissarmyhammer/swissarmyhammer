@@ -1,54 +1,71 @@
 ---
 name: implement
-description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. The kanban board is your todo list — pick up the next card and do the work.
+description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent.
+context: fork
+agent: implementer
 metadata:
   author: swissarmyhammer
-  version: "1.1"
+  version: "3.0"
 ---
 
 # Implement
 
-Work through all remaining kanban cards until the board is clear.
+Pick up the next kanban card and get it done.
 
 ## Process
 
-Repeat this loop until there are no more cards to pick up:
-
 ### 1. Get the next card
 
-Use `kanban` with `op: "next task"` to find the next actionable card. If there are no remaining cards, you're done — stop and tell the user.
+Use `kanban` with `op: "next task"` to find the next actionable card. If there are no remaining cards, tell the user the board is clear.
 
 ### 2. Move the card to doing
 
-Use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
+```json
+{"op": "move task", "id": "<task-id>", "column": "doing"}
+```
 
-### 3. Read the task details
+### 3. Read the card
 
-Use `kanban` with `op: "get task"`, `id: "<task-id>"` to see the description and checklist.
+```json
+{"op": "get task", "id": "<task-id>"}
+```
 
-### 4. Work through the checklist
+Get the full description and subtasks. Understand the task before writing code.
 
-For each checklist item (`- [ ]` line in the description):
-- Implement what the item describes
-- Update the description to mark it done (change `- [ ]` to `- [x]`) using `op: "update task"` with the updated description
+### 4. Read existing code
 
-### 5. Complete the card
+Read relevant code to understand patterns before writing. Never modify code you haven't read.
 
-**You MUST complete the card before moving on.** When all work is done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. Do NOT skip this step. A card left in "doing" is not finished — it must be explicitly completed.
+### 5. Implement the work
 
-### 6. Loop back
+Do the work described in the card and its subtasks.
 
-After completing the card, go back to step 1. Use `op: "next task"` again — if it returns a card, keep going. If there are no more actionable cards, stop and tell the user.
+### 6. Complete the card
 
-Use the `js` tool to record the overall result
-- If NO kanban tasks remain: `js` with `op: "set expression"`, `name: "kanban_empty"`, `expression: "true"`
-- If ANY kanban tasks remain: `js` with `op: "set expression"`, `name: "kanban_empty"`, `expression: "false"`
+When all subtasks pass:
 
-## Guidelines
+```json
+{"op": "complete task", "id": "<task-id>"}
+```
 
-- Do not skip checklist items without doing the work
-- Run tests after completing each checklist item to catch problems early
-- If an item is blocked or unclear, add a comment to the task and move on to the next card
-- If you discover new work while executing a task, add it as a new kanban card
-- Only mark a card complete when all work is done and tests pass
-- Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth
+A card left in "doing" is not finished.
+
+If you cannot complete the task, do NOT complete the card. Add a comment describing what happened and report back.
+
+### 7. Stop for review
+
+**Always stop after completing a card.** Present a summary of what was done and what tests pass. The user decides when to move to the next card — you do not auto-continue.
+
+Only exception: if the card description explicitly says **auto-continue** or **chain to next**, proceed to the next card without stopping.
+
+## Rules
+
+- One card at a time. Don't try to do multiple cards in one pass.
+- Do the work. No excuses, no "too complex". Find a way.
+- Don't over-engineer — write the simplest code that works.
+- Don't refactor unrelated code while implementing.
+- Stay focused on the task you were given.
+- ALL tests must pass before you report success. Zero failures, zero warnings.
+- Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
+- If you discover new work, add it as a new kanban card.
+- If you get stuck, report what you tried and where you're blocked — don't silently give up.

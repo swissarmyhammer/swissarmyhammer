@@ -65,6 +65,31 @@ impl CliToolContext {
         })
     }
 
+    /// Create a new CLI tool context with agent mode forced on.
+    ///
+    /// In agent mode, additional tools (files, shell, skill) are registered
+    /// that are normally omitted when running alongside Claude Code.
+    /// This is useful for tests that need to exercise agent-only tools.
+    #[allow(dead_code)] // Used in tests
+    pub async fn new_with_agent_mode(
+        working_dir: &std::path::Path,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mcp_server_handle = Self::initialize_mcp_server_with_agent_mode(
+            None,
+            Some(working_dir.to_path_buf()),
+            true,
+        )
+        .await?;
+
+        let tool_registry = Self::create_tool_registry().await;
+        let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
+
+        Ok(Self {
+            tool_registry: tool_registry_arc,
+            mcp_server_handle: Some(mcp_server_handle),
+        })
+    }
+
     /// Create a new CLI tool context with optional model override
     ///
     /// # Arguments

@@ -259,7 +259,7 @@ mod tests {
         let tool = AgentMcpTool::new(library, default_prompt_library());
         let desc = tool.description();
         assert!(desc.contains("available_agents"));
-        assert!(desc.contains("test"));
+        assert!(desc.contains("tester"));
     }
 
     #[tokio::test]
@@ -291,7 +291,8 @@ mod tests {
         let ctx = crate::test_utils::create_test_context().await;
 
         let args: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_value(serde_json::json!({"op": "use agent", "name": "test"})).unwrap();
+            serde_json::from_value(serde_json::json!({"op": "use agent", "name": "tester"}))
+                .unwrap();
         let result = tool.execute(args, &ctx).await;
         assert!(result.is_ok());
     }

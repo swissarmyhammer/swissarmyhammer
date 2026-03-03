@@ -76,7 +76,7 @@ mod tests {
 
         assert!(!library.is_empty());
         assert!(library.get("default").is_some());
-        assert!(library.get("test").is_some());
+        assert!(library.get("tester").is_some());
         assert!(library.get("nonexistent").is_none());
     }
 
