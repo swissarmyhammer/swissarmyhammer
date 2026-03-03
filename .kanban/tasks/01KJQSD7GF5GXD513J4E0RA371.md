@@ -1,8 +1,7 @@
 ---
+position_column: done
+position_ordinal: e2
 title: 'BLOCKER: reverse_unified_diff does not swap hunk header line numbers'
-position:
-  column: todo
-  ordinal: a9
 ---
 `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-entity/src/changelog.rs` lines 237-260
 

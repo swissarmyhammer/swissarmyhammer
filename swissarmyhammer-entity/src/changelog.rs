@@ -672,6 +672,78 @@ mod tests {
     }
 
     #[test]
+    fn diff_then_reverse_with_deletions() {
+        // Multi-hunk diff where lines are deleted (not just substituted).
+        // Verifies hunk headers stay correct through the round-trip.
+        let old_lines: Vec<String> = (1..=30).map(|i| format!("line {}", i)).collect();
+        let old_text = old_lines.join("\n");
+
+        let mut new_lines = old_lines.clone();
+        // Delete lines near the top (lines 3-4)
+        new_lines.remove(3); // "line 4"
+        new_lines.remove(2); // "line 3"
+        // Delete a line near the bottom (original "line 25", now shifted)
+        new_lines.retain(|l| l != "line 25");
+        let new_text = new_lines.join("\n");
+
+        let mut old = Entity::new("task", "01ABC");
+        old.set("body", Value::String(old_text.clone()));
+
+        let mut new_ent = Entity::new("task", "01ABC");
+        new_ent.set("body", Value::String(new_text.clone()));
+
+        let changes = diff_entities(&old, &new_ent);
+        let reversed = reverse_changes(&changes);
+
+        // Forward: old → new
+        let mut forward = old.clone();
+        apply_changes(&mut forward, &changes).unwrap();
+        assert_eq!(forward.get_str("body"), Some(new_text.as_str()));
+
+        // Reverse: new → old
+        let mut back = new_ent.clone();
+        apply_changes(&mut back, &reversed).unwrap();
+        assert_eq!(back.get_str("body"), Some(old_text.as_str()));
+    }
+
+    #[test]
+    fn diff_then_reverse_mixed_insertions_and_deletions() {
+        // Combines insertions and deletions in a single diff to stress
+        // multi-hunk asymmetric line-number changes.
+        let old_lines: Vec<String> = (1..=20).map(|i| format!("line {}", i)).collect();
+        let old_text = old_lines.join("\n");
+
+        let mut new_lines = old_lines.clone();
+        // Insert after line 3
+        new_lines.insert(3, "INSERTED after line 3".into());
+        // Delete original line 10 (now at index 10 due to insertion)
+        new_lines.remove(10);
+        // Substitute near end (original line 18, now shifted)
+        let idx = new_lines.iter().position(|l| l == "line 18").unwrap();
+        new_lines[idx] = "MODIFIED line 18".into();
+        let new_text = new_lines.join("\n");
+
+        let mut old = Entity::new("task", "01ABC");
+        old.set("body", Value::String(old_text.clone()));
+
+        let mut new_ent = Entity::new("task", "01ABC");
+        new_ent.set("body", Value::String(new_text.clone()));
+
+        let changes = diff_entities(&old, &new_ent);
+        let reversed = reverse_changes(&changes);
+
+        // Forward
+        let mut forward = old.clone();
+        apply_changes(&mut forward, &changes).unwrap();
+        assert_eq!(forward.get_str("body"), Some(new_text.as_str()));
+
+        // Reverse
+        let mut back = new_ent.clone();
+        apply_changes(&mut back, &reversed).unwrap();
+        assert_eq!(back.get_str("body"), Some(old_text.as_str()));
+    }
+
+    #[test]
     fn all_field_change_variants_round_trip_through_json() {
         let variants = vec![
             FieldChange::Set {
