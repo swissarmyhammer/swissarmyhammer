@@ -854,6 +854,24 @@ mod tests {
     }
 
     #[test]
+    fn stale_diff_application_returns_error() {
+        // Create a diff against the original text
+        let mut old = Entity::new("task", "01ABC");
+        old.set("body", Value::String("line1\nline2\nline3".into()));
+        let mut new = Entity::new("task", "01ABC");
+        new.set("body", Value::String("line1\nmodified\nline3".into()));
+
+        let changes = diff_entities(&old, &new);
+
+        // Now apply that diff to a DIFFERENT text (stale/modified content)
+        let mut stale = Entity::new("task", "01ABC");
+        stale.set("body", Value::String("line1\nTOTALLY_DIFFERENT\nline3".into()));
+
+        let result = apply_changes(&mut stale, &changes);
+        assert!(result.is_err(), "applying a stale diff should return an error, not silently corrupt data");
+    }
+
+    #[test]
     fn all_field_change_variants_round_trip_through_json() {
         let variants = vec![
             FieldChange::Set {
