@@ -195,9 +195,14 @@ async fn test_detected_projects_partial_with_empty_projects() {
         result.err()
     );
     let rendered = result.unwrap();
+    // Template now defers to treesitter tool for runtime detection
     assert!(
-        rendered.contains("No Projects Detected"),
-        "Should show 'No Projects Detected' message"
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
+    );
+    assert!(
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 }
 
@@ -244,12 +249,13 @@ async fn test_detected_projects_partial_with_projects() {
         result.err()
     );
     let rendered = result.unwrap();
+    // Template now defers to treesitter tool for runtime detection
     assert!(
-        rendered.contains("Detected Project Types"),
-        "Should show 'Detected Project Types' header"
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
     );
     assert!(
-        rendered.contains("Rust"),
-        "Should mention Rust project type"
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 }

@@ -1,6 +1,6 @@
 //! Model Context Protocol (MCP) server support
 //!
-//! This module provides MCP server functionality for serving prompts, workflows,
+//! This module provides MCP server functionality for serving prompts
 //! and various tools through the Model Context Protocol.
 //!
 //! ## Overview
@@ -11,7 +11,7 @@
 //! - **Server Implementation**: [`McpServer`] handles MCP protocol messages
 //! - **Tool Registry**: [`ToolRegistry`] manages available tools and their execution
 //! - **Tool Context**: [`ToolContext`] provides shared state and storage access
-//! - **File Watching**: Automatic detection of changes to workflows and issues
+//! - **File Watching**: Automatic detection of changes to prompts
 //!
 //! ## Architecture
 //!
@@ -20,7 +20,7 @@
 //! 1. **Server Layer**: Handles MCP protocol communication
 //! 2. **Registry Layer**: Manages tool registration and dispatch
 //! 3. **Tool Layer**: Individual tool implementations
-//! 4. **Storage Layer**: Backend storage for issues, memos, and workflows
+//! 4. **Storage Layer**: Backend storage for tools
 //!
 //! ## Usage
 //!
@@ -89,9 +89,9 @@ pub use plan_notifications::{
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{
-    register_file_tools, register_flow_tools, register_git_tools, register_js_tools,
-    register_kanban_tools, register_questions_tools, register_shell_tools,
-    register_treesitter_tools, register_web_tools, ToolContext, ToolRegistry,
+    register_file_tools, register_git_tools, register_js_tools, register_kanban_tools,
+    register_questions_tools, register_shell_tools, register_treesitter_tools, register_web_tools,
+    ToolContext, ToolRegistry,
 };
 pub use types::{GetPromptRequest, ListPromptsRequest};
 pub use unified_server::{

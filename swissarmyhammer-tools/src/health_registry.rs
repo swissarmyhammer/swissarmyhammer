@@ -10,9 +10,8 @@ use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
-    register_file_tools, register_flow_tools, register_git_tools, register_js_tools,
-    register_kanban_tools, register_questions_tools, register_shell_tools,
-    register_treesitter_tools, register_web_tools,
+    register_file_tools, register_git_tools, register_js_tools, register_kanban_tools,
+    register_questions_tools, register_shell_tools, register_treesitter_tools, register_web_tools,
 };
 
 /// Health checker for prompt directories and YAML front matter
@@ -162,7 +161,6 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
 
     // Register all MCP tools (same as server does)
     register_file_tools(&mut tool_registry).await;
-    register_flow_tools(&mut tool_registry);
     register_git_tools(&mut tool_registry);
     register_js_tools(&mut tool_registry);
     register_shell_tools(&mut tool_registry);
@@ -247,21 +245,6 @@ mod tests {
         assert!(
             !prompt_checks.is_empty(),
             "Should have prompt health checks"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_workflow_health_checks_included() {
-        let checks = collect_all_health_checks().await;
-
-        // Should have workflow-related checks from FlowTool
-        let workflow_checks: Vec<_> = checks
-            .iter()
-            .filter(|c| c.name.contains("Workflow") || c.name.contains("workflow"))
-            .collect();
-        assert!(
-            !workflow_checks.is_empty(),
-            "Should have workflow health checks from FlowTool"
         );
     }
 

@@ -1,4 +1,4 @@
-Tree-sitter code intelligence operations for semantic search, AST queries, and duplicate detection.
+Tree-sitter code intelligence operations for semantic search, AST queries, duplicate detection, and project detection.
 
 ## Operations
 
@@ -6,6 +6,7 @@ Tree-sitter code intelligence operations for semantic search, AST queries, and d
 - **query ast**: Execute tree-sitter S-expression queries to find AST patterns
 - **find duplicates**: Detect duplicate code clusters using semantic similarity
 - **get status**: Check the current status of the code index
+- **detect projects**: Detect project types in the workspace and return language-specific guidelines
 
 ## Examples
 
@@ -23,4 +24,8 @@ Tree-sitter code intelligence operations for semantic search, AST queries, and d
 
 ```json
 {"op": "get status"}
+```
+
+```json
+{"op": "detect projects"}
 ```

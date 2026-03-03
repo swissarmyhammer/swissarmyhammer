@@ -7,7 +7,6 @@
 
 pub mod agent;
 pub mod doctor;
-pub mod flow;
 pub mod install;
 pub mod model;
 pub mod prompt;

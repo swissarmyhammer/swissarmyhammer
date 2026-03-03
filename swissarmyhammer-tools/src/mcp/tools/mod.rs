@@ -37,7 +37,7 @@
 
 pub mod agent;
 pub mod files;
-pub mod flow;
+
 pub mod git;
 pub mod js;
 pub mod kanban;

@@ -12,9 +12,6 @@ parameters:
   - name: validator_content
     description: The rule instructions (markdown body) or RuleSet context
     required: true
-  - name: validator_name
-    description: Name of the RuleSet or individual rule being executed
-    required: true
   - name: hook_context
     description: The hook event context as JSON
     required: true

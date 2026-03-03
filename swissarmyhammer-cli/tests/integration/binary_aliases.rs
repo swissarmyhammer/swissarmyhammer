@@ -28,7 +28,6 @@ async fn test_swissarmyhammer_has_expected_commands() {
         output.contains("prompt"),
         "Help should mention prompt command"
     );
-    assert!(output.contains("flow"), "Help should mention flow command");
     assert!(
         output.contains("completion"),
         "Help should mention completion command"

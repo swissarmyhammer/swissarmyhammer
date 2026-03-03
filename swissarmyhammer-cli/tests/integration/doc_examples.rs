@@ -163,7 +163,7 @@ fn test_doc_examples_directory_structure() {
     }
 
     // Check expected subdirectories exist
-    let expected_dirs = vec!["prompts", "workflows", "scripts", "configs"];
+    let expected_dirs = vec!["prompts", "scripts", "configs"];
 
     for dir_name in expected_dirs {
         let dir_path = doc_examples_dir.join(dir_name);

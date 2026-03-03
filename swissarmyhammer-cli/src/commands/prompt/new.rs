@@ -120,11 +120,11 @@ async fn generate_ai_scaffold(
     );
 
     let config = context.template_context.get_agent_config(None);
-    let options = swissarmyhammer_workflow::CreateAgentOptions { ephemeral: true };
+    let options = swissarmyhammer_agent::CreateAgentOptions { ephemeral: true };
     let mut agent =
-        swissarmyhammer_workflow::create_agent_with_options(&config, None, options).await?;
+        swissarmyhammer_agent::create_agent_with_options(&config, None, options).await?;
 
-    swissarmyhammer_workflow::execute_prompt(&mut agent, Some(system_prompt), None, user_prompt)
+    swissarmyhammer_agent::execute_prompt(&mut agent, Some(system_prompt), None, user_prompt)
         .await?;
 
     if !file_path.exists() {

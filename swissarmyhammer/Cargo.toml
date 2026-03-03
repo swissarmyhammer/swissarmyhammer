@@ -32,7 +32,7 @@ async-trait = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
-swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
+
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 
 # Template engine (legacy - being phased out)
@@ -70,11 +70,6 @@ tree-sitter-typescript = { workspace = true }
 tree-sitter-javascript = { workspace = true }
 tree-sitter-dart = { workspace = true }
 
-# Mermaid parsing
-mermaid-parser = { workspace = true }
-
-# Parser combinator library for action parsing
-chumsky = { workspace = true }
 
 # Performance optimizations
 lru = { workspace = true }

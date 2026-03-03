@@ -21,30 +21,19 @@ macro_rules! setter {
 }
 
 /// Test context containing all components needed for CLI testing
-struct TestContext<'a> {
+struct TestContext {
     help: String,
     registry: Arc<tokio::sync::RwLock<ToolRegistry>>,
-    workflows: Vec<swissarmyhammer_workflow::Workflow>,
-    #[allow(dead_code)]
-    storage: Option<&'a swissarmyhammer_workflow::WorkflowStorage>,
 }
 
-impl<'a> TestContext<'a> {
-    /// Create a new test context with optional workflow storage
-    fn new(storage: Option<&'a swissarmyhammer_workflow::WorkflowStorage>) -> Self {
-        let components = TestComponents::new(storage);
+impl TestContext {
+    /// Create a new test context
+    fn new() -> Self {
+        let components = TestComponents::new();
         let (registry, cli) = components.into_registry_and_cli();
         let help = get_help_text(&cli);
-        let workflows = storage
-            .and_then(|s| s.list_workflows().ok())
-            .unwrap_or_default();
 
-        Self {
-            help,
-            registry,
-            workflows,
-            storage,
-        }
+        Self { help, registry }
     }
 
     /// Get registry categories as a vector of strings
@@ -63,11 +52,11 @@ struct TestComponents {
 }
 
 impl TestComponents {
-    /// Create new test components with optional workflow storage
-    fn new(storage: Option<&swissarmyhammer_workflow::WorkflowStorage>) -> Self {
+    /// Create new test components
+    fn new() -> Self {
         let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
         let builder = CliBuilder::new(registry.clone());
-        let cli = builder.build_cli(storage);
+        let cli = builder.build_cli();
         Self {
             registry,
             builder,
@@ -88,12 +77,12 @@ impl TestComponents {
 
 /// Helper function to create a test tool registry and CLI builder
 fn create_test_registry_and_builder() -> (Arc<tokio::sync::RwLock<ToolRegistry>>, CliBuilder) {
-    TestComponents::new(None).into_registry_and_builder()
+    TestComponents::new().into_registry_and_builder()
 }
 
 /// Helper function to create a CLI with default configuration for testing
 fn create_test_cli_with_defaults() -> (Arc<tokio::sync::RwLock<ToolRegistry>>, Command) {
-    TestComponents::new(None).into_registry_and_cli()
+    TestComponents::new().into_registry_and_cli()
 }
 
 /// Generic helper to assert text contains all specified items
@@ -311,20 +300,6 @@ fn assert_items_before_categories(ctx: &TestContext, items: &[(&str, &str)]) {
     }
 }
 
-/// Generic helper to assert all collections in context are sorted
-fn assert_all_collections_sorted(ctx: &TestContext) {
-    let categories = ctx.categories();
-    assert_sorted_if_multiple(
-        &categories,
-        "MCP tool categories should be sorted alphabetically",
-    );
-
-    let workflow_names: Vec<String> = ctx.workflows.iter().map(|w| w.name.to_string()).collect();
-    assert_sorted_if_multiple(
-        &workflow_names,
-        "Workflow shortcuts should be sorted alphabetically",
-    );
-}
 
 #[test]
 fn test_string_interning() {
@@ -392,8 +367,8 @@ fn test_cli_builder_creates_tool_registry() {
 fn test_cli_builder_graceful_degradation() {
     let (_registry, builder) = create_test_registry_and_builder();
 
-    // Build CLI with warnings should not panic even with no workflows
-    let cli = builder.build_cli_with_warnings(None);
+    // Build CLI with warnings should not panic
+    let cli = builder.build_cli_with_warnings();
 
     // Should successfully create CLI
     assert_eq!(cli.get_name(), "swissarmyhammer");
@@ -598,47 +573,37 @@ fn test_build_cli_basic_structure() {
     assert_eq!(cli.get_name(), "swissarmyhammer");
 
     // Verify core subcommands exist
-    // Note: plan and implement are now dynamic workflow shortcuts, not hardcoded commands
     // Note: rule command is now dynamically generated from rules_check MCP tool when tools are registered
     // This test uses an empty registry, so rule won't appear here
-    let expected_commands = ["serve", "doctor", "prompt", "flow", "validate", "model"];
+    let expected_commands = ["serve", "doctor", "prompt", "validate", "model"];
     assert_commands_exist(&cli, &expected_commands);
 }
 
 #[test]
 fn test_mcp_tool_categories_appear_in_help() {
-    let ctx = TestContext::new(None);
+    let ctx = TestContext::new();
     let categories = ctx.categories();
     assert_contains_all(&ctx.help, &categories, "Help text for MCP tool category");
 }
 
 #[test]
-fn test_workflow_shortcuts_and_ordering() {
-    let ctx = TestContext::new(None);
+fn test_static_commands_ordering() {
+    let ctx = TestContext::new();
 
-    // Test workflow presence in help when workflows exist
-    if let Some(first_workflow) = ctx.workflows.first() {
-        let workflow_names: Vec<String> =
-            ctx.workflows.iter().map(|w| w.name.to_string()).collect();
-        let has_workflow = workflow_names.iter().any(|name| ctx.help.contains(name));
-        assert!(
-            has_workflow,
-            "Help text should contain workflow shortcuts when workflows are present"
-        );
-
-        // Test workflow ordering before MCP tools
-        let workflow_name = first_workflow.name.to_string();
-        assert_items_before_categories(&ctx, &[(&workflow_name, "Workflows")]);
-    }
-
-    // Test static commands ordering and collection sorting
+    // Test static commands appear before MCP tool categories
     assert_items_before_categories(&ctx, &[("serve", "Static commands")]);
-    assert_all_collections_sorted(&ctx);
+
+    // Test MCP tool categories are sorted
+    let categories = ctx.categories();
+    assert_sorted_if_multiple(
+        &categories,
+        "MCP tool categories should be sorted alphabetically",
+    );
 }
 
 #[test]
 fn test_command_descriptions_are_clean() {
-    let ctx = TestContext::new(None);
+    let ctx = TestContext::new();
     // Verify no separator markers appear in command descriptions
     assert!(
         !ctx.help.contains("────────"),

@@ -260,21 +260,4 @@ mod tests {
         assert!(exit_code <= 2);
     }
 
-    #[tokio::test]
-    async fn test_workflow_diagnostics_in_run_diagnostics_without_output() {
-        let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics_without_output().await;
-        assert!(result.is_ok());
-
-        // Should have workflow-related checks in the full diagnostics
-        let workflow_checks: Vec<_> = doctor
-            .checks
-            .iter()
-            .filter(|c| c.name.contains("Workflow") || c.name.contains("workflow"))
-            .collect();
-        assert!(
-            !workflow_checks.is_empty(),
-            "run_diagnostics_without_output should include workflow checks"
-        );
-    }
 }

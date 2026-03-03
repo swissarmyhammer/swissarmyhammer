@@ -103,7 +103,7 @@ fn format_directory_creation_error(details: &str) -> String {
         • Memos in .swissarmyhammer/memos/\n\
         • Kanban boards in .swissarmyhammer/kanban/\n\
         • Search index in .swissarmyhammer/semantic.db\n\
-        • Workflow runs in .swissarmyhammer/runs/\n\
+        • Task runs in .swissarmyhammer/runs/\n\
         \n\
         Solutions:\n\
         • Check directory permissions in current location\n\
@@ -254,7 +254,7 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer_common::ParameterErro
         }
 
         _ => {
-            format!("✗ Workflow parameter error: {error}\n\n📖 For parameter details, run: sah <command> --help\n🔄 To fix this interactively, run: sah <command> --interactive")
+            format!("✗ Parameter error: {error}\n\n📖 For parameter details, run: sah <command> --help\n🔄 To fix this interactively, run: sah <command> --interactive")
         }
     }
 }

@@ -5,6 +5,7 @@
 //! - `query ast`: Execute tree-sitter S-expression queries on parsed files
 //! - `find duplicates`: Detect duplicate code clusters across the project
 //! - `get status`: Get the current status of the code index
+//! - `detect projects`: Detect project types and return language-specific guidelines
 //!
 //! Follows the Operation pattern from `swissarmyhammer-operations`.
 //!
@@ -22,6 +23,7 @@
 //! - Functional: Haskell, OCaml, Elixir, Scala
 //! - Config: JSON, YAML, TOML, Markdown
 
+pub mod detect;
 pub mod duplicates;
 pub mod query;
 pub mod schema;
@@ -37,6 +39,7 @@ use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 use swissarmyhammer_operations::Operation;
 
+use detect::DetectProjects;
 use duplicates::FindDuplicates;
 use query::QueryAst;
 use search::SearchCode;
@@ -47,6 +50,7 @@ static SEARCH_CODE: Lazy<SearchCode> = Lazy::new(SearchCode::default);
 static QUERY_AST: Lazy<QueryAst> = Lazy::new(QueryAst::default);
 static FIND_DUPLICATES: Lazy<FindDuplicates> = Lazy::new(FindDuplicates::default);
 static GET_STATUS: Lazy<GetStatus> = Lazy::new(GetStatus::default);
+static DETECT_PROJECTS: Lazy<DetectProjects> = Lazy::new(DetectProjects::default);
 
 static TREESITTER_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
@@ -54,6 +58,7 @@ static TREESITTER_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*QUERY_AST as &dyn Operation,
         &*FIND_DUPLICATES as &dyn Operation,
         &*GET_STATUS as &dyn Operation,
+        &*DETECT_PROJECTS as &dyn Operation,
     ]
 });
 
@@ -112,6 +117,7 @@ impl McpTool for TreesitterTool {
             "query ast" => query::execute_query(args, context).await,
             "find duplicates" => duplicates::execute_duplicates(args, context).await,
             "get status" => status::execute_status(args, context).await,
+            "detect projects" => detect::execute_detect(args, context).await,
             "" => {
                 // Infer operation from present keys
                 if arguments.contains_key("query") && !arguments.contains_key("files") && !arguments.contains_key("language") {
@@ -122,14 +128,14 @@ impl McpTool for TreesitterTool {
                     duplicates::execute_duplicates(args, context).await
                 } else {
                     Err(McpError::invalid_params(
-                        "Cannot determine operation. Provide 'op' field (\"search code\", \"query ast\", \"find duplicates\", or \"get status\").",
+                        "Cannot determine operation. Provide 'op' field (\"search code\", \"query ast\", \"find duplicates\", \"get status\", or \"detect projects\").",
                         None,
                     ))
                 }
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'search code', 'query ast', 'find duplicates', 'get status'",
+                    "Unknown operation '{}'. Valid operations: 'search code', 'query ast', 'find duplicates', 'get status', 'detect projects'",
                     other
                 ),
                 None,
@@ -193,11 +199,12 @@ mod tests {
     fn test_treesitter_tool_has_operations() {
         let tool = TreesitterTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 4);
+        assert_eq!(ops.len(), 5);
         assert!(ops.iter().any(|o| o.op_string() == "search code"));
         assert!(ops.iter().any(|o| o.op_string() == "query ast"));
         assert!(ops.iter().any(|o| o.op_string() == "find duplicates"));
         assert!(ops.iter().any(|o| o.op_string() == "get status"));
+        assert!(ops.iter().any(|o| o.op_string() == "detect projects"));
     }
 
     #[test]
@@ -215,6 +222,7 @@ mod tests {
         assert!(op_enum.contains(&serde_json::json!("query ast")));
         assert!(op_enum.contains(&serde_json::json!("find duplicates")));
         assert!(op_enum.contains(&serde_json::json!("get status")));
+        assert!(op_enum.contains(&serde_json::json!("detect projects")));
     }
 
     #[test]
@@ -225,7 +233,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 4);
+        assert_eq!(op_schemas.len(), 5);
     }
 
     #[tokio::test]
