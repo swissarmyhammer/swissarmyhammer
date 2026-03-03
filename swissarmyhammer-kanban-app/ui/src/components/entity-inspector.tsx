@@ -105,8 +105,9 @@ function FieldRow({
 /**
  * Dispatch to the correct field component based on FieldType kind.
  *
- * Currently all types use FieldPlaceholder. As Cards 15-21 are implemented,
- * each case will be replaced with the real Presenter/Editor component.
+ * Known types get dedicated components (added in Cards 15-21).
+ * Unrecognized types fall through to FieldPlaceholder which renders
+ * markdown for display and CodeMirror for editing — a capable default.
  */
 function FieldDispatch({
   field,
@@ -123,9 +124,14 @@ function FieldDispatch({
   onCommit: (value: unknown) => void;
   onCancel: () => void;
 }) {
-  // Future: switch on field.type.kind to dispatch to specific components
-  // e.g. case "text": return <TextPresenter/TextEditor .../>
-  //      case "markdown": return <MarkdownPresenter/MarkdownEditor .../>
+  // As Cards 15-21 land, add cases here for known types:
+  // switch (field.type.kind) {
+  //   case "text": return <TextField .../>;
+  //   case "select": return <SelectField .../>;
+  //   ...
+  // }
+
+  // Default: markdown display + CM6 editor for any type we don't recognize
   return (
     <FieldPlaceholder
       field={field}
