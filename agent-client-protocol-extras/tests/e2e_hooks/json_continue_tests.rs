@@ -18,9 +18,6 @@ use tokio::sync::broadcast;
 use crate::helpers;
 use std::sync::Arc;
 
-/// Maximum time to wait for an async channel message in notification tests.
-const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// UserPromptSubmit with continue:false should cancel the prompt.
 #[tokio::test]
 async fn user_prompt_submit_continue_false_cancels() {
@@ -67,7 +64,16 @@ async fn pre_tool_use_continue_false_cancels() {
 
     helpers::send_tool_completed_notifications(&tx, "test-session").await;
 
-    let cancel = tokio::time::timeout(CHANNEL_TIMEOUT, cancel_rx.recv()).await;
+    // Synchronize: wait for the hook script to finish before checking channel.
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    assert!(
+        captured.is_some(),
+        "PreToolUse hook should have been invoked"
+    );
+
+    // Hook already finished, so the channel message is already buffered.
+    let short = std::time::Duration::from_millis(200);
+    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
     assert!(
         cancel.is_ok(),
         "PreToolUse continue:false should send Cancel to cancel channel"
@@ -92,7 +98,16 @@ async fn post_tool_use_continue_false_cancels() {
 
     helpers::send_tool_completed_notifications(&tx, "test-session").await;
 
-    let cancel = tokio::time::timeout(CHANNEL_TIMEOUT, cancel_rx.recv()).await;
+    // Synchronize: wait for the hook script to finish before checking channel.
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    assert!(
+        captured.is_some(),
+        "PostToolUse hook should have been invoked"
+    );
+
+    // Hook already finished, so the channel message is already buffered.
+    let short = std::time::Duration::from_millis(200);
+    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
     assert!(
         cancel.is_ok(),
         "PostToolUse continue:false should send Cancel to cancel channel"
@@ -118,7 +133,16 @@ async fn post_tool_use_failure_continue_false_cancels() {
 
     helpers::send_tool_failed_notifications(&tx, "test-session").await;
 
-    let cancel = tokio::time::timeout(CHANNEL_TIMEOUT, cancel_rx.recv()).await;
+    // Synchronize: wait for the hook script to finish before checking channel.
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    assert!(
+        captured.is_some(),
+        "PostToolUseFailure hook should have been invoked"
+    );
+
+    // Hook already finished, so the channel message is already buffered.
+    let short = std::time::Duration::from_millis(200);
+    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
     assert!(
         cancel.is_ok(),
         "PostToolUseFailure continue:false should send Cancel to cancel channel"
@@ -192,7 +216,16 @@ async fn notification_continue_false_cancels() {
 
     helpers::send_agent_message_notification(&tx, "test-session").await;
 
-    let cancel = tokio::time::timeout(CHANNEL_TIMEOUT, cancel_rx.recv()).await;
+    // Synchronize: wait for the hook script to finish before checking channel.
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    assert!(
+        captured.is_some(),
+        "Notification hook should have been invoked"
+    );
+
+    // Hook already finished, so the channel message is already buffered.
+    let short = std::time::Duration::from_millis(200);
+    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
     assert!(
         cancel.is_ok(),
         "Notification continue:false should send Cancel to cancel channel"

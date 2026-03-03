@@ -15,9 +15,6 @@ use tokio::sync::broadcast;
 use crate::helpers;
 use std::sync::Arc;
 
-/// Maximum time to wait for an async channel message in notification tests.
-const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// UserPromptSubmit is blockable — exit 2 should Block and reject the prompt.
 #[tokio::test]
 async fn user_prompt_submit_exit2_blocks() {
@@ -92,8 +89,17 @@ async fn post_tool_use_exit2_feeds_context() {
 
     helpers::send_tool_completed_notifications(&tx, "test-session").await;
 
+    // Synchronize: wait for the hook script to finish before checking channel.
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    assert!(
+        captured.is_some(),
+        "PostToolUse hook should have been invoked"
+    );
+
+    // Hook already finished, so the channel message is already buffered.
     // PostToolUse exit-2 → AllowWithContext → context channel receives stderr
-    let ctx = tokio::time::timeout(CHANNEL_TIMEOUT, context_rx.recv()).await;
+    let short = std::time::Duration::from_millis(200);
+    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
     assert!(
         ctx.is_ok(),
         "PostToolUse exit-2 should feed stderr as context"
@@ -101,13 +107,6 @@ async fn post_tool_use_exit2_feeds_context() {
     assert!(
         ctx.unwrap().unwrap().contains("review this output"),
         "Context should contain stderr message"
-    );
-
-    // Verify hook ran
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
-    assert!(
-        captured.is_some(),
-        "PostToolUse hook should have been invoked"
     );
 }
 
@@ -130,8 +129,17 @@ async fn post_tool_use_failure_exit2_feeds_context() {
 
     helpers::send_tool_failed_notifications(&tx, "test-session").await;
 
+    // Synchronize: wait for the hook script to finish before checking channel.
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    assert!(
+        captured.is_some(),
+        "PostToolUseFailure hook should have been invoked"
+    );
+
+    // Hook already finished, so the channel message is already buffered.
     // PostToolUseFailure exit-2 → AllowWithContext → context channel receives stderr
-    let ctx = tokio::time::timeout(CHANNEL_TIMEOUT, context_rx.recv()).await;
+    let short = std::time::Duration::from_millis(200);
+    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
     assert!(
         ctx.is_ok(),
         "PostToolUseFailure exit-2 should feed stderr as context"

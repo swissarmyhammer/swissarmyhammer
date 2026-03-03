@@ -273,6 +273,14 @@ async fn notification_pipeline_delivers_context() {
 
     helpers::send_agent_message_notification(&tx, "test-session").await;
 
+    // Synchronize: wait for the hook script to finish before checking channel.
+    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    assert!(
+        captured.is_some(),
+        "Notification hook should have been invoked"
+    );
+
+    // Hook already finished, so the channel message is already buffered.
     let ctx = tokio::time::timeout(CHANNEL_TIMEOUT, context_rx.recv()).await;
     assert!(
         ctx.is_ok(),

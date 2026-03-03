@@ -98,6 +98,12 @@ async fn test_validator_blocks_with_llama_model_config() {
     let temp = TempDir::new().unwrap();
     fs::create_dir_all(temp.path().join(".git")).unwrap();
 
+    // Clear CLAUDE_ACP so ValidatorContextStarter doesn't short-circuit the chain.
+    // When running inside a Claude Code session, this env var causes the chain to
+    // return success immediately, bypassing all validators.
+    let saved_claude_acp = std::env::var("CLAUDE_ACP").ok();
+    std::env::remove_var("CLAUDE_ACP");
+
     let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
     let context =
         create_context_with_model(&temp, "post_tool_use_no_secrets_fail.json", llama_config);
@@ -135,6 +141,11 @@ async fn test_validator_blocks_with_llama_model_config() {
     .unwrap();
 
     let (chain_output, _) = chain.execute(&input).await.unwrap();
+
+    // Restore CLAUDE_ACP if it was previously set.
+    if let Some(val) = saved_claude_acp {
+        std::env::set_var("CLAUDE_ACP", val);
+    }
 
     // The no-secrets validator should have blocked
     assert!(
