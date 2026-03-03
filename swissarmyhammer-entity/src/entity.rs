@@ -12,7 +12,7 @@ use serde_json::Value;
 /// The `entity_type` identifies the kind (e.g. "task", "tag") and determines
 /// which EntityDef schema applies. The `id` is a ULID or slug extracted from
 /// the filename. All data fields live in the `fields` HashMap.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Entity {
     pub entity_type: String,
     pub id: String,

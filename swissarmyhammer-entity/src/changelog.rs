@@ -201,7 +201,7 @@ pub fn apply_changes(entity: &mut Entity, changes: &[(String, FieldChange)]) -> 
                     .get_str(key)
                     .unwrap_or("")
                     .to_string();
-                let patch = diffy::Patch::from_str(&forward_patch)
+                let patch = diffy::Patch::from_str(forward_patch)
                     .map_err(|e| crate::error::EntityError::PatchApply(format!(
                         "failed to parse patch for field '{}': {}", key, e
                     )))?;
