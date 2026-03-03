@@ -4,11 +4,11 @@ import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
-import { vim, getCM, Vim } from "@replit/codemirror-vim";
-import { emacs } from "@replit/codemirror-emacs";
+import { getCM, Vim } from "@replit/codemirror-vim";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useKeymap } from "@/lib/keymap-context";
+import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
 import { tagDecorations } from "@/lib/cm-tag-decorations";
 import { tagAutocomplete } from "@/lib/cm-tag-autocomplete";
 import { tagTooltips, type TagMeta } from "@/lib/cm-tag-tooltip";
@@ -42,28 +42,6 @@ function toggleCheckbox(source: string, index: number): string | null {
     }
     return match;
   });
-}
-
-/** Minimal CM6 theme: no gutters, transparent bg, matches surrounding text */
-const minimalTheme = EditorView.theme({
-  "&": { backgroundColor: "transparent" },
-  ".cm-gutters": { display: "none" },
-  ".cm-content": { padding: "0" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-line": { padding: "0" },
-  ".cm-scroller": { overflow: "auto" },
-});
-
-/** Build keymap extension based on mode */
-function keymapExtension(mode: string) {
-  switch (mode) {
-    case "vim":
-      return vim();
-    case "emacs":
-      return emacs();
-    default:
-      return [];
-  }
 }
 
 export function EditableMarkdown({

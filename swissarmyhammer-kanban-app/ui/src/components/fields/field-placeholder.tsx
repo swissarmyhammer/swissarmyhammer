@@ -4,11 +4,11 @@ import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
-import { vim, getCM, Vim } from "@replit/codemirror-vim";
-import { emacs } from "@replit/codemirror-emacs";
+import { getCM, Vim } from "@replit/codemirror-vim";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useKeymap } from "@/lib/keymap-context";
+import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
 import type { FieldDef } from "@/types/kanban";
 
 interface FieldPlaceholderProps {
@@ -18,27 +18,6 @@ interface FieldPlaceholderProps {
   onEdit: () => void;
   onCommit: (value: unknown) => void;
   onCancel: () => void;
-}
-
-/** Minimal CM6 theme — matches surrounding text, no chrome. */
-const minimalTheme = EditorView.theme({
-  "&": { backgroundColor: "transparent" },
-  ".cm-gutters": { display: "none" },
-  ".cm-content": { padding: "0" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-line": { padding: "0" },
-  ".cm-scroller": { overflow: "auto" },
-});
-
-function keymapExtension(mode: string) {
-  switch (mode) {
-    case "vim":
-      return vim();
-    case "emacs":
-      return emacs();
-    default:
-      return [];
-  }
 }
 
 /**
