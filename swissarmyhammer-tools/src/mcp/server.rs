@@ -399,7 +399,7 @@ impl McpServer {
         prompt_library: Arc<RwLock<PromptLibrary>>,
         agent_mode: bool,
     ) {
-        // Always register domain-specific tools
+        // Register all tools unconditionally
         register_flow_tools(tool_registry);
         register_git_tools(tool_registry);
         register_kanban_tools(tool_registry);
@@ -407,20 +407,17 @@ impl McpServer {
         register_web_tools(tool_registry);
         register_treesitter_tools(tool_registry);
         register_js_tools(tool_registry);
-
-        // Agent discovery is always available — coding agents like Claude Code
-        // need to discover and delegate to subagents via MCP sidecar mode
+        register_shell_tools(tool_registry);
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
+        register_file_tools(tool_registry).await;
+        register_skill_tools(tool_registry, skill_library, prompt_library);
 
-        // Agent tools: only register when powering a full agent
-        // Off-the-shelf agents like Claude Code already have these capabilities natively
-        if agent_mode {
-            register_file_tools(tool_registry).await;
-            register_shell_tools(tool_registry);
-            register_skill_tools(tool_registry, skill_library, prompt_library);
-            tracing::debug!("Registered agent tools (agent_mode=true)");
-        } else {
-            tracing::debug!("Skipped agent tools (agent_mode=false)");
+        // Filter out agent-only tools when not in agent mode.
+        // Tools that return is_agent_tool() == true are duplicates of
+        // capabilities that off-the-shelf agents already have natively.
+        if !agent_mode {
+            tool_registry.remove_agent_tools();
+            tracing::debug!("Removed agent-only tools (agent_mode=false)");
         }
 
         tracing::debug!("Registered all tool handlers");

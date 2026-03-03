@@ -76,6 +76,10 @@ impl McpTool for FilesTool {
         Some("files")
     }
 
+    fn is_agent_tool(&self) -> bool {
+        true
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
