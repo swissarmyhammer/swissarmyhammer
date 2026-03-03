@@ -38,7 +38,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
             let ectx = ctx.entity_context().await?;
 
             // Read tag entity to get its name
-            let entity = ectx.read("tag", self.id.as_str()).await?;
+            let entity = ectx.read("tag", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
             let tag_name = entity.get_str("tag_name").unwrap_or("").to_string();
 
             // Remove #name text from all task bodies

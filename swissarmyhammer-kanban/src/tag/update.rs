@@ -66,7 +66,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
 
         let result: std::result::Result<Value, KanbanError> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("tag", self.id.as_str()).await?;
+            let mut entity = ectx.read("tag", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
             let old_name = entity.get_str("tag_name").unwrap_or("").to_string();
 
             if let Some(name) = &self.name {

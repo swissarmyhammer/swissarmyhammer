@@ -37,11 +37,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
             let ectx = ctx.entity_context().await?;
 
             // Check swimlane exists
-            ectx.read("swimlane", self.id.as_str()).await.map_err(|_| {
-                KanbanError::SwimlaneNotFound {
-                    id: self.id.to_string(),
-                }
-            })?;
+            ectx.read("swimlane", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
 
             // Check for tasks in this swimlane
             let tasks = ectx.list("task").await?;

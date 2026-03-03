@@ -89,7 +89,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("task", self.id.as_str()).await?;
+            let mut entity = ectx.read("task", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
 
             // Apply updates
             if let Some(title) = &self.title {

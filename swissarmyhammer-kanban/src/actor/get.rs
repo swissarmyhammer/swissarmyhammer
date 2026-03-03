@@ -27,11 +27,7 @@ impl Execute<KanbanContext, KanbanError> for GetActor {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("actor", self.id.as_str()).await.map_err(|_| {
-                KanbanError::ActorNotFound {
-                    id: self.id.to_string(),
-                }
-            })?;
+            let entity = ectx.read("actor", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
             Ok(actor_entity_to_json(&entity))
         }
         .await

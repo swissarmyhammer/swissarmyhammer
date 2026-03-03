@@ -38,7 +38,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
             let ectx = ctx.entity_context().await?;
 
             // Read the task first to verify it exists and get its data
-            let entity = ectx.read("task", self.id.as_str()).await?;
+            let entity = ectx.read("task", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
             let title = entity.get_str("title").unwrap_or("").to_string();
 
             // Remove this task from the depends_on list of all other tasks

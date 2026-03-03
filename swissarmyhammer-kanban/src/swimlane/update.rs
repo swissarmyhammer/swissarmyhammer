@@ -54,7 +54,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateSwimlane {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("swimlane", self.id.as_str()).await?;
+            let mut entity = ectx.read("swimlane", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
 
             if let Some(name) = &self.name {
                 entity.set("name", json!(name));

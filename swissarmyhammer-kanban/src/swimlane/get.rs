@@ -27,7 +27,7 @@ impl Execute<KanbanContext, KanbanError> for GetSwimlane {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("swimlane", self.id.as_str()).await?;
+            let entity = ectx.read("swimlane", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
             Ok(swimlane_entity_to_json(&entity))
         }
         .await

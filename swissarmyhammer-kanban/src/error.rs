@@ -137,6 +137,26 @@ impl KanbanError {
         }
     }
 
+    /// Convert an [`EntityError`] into a specific `*NotFound` variant when possible.
+    ///
+    /// Maps `EntityError::NotFound { entity_type, id }` to the corresponding
+    /// `KanbanError::TaskNotFound`, `ColumnNotFound`, etc. Other entity errors
+    /// fall through to the generic `EntityError` wrapper.
+    pub fn from_entity_error(err: swissarmyhammer_entity::EntityError) -> Self {
+        if let swissarmyhammer_entity::EntityError::NotFound { entity_type, id } = &err {
+            match entity_type.as_str() {
+                "task" => return Self::TaskNotFound { id: id.clone() },
+                "column" => return Self::ColumnNotFound { id: id.clone() },
+                "swimlane" => return Self::SwimlaneNotFound { id: id.clone() },
+                "actor" => return Self::ActorNotFound { id: id.clone() },
+                "tag" => return Self::TagNotFound { id: id.clone() },
+                "comment" => return Self::CommentNotFound { id: id.clone() },
+                _ => {}
+            }
+        }
+        Self::EntityError(err)
+    }
+
     /// Check if this is a retryable error
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::LockBusy)

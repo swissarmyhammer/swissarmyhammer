@@ -46,12 +46,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateActor {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity =
-                ectx.read("actor", self.id.as_str())
-                    .await
-                    .map_err(|_| KanbanError::ActorNotFound {
-                        id: self.id.to_string(),
-                    })?;
+            let mut entity = ectx.read("actor", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
 
             if let Some(name) = &self.name {
                 entity.set("name", json!(name));

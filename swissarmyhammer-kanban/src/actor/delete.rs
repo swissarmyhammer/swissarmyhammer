@@ -37,11 +37,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteActor {
             let ectx = ctx.entity_context().await?;
 
             // Check actor exists
-            ectx.read("actor", self.id.as_str())
-                .await
-                .map_err(|_| KanbanError::ActorNotFound {
-                    id: self.id.to_string(),
-                })?;
+            ectx.read("actor", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
 
             // Remove actor from all task assignee lists
             let all_tasks = ectx.list("task").await?;
