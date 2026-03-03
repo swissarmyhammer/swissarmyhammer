@@ -1,8 +1,7 @@
 ---
+position_column: done
+position_ordinal: e1
 title: read_entity_dir silently swallows all parse errors
-position:
-  column: todo
-  ordinal: a8
 ---
 `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-entity/src/io.rs` line 116
 

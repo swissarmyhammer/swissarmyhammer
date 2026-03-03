@@ -119,6 +119,8 @@ pub async fn write_entity(
 /// Read all entities from a directory.
 ///
 /// Scans for files matching the expected extension and parses each one.
+/// Parse errors (invalid YAML, bad frontmatter) are logged and skipped.
+/// I/O errors (permission denied, disk failure) are propagated.
 pub async fn read_entity_dir(
     dir: &Path,
     entity_type: &str,
@@ -144,10 +146,15 @@ pub async fn read_entity_dir(
         };
         match read_entity(&path, entity_type, &id, entity_def).await {
             Ok(entity) => entities.push(entity),
-            Err(e) => {
+            // File deleted between readdir and read — benign race condition
+            Err(EntityError::NotFound { .. }) => continue,
+            // Parse errors — warn and skip
+            Err(e @ (EntityError::InvalidFrontmatter { .. } | EntityError::Yaml { .. })) => {
                 warn!(path = %path.display(), error = %e, "skipping unparseable entity file");
                 continue;
             }
+            // I/O and other errors — propagate
+            Err(e) => return Err(e),
         }
     }
 
@@ -559,6 +566,80 @@ mod tests {
             .unwrap();
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].id, "bug");
+    }
+
+    #[tokio::test]
+    async fn read_entity_dir_skips_parse_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let entity_def = tag_entity_def(); // expects .yaml
+
+        // Write a valid .yaml file
+        let path = entity_file_path(dir.path(), "bug", &entity_def);
+        let mut entity = Entity::new("tag", "bug");
+        entity.set("tag_name", Value::String("bug".into()));
+        write_entity(&path, &entity, &entity_def).await.unwrap();
+
+        // Write an unparseable .yaml file
+        fs::write(dir.path().join("corrupt.yaml"), "{{{{not valid yaml")
+            .await
+            .unwrap();
+
+        let entities = read_entity_dir(dir.path(), "tag", &entity_def)
+            .await
+            .unwrap();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].id, "bug");
+    }
+
+    #[tokio::test]
+    async fn read_entity_dir_skips_bad_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let entity_def = task_entity_def(); // expects .md with frontmatter
+
+        // Write a valid .md file
+        let path = entity_file_path(dir.path(), "01ABC", &entity_def);
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set("title", Value::String("Good Task".into()));
+        entity.set("body", Value::String("Body".into()));
+        write_entity(&path, &entity, &entity_def).await.unwrap();
+
+        // Write a .md file without frontmatter delimiters
+        fs::write(dir.path().join("01DEF.md"), "just text, no frontmatter")
+            .await
+            .unwrap();
+
+        let entities = read_entity_dir(dir.path(), "task", &entity_def)
+            .await
+            .unwrap();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].id, "01ABC");
+    }
+
+    #[tokio::test]
+    async fn read_entity_dir_propagates_io_errors() {
+        // Create a directory with a file that can't be read (permission denied).
+        // On unix, we can remove read permission from a file.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let dir = tempfile::tempdir().unwrap();
+            let entity_def = tag_entity_def();
+
+            // Write a .yaml file, then remove read permission
+            let path = dir.path().join("secret.yaml");
+            fs::write(&path, "tag_name: secret\n").await.unwrap();
+            let perms = std::fs::Permissions::from_mode(0o000);
+            std::fs::set_permissions(&path, perms).unwrap();
+
+            let result = read_entity_dir(dir.path(), "tag", &entity_def).await;
+            assert!(result.is_err());
+            assert!(matches!(result.unwrap_err(), EntityError::Io(_)));
+
+            // Restore permissions for cleanup
+            let perms = std::fs::Permissions::from_mode(0o644);
+            std::fs::set_permissions(&path, perms).unwrap();
+        }
     }
 
     #[tokio::test]
