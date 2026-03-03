@@ -1,0 +1,7 @@
+---
+title: 'KanbanLookup asymmetry: column uses EntityContext, others use typed I/O'
+position:
+  column: todo
+  ordinal: c5
+---
+## File\n- `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-kanban/src/defaults.rs:136-265`\n\n## What\nIn `KanbanLookup::get()` and `KanbanLookup::list()`, the `\"column\"` arm uses `ctx.entity_context().await?.read(\"column\", id)` and `e.to_json()`, while every other entity type (task, tag, actor, swimlane) uses the typed read methods (`ctx.read_tag()`, `ctx.read_actor()`, etc.) with manual `serde_json::to_value` + id injection.\n\n## Why\nThis asymmetry means:\n1. Column is the only entity using the new path in `KanbanLookup` -- if EntityContext has different serialization behavior, column will differ from the rest.\n2. The JSON shape for column includes `entity_type` (from `Entity::to_json()`) but the other entities do not -- they only inject `id`. This could surprise downstream consumers.\n3. As more entities migrate, each one needs manual updating. A single strategy would be cleaner.\n\n## Suggestion\nThis is fine for now as a transitional step, but when other entities migrate to EntityContext, a unified approach (probably all going through EntityContext) will be needed.\n\n- [ ] Document the asymmetry with a TODO comment\n- [ ] Plan to unify once more entities migrate\n- [ ] Verify column JSON shape is compatible with consumers expecting `entity_type`\n\n#warning" #warning

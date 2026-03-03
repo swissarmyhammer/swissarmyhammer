@@ -1,0 +1,7 @@
+---
+title: 'mirdan-cli: 22 install::tests failures -- NotFound OS error'
+position:
+  column: done
+  ordinal: a2
+---
+22 tests in mirdan-cli/src/install.rs fail with Os { code: 2, kind: NotFound, message: "No such file or directory" } at various unwrap() calls. All tests: test_deploy_and_uninstall_plugin (line 2026), test_deploy_and_uninstall_tool (1850), test_deploy_and_uninstall_validator (2282), test_deploy_plugin_creates_files (1984), test_deploy_plugin_twice_overwrites_cleanly (2685), test_deploy_plugin_with_bundled_mcp (2045), test_deploy_tool_creates_store_and_mcp_json (1781), test_deploy_tool_preserves_existing_mcp_servers (1891), test_deploy_tool_twice_overwrites_cleanly (2641), test_deploy_validator_creates_files (2260), test_e2e_all_four_types_coexist (2515), test_e2e_clone_anthropics_deploy_validator_uninstall_by_url (2729), test_e2e_deploy_local_validator_and_uninstall_by_name (2464), test_e2e_plugin_install_list_uninstall (2162), test_e2e_tool_install_list_uninstall (2098), test_install_tool_from_mcp_config_registers_server (2798), test_install_tool_from_mcp_config_then_uninstall (2959), test_install_tool_from_metadata_rejects_non_tool (2925), test_install_tool_from_tool_md_content (2861), test_uninstall_plugin_not_found (2084), test_uninstall_tool_not_found (1955), test_uninstall_validator_not_found (2303). Likely a missing binary or fixture path. #test-failure

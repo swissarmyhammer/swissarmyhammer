@@ -1,0 +1,7 @@
+---
+title: GetColumn error type is generic EntityError, not ColumnNotFound
+position:
+  column: todo
+  ordinal: c4
+---
+## File\n- `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-kanban/src/column/get.rs:28-41`\n\n## What\nWhen `GetColumn` cannot find a column, it returns `EntityError::NotFound { entity_type: \"column\", id }` which converts to `KanbanError::EntityError(...)`. The user-visible error message is `entity error: entity not found: column/{id}`. The pre-migration code returned `KanbanError::ColumnNotFound { id }` which gives the message `column not found: {id}`.\n\n## Why\nThis is a minor regression in error message quality. Callers matching on `KanbanError::ColumnNotFound` will no longer match. The `DeleteColumn` handler already works around this by catching the EntityError and re-mapping to ColumnNotFound (line 40-44 of delete.rs). GetColumn and UpdateColumn do not.\n\nNote: this may be intentional (moving toward generic errors), but if so, callers relying on specific variants will break silently.\n\n## Suggestion\nEither:\n1. Add `.map_err()` in `get.rs` and `update.rs` to convert EntityError::NotFound into KanbanError::ColumnNotFound (matching what delete.rs already does), OR\n2. Accept the generic error and update any downstream match arms.\n\n- [ ] Decide on error mapping strategy\n- [ ] Apply consistently across get/update/delete\n- [ ] Verify no downstream callers match on ColumnNotFound for these paths\n\n#warning" #warning

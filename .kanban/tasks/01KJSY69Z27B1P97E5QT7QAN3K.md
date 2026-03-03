@@ -1,0 +1,7 @@
+---
+title: map_err discards original entity error context in get/delete/update
+position:
+  column: todo
+  ordinal: d9
+---
+**Files:**\n- `swissarmyhammer-kanban/src/attachment/get.rs` (line 42)\n- `swissarmyhammer-kanban/src/attachment/delete.rs` (line 46)\n- `swissarmyhammer-kanban/src/attachment/update.rs` (line 80)\n\n**What:** All three files use `.map_err(|_| KanbanError::NotFound { ... })` when reading the attachment entity. The `|_|` closure discards the original error. If the entity read fails for a reason other than \"not found\" (e.g., YAML parse error, I/O permission error), the caller gets a misleading `NotFound` error, making debugging difficult.\n\n**Why it matters:** The entity layer distinguishes `EntityError::NotFound` from `EntityError::Io` and `EntityError::Yaml`. Mapping all failures to `NotFound` hides legitimate I/O or parse errors. This violates the principle that error messages should help diagnose the actual problem.\n\n**Suggestion:**\n- [ ] Match on the error variant: convert `EntityError::NotFound` to `KanbanError::NotFound`, but let other errors propagate with their original context (e.g., via `KanbanError::from(entity_error)` or a dedicated variant)\n- [ ] Apply this pattern consistently across `get.rs`, `delete.rs`, and `update.rs`\n- [ ] Verify by running tests: `cargo nextest run --package swissarmyhammer-kanban` #warning

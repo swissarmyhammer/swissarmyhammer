@@ -1,0 +1,21 @@
+{
+  "name": "Untitled Board",
+  "columns": [
+    {
+      "id": "todo",
+      "name": "To Do",
+      "order": 0
+    },
+    {
+      "id": "doing",
+      "name": "Doing",
+      "order": 1
+    },
+    {
+      "id": "done",
+      "name": "Done",
+      "order": 2
+    }
+  ],
+  "swimlanes": []
+}

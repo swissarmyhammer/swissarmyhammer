@@ -1,0 +1,7 @@
+---
+title: DeleteTask leaves orphaned attachment entities
+position:
+  column: todo
+  ordinal: d7
+---
+**File:** `swissarmyhammer-kanban/src/task/delete.rs` (lines 37-63)\n\n**What:** When a task is deleted via `DeleteTask`, the code removes the task from other tasks' `depends_on` lists, but does not delete or trash the standalone attachment entities that reference the deleted task. This leaves orphaned `.yaml` files in `.kanban/attachments/` with an `attachment_task` field pointing to a non-existent task.\n\n**Why it matters:** Orphaned attachment entities accumulate over time and can cause confusing behavior. For example, if a task ID is somehow reused (unlikely with ULIDs but possible via manual edits), old attachments could be associated with a new task. More practically, they consume disk space and clutter the attachments directory. The old embedded-JSON model did not have this problem because attachments were deleted with the task file.\n\n**Suggestion:**\n- [ ] In `DeleteTask::execute`, read the task's `attachments` string list before deleting the task\n- [ ] For each attachment ID, call `ectx.delete(\"attachment\", &id)` to trash the attachment entity\n- [ ] Add a test: create a task with attachments, delete the task, verify attachment entities are also removed\n- [ ] Verify the fix by running `cargo nextest run --package swissarmyhammer-kanban` #warning

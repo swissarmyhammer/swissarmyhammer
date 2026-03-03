@@ -1,0 +1,1 @@
+{"id":"01KJQ8VXZ7QY47WTSFRMKX721R","timestamp":"2026-03-02T12:37:45.575514Z","op":"add actor","input":{"ensure":true,"id":"assistant","name":"Assistant","type":"human"},"output":{"actor":{"id":"assistant","name":"Assistant","type":"human"},"created":true},"duration_ms":0}
