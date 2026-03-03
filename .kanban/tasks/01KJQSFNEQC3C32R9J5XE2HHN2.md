@@ -1,22 +1,6 @@
 ---
+position_column: done
+position_ordinal: e8
 title: 'WARNING: consider replacing custom diff apply/reverse with similar crate'
-position:
-  column: todo
-  ordinal: b5
 ---
-`/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-entity/src/changelog.rs` lines 236-354 (all of reverse_unified_diff, apply_unified_diff, parse_hunk_header)
-
-**What:** The codebase uses `similar` to CREATE diffs but then implements custom `apply_unified_diff` and `reverse_unified_diff` functions by hand-parsing unified diff format. This is roughly 120 lines of subtle, bug-prone code that reimplements functionality available in the `similar` crate itself.
-
-**Why:** `similar` already provides `TextDiff::from_lines()` which can produce diffs in either direction. Instead of reversing a diff, you can simply call `make_text_diff(new, old)` to get the reverse diff directly. For applying diffs, you could store old/new text pairs or use `similar`'s change operations directly rather than parsing unified diff text.
-
-This would eliminate all three blockers above (hunk header reversal, malformed headers, trailing newline handling) because you'd never need to parse or reverse unified diff text.
-
-**Suggestion:** Consider one of:
-1. Store `similar::ChangeTag` operations instead of unified diff text strings
-2. For reversal, call `make_text_diff(new_text, old_text)` instead of `reverse_unified_diff`
-3. If unified diff text must be stored (for human readability in JSONL), keep the current `make_text_diff` for storage but use `similar` directly for application
-
-- [ ] Evaluate whether `similar`'s API supports direct patch application
-- [ ] If not, consider storing old+new text hashes alongside the diff for verification
-- [ ] Prototype the `make_text_diff(new, old)` approach for reversal to avoid custom reversal entirely #warning
+**Resolution:** Already done. The custom `apply_unified_diff` and `reverse_unified_diff` functions no longer exist. The code now uses `diffy` for everything:\n- `diffy::create_patch(old, new)` for forward patches\n- `diffy::create_patch(new, old)` for reverse patches (both computed at diff time)\n- `diffy::Patch::from_str` + `diffy::apply` for application\n- `reverse_changes` just swaps forward/reverse patches\n\nNo custom parsing or reversal of unified diff text. No code changes needed.\n\n- [x] Evaluate whether similar/diffy API supports direct patch application — yes, diffy::apply\n- [x] Store old+new text hashes — not needed, diffy validates context lines\n- [x] Prototype clean reversal — already in place via dual create_patch at diff time

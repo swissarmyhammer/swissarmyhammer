@@ -6,6 +6,15 @@
 //! as JSON values. Changes are reversible — each [`FieldChange`] has a natural
 //! inverse.
 //!
+//! ## Storage
+//!
+//! Changelogs are stored as append-only JSONL files (one JSON object per line).
+//! Each entity has its own changelog file. [`read_changelog`] loads the entire
+//! file into memory, so growth is proportional to the number of mutations.
+//! For typical kanban usage (hundreds of updates per entity) this is fine.
+//! Long-lived entities with thousands of updates may benefit from future
+//! compaction (snapshotting state and truncating the log).
+//!
 //! ## Usage
 //!
 //! ```rust,no_run
