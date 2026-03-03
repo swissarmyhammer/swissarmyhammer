@@ -83,13 +83,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
             }
 
             // Read the attachment entity
-            let mut attachment =
-                ectx.read("attachment", &self.id)
-                    .await
-                    .map_err(|_| KanbanError::NotFound {
-                        resource: "attachment".to_string(),
-                        id: self.id.to_string(),
-                    })?;
+            let mut attachment = ectx.read("attachment", &self.id).await.map_err(KanbanError::from_entity_error)?;
 
             // Update only provided fields
             if let Some(name) = &self.name {

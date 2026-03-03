@@ -48,12 +48,7 @@ impl Execute<KanbanContext, KanbanError> for GetAttachment {
             }
 
             // Read the attachment entity
-            let attachment = ectx.read("attachment", &self.id).await.map_err(|_| {
-                KanbanError::NotFound {
-                    resource: "attachment".to_string(),
-                    id: self.id.to_string(),
-                }
-            })?;
+            let attachment = ectx.read("attachment", &self.id).await.map_err(KanbanError::from_entity_error)?;
 
             Ok(attachment_entity_to_json(&attachment))
         }
