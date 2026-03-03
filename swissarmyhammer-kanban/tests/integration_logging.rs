@@ -59,20 +59,22 @@ async fn test_activity_logging_end_to_end() {
     assert_eq!(entries[1].actor, Some("test-user[session123]".to_string()));
     assert_eq!(entries[2].actor, Some("test-user[session123]".to_string()));
 
-    // Verify per-task entity changelog (written by EntityContext)
+    // Verify per-task log
     let task_id_type = swissarmyhammer_kanban::types::TaskId::from_string(&task_id);
     let task_log_path = ctx.task_log_path(&task_id_type);
     let task_log = std::fs::read_to_string(&task_log_path).unwrap();
     let lines: Vec<&str> = task_log.lines().collect();
 
-    // Entity changelog entries (create + update, no GetTask)
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 2); // AddTask + UpdateTask (not GetTask)
 
+    // Parse entries
     let entry1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     let entry2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
 
-    assert_eq!(entry1["op"], "create");
-    assert_eq!(entry2["op"], "update");
+    assert_eq!(entry1["op"], "add task");
+    assert_eq!(entry2["op"], "update task");
+    assert_eq!(entry1["actor"], "test-user[session123]");
+    assert_eq!(entry2["actor"], "test-user[session123]");
 
     // Verify activity log file exists
     let activity_path = ctx.activity_path();

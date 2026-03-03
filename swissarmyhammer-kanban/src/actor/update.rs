@@ -1,11 +1,10 @@
 //! UpdateActor command
 
-use crate::actor::actor_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::ActorId;
+use crate::types::{Actor, ActorId};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -45,16 +44,27 @@ impl Execute<KanbanContext, KanbanError> for UpdateActor {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("actor", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            let actor = ctx.read_actor(&self.id).await?;
 
-            if let Some(name) = &self.name {
-                entity.set("name", json!(name));
-            }
+            let updated_actor = if let Some(name) = &self.name {
+                // Update the name while preserving the type
+                match actor {
+                    Actor::Human { id, .. } => Actor::Human {
+                        id,
+                        name: name.clone(),
+                    },
+                    Actor::Agent { id, .. } => Actor::Agent {
+                        id,
+                        name: name.clone(),
+                    },
+                }
+            } else {
+                actor
+            };
 
-            ectx.write(&entity).await?;
+            ctx.write_actor(&updated_actor).await?;
 
-            Ok(actor_entity_to_json(&entity))
+            Ok(serde_json::to_value(&updated_actor)?)
         }
         .await;
 

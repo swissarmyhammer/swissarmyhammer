@@ -1,6 +1,5 @@
 //! GetActor command
 
-use crate::actor::actor_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::ActorId;
@@ -26,9 +25,8 @@ impl GetActor {
 impl Execute<KanbanContext, KanbanError> for GetActor {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("actor", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
-            Ok(actor_entity_to_json(&entity))
+            let actor = ctx.read_actor(&self.id).await?;
+            Ok(serde_json::to_value(actor)?)
         }
         .await
         {

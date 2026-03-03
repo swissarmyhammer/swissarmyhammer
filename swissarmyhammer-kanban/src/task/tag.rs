@@ -1,33 +1,26 @@
-//! TagTask command — appends `#tag` to task description
+//! TagTask command
 
-use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::tag::tag_name_exists_entity;
-use crate::tag_parser;
-use crate::types::TaskId;
+use crate::types::{TagId, TaskId};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use swissarmyhammer_entity::Entity;
+use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Add a tag to a task by appending `#tag` to its description.
-///
-/// The `tag` field is the tag name/slug (e.g. "bug").
-/// If the Tag object doesn't exist yet, it is auto-created with an auto-color.
+/// Add a tag to a task
 #[operation(verb = "tag", noun = "task", description = "Add a tag to a task")]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TagTask {
     /// The task ID to tag
     pub id: TaskId,
-    /// The tag name (slug) to add (e.g. "bug")
-    pub tag: String,
+    /// The tag ID to add
+    pub tag: TagId,
 }
 
 impl TagTask {
-    pub fn new(id: impl Into<TaskId>, tag: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<TaskId>, tag: impl Into<TagId>) -> Self {
         Self {
             id: id.into(),
             tag: tag.into(),
@@ -41,34 +34,26 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
 
-        let result: std::result::Result<Value, KanbanError> = async {
-            let slug = tag_parser::normalize_slug(&self.tag);
-
-            let ectx = ctx.entity_context().await?;
-
-            // Auto-create Tag entity if it doesn't exist
-            if !tag_name_exists_entity(ectx, &slug).await {
-                let color = auto_color::auto_color(&slug).to_string();
-                let tag_id = ulid::Ulid::new().to_string();
-                let mut tag_entity = Entity::new("tag", &tag_id);
-                tag_entity.set("tag_name", json!(slug));
-                tag_entity.set("color", json!(color));
-                ectx.write(&tag_entity).await?;
+        let result = async {
+            // Verify tag exists using file-based storage
+            if !ctx.tag_exists(&self.tag).await {
+                return Err(KanbanError::TagNotFound {
+                    id: self.tag.to_string(),
+                });
             }
-            let mut entity = ectx.read("task", self.id.as_str()).await?;
 
-            // Append #tag to body if not already present
-            let body = entity.get_str("body").unwrap_or("").to_string();
-            let new_body = tag_parser::append_tag(&body, &slug);
-            if new_body != body {
-                entity.set("body", serde_json::json!(new_body));
-                ectx.write(&entity).await?;
+            let mut task = ctx.read_task(&self.id).await?;
+
+            // Add tag if not already present
+            if !task.tags.contains(&self.tag) {
+                task.tags.push(self.tag.clone());
+                ctx.write_task(&task).await?;
             }
 
             Ok(serde_json::json!({
                 "tagged": true,
                 "task_id": self.id.to_string(),
-                "tag": slug
+                "tag_id": self.tag.to_string()
             }))
         }
         .await;

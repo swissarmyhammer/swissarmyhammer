@@ -155,6 +155,121 @@ pub fn format_query_matches(results: &[QueryMatch]) -> String {
 }
 
 #[cfg(test)]
+pub mod test_helpers {
+    use crate::mcp::tool_registry::McpTool;
+    use crate::test_utils::create_test_context;
+    use serde_json::json;
+
+    /// Create a test context and temp directory for treesitter tool tests.
+    pub async fn setup_test_env() -> (crate::mcp::tool_registry::ToolContext, tempfile::TempDir) {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        (context, temp_dir)
+    }
+
+    /// Create arguments with just a path pointing to the temp directory.
+    pub fn args_with_path(
+        temp_dir: &tempfile::TempDir,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "path".to_string(),
+            json!(temp_dir.path().display().to_string()),
+        );
+        arguments
+    }
+
+    /// Assert basic tool properties: name matches expected and description contains keyword.
+    pub fn assert_tool_basics<T: McpTool>(
+        tool: &T,
+        expected_name: &str,
+        description_keyword: &str,
+    ) {
+        assert_eq!(McpTool::name(tool), expected_name);
+        let desc = McpTool::description(tool);
+        assert!(!desc.is_empty(), "Description should not be empty");
+        assert!(
+            desc.to_lowercase()
+                .contains(&description_keyword.to_lowercase()),
+            "Description '{}' should contain '{}'",
+            desc,
+            description_keyword
+        );
+    }
+
+    /// Assert that the tool schema is a valid JSON object with properties.
+    pub fn assert_schema_is_object<T: McpTool>(tool: &T) {
+        let schema = McpTool::schema(tool);
+        assert_eq!(schema["type"], "object", "Schema type should be 'object'");
+        assert!(
+            schema["properties"].is_object(),
+            "Schema should have properties"
+        );
+    }
+
+    /// Assert that the schema has specific required fields.
+    pub fn assert_schema_has_required<T: McpTool>(tool: &T, required_fields: &[&str]) {
+        let schema = McpTool::schema(tool);
+        let required = schema["required"].as_array();
+        assert!(required.is_some(), "Schema should have required array");
+        let required = required.unwrap();
+        for field in required_fields {
+            assert!(
+                required.contains(&json!(field)),
+                "Required fields should include '{}'",
+                field
+            );
+        }
+    }
+
+    /// Assert that the schema has specific property fields.
+    pub fn assert_schema_has_properties<T: McpTool>(tool: &T, property_names: &[&str]) {
+        let schema = McpTool::schema(tool);
+        for name in property_names {
+            assert!(
+                schema["properties"][name].is_object(),
+                "Schema should have property '{}'",
+                name
+            );
+        }
+    }
+
+    /// Execute a tool with a temp directory path and optional extra arguments.
+    ///
+    /// Sets up the test environment, creates arguments with the temp path,
+    /// merges any extra arguments, and executes the tool.
+    pub async fn execute_tool_with_temp_path<T: McpTool>(
+        tool: &T,
+        extra_args: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> (
+        std::result::Result<rmcp::model::CallToolResult, rmcp::ErrorData>,
+        tempfile::TempDir,
+    ) {
+        let (context, temp_dir) = setup_test_env().await;
+        let mut arguments = args_with_path(&temp_dir);
+        if let Some(extra) = extra_args {
+            for (k, v) in extra {
+                arguments.insert(k, v);
+            }
+        }
+        let result = tool.execute(arguments, &context).await;
+        (result, temp_dir)
+    }
+
+    /// Assert that tool execution succeeds on an empty workspace.
+    ///
+    /// With the Workspace API, opening a workspace makes the process
+    /// a leader automatically, so tools should succeed (with empty results).
+    pub async fn assert_execute_succeeds_on_empty_workspace<T: McpTool>(
+        tool: &T,
+        extra_args: Option<serde_json::Map<String, serde_json::Value>>,
+    ) {
+        let (result, _temp_dir) = execute_tool_with_temp_path(tool, extra_args).await;
+        assert!(result.is_ok(), "Tool should succeed on empty workspace");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::create_test_context;

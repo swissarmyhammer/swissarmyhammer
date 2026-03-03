@@ -1,6 +1,5 @@
 //! GetColumn command
 
-use crate::column::add::column_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::ColumnId;
@@ -26,9 +25,16 @@ impl GetColumn {
 impl Execute<KanbanContext, KanbanError> for GetColumn {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("column", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
-            Ok(column_entity_to_json(&entity))
+            let board = ctx.read_board().await?;
+
+            let column =
+                board
+                    .find_column(&self.id)
+                    .ok_or_else(|| KanbanError::ColumnNotFound {
+                        id: self.id.to_string(),
+                    })?;
+
+            Ok(serde_json::to_value(column)?)
         }
         .await
         {

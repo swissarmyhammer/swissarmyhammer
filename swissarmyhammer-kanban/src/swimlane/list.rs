@@ -2,7 +2,6 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::swimlane::swimlane_entity_to_json;
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -20,18 +19,14 @@ pub struct ListSwimlanes;
 impl Execute<KanbanContext, KanbanError> for ListSwimlanes {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let mut swimlanes = ectx.list("swimlane").await?;
-            swimlanes.sort_by_key(|s| {
-                s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
-            });
+            let board = ctx.read_board().await?;
 
-            let swimlanes_json: Vec<Value> =
-                swimlanes.iter().map(swimlane_entity_to_json).collect();
+            let mut swimlanes = board.swimlanes.clone();
+            swimlanes.sort_by_key(|s| s.order);
 
             Ok(serde_json::json!({
-                "swimlanes": swimlanes_json,
-                "count": swimlanes_json.len()
+                "swimlanes": swimlanes,
+                "count": swimlanes.len()
             }))
         }
         .await

@@ -33,25 +33,26 @@ impl Execute<KanbanContext, KanbanError> for DeleteActor {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
 
-        let result: crate::error::Result<Value> = async {
-            let ectx = ctx.entity_context().await?;
-
+        let result = async {
             // Check actor exists
-            ectx.read("actor", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            if !ctx.actor_exists(&self.id).await {
+                return Err(KanbanError::ActorNotFound {
+                    id: self.id.to_string(),
+                });
+            }
 
             // Remove actor from all task assignee lists
-            let all_tasks = ectx.list("task").await?;
-            for mut task in all_tasks {
-                let mut assignees = task.get_string_list("assignees");
-                if assignees.contains(&self.id.to_string()) {
-                    assignees.retain(|a| a != self.id.as_str());
-                    task.set("assignees", serde_json::to_value(&assignees)?);
-                    ectx.write(&task).await?;
+            let task_ids = ctx.list_task_ids().await?;
+            for id in task_ids {
+                let mut task = ctx.read_task(&id).await?;
+                if task.assignees.contains(&self.id) {
+                    task.assignees.retain(|a| a != &self.id);
+                    ctx.write_task(&task).await?;
                 }
             }
 
-            // Delete the actor entity
-            ectx.delete("actor", self.id.as_str()).await?;
+            // Delete the actor file
+            ctx.delete_actor_file(&self.id).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,
@@ -126,8 +127,7 @@ mod tests {
         assert_eq!(result["id"], "alice");
 
         // Verify actor is gone
-        let ectx = ctx.entity_context().await.unwrap();
-        assert!(ectx.read("actor", "alice").await.is_err());
+        assert!(!ctx.actor_exists(&"alice".into()).await);
     }
 
     #[tokio::test]
@@ -168,9 +168,8 @@ mod tests {
             .unwrap();
 
         // Verify assignment
-        let ectx = ctx.entity_context().await.unwrap();
-        let task = ectx.read("task", task_id).await.unwrap();
-        assert!(task.get_string_list("assignees").contains(&"assistant".to_string()));
+        let task = ctx.read_task(&task_id.into()).await.unwrap();
+        assert!(task.assignees.contains(&"assistant".into()));
 
         // Delete actor
         DeleteActor::new("assistant")
@@ -180,7 +179,7 @@ mod tests {
             .unwrap();
 
         // Verify task no longer has assignment
-        let task = ectx.read("task", task_id).await.unwrap();
-        assert!(!task.get_string_list("assignees").contains(&"assistant".to_string()));
+        let task = ctx.read_task(&task_id.into()).await.unwrap();
+        assert!(!task.assignees.contains(&"assistant".into()));
     }
 }

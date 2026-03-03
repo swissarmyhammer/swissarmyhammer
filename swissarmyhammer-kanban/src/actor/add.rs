@@ -2,22 +2,12 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::ActorId;
+use crate::types::{Actor, ActorId};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use swissarmyhammer_entity::Entity;
+use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
-
-/// Convert an actor entity to JSON output
-pub(crate) fn actor_entity_to_json(entity: &Entity) -> Value {
-    json!({
-        "id": entity.id,
-        "name": entity.get_str("name").unwrap_or(""),
-        "type": entity.get_str("actor_type").unwrap_or("human"),
-    })
-}
 
 /// Actor type for creation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -85,14 +75,13 @@ impl Execute<KanbanContext, KanbanError> for AddActor {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let ectx = ctx.entity_context().await?;
-
             // Check if actor already exists
-            if let Ok(existing) = ectx.read("actor", self.id.as_str()).await {
+            if ctx.actor_exists(&self.id).await {
                 if self.ensure {
                     // Idempotent mode: return existing actor
-                    return Ok(json!({
-                        "actor": actor_entity_to_json(&existing),
+                    let actor = ctx.read_actor(&self.id).await?;
+                    return Ok(serde_json::json!({
+                        "actor": actor,
                         "created": false,
                         "message": "Actor already exists"
                     }));
@@ -100,19 +89,21 @@ impl Execute<KanbanContext, KanbanError> for AddActor {
                 return Err(KanbanError::duplicate_id("actor", self.id.to_string()));
             }
 
-            let type_str = match self.actor_type {
-                ActorType::Human => "human",
-                ActorType::Agent => "agent",
+            let actor = match self.actor_type {
+                ActorType::Human => Actor::Human {
+                    id: self.id.clone(),
+                    name: self.name.clone(),
+                },
+                ActorType::Agent => Actor::Agent {
+                    id: self.id.clone(),
+                    name: self.name.clone(),
+                },
             };
 
-            let mut entity = Entity::new("actor", self.id.as_str());
-            entity.set("name", json!(self.name));
-            entity.set("actor_type", json!(type_str));
+            ctx.write_actor(&actor).await?;
 
-            ectx.write(&entity).await?;
-
-            Ok(json!({
-                "actor": actor_entity_to_json(&entity),
+            Ok(serde_json::json!({
+                "actor": actor,
                 "created": true
             }))
         }

@@ -88,7 +88,7 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 
 - `update task` - Update task properties
   - Required: `id`
-  - Optional: `title`, `description`, `assignees`, `tags`, `depends_on`, `attachments`
+  - Optional: `title`, `description`, `assignees`, `tags`, `depends_on`, `subtasks`, `attachments`
 
 - `move task` - Move task to a different column
   - Required: `id`, `column`
@@ -152,6 +152,21 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 
 - `list comments` - List all comments on a task
   - Required: `task_id`
+
+### Subtask Operations
+
+- `add subtask` - Add a checklist item to a task
+  - Required: `task_id`, `title`
+
+- `update subtask` - Update subtask properties
+  - Required: `task_id`, `id`
+  - Optional: `title`, `completed`
+
+- `complete subtask` - Mark a subtask as complete
+  - Required: `task_id`, `id`
+
+- `delete subtask` - Delete a subtask
+  - Required: `task_id`, `id`
 
 ### Attachment Operations
 
@@ -278,6 +293,7 @@ Complete a task:
 {
   "op": "add tag",
   "id": "bug",
+  "name": "Bug",
   "color": "ff0000",
   "description": "Bug fixes"
 }
@@ -289,6 +305,25 @@ Tag a task:
   "op": "tag task",
   "id": "01ABC123...",
   "tag": "bug"
+}
+```
+
+### Add subtasks for checklists
+
+```json
+{
+  "op": "add subtask",
+  "task_id": "01ABC123...",
+  "title": "Write tests"
+}
+```
+
+Complete a subtask:
+```json
+{
+  "op": "complete subtask",
+  "task_id": "01ABC123...",
+  "id": "01DEF456..."
 }
 ```
 
@@ -393,7 +428,7 @@ The blocked task won't appear in ready tasks until the blocker is completed:
 {"op": "add actor", "id": "assistant", "name": "AI Assistant", "type": "agent", "ensure": true}
 
 // 3. Add a tag
-{"op": "add tag", "id": "feature", "color": "00ff00"}
+{"op": "add tag", "id": "feature", "name": "Feature", "color": "00ff00"}
 
 // 4. Create a task
 {"op": "add task", "title": "Implement login", "tags": ["feature"]}
@@ -401,13 +436,19 @@ The blocked task won't appear in ready tasks until the blocker is completed:
 // 5. Assign to yourself
 {"op": "assign task", "id": "<task-id>", "assignee": "assistant"}
 
-// 6. Move to doing
+// 6. Add a subtask
+{"op": "add subtask", "task_id": "<task-id>", "title": "Write tests"}
+
+// 7. Move to doing
 {"op": "move task", "id": "<task-id>", "column": "doing"}
 
-// 7. Add a comment
+// 8. Complete subtask
+{"op": "complete subtask", "task_id": "<task-id>", "id": "<subtask-id>"}
+
+// 9. Add a comment
 {"op": "add comment", "task_id": "<task-id>", "body": "Implementation complete", "author": "assistant"}
 
-// 8. Complete the task
+// 10. Complete the task
 {"op": "complete task", "id": "<task-id>"}
 ```
 

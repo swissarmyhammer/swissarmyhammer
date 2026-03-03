@@ -1,9 +1,0 @@
-{
-  "identifier": "default",
-  "description": "Default capability for the kanban app",
-  "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "dialog:default"
-  ]
-}

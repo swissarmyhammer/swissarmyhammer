@@ -2,8 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task_helpers::{task_entity_to_rich_json, task_is_ready, task_tags};
-use crate::types::{ActorId, Ordinal, SwimlaneId, TagId};
+use crate::types::{ActorId, SwimlaneId, TagId, Task};
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -57,58 +56,52 @@ impl NextTask {
 impl Execute<KanbanContext, KanbanError> for NextTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let all_columns = ectx.list("column").await?;
-            let all_tasks = ectx.list("task").await?;
+            let board = ctx.read_board().await?;
+            let all_tasks = ctx.read_all_tasks().await?;
 
-            // Get first column (lowest order)
-            let first_column = all_columns
-                .iter()
-                .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
-                .map(|c| c.id.as_str());
-            let first_column = match first_column {
-                Some(c) => c,
+            // Get first column
+            let first_column = match board.first_column() {
+                Some(c) => &c.id,
                 None => return Ok(Value::Null),
             };
 
             // Get terminal column for readiness check
-            let terminal_column = all_columns
-                .iter()
-                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+            let terminal_column = board
+                .terminal_column()
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
             // Filter to tasks in first column that are ready
-            let mut candidates: Vec<&swissarmyhammer_entity::Entity> = all_tasks
+            let mut candidates: Vec<&Task> = all_tasks
                 .iter()
                 .filter(|t| {
                     // Must be in first column
-                    if t.get_str("position_column") != Some(first_column) {
+                    if &t.position.column != first_column {
                         return false;
                     }
 
                     // Must be ready (all deps complete)
-                    if !task_is_ready(t, &all_tasks, terminal_column) {
+                    if !t.is_ready(&all_tasks, terminal_column) {
                         return false;
                     }
 
                     // Filter by swimlane if specified
                     if let Some(ref swimlane) = self.swimlane {
-                        if t.get_str("position_swimlane") != Some(swimlane.as_str()) {
+                        if t.position.swimlane.as_ref() != Some(swimlane) {
                             return false;
                         }
                     }
 
                     // Filter by assignee if specified
                     if let Some(ref assignee) = self.assignee {
-                        if !t.get_string_list("assignees").contains(&assignee.to_string()) {
+                        if !t.assignees.contains(assignee) {
                             return false;
                         }
                     }
 
                     // Filter by tag if specified
                     if let Some(ref tag) = self.tag {
-                        if !task_tags(t).contains(&tag.to_string()) {
+                        if !t.tags.contains(tag) {
                             return false;
                         }
                     }
@@ -118,15 +111,23 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                 .collect();
 
             // Sort by ordinal (position within column)
-            candidates.sort_by(|a, b| {
-                let a_ord = a.get_str("position_ordinal").unwrap_or("a0");
-                let b_ord = b.get_str("position_ordinal").unwrap_or("a0");
-                Ordinal::from_string(a_ord).cmp(&Ordinal::from_string(b_ord))
-            });
+            candidates.sort_by(|a, b| a.position.ordinal.cmp(&b.position.ordinal));
 
             // Return the first (oldest by position)
             match candidates.first() {
-                Some(task) => Ok(task_entity_to_rich_json(task, &all_tasks, terminal_column)),
+                Some(task) => {
+                    // Include computed fields
+                    let blocked_by = task.blocked_by(&all_tasks, terminal_column);
+                    let blocks = task.blocks(&all_tasks);
+                    let progress = task.progress();
+
+                    let mut result = serde_json::to_value(task)?;
+                    result["ready"] = serde_json::json!(true);
+                    result["blocked_by"] = serde_json::to_value(&blocked_by)?;
+                    result["blocks"] = serde_json::to_value(&blocks)?;
+                    result["progress"] = serde_json::json!(progress);
+                    Ok(result)
+                }
                 None => Ok(Value::Null),
             }
         }
@@ -218,16 +219,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_next_task_filters_by_tag() {
+        use crate::tag::AddTag;
+        use crate::types::TagId;
+
         let (_temp, ctx) = setup().await;
 
-        // Create tasks - one with a #bug tag in description, one without
+        // Create a tag
+        AddTag::new("bug", "Bug", "ff0000")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Create tasks - one with the tag, one without
         AddTask::new("Untagged task")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
         AddTask::new("Bug task")
-            .with_description("#bug")
+            .with_tags(vec![TagId::from_string("bug")])
             .execute(&ctx)
             .await
             .into_result()

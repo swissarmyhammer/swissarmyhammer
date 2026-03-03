@@ -2,10 +2,9 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::default_column_entities;
+use crate::types::Board;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use swissarmyhammer_entity::Entity;
+use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -57,34 +56,16 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             // Create directory structure
             ctx.create_directories().await?;
 
-            // Build board entity
-            let ectx = ctx.entity_context().await?;
-            let mut board_entity = Entity::new("board", "board");
-            board_entity.set("name", json!(self.name));
+            // Build board with default columns
+            let mut board = Board::new(&self.name);
             if let Some(desc) = &self.description {
-                board_entity.set("description", json!(desc));
-            }
-            ectx.write(&board_entity).await?;
-
-            // Write default columns as entities
-            let default_cols = default_column_entities();
-            let mut columns_json: Vec<Value> = Vec::new();
-            for entity in &default_cols {
-                ectx.write(entity).await?;
-                columns_json.push(json!({
-                    "id": entity.id,
-                    "name": entity.get_str("name").unwrap_or(""),
-                    "order": entity.get_i64("order").unwrap_or(0),
-                }));
+                board = board.with_description(desc);
             }
 
-            // Return board with columns in response (for API compatibility)
-            Ok(json!({
-                "name": self.name,
-                "description": self.description,
-                "columns": columns_json,
-                "swimlanes": [],
-            }))
+            // Write board file
+            ctx.write_board(&board).await?;
+
+            Ok(serde_json::to_value(&board)?)
         }
         .await;
 
@@ -134,12 +115,7 @@ mod tests {
         assert_eq!(result["name"], "Test Board");
         assert_eq!(result["description"], "A test board");
         assert!(result["columns"].is_array());
-        let columns = result["columns"].as_array().unwrap();
-        assert_eq!(columns.len(), 3);
-        // Verify column IDs are present
-        for col in columns {
-            assert!(col["id"].is_string(), "Column should have id field");
-        }
+        assert_eq!(result["columns"].as_array().unwrap().len(), 3);
     }
 
     #[tokio::test]

@@ -1,5 +1,0 @@
-name: tag
-fields:
-  - tag_name
-  - color
-  - description

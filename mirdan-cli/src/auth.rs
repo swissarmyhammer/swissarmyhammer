@@ -648,8 +648,9 @@ mod tests {
             Some(v) => env::set_var("MIRDAN_CREDENTIALS_PATH", v),
             None => env::remove_var("MIRDAN_CREDENTIALS_PATH"),
         }
-        if let Some(v) = original_token {
-            env::set_var("MIRDAN_TOKEN", v);
+        match original_token {
+            Some(v) => env::set_var("MIRDAN_TOKEN", v),
+            None => {} // Already removed
         }
     }
 

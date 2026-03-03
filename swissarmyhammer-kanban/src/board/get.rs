@@ -1,11 +1,8 @@
 //! GetBoard command
 
-use crate::column::column_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::swimlane::swimlane_entity_to_json;
-use crate::tag::tag_entity_to_json;
-use crate::task_helpers::{task_is_ready, task_tags};
+use crate::types::{ColumnId, SwimlaneId, TagId};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -40,96 +37,66 @@ fn default_include_counts() -> bool {
 impl Execute<KanbanContext, KanbanError> for GetBoard {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let board = ectx.read("board", "board").await.map_err(|_| {
-                KanbanError::NotInitialized {
-                    path: ctx.root().to_path_buf(),
-                }
-            })?;
-            let board_name = board.get_str("name").unwrap_or("");
-            let board_description = board.get_str("description");
-            let mut all_columns = ectx.list("column").await?;
-            all_columns.sort_by_key(|c| {
-                c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
-            });
-            let mut all_swimlanes = ectx.list("swimlane").await?;
-            all_swimlanes.sort_by_key(|s| {
-                s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
-            });
+            let board = ctx.read_board().await?;
 
             // If counts are not requested, return basic board structure
             if !self.include_counts {
-                let all_tags = ectx.list("tag").await?;
-                let columns_json: Vec<Value> =
-                    all_columns.iter().map(column_entity_to_json).collect();
-                let swimlanes_json: Vec<Value> = all_swimlanes
-                    .iter()
-                    .map(swimlane_entity_to_json)
-                    .collect();
-                let tags_json: Vec<Value> = all_tags
-                    .iter()
-                    .map(tag_entity_to_json)
-                    .collect();
+                let tags = ctx.read_all_tags().await?;
                 return Ok(json!({
-                    "name": board_name,
-                    "description": board_description,
-                    "columns": columns_json,
-                    "swimlanes": swimlanes_json,
-                    "tags": tags_json,
+                    "name": board.name,
+                    "description": board.description,
+                    "columns": board.columns,
+                    "swimlanes": board.swimlanes,
+                    "tags": tags,
                 }));
             }
 
-            // Read all tasks as entities
-            let all_tasks = ectx.list("task").await?;
-            let terminal_id = all_columns
-                .iter()
-                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
-                .map(|c| c.id.as_str())
-                .unwrap_or("done");
+            // Read all tasks once for efficiency
+            let all_tasks = ctx.read_all_tasks().await?;
+            let terminal = board.terminal_column().unwrap();
 
             // Count tasks by column
-            let mut column_counts: HashMap<String, usize> = HashMap::new();
-            let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
+            let mut column_counts: HashMap<&ColumnId, usize> = HashMap::new();
+            let mut column_ready_counts: HashMap<&ColumnId, usize> = HashMap::new();
 
             for task in &all_tasks {
-                let col = task.get_str("position_column").unwrap_or("todo").to_string();
-                *column_counts.entry(col.clone()).or_insert(0) += 1;
+                *column_counts.entry(&task.position.column).or_insert(0) += 1;
 
-                if task_is_ready(task, &all_tasks, terminal_id) {
-                    *column_ready_counts.entry(col).or_insert(0) += 1;
+                if task.is_ready(&all_tasks, terminal.id.as_str()) {
+                    *column_ready_counts
+                        .entry(&task.position.column)
+                        .or_insert(0) += 1;
                 }
             }
 
             // Count tasks by swimlane
-            let mut swimlane_counts: HashMap<String, usize> = HashMap::new();
+            let mut swimlane_counts: HashMap<&SwimlaneId, usize> = HashMap::new();
             for task in &all_tasks {
-                if let Some(swimlane) = task.get_str("position_swimlane") {
-                    if !swimlane.is_empty() {
-                        *swimlane_counts.entry(swimlane.to_string()).or_insert(0) += 1;
-                    }
+                if let Some(ref swimlane) = task.position.swimlane {
+                    *swimlane_counts.entry(swimlane).or_insert(0) += 1;
                 }
             }
 
-            // Count tasks by tag name (computed from body)
-            let all_task_tags: Vec<Vec<String>> = all_tasks.iter().map(task_tags).collect();
-            let mut tag_counts: HashMap<String, usize> = HashMap::new();
-            for tags in &all_task_tags {
-                for tag_name in tags {
-                    *tag_counts.entry(tag_name.clone()).or_insert(0) += 1;
+            // Count tasks by tag
+            let mut tag_counts: HashMap<&TagId, usize> = HashMap::new();
+            for task in &all_tasks {
+                for tag in &task.tags {
+                    *tag_counts.entry(tag).or_insert(0) += 1;
                 }
             }
 
             // Enhance columns with counts
-            let columns: Vec<Value> = all_columns
+            let columns: Vec<Value> = board
+                .columns
                 .iter()
                 .map(|col| {
-                    let count = column_counts.get(col.id.as_str()).copied().unwrap_or(0);
-                    let ready = column_ready_counts.get(col.id.as_str()).copied().unwrap_or(0);
+                    let count = column_counts.get(&col.id).copied().unwrap_or(0);
+                    let ready = column_ready_counts.get(&col.id).copied().unwrap_or(0);
 
                     json!({
                         "id": col.id,
-                        "name": col.get_str("name").unwrap_or(""),
-                        "order": col.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
+                        "name": col.name,
+                        "order": col.order,
                         "task_count": count,
                         "ready_count": ready
                     })
@@ -137,33 +104,33 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .collect();
 
             // Enhance swimlanes with counts
-            let swimlanes: Vec<Value> = all_swimlanes
+            let swimlanes: Vec<Value> = board
+                .swimlanes
                 .iter()
                 .map(|sl| {
-                    let count = swimlane_counts.get(sl.id.as_str()).copied().unwrap_or(0);
+                    let count = swimlane_counts.get(&sl.id).copied().unwrap_or(0);
 
                     json!({
                         "id": sl.id,
-                        "name": sl.get_str("name").unwrap_or(""),
-                        "order": sl.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
+                        "name": sl.name,
+                        "order": sl.order,
                         "task_count": count
                     })
                 })
                 .collect();
 
             // Read all tags and enhance with counts
-            let all_tags = ectx.list("tag").await?;
+            let all_tags = ctx.read_all_tags().await?;
             let tags: Vec<Value> = all_tags
                 .iter()
                 .map(|tag| {
-                    let tag_name = tag.get_str("tag_name").unwrap_or("");
-                    let count = tag_counts.get(tag_name).copied().unwrap_or(0);
+                    let count = tag_counts.get(&tag.id).copied().unwrap_or(0);
 
                     json!({
                         "id": tag.id,
-                        "name": tag_name,
-                        "description": tag.get_str("description").unwrap_or(""),
-                        "color": tag.get_str("color").unwrap_or(""),
+                        "name": tag.name,
+                        "description": tag.description,
+                        "color": tag.color,
                         "task_count": count
                     })
                 })
@@ -173,14 +140,14 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             let total_tasks = all_tasks.len();
             let ready_tasks = all_tasks
                 .iter()
-                .filter(|t| task_is_ready(t, &all_tasks, terminal_id))
+                .filter(|t| t.is_ready(&all_tasks, terminal.id.as_str()))
                 .count();
             let blocked_tasks = total_tasks - ready_tasks;
-            let total_actors = ectx.list("actor").await?.len();
+            let total_actors = ctx.list_actor_ids().await?.len();
 
             Ok(json!({
-                "name": board_name,
-                "description": board_description,
+                "name": board.name,
+                "description": board.description,
                 "columns": columns,
                 "swimlanes": swimlanes,
                 "tags": tags,
@@ -441,23 +408,19 @@ mod tests {
     async fn test_tag_counts() {
         let (_temp, ctx) = setup().await;
 
-        // Create tags and capture ULIDs
-        let bug_result = AddTag::new("bug")
-            .with_color("d73a4a")
+        // Create tags
+        AddTag::new("bug", "Bug", "d73a4a")
             .with_description("Something isn't working")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let bug_id = bug_result["id"].as_str().unwrap().to_string();
 
-        let feature_result = AddTag::new("feature")
-            .with_color("a2eeef")
+        AddTag::new("feature", "Feature", "a2eeef")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let feature_id = feature_result["id"].as_str().unwrap().to_string();
 
         // Add tasks with tags
         let task1_id = AddTask::new("Task 1")
@@ -504,20 +467,16 @@ mod tests {
             .unwrap();
 
         let tags = result["tags"].as_array().unwrap();
-        let bug_tag = tags
-            .iter()
-            .find(|t| t["id"].as_str() == Some(&*bug_id))
-            .unwrap();
-        let feature_tag = tags
-            .iter()
-            .find(|t| t["id"].as_str() == Some(&*feature_id))
-            .unwrap();
+        let bug_tag = tags.iter().find(|t| t["id"] == "bug").unwrap();
+        let feature_tag = tags.iter().find(|t| t["id"] == "feature").unwrap();
 
         assert_eq!(bug_tag["task_count"], 2);
+        assert_eq!(bug_tag["name"], "Bug");
         assert_eq!(bug_tag["description"], "Something isn't working");
         assert_eq!(bug_tag["color"], "d73a4a");
 
         assert_eq!(feature_tag["task_count"], 1);
+        assert_eq!(feature_tag["name"], "Feature");
     }
 
     #[tokio::test]

@@ -41,7 +41,7 @@ pub enum KanbanError {
     #[error("comment not found: {id}")]
     CommentNotFound { id: String },
 
-    /// Generic resource not found (for attachments, etc.)
+    /// Generic resource not found (for subtasks, attachments, etc.)
     #[error("{resource} not found: {id}")]
     NotFound { resource: String, id: String },
 
@@ -92,18 +92,6 @@ pub enum KanbanError {
     /// JSON serialization error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-
-    /// YAML serialization error
-    #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
-
-    /// Field registry error
-    #[error("fields error: {0}")]
-    FieldsError(String),
-
-    /// Entity I/O error
-    #[error("entity error: {0}")]
-    EntityError(#[from] swissarmyhammer_entity::EntityError),
 }
 
 impl KanbanError {
@@ -135,26 +123,6 @@ impl KanbanError {
             item_type: item_type.into(),
             id: id.into(),
         }
-    }
-
-    /// Convert an [`EntityError`] into a specific `*NotFound` variant when possible.
-    ///
-    /// Maps `EntityError::NotFound { entity_type, id }` to the corresponding
-    /// `KanbanError::TaskNotFound`, `ColumnNotFound`, etc. Other entity errors
-    /// fall through to the generic `EntityError` wrapper.
-    pub fn from_entity_error(err: swissarmyhammer_entity::EntityError) -> Self {
-        if let swissarmyhammer_entity::EntityError::NotFound { entity_type, id } = &err {
-            match entity_type.as_str() {
-                "task" => return Self::TaskNotFound { id: id.clone() },
-                "column" => return Self::ColumnNotFound { id: id.clone() },
-                "swimlane" => return Self::SwimlaneNotFound { id: id.clone() },
-                "actor" => return Self::ActorNotFound { id: id.clone() },
-                "tag" => return Self::TagNotFound { id: id.clone() },
-                "comment" => return Self::CommentNotFound { id: id.clone() },
-                _ => return Self::NotFound { resource: entity_type.clone(), id: id.clone() },
-            }
-        }
-        Self::EntityError(err)
     }
 
     /// Check if this is a retryable error

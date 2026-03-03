@@ -5,18 +5,17 @@
 
 use anyhow::Result;
 use serde_json::json;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
 
 use crate::test_utils::{create_semantic_test_guard, setup_git_repo};
 
-/// Helper to create a fully isolated test context with git repository.
-///
-/// No HTTP server, no env var mutation, safe for parallel execution.
-async fn create_test_context_with_git() -> Result<(tempfile::TempDir, CliToolContext)> {
-    let temp = tempfile::TempDir::new()?;
-    let temp_path = temp.path().to_path_buf();
+/// Helper to create a test context with git repository
+async fn create_test_context_with_git() -> Result<(IsolatedTestEnvironment, CliToolContext)> {
+    let env = IsolatedTestEnvironment::new()?;
+    let temp_path = env.temp_dir();
     setup_git_repo(&temp_path)?;
-    let context = CliToolContext::new_isolated(&temp_path)
+    let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -27,20 +26,17 @@ async fn create_test_context_with_git() -> Result<(tempfile::TempDir, CliToolCon
     ]);
     context.execute_tool("kanban", init_args).await.ok();
 
-    Ok((temp, context))
+    Ok((env, context))
 }
 
-/// Helper to create a fully isolated test context without git repository.
-///
-/// No HTTP server, no env var mutation, safe for parallel execution.
-async fn create_test_context() -> Result<(tempfile::TempDir, CliToolContext)> {
-    let temp = tempfile::TempDir::new()?;
-    let temp_path = temp.path().to_path_buf();
-    setup_git_repo(&temp_path)?;
-    let context = CliToolContext::new_isolated(&temp_path)
+/// Helper to create a test context without git repository
+async fn create_test_context() -> Result<(IsolatedTestEnvironment, CliToolContext)> {
+    let env = IsolatedTestEnvironment::new()?;
+    let temp_path = env.temp_dir();
+    let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    Ok((temp, context))
+    Ok((env, context))
 }
 
 /// Helper to create kanban task arguments
@@ -79,7 +75,7 @@ macro_rules! assert_tool_success {
 /// Test error propagation from MCP tools to CLI
 #[tokio::test]
 async fn test_mcp_error_propagation() -> Result<()> {
-    let (_temp, context) = create_test_context().await?;
+    let (_env, context) = create_test_context().await?;
 
     // Test invalid arguments error (missing required op field)
     let invalid_args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
@@ -91,8 +87,9 @@ async fn test_mcp_error_propagation() -> Result<()> {
     let result = context.execute_tool("kanban", empty_args).await;
     // With auto-init and forgiving parsing, empty args might succeed (treated as list)
     // or fail with parse error - both are acceptable
-    if let Err(error) = result {
+    if result.is_err() {
         // If it errors, should be a parse error
+        let error = result.unwrap_err();
         let error_msg = format!("{:?}", error);
         assert!(
             error_msg.contains("parse")
@@ -135,8 +132,8 @@ async fn test_mcp_error_propagation() -> Result<()> {
 // Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_argument_passing_and_validation() -> Result<()> {
     let _guard = create_semantic_test_guard();
-    let (_temp, _context) = create_test_context_with_git().await?;
-    let temp_path = _temp.path().to_path_buf();
+    let (_env, _context) = create_test_context_with_git().await?;
+    let temp_path = _env.temp_dir();
 
     // Create source files for search testing
     let src_dir = temp_path.join("src");
@@ -148,7 +145,7 @@ async fn test_argument_passing_and_validation() -> Result<()> {
 pub fn test_function() -> String { "test".to_string() }"#,
     )?;
 
-    let context = CliToolContext::new_isolated(&temp_path)
+    let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -163,7 +160,7 @@ pub fn test_function() -> String { "test".to_string() }"#,
 /// Test response formatting utilities
 #[tokio::test]
 async fn test_response_formatting() -> Result<()> {
-    let (_temp, context) = create_test_context_with_git().await?;
+    let (_env, context) = create_test_context_with_git().await?;
 
     // Test successful response formatting with kanban add task
     let args =
@@ -203,15 +200,15 @@ async fn test_response_formatting() -> Result<()> {
 /// Test concurrent tool execution
 #[tokio::test]
 async fn test_concurrent_tool_execution() -> Result<()> {
-    let (_temp, _context) = create_test_context_with_git().await?;
-    let temp_path = _temp.path().to_path_buf();
+    let (_env, _context) = create_test_context_with_git().await?;
+    let temp_path = _env.temp_dir();
 
     // Execute multiple tools concurrently
     let mut handles = vec![];
 
     // Create multiple tasks concurrently
     for i in 0..3 {
-        let context_clone = CliToolContext::new_isolated(&temp_path)
+        let context_clone = CliToolContext::new_with_dir(&temp_path)
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         let handle = tokio::spawn(async move {
@@ -241,7 +238,7 @@ async fn test_concurrent_tool_execution() -> Result<()> {
 /// Test error message formatting and user-friendliness
 #[tokio::test]
 async fn test_error_message_formatting() -> Result<()> {
-    let (_temp, context) = create_test_context().await?;
+    let (_env, context) = create_test_context().await?;
 
     // Test missing required field error
     // Empty arguments should fail at parsing stage
@@ -251,7 +248,8 @@ async fn test_error_message_formatting() -> Result<()> {
 
     // With auto-init, board initialization succeeds, but empty args should still fail parsing
     // If it succeeds (e.g., interpreted as list operation), that's also acceptable
-    if let Err(error) = result {
+    if result.is_err() {
+        let error = result.unwrap_err();
         // Accept parsing errors
         assert_error_contains_any(&error, &["required", "missing", "op", "parse", "invalid"]);
     }
@@ -272,11 +270,11 @@ async fn test_error_message_formatting() -> Result<()> {
 /// Test tool context initialization with different configurations
 #[tokio::test]
 async fn test_tool_context_configurations() -> Result<()> {
-    let (_temp, context1) = create_test_context_with_git().await?;
-    let temp_path = _temp.path().to_path_buf();
+    let (_env, context1) = create_test_context_with_git().await?;
+    let temp_path = _env.temp_dir();
 
     // Test with another context using the same directory
-    let context2 = CliToolContext::new_isolated(&temp_path)
+    let context2 = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -296,7 +294,7 @@ async fn test_tool_context_configurations() -> Result<()> {
 /// Test MCP error boundaries and recovery
 #[tokio::test]
 async fn test_mcp_error_boundaries() -> Result<()> {
-    let (_temp, context) = create_test_context_with_git().await?;
+    let (_env, context) = create_test_context_with_git().await?;
 
     // Test invalid operation (get task with non-existent ID)
     let invalid_args = context.create_arguments(vec![

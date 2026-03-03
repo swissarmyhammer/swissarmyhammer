@@ -1,6 +1,0 @@
-name: attachment
-fields:
-  - attachment_name
-  - attachment_path
-  - attachment_mime_type
-  - attachment_size

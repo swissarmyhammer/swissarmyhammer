@@ -209,10 +209,6 @@ impl McpTool for SkillTool {
         *SKILL_OPERATIONS
     }
 
-    fn is_agent_tool(&self) -> bool {
-        true
-    }
-
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

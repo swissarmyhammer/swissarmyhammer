@@ -1,9 +1,0 @@
-id: "0000000000000000000000000E"
-name: name
-description: Display name
-type:
-  kind: text
-  single_line: true
-editor: markdown
-display: text
-sort: alphanumeric

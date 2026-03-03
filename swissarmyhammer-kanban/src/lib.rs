@@ -1,15 +1,15 @@
 //! Kanban board engine with file-backed storage
 //!
-//! This crate provides a kanban board implementation that stores all data as YAML/Markdown
-//! files in a `.kanban` directory. It's designed for git-friendly task management with
+//! This crate provides a kanban board implementation that stores all data as JSON files
+//! in a `.kanban` directory. It's designed for git-friendly task management with
 //! support for concurrent access via file locking.
 //!
 //! ## Overview
 //!
 //! - **One repo = one board** - The `.kanban` directory lives at the repo root
-//! - **File-per-entity** - Tasks, tags, columns, actors, swimlanes are individual files
-//! - **Git-friendly** - Human-readable YAML/Markdown, no binary formats
-//! - **Agent-aware** - Per-entity JSONL logs track which agent/user modified what and why
+//! - **File-per-task** - Tasks are individual JSON files for clean git diffs
+//! - **Git-friendly** - Human-readable JSON, no binary formats
+//! - **Agent-aware** - Tracks which agent/user modified tasks and why
 //!
 //! ## Basic Usage
 //!
@@ -19,12 +19,12 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Initialize a new board
 //! let ctx = KanbanContext::new("/path/to/repo/.kanban");
-//! InitBoard::new("My Project").execute(&ctx).await.into_result()?;
+//! InitBoard::new("My Project").execute(&ctx).await?;
 //!
 //! // Add a task
 //! let result = AddTask::new("Implement feature X")
 //!     .with_description("Add the new feature")
-//!     .execute(&ctx).await.into_result()?;
+//!     .execute(&ctx).await?;
 //!
 //! println!("Created task: {}", result["id"]);
 //! # Ok(())
@@ -36,39 +36,20 @@
 //! ```text
 //! repo/
 //! └── .kanban/
-//!     ├── board.yaml          # Board metadata (YAML)
-//!     ├── board.jsonl          # Board operation log
+//!     ├── board.json         # Board metadata and column definitions
 //!     ├── tasks/
-//!     │   ├── {id}.md          # Task (YAML frontmatter + markdown body)
-//!     │   ├── {id}.jsonl       # Per-task operation log
-//!     ├── tags/
-//!     │   ├── {id}.yaml        # Tag state
-//!     │   ├── {id}.jsonl       # Per-tag operation log
-//!     ├── columns/
-//!     │   ├── {id}.yaml        # Column state
-//!     │   ├── {id}.jsonl       # Per-column operation log
-//!     ├── swimlanes/
-//!     │   ├── {id}.yaml        # Swimlane state
-//!     │   ├── {id}.jsonl       # Per-swimlane operation log
-//!     ├── actors/
-//!     │   ├── {id}.yaml        # Actor state
-//!     │   ├── {id}.jsonl       # Per-actor operation log
+//!     │   ├── {id}.json      # Current task state
+//!     │   ├── {id}.jsonl     # Per-task operation log
+//!     │   └── ...
 //!     └── activity/
-//!         └── current.jsonl    # Global operation log
+//!         ├── 000001.jsonl   # Global log (archived)
+//!         └── current.jsonl  # Active global log
 //! ```
-//!
-//! Entity state files use YAML (or YAML frontmatter + markdown for tasks).
-//! Operation logs use JSONL (one JSON object per line, newest first).
-//! JSON API responses remain unchanged — serde_json is used for all output.
 
-pub mod auto_color;
 mod context;
-pub mod defaults;
 mod error;
 pub mod parse;
 mod processor;
-pub mod tag_parser;
-pub mod task_helpers;
 pub mod types;
 
 // Command modules
@@ -77,7 +58,9 @@ pub mod actor;
 pub mod attachment;
 pub mod board;
 pub mod column;
+pub mod comment;
 pub mod schema;
+pub mod subtask;
 pub mod swimlane;
 pub mod tag;
 pub mod task;
@@ -88,17 +71,12 @@ pub use swissarmyhammer_operations::{
 };
 
 pub use context::{KanbanContext, KanbanLock};
-pub use defaults::{kanban_compute_engine, KanbanLookup};
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
 
-// Re-export entity types for dynamic entity access
-pub use swissarmyhammer_entity::Entity;
-pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
-
 // Re-export commonly used types
 pub use types::{
-    default_column_entities, ActorId, ColumnId, LogEntry, Noun,
-    Operation as KanbanOperation, OperationResult, Ordinal, Position, SwimlaneId,
-    TagId, TaskId, Verb,
+    Actor, ActorId, Attachment, Board, Column, ColumnId, Comment, CommentId, LogEntry, Noun,
+    Operation as KanbanOperation, OperationResult, Ordinal, Position, Subtask, Swimlane,
+    SwimlaneId, Tag, TagId, Task, TaskId, Verb,
 };

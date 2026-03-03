@@ -43,9 +43,6 @@ members = [
     "swissarmyhammer-agents",
     "swissarmyhammer-web",
     "mirdan-cli",
-    "swissarmyhammer-kanban-app",
-    "swissarmyhammer-fields",
-    "swissarmyhammer-entity",
 ]
 resolver = "2"
 
@@ -240,9 +237,6 @@ include_dir = "0.7"
 lru = "0.12"
 rquickjs = { version = "0.11", features = ["futures", "loader"] }
 swissarmyhammer-js = { path = "swissarmyhammer-js" }
-swissarmyhammer-fields = { path = "swissarmyhammer-fields" }
-swissarmyhammer-entity = { path = "swissarmyhammer-entity" }
-diffy = "0.4.2"
 chumsky = "0.10.1"
 zstd = "0.13"
 memmap2 = "0.9"

@@ -2,8 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task_helpers::{task_entity_to_rich_json, task_is_ready, task_tags};
-use crate::types::{ActorId, ColumnId, SwimlaneId};
+use crate::types::{ActorId, ColumnId, SwimlaneId, TagId};
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -20,8 +19,8 @@ pub struct ListTasks {
     pub column: Option<ColumnId>,
     /// Filter by swimlane
     pub swimlane: Option<SwimlaneId>,
-    /// Filter by tag name (slug)
-    pub tag: Option<String>,
+    /// Filter by tag
+    pub tag: Option<TagId>,
     /// Filter by assignee
     pub assignee: Option<ActorId>,
     /// Filter by readiness status
@@ -52,8 +51,8 @@ impl ListTasks {
         self
     }
 
-    /// Filter by tag name (slug)
-    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+    /// Filter by tag
+    pub fn with_tag(mut self, tag: impl Into<TagId>) -> Self {
         self.tag = Some(tag.into());
         self
     }
@@ -75,13 +74,11 @@ impl ListTasks {
 impl Execute<KanbanContext, KanbanError> for ListTasks {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let all_columns = ectx.list("column").await?;
-            let all_tasks = ectx.list("task").await?;
+            let board = ctx.read_board().await?;
+            let all_tasks = ctx.read_all_tasks().await?;
 
-            let terminal_column = all_columns
-                .iter()
-                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+            let terminal_column = board
+                .terminal_column()
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
@@ -91,35 +88,35 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                 .filter(|t| {
                     // Filter by column
                     if let Some(ref col) = self.column {
-                        if t.get_str("position_column") != Some(col.as_str()) {
+                        if &t.position.column != col {
                             return false;
                         }
                     }
 
                     // Filter by swimlane
                     if let Some(ref swimlane) = self.swimlane {
-                        if t.get_str("position_swimlane") != Some(swimlane.as_str()) {
+                        if t.position.swimlane.as_ref() != Some(swimlane) {
                             return false;
                         }
                     }
 
-                    // Filter by tag name (computed from body)
-                    if let Some(ref tag_name) = self.tag {
-                        if !task_tags(t).iter().any(|tag| tag == tag_name) {
+                    // Filter by tag
+                    if let Some(ref tag) = self.tag {
+                        if !t.tags.contains(tag) {
                             return false;
                         }
                     }
 
                     // Filter by assignee
                     if let Some(ref assignee) = self.assignee {
-                        if !t.get_string_list("assignees").contains(&assignee.to_string()) {
+                        if !t.assignees.contains(assignee) {
                             return false;
                         }
                     }
 
                     // Filter by readiness
                     if let Some(ready) = self.ready {
-                        let is_ready = task_is_ready(t, &all_tasks, terminal_column);
+                        let is_ready = t.is_ready(&all_tasks, terminal_column);
                         if is_ready != ready {
                             return false;
                         }
@@ -127,7 +124,17 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
 
                     true
                 })
-                .map(|t| task_entity_to_rich_json(t, &all_tasks, terminal_column))
+                .map(|t| {
+                    let ready = t.is_ready(&all_tasks, terminal_column);
+                    let blocked_by = t.blocked_by(&all_tasks, terminal_column);
+                    let progress = t.progress();
+
+                    let mut result = serde_json::to_value(t).unwrap_or(Value::Null);
+                    result["ready"] = serde_json::json!(ready);
+                    result["blocked_by"] = serde_json::to_value(&blocked_by).unwrap_or(Value::Null);
+                    result["progress"] = serde_json::json!(progress);
+                    result
+                })
                 .collect();
 
             Ok(serde_json::json!({

@@ -40,31 +40,28 @@ impl Execute<KanbanContext, KanbanError> for AssignTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("task", self.id.as_str()).await?;
+            let mut task = ctx.read_task(&self.id).await?;
 
-            // Verify the actor exists
-            if ectx.read("actor", self.assignee.as_str()).await.is_err() {
+            // Verify the actor exists using file-based storage
+            if !ctx.actor_exists(&self.assignee).await {
                 return Err(KanbanError::ActorNotFound {
                     id: self.assignee.to_string(),
                 });
             }
 
             // Add assignee if not already assigned
-            let mut assignees = entity.get_string_list("assignees");
-            if !assignees.contains(&self.assignee.to_string()) {
-                assignees.push(self.assignee.to_string());
-                entity.set("assignees", serde_json::to_value(&assignees)?);
+            if !task.assignees.contains(&self.assignee) {
+                task.assignees.push(self.assignee.clone());
             }
 
-            ectx.write(&entity).await?;
+            ctx.write_task(&task).await?;
 
             // Return confirmation with task info
             Ok(serde_json::json!({
                 "assigned": true,
                 "task_id": self.id,
                 "assignee": self.assignee,
-                "all_assignees": assignees,
+                "all_assignees": task.assignees,
             }))
         }
         .await;
@@ -127,12 +124,14 @@ mod tests {
     async fn test_assign_task() {
         let (_temp, ctx) = setup().await;
 
+        // Create an actor
         AddActor::agent("assistant", "Assistant")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
+        // Create a task
         let add_result = AddTask::new("Test task")
             .execute(&ctx)
             .await
@@ -140,6 +139,7 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
+        // Assign the task
         let result = AssignTask::new(task_id, "assistant")
             .execute(&ctx)
             .await
@@ -159,12 +159,14 @@ mod tests {
     async fn test_assign_task_idempotent() {
         let (_temp, ctx) = setup().await;
 
+        // Create an actor
         AddActor::agent("assistant", "Assistant")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
+        // Create a task
         let add_result = AddTask::new("Test task")
             .execute(&ctx)
             .await
@@ -172,6 +174,7 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
+        // Assign twice
         AssignTask::new(task_id, "assistant")
             .execute(&ctx)
             .await
@@ -183,13 +186,54 @@ mod tests {
             .into_result()
             .unwrap();
 
+        // Should still only have one assignee
         assert_eq!(result["all_assignees"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_assign_task_multiple_assignees() {
+        let (_temp, ctx) = setup().await;
+
+        // Create two actors
+        AddActor::agent("assistant", "Assistant")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddActor::human("user", "User")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Create a task
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        // Assign both
+        AssignTask::new(task_id, "assistant")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let result = AssignTask::new(task_id, "user")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["all_assignees"].as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]
     async fn test_assign_task_nonexistent_task() {
         let (_temp, ctx) = setup().await;
 
+        // Create an actor
         AddActor::agent("assistant", "Assistant")
             .execute(&ctx)
             .await
@@ -201,13 +245,14 @@ mod tests {
             .await
             .into_result();
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
     }
 
     #[tokio::test]
     async fn test_assign_task_nonexistent_actor() {
         let (_temp, ctx) = setup().await;
 
+        // Create a task
         let add_result = AddTask::new("Test task")
             .execute(&ctx)
             .await
@@ -215,6 +260,7 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
+        // Try to assign to nonexistent actor
         let result = AssignTask::new(task_id, "nonexistent")
             .execute(&ctx)
             .await

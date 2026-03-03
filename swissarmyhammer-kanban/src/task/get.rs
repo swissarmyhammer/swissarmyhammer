@@ -2,7 +2,6 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task_helpers::task_entity_to_rich_json;
 use crate::types::TaskId;
 use serde::Deserialize;
 use serde_json::Value;
@@ -31,19 +30,29 @@ impl GetTask {
 impl Execute<KanbanContext, KanbanError> for GetTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("task", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            let task = ctx.read_task(&self.id).await?;
+            let board = ctx.read_board().await?;
+            let all_tasks = ctx.read_all_tasks().await?;
 
-            let all_columns = ectx.list("column").await?;
-            let all_tasks = ectx.list("task").await?;
-
-            let terminal_column = all_columns
-                .iter()
-                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+            let terminal_column = board
+                .terminal_column()
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            Ok(task_entity_to_rich_json(&entity, &all_tasks, terminal_column))
+            // Compute derived fields
+            let ready = task.is_ready(&all_tasks, terminal_column);
+            let blocked_by = task.blocked_by(&all_tasks, terminal_column);
+            let blocks = task.blocks(&all_tasks);
+            let progress = task.progress();
+
+            // Build response with computed fields
+            let mut result = serde_json::to_value(&task)?;
+            result["ready"] = serde_json::json!(ready);
+            result["blocked_by"] = serde_json::to_value(&blocked_by)?;
+            result["blocks"] = serde_json::to_value(&blocks)?;
+            result["progress"] = serde_json::json!(progress);
+
+            Ok(result)
         }
         .await
         {

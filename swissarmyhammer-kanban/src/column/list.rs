@@ -1,6 +1,5 @@
 //! ListColumns command
 
-use crate::column::add::column_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use serde::Deserialize;
@@ -20,19 +19,14 @@ pub struct ListColumns;
 impl Execute<KanbanContext, KanbanError> for ListColumns {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let mut columns = ectx.list("column").await?;
-            columns.sort_by_key(|c| {
-                c.get("order")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize
-            });
+            let board = ctx.read_board().await?;
 
-            let columns_json: Vec<Value> = columns.iter().map(column_entity_to_json).collect();
+            let mut columns = board.columns.clone();
+            columns.sort_by_key(|c| c.order);
 
             Ok(serde_json::json!({
-                "columns": columns_json,
-                "count": columns_json.len()
+                "columns": columns,
+                "count": columns.len()
             }))
         }
         .await

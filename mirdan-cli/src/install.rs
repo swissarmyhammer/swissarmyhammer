@@ -1461,7 +1461,6 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), RegistryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
 
     #[test]
     fn test_parse_package_spec_name_only() {
@@ -1777,7 +1776,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_tool_creates_store_and_mcp_json() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -1847,7 +1845,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_and_uninstall_tool() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -1889,7 +1886,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_tool_preserves_existing_mcp_servers() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -1954,7 +1950,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_uninstall_tool_not_found() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -1984,7 +1979,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_plugin_creates_files() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2027,7 +2021,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_and_uninstall_plugin() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2047,7 +2040,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_plugin_with_bundled_mcp() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2087,7 +2079,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_uninstall_plugin_not_found() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2102,7 +2093,6 @@ work with files in a controlled directory.
     // --- e2e: tool install → lockfile → list → uninstall ---
 
     #[test]
-    #[serial]
     fn test_e2e_tool_install_list_uninstall() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2167,7 +2157,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_e2e_plugin_install_list_uninstall() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2266,7 +2255,6 @@ work with files in a controlled directory.
     // --- validator deploy + uninstall (no agents required) ---
 
     #[test]
-    #[serial]
     fn test_deploy_validator_creates_files() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2289,7 +2277,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_and_uninstall_validator() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2311,7 +2298,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_uninstall_validator_not_found() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2473,7 +2459,6 @@ work with files in a controlled directory.
     // --- end-to-end: clone real repo → deploy validator → lockfile → uninstall ---
 
     #[test]
-    #[serial]
     fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2525,7 +2510,6 @@ work with files in a controlled directory.
     // --- cross-type coexistence and duplicate install tests ---
 
     #[tokio::test]
-    #[serial]
     async fn test_e2e_all_four_types_coexist() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2652,7 +2636,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_tool_twice_overwrites_cleanly() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2697,7 +2680,6 @@ work with files in a controlled directory.
     }
 
     #[test]
-    #[serial]
     fn test_deploy_plugin_twice_overwrites_cleanly() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2740,7 +2722,6 @@ work with files in a controlled directory.
     // --- end-to-end: clone real repo → deploy validator → lockfile → uninstall ---
 
     #[test]
-    #[serial]
     fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {
         use crate::git_source;
 
@@ -2812,7 +2793,6 @@ work with files in a controlled directory.
     // --- metadata-only tool install tests ---
 
     #[tokio::test]
-    #[serial]
     async fn test_install_tool_from_mcp_config_registers_server() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2876,7 +2856,6 @@ work with files in a controlled directory.
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_install_tool_from_tool_md_content() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2941,7 +2920,6 @@ mcp:
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_install_tool_from_metadata_rejects_non_tool() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -2976,7 +2954,6 @@ mcp:
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_install_tool_from_mcp_config_then_uninstall() {
         let work = tempfile::tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();

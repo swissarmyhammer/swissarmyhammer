@@ -791,41 +791,25 @@ pub trait McpTool: Doctorable + Send + Sync {
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
         &[]
     }
-
-    /// Whether this tool is an agent-only tool.
-    ///
-    /// Agent tools replicate capabilities that off-the-shelf agents already have
-    /// natively (file editing, shell, skills). They are filtered out when the
-    /// server runs alongside an existing agent like Claude Code.
-    ///
-    /// # Default
-    ///
-    /// Returns false — most tools are always available.
-    fn is_agent_tool(&self) -> bool {
-        false
-    }
 }
 
 /// Marker trait for tools that provide base agent behavior.
 ///
 /// Agent tools replicate capabilities that off-the-shelf agents (like Claude Code)
-/// already have natively — file editing, grep, skills, etc. These tools are
-/// filtered out (via `is_agent_tool()`) when the MCP server supplements an
-/// existing agent that already has these capabilities.
+/// already have natively — file editing, shell execution, grep, skills, etc.
+/// These tools are only registered when the MCP server runs in "agent mode"
+/// (i.e., powering a full agent like llama-agent), not when supplementing
+/// an existing agent that already has these capabilities.
 ///
-/// To mark a tool as agent-only:
-/// 1. Implement this trait
-/// 2. Override `is_agent_tool()` to return `true` in the `McpTool` impl
-///
-/// Domain-specific tools (kanban, flow, git, shell, treesitter, etc.)
-/// should NOT implement this trait — they are always available.
+/// Implement this trait on any `McpTool` that should only be available in
+/// agent mode. Domain-specific tools (kanban, flow, git, treesitter, etc.)
+/// should NOT implement this trait — they are always registered.
 ///
 /// # Example
 ///
 /// ```rust,ignore
+/// impl AgentTool for ShellExecuteTool {}
 /// impl AgentTool for FilesTool {}
-/// // and in the McpTool impl:
-/// fn is_agent_tool(&self) -> bool { true }
 /// ```
 pub trait AgentTool: McpTool {}
 
@@ -924,14 +908,6 @@ impl ToolRegistry {
     pub fn register<T: McpTool + 'static>(&mut self, tool: T) {
         let name = McpTool::name(&tool).to_string();
         self.tools.insert(name, Box::new(tool));
-    }
-
-    /// Remove all tools that are marked as agent-only.
-    ///
-    /// Call this after registering all tools when `agent_mode` is false.
-    /// Tools where `is_agent_tool()` returns true will be removed.
-    pub fn remove_agent_tools(&mut self) {
-        self.tools.retain(|_, tool| !tool.is_agent_tool());
     }
 
     /// Get a tool by name

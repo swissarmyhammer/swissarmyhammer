@@ -130,16 +130,13 @@ pub(crate) fn read_stdin_capture(dir: &Path, script_name: &str) -> Option<String
 /// avoid reading a partially-written (empty) capture file.
 pub(crate) async fn wait_for_stdin_capture(dir: &Path, script_name: &str) -> Option<String> {
     let capture_path = dir.join(format!("{}.stdin_capture", script_name));
-    // Use 80 retries * 150ms = 12 seconds total. Under heavy concurrent test
-    // load the tokio runtime may delay the spawned notification-loop task and
-    // the shell script execution, so we need a generous budget.
-    for _ in 0..80 {
+    for _ in 0..40 {
         if let Ok(contents) = std::fs::read_to_string(&capture_path) {
             if !contents.is_empty() {
                 return Some(contents);
             }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     None
 }

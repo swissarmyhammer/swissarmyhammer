@@ -1,9 +1,8 @@
 //! GetAttachment command
 
-use crate::attachment::attachment_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::TaskId;
+use crate::types::{AttachmentId, TaskId};
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -16,15 +15,15 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 )]
 #[derive(Debug, Deserialize)]
 pub struct GetAttachment {
-    /// The task ID (kept for API compatibility; used to verify ownership)
+    /// The task ID
     pub task_id: TaskId,
     /// The attachment ID
-    pub id: String,
+    pub id: AttachmentId,
 }
 
 impl GetAttachment {
     /// Create a new GetAttachment command
-    pub fn new(task_id: impl Into<TaskId>, id: impl Into<String>) -> Self {
+    pub fn new(task_id: impl Into<TaskId>, id: impl Into<AttachmentId>) -> Self {
         Self {
             task_id: task_id.into(),
             id: id.into(),
@@ -36,21 +35,16 @@ impl GetAttachment {
 impl Execute<KanbanContext, KanbanError> for GetAttachment {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
+            let task = ctx.read_task(&self.task_id).await?;
 
-            // Verify the task owns this attachment
-            let task = ectx.read("task", self.task_id.as_str()).await?;
-            if !task.get_string_list("attachments").contains(&self.id) {
-                return Err(KanbanError::NotFound {
-                    resource: "attachment".to_string(),
-                    id: self.id.to_string(),
-                });
-            }
+            let attachment =
+                task.find_attachment(&self.id)
+                    .ok_or_else(|| KanbanError::NotFound {
+                        resource: "attachment".to_string(),
+                        id: self.id.to_string(),
+                    })?;
 
-            // Read the attachment entity
-            let attachment = ectx.read("attachment", &self.id).await.map_err(KanbanError::from_entity_error)?;
-
-            Ok(attachment_entity_to_json(&attachment))
+            Ok(serde_json::to_value(attachment)?)
         }
         .await
         {
@@ -142,6 +136,6 @@ mod tests {
             .await
             .into_result();
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
     }
 }

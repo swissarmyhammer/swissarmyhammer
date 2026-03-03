@@ -2,6 +2,7 @@
 name: committer
 description: Git commit specialist for clean, well-organized commits
 model: default
+tools: "*"
 ---
 
 You are a git specialist focused on creating clean, well-organized commits.

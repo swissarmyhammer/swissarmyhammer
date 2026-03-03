@@ -2,9 +2,9 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::TaskId;
+use crate::types::{AttachmentId, TaskId};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -20,12 +20,12 @@ pub struct DeleteAttachment {
     /// The task ID
     pub task_id: TaskId,
     /// The attachment ID to delete
-    pub id: String,
+    pub id: AttachmentId,
 }
 
 impl DeleteAttachment {
     /// Create a new DeleteAttachment command
-    pub fn new(task_id: impl Into<TaskId>, id: impl Into<String>) -> Self {
+    pub fn new(task_id: impl Into<TaskId>, id: impl Into<AttachmentId>) -> Self {
         Self {
             task_id: task_id.into(),
             id: id.into(),
@@ -40,33 +40,23 @@ impl Execute<KanbanContext, KanbanError> for DeleteAttachment {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let ectx = ctx.entity_context().await?;
+            let mut task = ctx.read_task(&self.task_id).await?;
 
-            // Verify the attachment exists and belongs to this task
-            // Read the task and verify it owns this attachment
-            let mut task = ectx.read("task", self.task_id.as_str()).await?;
-            if !task.get_string_list("attachments").contains(&self.id) {
+            // Check if attachment exists before deleting
+            if !task.attachments.iter().any(|a| a.id == self.id) {
                 return Err(KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
                 });
             }
 
-            // Two-phase write: delete attachment entity first, then update task.
-            // If the task update fails, the stale ID in the task's list is
-            // silently skipped by ListAttachments (tolerant of missing IDs).
-            ectx.delete("attachment", &self.id).await?;
+            task.attachments.retain(|a| a.id != self.id);
+            ctx.write_task(&task).await?;
 
-            // Remove the attachment ID from the task's attachments list
-            let mut attachment_ids = task.get_string_list("attachments");
-            attachment_ids.retain(|id| id != &self.id);
-            task.set("attachments", json!(attachment_ids));
-            ectx.write(&task).await?;
-
-            Ok(json!({
+            Ok(serde_json::json!({
                 "deleted": true,
                 "attachment_id": self.id,
-                "task_id": self.task_id.to_string()
+                "task_id": task.id
             }))
         }
         .await;
@@ -85,7 +75,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteAttachment {
                     log_entry: Some(LogEntry::new(
                         self.op_string(),
                         input,
-                        json!({"error": error_msg}),
+                        serde_json::json!({"error": error_msg}),
                         None,
                         duration_ms,
                     )),
@@ -123,7 +113,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_attachment() {
-        let (temp, ctx) = setup().await;
+        let (_temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -149,18 +139,14 @@ mod tests {
         assert_eq!(result["attachment_id"], attachment_id);
         assert_eq!(result["task_id"], task_id);
 
-        // Verify the entity file is gone (moved to trash)
-        let attachment_file = temp
-            .path()
-            .join(".kanban")
-            .join("attachments")
-            .join(format!("{}.yaml", attachment_id));
-        assert!(!attachment_file.exists());
-
-        // Verify the task's attachments list is empty
-        let ectx = ctx.entity_context().await.unwrap();
-        let task = ectx.read("task", task_id).await.unwrap();
-        assert!(task.get_string_list("attachments").is_empty());
+        // Verify the attachment is gone
+        use crate::task::GetTask;
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(task["attachments"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -191,7 +177,7 @@ mod tests {
             .await
             .into_result();
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
     }
 
     #[tokio::test]
@@ -213,12 +199,11 @@ mod tests {
             .unwrap();
         let attachment_id1 = add1["attachment"]["id"].as_str().unwrap();
 
-        let add2 = AddAttachment::new(task_id, "file2.txt", "./file2.txt")
+        AddAttachment::new(task_id, "file2.txt", "./file2.txt")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let attachment_id2 = add2["attachment"]["id"].as_str().unwrap().to_string();
 
         // Delete the first one
         DeleteAttachment::new(task_id, attachment_id1)
@@ -227,11 +212,14 @@ mod tests {
             .into_result()
             .unwrap();
 
-        // Verify only one attachment remains in the task's list
-        let ectx = ctx.entity_context().await.unwrap();
-        let task = ectx.read("task", task_id).await.unwrap();
-        let ids = task.get_string_list("attachments");
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], attachment_id2);
+        // Verify only one attachment remains
+        use crate::task::GetTask;
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(task["attachments"].as_array().unwrap().len(), 1);
+        assert_eq!(task["attachments"][0]["name"], "file2.txt");
     }
 }

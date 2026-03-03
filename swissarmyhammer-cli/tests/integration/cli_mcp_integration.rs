@@ -2,29 +2,28 @@
 //!
 //! These tests verify that the CLI can successfully call MCP tools directly
 //! without going through the MCP protocol layer.
-//!
-//! All tests use `new_isolated` which creates an in-process McpServer with
-//! no HTTP server and no env var mutation, safe for parallel execution.
 
 use serde_json::json;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 use crate::test_utils::setup_git_repo;
 
-/// Creates a fully isolated test context.
-///
-/// No HTTP server, no env var mutation, all tools registered (agent_mode=true).
-async fn setup_isolated_context() -> (tempfile::TempDir, CliToolContext) {
-    let temp = tempfile::TempDir::new().unwrap();
-    let temp_path = temp.path().to_path_buf();
+// Test helper functions to reduce code duplication
 
+/// Creates a test context with an isolated environment.
+/// Returns the environment (which must be kept alive) and the context.
+async fn setup_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = env.temp_dir();
+
+    // Set up git repository for tests that need it
     setup_git_repo(&temp_path).expect("Failed to set up git repository");
 
-    let context = CliToolContext::new_isolated(&temp_path)
+    let context = CliToolContext::new_with_dir(&temp_path)
         .await
-        .expect("Failed to create isolated CliToolContext");
-    (temp, context)
+        .expect("Failed to create CliToolContext");
+    (env, context)
 }
 
 /// Creates a test context with agent mode enabled.
@@ -76,12 +75,15 @@ fn assert_cli_error_conversion(mcp_error: rmcp::ErrorData, expected_text: &str) 
 
 #[tokio::test]
 async fn test_cli_can_call_mcp_tools() {
-    let (_temp, _context) = setup_isolated_context().await;
+    let (_env, _context) = setup_test_context().await;
 
     // Context creation successful means the tool registry is working
+    // We can't directly access the registry methods anymore, but
+    // successful initialization means tools are available
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_files_read_tool_integration() {
     // The files tool is only registered in agent mode
     let (env, context) = setup_agent_mode_test_context().await;
@@ -117,7 +119,7 @@ async fn test_files_read_tool_integration() {
 
 #[tokio::test]
 async fn test_nonexistent_tool_error() {
-    let (_temp, context) = setup_isolated_context().await;
+    let (_env, context) = setup_test_context().await;
 
     // Test calling a nonexistent tool
     let args = context.create_arguments(vec![]);
@@ -135,6 +137,7 @@ async fn test_nonexistent_tool_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_invalid_arguments_error() {
     // The files tool is only registered in agent mode
     let (_env, context) = setup_agent_mode_test_context().await;
@@ -161,6 +164,9 @@ fn test_response_formatting_utilities() {
 
     let formatted_error = response_formatting::format_error_response(&error_result);
     assert!(formatted_error.contains("Something went wrong"));
+
+    // Only test the functions that still exist
+    // The table formatting and status message functions have been removed as they were dead code
 }
 
 #[test]
@@ -178,7 +184,7 @@ fn test_error_conversion() {
 
 #[tokio::test]
 async fn test_create_arguments_helper() {
-    let (_temp, context) = setup_isolated_context().await;
+    let (_env, context) = setup_test_context().await;
 
     // Test the create_arguments helper method
     let args = context.create_arguments(vec![

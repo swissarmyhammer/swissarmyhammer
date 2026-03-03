@@ -124,7 +124,14 @@ fn infer_operation(obj: &Map<String, Value>) -> Option<(Verb, Noun)> {
 
     // Has id + column but no other updates → move task
     if has_id && has_column {
-        let update_keys = ["title", "description", "tags", "assignees", "depends_on"];
+        let update_keys = [
+            "title",
+            "description",
+            "tags",
+            "assignees",
+            "depends_on",
+            "subtasks",
+        ];
         if !update_keys.iter().any(|k| obj.contains_key(*k)) {
             return Some((Verb::Move, Noun::Task));
         }

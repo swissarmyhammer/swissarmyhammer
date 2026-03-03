@@ -1,11 +1,10 @@
 //! ListAttachments command
 
-use crate::attachment::attachment_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::TaskId;
+use crate::types::{Attachment, TaskId};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all attachments on a task
@@ -33,22 +32,14 @@ impl ListAttachments {
 impl Execute<KanbanContext, KanbanError> for ListAttachments {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let task = ectx.read("task", self.task_id.as_str()).await?;
+            let task = ctx.read_task(&self.task_id).await?;
 
-            // Read each attachment entity referenced by the task
-            let attachment_ids = task.get_string_list("attachments");
-            let mut attachments = Vec::new();
-            for id in &attachment_ids {
-                if let Ok(entity) = ectx.read("attachment", id).await {
-                    attachments.push(attachment_entity_to_json(&entity));
-                }
-            }
+            let attachments: Vec<&Attachment> = task.attachments.iter().collect();
 
-            Ok(json!({
+            Ok(serde_json::json!({
                 "attachments": attachments,
                 "count": attachments.len(),
-                "task_id": self.task_id.to_string()
+                "task_id": task.id
             }))
         }
         .await
@@ -157,6 +148,6 @@ mod tests {
             .await
             .into_result();
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
     }
 }

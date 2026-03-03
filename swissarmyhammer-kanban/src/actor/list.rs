@@ -1,8 +1,8 @@
 //! ListActors command
 
-use crate::actor::actor_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::types::Actor;
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -42,21 +42,21 @@ impl ListActors {
 impl Execute<KanbanContext, KanbanError> for ListActors {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let all_actors = ectx.list("actor").await?;
+            let all_actors = ctx.read_all_actors().await?;
 
-            let actors_json: Vec<Value> = all_actors
+            let actors: Vec<&Actor> = all_actors
                 .iter()
                 .filter(|a| match &self.actor_type {
                     None => true,
-                    Some(t) => a.get_str("actor_type") == Some(t.as_str()),
+                    Some(t) if t == "human" => matches!(a, Actor::Human { .. }),
+                    Some(t) if t == "agent" => matches!(a, Actor::Agent { .. }),
+                    Some(_) => true, // Unknown type, include all
                 })
-                .map(actor_entity_to_json)
                 .collect();
 
             Ok(serde_json::json!({
-                "actors": actors_json,
-                "count": actors_json.len()
+                "actors": actors,
+                "count": actors.len()
             }))
         }
         .await

@@ -1,22 +1,15 @@
 //! AddTask command
 
-use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::tag::tag_name_exists_entity;
-use crate::task_helpers::task_entity_to_json;
-use crate::types::{ActorId, Ordinal, TaskId};
+use crate::types::{ActorId, Ordinal, Position, TagId, Task, TaskId};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use swissarmyhammer_entity::Entity;
+use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Add a new task to the board.
-///
-/// Tags are derived from `#tag` patterns in the description — no explicit
-/// tags parameter needed.
+/// Add a new task to the board
 #[operation(
     verb = "add",
     noun = "task",
@@ -26,14 +19,13 @@ use swissarmyhammer_operations::{
 pub struct AddTask {
     /// The task title (required)
     pub title: String,
-    /// Detailed task description (may contain #tag patterns)
+    /// Detailed task description
     pub description: Option<String>,
-    /// Initial column (if None, uses first column)
-    pub column: Option<String>,
-    /// Initial swimlane
-    pub swimlane: Option<String>,
-    /// Initial ordinal (if None, appended at end)
-    pub ordinal: Option<String>,
+    /// Initial position (column, swimlane, ordinal)
+    pub position: Option<Position>,
+    /// Tags to apply
+    #[serde(default)]
+    pub tags: Vec<TagId>,
     /// Assignees for this task
     #[serde(default)]
     pub assignees: Vec<ActorId>,
@@ -48,9 +40,8 @@ impl AddTask {
         Self {
             title: title.into(),
             description: None,
-            column: None,
-            swimlane: None,
-            ordinal: None,
+            position: None,
+            tags: Vec::new(),
             assignees: Vec::new(),
             depends_on: Vec::new(),
         }
@@ -62,11 +53,15 @@ impl AddTask {
         self
     }
 
-    /// Set the position (column, swimlane, ordinal) for backward compat
-    pub fn with_position(mut self, position: crate::types::Position) -> Self {
-        self.column = Some(position.column.to_string());
-        self.swimlane = position.swimlane.map(|s| s.to_string());
-        self.ordinal = Some(position.ordinal.as_str().to_string());
+    /// Set the position
+    pub fn with_position(mut self, position: Position) -> Self {
+        self.position = Some(position);
+        self
+    }
+
+    /// Set the tags
+    pub fn with_tags(mut self, tags: Vec<TagId>) -> Self {
+        self.tags = tags;
         self
     }
 
@@ -90,83 +85,60 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let ectx = ctx.entity_context().await?;
+            let board = ctx.read_board().await?;
 
-            // Determine column
-            let column = match &self.column {
-                Some(col) => col.clone(),
+            // Determine position
+            let position = match &self.position {
+                Some(pos) => pos.clone(),
                 None => {
-                    let columns = ectx.list("column").await?;
-                    let first = columns
-                        .iter()
-                        .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+                    // Default to first column, no swimlane, at the end
+                    let column = board
+                        .first_column()
                         .expect("board must have at least one column");
-                    first.id.clone()
-                }
-            };
 
-            // Calculate ordinal at end of target column/swimlane
-            let ordinal = match &self.ordinal {
-                Some(ord) => ord.clone(),
-                None => {
-                    let tasks = ectx.list("task").await?;
+                    // Find the last ordinal in that column
+                    let task_ids = ctx.list_task_ids().await?;
                     let mut last_ordinal: Option<Ordinal> = None;
 
-                    for t in &tasks {
-                        let t_col = t.get_str("position_column").unwrap_or("");
-                        let t_swim = t.get_str("position_swimlane");
-                        if t_col == column && t_swim == self.swimlane.as_deref() {
-                            let ord_str = t.get_str("position_ordinal").unwrap_or("a0");
-                            let ord = Ordinal::from_string(ord_str);
+                    for id in &task_ids {
+                        let t = ctx.read_task(id).await?;
+                        if t.position.column == column.id && t.position.swimlane.is_none() {
                             last_ordinal = Some(match last_ordinal {
-                                None => ord,
-                                Some(ref o) if ord > *o => ord,
+                                None => t.position.ordinal.clone(),
+                                Some(ref o) if t.position.ordinal > *o => {
+                                    t.position.ordinal.clone()
+                                }
                                 Some(o) => o,
                             });
                         }
                     }
 
-                    match last_ordinal {
-                        Some(last) => Ordinal::after(&last).as_str().to_string(),
-                        None => Ordinal::first().as_str().to_string(),
+                    Position {
+                        column: column.id.clone(),
+                        swimlane: None,
+                        ordinal: match last_ordinal {
+                            Some(last) => Ordinal::after(&last),
+                            None => Ordinal::first(),
+                        },
                     }
                 }
             };
 
-            // Create entity
-            let task_id = TaskId::new();
-            let mut entity = Entity::new("task", task_id.as_str());
-            entity.set("title", json!(self.title));
-            entity.set("body", json!(self.description.clone().unwrap_or_default()));
-            entity.set("position_column", json!(column));
-            if let Some(ref swimlane) = self.swimlane {
-                entity.set("position_swimlane", json!(swimlane));
-            }
-            entity.set("position_ordinal", json!(ordinal));
+            let task = Task {
+                id: TaskId::new(),
+                title: self.title.clone(),
+                description: self.description.clone().unwrap_or_default(),
+                tags: self.tags.clone(),
+                position,
+                depends_on: self.depends_on.clone(),
+                assignees: self.assignees.clone(),
+                comments: Vec::new(),
+                subtasks: Vec::new(),
+                attachments: Vec::new(),
+            };
 
-            if !self.assignees.is_empty() {
-                entity.set("assignees", serde_json::to_value(&self.assignees)?);
-            }
-            if !self.depends_on.is_empty() {
-                entity.set("depends_on", serde_json::to_value(&self.depends_on)?);
-            }
-
-            ectx.write(&entity).await?;
-
-            // Auto-create Tag entities for any #tag patterns in description
-            let tags = crate::task_helpers::task_tags(&entity);
-            for tag_name in &tags {
-                if !tag_name_exists_entity(ectx, tag_name).await {
-                    let color = auto_color::auto_color(tag_name).to_string();
-                    let tag_id = ulid::Ulid::new().to_string();
-                    let mut tag_entity = Entity::new("tag", &tag_id);
-                    tag_entity.set("tag_name", json!(tag_name));
-                    tag_entity.set("color", json!(color));
-                    ectx.write(&tag_entity).await?;
-                }
-            }
-
-            Ok(task_entity_to_json(&entity))
+            ctx.write_task(&task).await?;
+            Ok(serde_json::to_value(&task)?)
         }
         .await;
 

@@ -34,16 +34,20 @@ impl Execute<KanbanContext, KanbanError> for DeleteColumn {
         let input = serde_json::to_value(self).unwrap();
 
         let result = async {
-            let ectx = ctx.entity_context().await?;
+            let mut board = ctx.read_board().await?;
 
-            // Check column exists (read will error if not found)
-            ectx.read("column", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            // Check column exists
+            if board.find_column(&self.id).is_none() {
+                return Err(KanbanError::ColumnNotFound {
+                    id: self.id.to_string(),
+                });
+            }
 
             // Check for tasks in this column
-            let tasks = ectx.list("task").await?;
+            let tasks = ctx.read_all_tasks().await?;
             let task_count = tasks
                 .iter()
-                .filter(|t| t.get_str("position_column") == Some(self.id.as_str()))
+                .filter(|t| t.position.column == self.id)
                 .count();
 
             if task_count > 0 {
@@ -53,7 +57,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteColumn {
                 });
             }
 
-            ectx.delete("column", self.id.as_str()).await?;
+            board.columns.retain(|c| c.id != self.id);
+            ctx.write_board(&board).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,

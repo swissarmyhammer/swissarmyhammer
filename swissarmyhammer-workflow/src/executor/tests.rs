@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 #[cfg(test)]
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+#[cfg(test)]
 
 fn create_test_workflow() -> Workflow {
     let mut workflow = Workflow::new(

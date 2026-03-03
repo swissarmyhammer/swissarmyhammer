@@ -393,11 +393,11 @@ mod tests {
         let link = agent_dir.join("my-skill");
         std::os::unix::fs::symlink(std::fs::canonicalize(&store).unwrap(), &link).unwrap();
 
-        assert!(store_entry_still_referenced(&store, std::slice::from_ref(&agent_dir)));
+        assert!(store_entry_still_referenced(&store, &[agent_dir.clone()]));
 
         // Remove the symlink
         std::fs::remove_file(&link).unwrap();
-        assert!(!store_entry_still_referenced(&store, std::slice::from_ref(&agent_dir)));
+        assert!(!store_entry_still_referenced(&store, &[agent_dir]));
     }
 
     /// Simulate deploy_skill_to_agents twice without deinit.

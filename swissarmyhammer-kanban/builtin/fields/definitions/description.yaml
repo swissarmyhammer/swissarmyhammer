@@ -1,8 +1,0 @@
-id: "0000000000000000000000000B"
-name: description
-description: Short text description
-type:
-  kind: markdown
-  single_line: true
-editor: markdown
-display: markdown

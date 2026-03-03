@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_roundtrip() {
-        let embedding = vec![1.0f32, -2.5, 0.75, 0.0, -0.001];
+        let embedding = vec![1.0f32, -2.5, 3.14, 0.0, -0.001];
         let encoded = encode_embedding(&embedding);
         let decoded = decode_embedding(&encoded);
         assert_eq!(embedding, decoded);

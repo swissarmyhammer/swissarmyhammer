@@ -4,7 +4,7 @@
 
 use super::state::ShellState;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
-use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, AgentTool, BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::{
@@ -1691,6 +1691,9 @@ impl ShellExecuteTool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(ShellExecuteTool);
+
+#[async_trait]
+impl AgentTool for ShellExecuteTool {}
 
 #[async_trait]
 impl McpTool for ShellExecuteTool {

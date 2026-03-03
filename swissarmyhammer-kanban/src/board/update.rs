@@ -3,7 +3,7 @@
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -51,27 +51,17 @@ impl Execute<KanbanContext, KanbanError> for UpdateBoard {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let ectx = ctx.entity_context().await?;
-            let mut entity =
-                ectx.read("board", "board")
-                    .await
-                    .map_err(|_| KanbanError::NotInitialized {
-                        path: ctx.root().to_path_buf(),
-                    })?;
+            let mut board = ctx.read_board().await?;
 
             if let Some(name) = &self.name {
-                entity.set("name", json!(name));
+                board.name = name.clone();
             }
             if let Some(desc) = &self.description {
-                entity.set("description", json!(desc));
+                board.description = Some(desc.clone());
             }
 
-            ectx.write(&entity).await?;
-
-            Ok(json!({
-                "name": entity.get_str("name").unwrap_or(""),
-                "description": entity.get_str("description"),
-            }))
+            ctx.write_board(&board).await?;
+            Ok(serde_json::to_value(&board)?)
         }
         .await;
 

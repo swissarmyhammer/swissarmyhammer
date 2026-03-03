@@ -3,65 +3,23 @@
 //! The context provides access to storage and utilities. No business logic methods,
 //! just data access primitives. Commands do all the work.
 
-use crate::defaults::{
-    builtin_entity_definitions, builtin_field_definitions, kanban_compute_engine, KanbanLookup,
-};
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, ColumnId, LogEntry, SwimlaneId, TagId, TaskId};
+use crate::types::{Actor, ActorId, Board, LogEntry, Tag, TagId, Task, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use swissarmyhammer_entity::changelog::ChangeEntry;
-use swissarmyhammer_entity::{Entity, EntityContext};
-use swissarmyhammer_fields::{load_yaml_dir, FieldsContext, ValidationEngine};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::OnceCell;
 
 /// Context passed to every command - provides access, not logic
 pub struct KanbanContext {
     /// Path to the .kanban directory
     root: PathBuf,
-    /// Field registry (populated via `open()`, None when created via `new()`)
-    fields: Option<Arc<FieldsContext>>,
-    /// Entity I/O coordinator — lazy-initialized on first access
-    entities: OnceCell<EntityContext>,
 }
 
 impl KanbanContext {
-    /// Create a new context for the given .kanban directory.
-    ///
-    /// This is a lightweight synchronous constructor. The field registry is
-    /// not initialized — use `open()` for a fully-initialized context.
+    /// Create a new context for the given .kanban directory
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: root.into(),
-            fields: None,
-            entities: OnceCell::new(),
-        }
-    }
-
-    /// Create a fully-initialized context with field registry.
-    ///
-    /// Loads builtin field/entity YAML definitions (embedded at compile time),
-    /// then merges with any local overrides from `.kanban/fields/`.
-    pub async fn open(root: impl Into<PathBuf>) -> Result<Self> {
-        let root = root.into();
-
-        // Ensure fields directory structure exists for local overrides
-        let fields_root = root.join("fields");
-        fs::create_dir_all(fields_root.join("definitions")).await?;
-        fs::create_dir_all(fields_root.join("entities")).await?;
-
-        let (fields, entities) = Self::build_entity_context(&root)?;
-        let cell = OnceCell::new();
-        cell.set(entities).ok();
-
-        Ok(Self {
-            root,
-            fields: Some(fields),
-            entities: cell,
-        })
+        Self { root: root.into() }
     }
 
     /// Create a context by finding the .kanban directory from a starting path
@@ -82,11 +40,6 @@ impl KanbanContext {
         }
     }
 
-    /// Access the field registry, if initialized.
-    pub fn fields(&self) -> Option<&FieldsContext> {
-        self.fields.as_deref()
-    }
-
     // =========================================================================
     // Path helpers
     // =========================================================================
@@ -96,9 +49,9 @@ impl KanbanContext {
         &self.root
     }
 
-    /// Path to board.yaml
+    /// Path to board.json
     pub fn board_path(&self) -> PathBuf {
-        self.root.join("board.yaml")
+        self.root.join("board.json")
     }
 
     /// Path to tasks directory
@@ -106,9 +59,9 @@ impl KanbanContext {
         self.root.join("tasks")
     }
 
-    /// Path to a task's markdown file (YAML frontmatter + markdown body)
+    /// Path to a task's JSON file
     pub fn task_path(&self, id: &TaskId) -> PathBuf {
-        self.root.join("tasks").join(format!("{}.md", id))
+        self.root.join("tasks").join(format!("{}.json", id))
     }
 
     /// Path to a task's log file
@@ -121,9 +74,9 @@ impl KanbanContext {
         self.root.join("actors")
     }
 
-    /// Path to an actor's YAML file
+    /// Path to an actor's JSON file
     pub fn actor_path(&self, id: &ActorId) -> PathBuf {
-        self.root.join("actors").join(format!("{}.yaml", id))
+        self.root.join("actors").join(format!("{}.json", id))
     }
 
     /// Path to tags directory
@@ -131,39 +84,9 @@ impl KanbanContext {
         self.root.join("tags")
     }
 
-    /// Path to a tag's YAML file
+    /// Path to a tag's JSON file
     pub fn tag_path(&self, id: &TagId) -> PathBuf {
-        self.root.join("tags").join(format!("{}.yaml", id))
-    }
-
-    /// Path to columns directory
-    pub fn columns_dir(&self) -> PathBuf {
-        self.root.join("columns")
-    }
-
-    /// Path to a column's YAML file
-    pub fn column_path(&self, id: &ColumnId) -> PathBuf {
-        self.root.join("columns").join(format!("{}.yaml", id))
-    }
-
-    /// Path to a column's log file
-    pub fn column_log_path(&self, id: &ColumnId) -> PathBuf {
-        self.root.join("columns").join(format!("{}.jsonl", id))
-    }
-
-    /// Path to swimlanes directory
-    pub fn swimlanes_dir(&self) -> PathBuf {
-        self.root.join("swimlanes")
-    }
-
-    /// Path to a swimlane's YAML file
-    pub fn swimlane_path(&self, id: &SwimlaneId) -> PathBuf {
-        self.root.join("swimlanes").join(format!("{}.yaml", id))
-    }
-
-    /// Path to a swimlane's log file
-    pub fn swimlane_log_path(&self, id: &SwimlaneId) -> PathBuf {
-        self.root.join("swimlanes").join(format!("{}.jsonl", id))
+        self.root.join("tags").join(format!("{}.json", id))
     }
 
     /// Path to the activity directory
@@ -185,12 +108,9 @@ impl KanbanContext {
     // Directory initialization
     // =========================================================================
 
-    /// Check if the board is initialized (checks board.yaml or legacy board.json)
+    /// Check if the board is initialized
     pub fn is_initialized(&self) -> bool {
-        // Check new entity location first, then legacy
-        self.root.join("boards").join("board.yaml").exists()
-            || self.board_path().exists()
-            || self.root.join("board.json").exists()
+        self.board_path().exists()
     }
 
     /// Check if all required directories exist
@@ -199,8 +119,6 @@ impl KanbanContext {
             && self.tasks_dir().exists()
             && self.actors_dir().exists()
             && self.tags_dir().exists()
-            && self.columns_dir().exists()
-            && self.swimlanes_dir().exists()
             && self.activity_dir().exists()
     }
 
@@ -216,8 +134,6 @@ impl KanbanContext {
         fs::create_dir_all(self.tasks_dir()).await?;
         fs::create_dir_all(self.actors_dir()).await?;
         fs::create_dir_all(self.tags_dir()).await?;
-        fs::create_dir_all(self.columns_dir()).await?;
-        fs::create_dir_all(self.swimlanes_dir()).await?;
         fs::create_dir_all(self.activity_dir()).await?;
         Ok(())
     }
@@ -234,6 +150,249 @@ impl KanbanContext {
     }
 
     // =========================================================================
+    // Board I/O
+    // =========================================================================
+
+    /// Read the board file
+    pub async fn read_board(&self) -> Result<Board> {
+        let path = self.board_path();
+        if !path.exists() {
+            return Err(KanbanError::NotInitialized {
+                path: self.root.clone(),
+            });
+        }
+
+        let content = fs::read_to_string(&path).await?;
+        let board: Board = serde_json::from_str(&content)?;
+        Ok(board)
+    }
+
+    /// Write the board file (atomic write via temp file)
+    pub async fn write_board(&self, board: &Board) -> Result<()> {
+        let path = self.board_path();
+        let content = serde_json::to_string_pretty(board)?;
+        atomic_write(&path, content.as_bytes()).await
+    }
+
+    // =========================================================================
+    // Task I/O
+    // =========================================================================
+
+    /// Read a task file
+    pub async fn read_task(&self, id: &TaskId) -> Result<Task> {
+        let path = self.task_path(id);
+        if !path.exists() {
+            return Err(KanbanError::TaskNotFound { id: id.to_string() });
+        }
+
+        let content = fs::read_to_string(&path).await?;
+        let task: Task = serde_json::from_str(&content)?;
+        Ok(task)
+    }
+
+    /// Write a task file (atomic write via temp file)
+    pub async fn write_task(&self, task: &Task) -> Result<()> {
+        let path = self.task_path(&task.id);
+        let content = serde_json::to_string_pretty(task)?;
+        atomic_write(&path, content.as_bytes()).await
+    }
+
+    /// Delete a task file and its log
+    pub async fn delete_task_file(&self, id: &TaskId) -> Result<()> {
+        let task_path = self.task_path(id);
+        let log_path = self.task_log_path(id);
+
+        if task_path.exists() {
+            fs::remove_file(&task_path).await?;
+        }
+        if log_path.exists() {
+            fs::remove_file(&log_path).await?;
+        }
+
+        Ok(())
+    }
+
+    /// List all task IDs by reading the tasks directory
+    pub async fn list_task_ids(&self) -> Result<Vec<TaskId>> {
+        let tasks_dir = self.tasks_dir();
+        if !tasks_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids = Vec::new();
+        let mut entries = fs::read_dir(&tasks_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(TaskId::from_string(stem));
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+
+    /// Read all tasks
+    pub async fn read_all_tasks(&self) -> Result<Vec<Task>> {
+        let ids = self.list_task_ids().await?;
+        let mut tasks = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            tasks.push(self.read_task(&id).await?);
+        }
+
+        Ok(tasks)
+    }
+
+    // =========================================================================
+    // Actor I/O
+    // =========================================================================
+
+    /// Read an actor file
+    pub async fn read_actor(&self, id: &ActorId) -> Result<Actor> {
+        let path = self.actor_path(id);
+        if !path.exists() {
+            return Err(KanbanError::ActorNotFound { id: id.to_string() });
+        }
+
+        let content = fs::read_to_string(&path).await?;
+        let actor: Actor = serde_json::from_str(&content)?;
+        Ok(actor)
+    }
+
+    /// Write an actor file (atomic write via temp file)
+    pub async fn write_actor(&self, actor: &Actor) -> Result<()> {
+        let path = self.actor_path(actor.id());
+        let content = serde_json::to_string_pretty(actor)?;
+        atomic_write(&path, content.as_bytes()).await
+    }
+
+    /// Delete an actor file
+    pub async fn delete_actor_file(&self, id: &ActorId) -> Result<()> {
+        let actor_path = self.actor_path(id);
+
+        if actor_path.exists() {
+            fs::remove_file(&actor_path).await?;
+        }
+
+        Ok(())
+    }
+
+    /// List all actor IDs by reading the actors directory
+    pub async fn list_actor_ids(&self) -> Result<Vec<ActorId>> {
+        let actors_dir = self.actors_dir();
+        if !actors_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids = Vec::new();
+        let mut entries = fs::read_dir(&actors_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(ActorId::from_string(stem));
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+
+    /// Read all actors
+    pub async fn read_all_actors(&self) -> Result<Vec<Actor>> {
+        let ids = self.list_actor_ids().await?;
+        let mut actors = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            actors.push(self.read_actor(&id).await?);
+        }
+
+        Ok(actors)
+    }
+
+    /// Check if an actor exists
+    pub async fn actor_exists(&self, id: &ActorId) -> bool {
+        self.actor_path(id).exists()
+    }
+
+    // =========================================================================
+    // Tag I/O
+    // =========================================================================
+
+    /// Read a tag file
+    pub async fn read_tag(&self, id: &TagId) -> Result<Tag> {
+        let path = self.tag_path(id);
+        if !path.exists() {
+            return Err(KanbanError::TagNotFound { id: id.to_string() });
+        }
+
+        let content = fs::read_to_string(&path).await?;
+        let tag: Tag = serde_json::from_str(&content)?;
+        Ok(tag)
+    }
+
+    /// Write a tag file (atomic write via temp file)
+    pub async fn write_tag(&self, tag: &Tag) -> Result<()> {
+        let path = self.tag_path(&tag.id);
+        let content = serde_json::to_string_pretty(tag)?;
+        atomic_write(&path, content.as_bytes()).await
+    }
+
+    /// Delete a tag file
+    pub async fn delete_tag_file(&self, id: &TagId) -> Result<()> {
+        let tag_path = self.tag_path(id);
+
+        if tag_path.exists() {
+            fs::remove_file(&tag_path).await?;
+        }
+
+        Ok(())
+    }
+
+    /// List all tag IDs by reading the tags directory
+    pub async fn list_tag_ids(&self) -> Result<Vec<TagId>> {
+        let tags_dir = self.tags_dir();
+        if !tags_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids = Vec::new();
+        let mut entries = fs::read_dir(&tags_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(TagId::from_string(stem));
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+
+    /// Read all tags
+    pub async fn read_all_tags(&self) -> Result<Vec<Tag>> {
+        let ids = self.list_tag_ids().await?;
+        let mut tags = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            tags.push(self.read_tag(&id).await?);
+        }
+
+        Ok(tags)
+    }
+
+    /// Check if a tag exists
+    pub async fn tag_exists(&self, id: &TagId) -> bool {
+        self.tag_path(id).exists()
+    }
+
+    // =========================================================================
     // Activity logging
     // =========================================================================
 
@@ -245,46 +404,6 @@ impl KanbanContext {
     /// Append a log entry to a task's log
     pub async fn append_task_log(&self, task_id: &TaskId, entry: &LogEntry) -> Result<()> {
         self.append_log(&self.task_log_path(task_id), entry).await
-    }
-
-    /// Path to a tag's log file
-    pub fn tag_log_path(&self, id: &TagId) -> PathBuf {
-        self.root.join("tags").join(format!("{}.jsonl", id))
-    }
-
-    /// Path to an actor's log file
-    pub fn actor_log_path(&self, id: &ActorId) -> PathBuf {
-        self.root.join("actors").join(format!("{}.jsonl", id))
-    }
-
-    /// Path to the board log file
-    pub fn board_log_path(&self) -> PathBuf {
-        self.root.join("board.jsonl")
-    }
-
-    /// Append a log entry to a tag's log
-    pub async fn append_tag_log(&self, id: &TagId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.tag_log_path(id), entry).await
-    }
-
-    /// Append a log entry to an actor's log
-    pub async fn append_actor_log(&self, id: &ActorId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.actor_log_path(id), entry).await
-    }
-
-    /// Append a log entry to a column's log
-    pub async fn append_column_log(&self, id: &ColumnId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.column_log_path(id), entry).await
-    }
-
-    /// Append a log entry to a swimlane's log
-    pub async fn append_swimlane_log(&self, id: &SwimlaneId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.swimlane_log_path(id), entry).await
-    }
-
-    /// Append a log entry to the board log
-    pub async fn append_board_log(&self, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.board_log_path(), entry).await
     }
 
     /// Append a log entry to a JSONL file
@@ -329,96 +448,6 @@ impl KanbanContext {
     }
 
     // =========================================================================
-    // Generic Entity I/O (delegates to EntityContext)
-    // =========================================================================
-
-    /// Get the EntityContext for generic entity operations.
-    ///
-    /// Lazy-initialized on first access from builtin + local field definitions.
-    pub async fn entity_context(&self) -> Result<&EntityContext> {
-        self.entities
-            .get_or_try_init(|| async {
-                let (_fields, entities) = Self::build_entity_context(&self.root)?;
-                Ok(entities)
-            })
-            .await
-    }
-
-    /// Build a FieldsContext + EntityContext from builtin and local field definitions.
-    ///
-    /// Loads builtin YAML definitions (embedded at compile time), then merges
-    /// with any local overrides from `.kanban/fields/`. Does NOT create directories
-    /// — callers that need dirs should ensure them beforehand.
-    fn build_entity_context(root: &Path) -> Result<(Arc<FieldsContext>, EntityContext)> {
-        let fields_root = root.join("fields");
-
-        let builtin_defs = builtin_field_definitions();
-        let builtin_entities = builtin_entity_definitions();
-
-        // Load local overrides (returns empty vec if dirs don't exist)
-        let local_defs = load_yaml_dir(&fields_root.join("definitions"));
-        let local_entities = load_yaml_dir(&fields_root.join("entities"));
-
-        let mut all_defs: Vec<(&str, &str)> = builtin_defs.clone();
-        let local_def_refs: Vec<(&str, &str)> = local_defs
-            .iter()
-            .map(|(n, c)| (n.as_str(), c.as_str()))
-            .collect();
-        all_defs.extend(local_def_refs);
-
-        let mut all_entities: Vec<(&str, &str)> = builtin_entities.clone();
-        let local_entity_refs: Vec<(&str, &str)> = local_entities
-            .iter()
-            .map(|(n, c)| (n.as_str(), c.as_str()))
-            .collect();
-        all_entities.extend(local_entity_refs);
-
-        let fields = Arc::new(
-            FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
-                .map_err(|e| KanbanError::FieldsError(e.to_string()))?,
-        );
-
-        // Build engines — KanbanLookup uses a bare EntityContext (no engines)
-        // to avoid circular dependency.
-        let lookup = KanbanLookup::new(root, Arc::clone(&fields));
-        let compute = Arc::new(kanban_compute_engine());
-        let validation = Arc::new(ValidationEngine::new().with_lookup(lookup));
-        let entities = EntityContext::new(root, Arc::clone(&fields))
-            .with_compute(compute)
-            .with_validation(validation);
-        Ok((fields, entities))
-    }
-
-    /// Read a single entity by type and ID.
-    pub async fn read_entity_generic(&self, entity_type: &str, id: &str) -> Result<Entity> {
-        Ok(self.entity_context().await?.read(entity_type, id).await?)
-    }
-
-    /// Write an entity with automatic changelog.
-    pub async fn write_entity_generic(&self, entity: &Entity) -> Result<()> {
-        Ok(self.entity_context().await?.write(entity).await?)
-    }
-
-    /// Delete an entity by type and ID.
-    pub async fn delete_entity_generic(&self, entity_type: &str, id: &str) -> Result<()> {
-        Ok(self.entity_context().await?.delete(entity_type, id).await?)
-    }
-
-    /// List all entities of a given type.
-    pub async fn list_entities_generic(&self, entity_type: &str) -> Result<Vec<Entity>> {
-        Ok(self.entity_context().await?.list(entity_type).await?)
-    }
-
-    /// Read the changelog for an entity.
-    pub async fn read_entity_changelog(
-        &self,
-        entity_type: &str,
-        id: &str,
-    ) -> Result<Vec<ChangeEntry>> {
-        Ok(self.entity_context().await?.read_changelog(entity_type, id).await?)
-    }
-
-    // =========================================================================
     // Locking
     // =========================================================================
 
@@ -439,7 +468,10 @@ impl KanbanContext {
 
         // Non-blocking lock attempt
         match file.try_lock_exclusive() {
-            Ok(()) => Ok(KanbanLock { file }),
+            Ok(()) => Ok(KanbanLock {
+                file,
+                path: lock_path,
+            }),
             Err(_) => Err(KanbanError::LockBusy),
         }
     }
@@ -448,6 +480,8 @@ impl KanbanContext {
 /// RAII lock guard - releases on drop
 pub struct KanbanLock {
     file: std::fs::File,
+    #[allow(dead_code)]
+    path: PathBuf,
 }
 
 impl Drop for KanbanLock {
@@ -456,10 +490,26 @@ impl Drop for KanbanLock {
     }
 }
 
+/// Atomic write via temp file and rename
+async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
+    // Write to temp file in same directory
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, content).await?;
+
+    // Rename (atomic on same filesystem)
+    fs::rename(&temp_path, path).await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ColumnId, SwimlaneId};
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -477,35 +527,51 @@ mod tests {
         let root = temp.path().join(".kanban");
 
         assert_eq!(ctx.root(), root);
-        assert_eq!(ctx.board_path(), root.join("board.yaml"));
+        assert_eq!(ctx.board_path(), root.join("board.json"));
         assert_eq!(ctx.tasks_dir(), root.join("tasks"));
     }
 
     #[tokio::test]
+    async fn test_board_io() {
+        let (_temp, ctx) = setup().await;
+
+        let board = Board::new("Test Board");
+        ctx.write_board(&board).await.unwrap();
+
+        let loaded = ctx.read_board().await.unwrap();
+        assert_eq!(loaded.name, "Test Board");
+    }
+
+    #[tokio::test]
     async fn test_task_io() {
-        let (_temp, ctx) = setup_with_fields().await;
+        use crate::types::{ColumnId, Ordinal, Position};
 
-        // Write a task via entity context
-        let mut task = swissarmyhammer_entity::Entity::new("task", "01TESTTASK");
-        task.set("title", serde_json::json!("Test Task"));
-        task.set("position_column", serde_json::json!("todo"));
-        task.set("position_ordinal", serde_json::json!("a0"));
+        let (_temp, ctx) = setup().await;
 
-        let ectx = ctx.entity_context().await.unwrap();
-        ectx.write(&task).await.unwrap();
+        // Initialize board first
+        let board = Board::new("Test");
+        ctx.write_board(&board).await.unwrap();
 
-        // Read back
-        let loaded = ectx.read("task", "01TESTTASK").await.unwrap();
-        assert_eq!(loaded.get_str("title"), Some("Test Task"));
+        let task = Task::new(
+            "Test Task",
+            Position::new(ColumnId::from_string("todo"), None, Ordinal::first()),
+        );
+        let task_id = task.id.clone();
+
+        ctx.write_task(&task).await.unwrap();
+
+        let loaded = ctx.read_task(&task_id).await.unwrap();
+        assert_eq!(loaded.title, "Test Task");
 
         // List tasks
-        let tasks = ectx.list("task").await.unwrap();
-        assert_eq!(tasks.len(), 1);
+        let ids = ctx.list_task_ids().await.unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], task_id);
 
         // Delete
-        ectx.delete("task", "01TESTTASK").await.unwrap();
-        let tasks = ectx.list("task").await.unwrap();
-        assert!(tasks.is_empty());
+        ctx.delete_task_file(&task_id).await.unwrap();
+        let ids = ctx.list_task_ids().await.unwrap();
+        assert!(ids.is_empty());
     }
 
     #[tokio::test]
@@ -587,38 +653,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_column_paths() {
-        let (temp, ctx) = setup().await;
-        let root = temp.path().join(".kanban");
-
-        assert_eq!(ctx.columns_dir(), root.join("columns"));
-        assert_eq!(
-            ctx.column_path(&ColumnId::from_string("todo")),
-            root.join("columns").join("todo.yaml")
-        );
-        assert_eq!(
-            ctx.column_log_path(&ColumnId::from_string("todo")),
-            root.join("columns").join("todo.jsonl")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_swimlane_paths() {
-        let (temp, ctx) = setup().await;
-        let root = temp.path().join(".kanban");
-
-        assert_eq!(ctx.swimlanes_dir(), root.join("swimlanes"));
-        assert_eq!(
-            ctx.swimlane_path(&SwimlaneId::from_string("backend")),
-            root.join("swimlanes").join("backend.yaml")
-        );
-        assert_eq!(
-            ctx.swimlane_log_path(&SwimlaneId::from_string("backend")),
-            root.join("swimlanes").join("backend.jsonl")
-        );
-    }
-
-    #[tokio::test]
     async fn test_ensure_directories_recreates_missing() {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
@@ -636,197 +670,5 @@ mod tests {
         ctx.ensure_directories().await.unwrap();
         assert!(ctx.directories_exist());
         assert!(ctx.actors_dir().exists());
-    }
-
-    #[tokio::test]
-    async fn test_open_creates_fields_directory() {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        std::fs::create_dir_all(&kanban_dir).unwrap();
-
-        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
-
-        // fields/ directory should exist
-        assert!(kanban_dir.join("fields").exists());
-        assert!(kanban_dir.join("fields/definitions").exists());
-        assert!(kanban_dir.join("fields/entities").exists());
-
-        // fields() should return Some
-        assert!(ctx.fields().is_some());
-    }
-
-    #[tokio::test]
-    async fn test_open_seeds_defaults() {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        std::fs::create_dir_all(&kanban_dir).unwrap();
-
-        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
-        let fields = ctx.fields().unwrap();
-
-        // Should have all 21 built-in fields
-        assert_eq!(fields.all_fields().len(), 21);
-
-        // Should have all 7 entity templates
-        assert_eq!(fields.all_entities().len(), 7);
-
-        // Check a specific field
-        let title = fields.get_field_by_name("title").unwrap();
-        assert_eq!(title.name, "title");
-    }
-
-    #[tokio::test]
-    async fn test_open_preserves_customizations() {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        let fields_defs_dir = kanban_dir.join("fields/definitions");
-        std::fs::create_dir_all(&fields_defs_dir).unwrap();
-
-        // Manually add a custom field to definitions/
-        let custom_yaml = r#"id: 0000000000000000000000ZZZZ
-name: sprint
-type:
-  kind: text
-  single_line: true
-"#;
-        tokio::fs::write(fields_defs_dir.join("sprint.yaml"), custom_yaml)
-            .await
-            .unwrap();
-
-        // Open — should have 21 built-in + 1 custom = 22
-        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
-        let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 22);
-
-        // Custom field should be present
-        let sprint = fields.get_field_by_name("sprint").unwrap();
-        assert_eq!(sprint.name, "sprint");
-    }
-
-    #[tokio::test]
-    async fn test_new_has_no_fields() {
-        let (_, ctx) = setup().await;
-        assert!(ctx.fields().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_fields_accessor() {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        std::fs::create_dir_all(&kanban_dir).unwrap();
-
-        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
-        let fields = ctx.fields().unwrap();
-
-        // Should be able to look up fields by name
-        assert!(fields.get_field_by_name("title").is_some());
-        assert!(fields.get_field_by_name("body").is_some());
-        assert!(fields.get_field_by_name("nonexistent").is_none());
-
-        // Should be able to get entity templates
-        assert!(fields.get_entity("task").is_some());
-        assert!(fields.get_entity("tag").is_some());
-        assert!(fields.get_entity("nonexistent").is_none());
-
-        // Entity fields should resolve to field definitions
-        let task_fields = fields.fields_for_entity("task");
-        assert_eq!(task_fields.len(), 11); // title, tags, progress, assignees, due, depends_on, body, position_column, position_swimlane, position_ordinal, attachments
-    }
-
-    // =========================================================================
-    // Generic Entity I/O tests (integration with EntityContext)
-    // =========================================================================
-
-    async fn setup_with_fields() -> (TempDir, KanbanContext) {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        std::fs::create_dir_all(&kanban_dir).unwrap();
-        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
-        ctx.create_directories().await.unwrap();
-        (temp, ctx)
-    }
-
-    #[tokio::test]
-    async fn test_entity_context_available_after_open() {
-        let (_temp, ctx) = setup_with_fields().await;
-        assert!(ctx.entity_context().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_entity_context_lazy_init() {
-        let (_temp, ctx) = setup().await;
-        ctx.create_directories().await.unwrap();
-        // entity_context() lazy-initializes even without explicit open()
-        assert!(ctx.entity_context().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_generic_entity_round_trip_plain_yaml() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut tag = swissarmyhammer_entity::Entity::new("tag", "bug");
-        tag.set("tag_name", serde_json::json!("Bug"));
-        tag.set("color", serde_json::json!("#ff0000"));
-
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        let loaded = ctx.read_entity_generic("tag", "bug").await.unwrap();
-        assert_eq!(loaded.get_str("tag_name"), Some("Bug"));
-        assert_eq!(loaded.get_str("color"), Some("#ff0000"));
-    }
-
-    #[tokio::test]
-    async fn test_generic_entity_round_trip_with_body() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut task = swissarmyhammer_entity::Entity::new("task", "01ABC");
-        task.set("title", serde_json::json!("Fix the bug"));
-        task.set("body", serde_json::json!("This needs fixing.\n\n- [ ] Step 1\n- [ ] Step 2"));
-
-        ctx.write_entity_generic(&task).await.unwrap();
-
-        let loaded = ctx.read_entity_generic("task", "01ABC").await.unwrap();
-        assert_eq!(loaded.get_str("title"), Some("Fix the bug"));
-        assert!(loaded.get_str("body").unwrap().contains("Step 1"));
-    }
-
-    #[tokio::test]
-    async fn test_generic_entity_list_and_delete() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut t1 = swissarmyhammer_entity::Entity::new("tag", "bug");
-        t1.set("tag_name", serde_json::json!("Bug"));
-        let mut t2 = swissarmyhammer_entity::Entity::new("tag", "feature");
-        t2.set("tag_name", serde_json::json!("Feature"));
-
-        ctx.write_entity_generic(&t1).await.unwrap();
-        ctx.write_entity_generic(&t2).await.unwrap();
-        assert_eq!(ctx.list_entities_generic("tag").await.unwrap().len(), 2);
-
-        ctx.delete_entity_generic("tag", "bug").await.unwrap();
-        assert_eq!(ctx.list_entities_generic("tag").await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_generic_entity_changelog_on_create_and_update() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut tag = swissarmyhammer_entity::Entity::new("tag", "bug");
-        tag.set("tag_name", serde_json::json!("Bug"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        tag.set("tag_name", serde_json::json!("Bug Report"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        let log = ctx.read_entity_changelog("tag", "bug").await.unwrap();
-        assert_eq!(log.len(), 2);
-        assert_eq!(log[0].op, "create");
-        assert_eq!(log[1].op, "update");
-    }
-
-    #[tokio::test]
-    async fn test_entity_error_for_unknown_type() {
-        let (_temp, ctx) = setup_with_fields().await;
-        assert!(ctx.read_entity_generic("unicorn", "xyz").await.is_err());
     }
 }

@@ -1,6 +1,6 @@
 //! Kanban operation processor
 
-use crate::types::default_column_entities;
+use crate::types::TaskId;
 use crate::{KanbanContext, KanbanError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -43,13 +43,8 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         // Auto-initialize board if not present (idempotent)
         // Skip auto-init if the operation is InitBoard itself
         if !ctx.is_initialized() && operation.op_string() != "init board" {
-            let ectx = ctx.entity_context().await?;
-            let mut board_entity = swissarmyhammer_entity::Entity::new("board", "board");
-            board_entity.set("name", serde_json::json!("Untitled Board"));
-            ectx.write(&board_entity).await?;
-            for entity in &default_column_entities() {
-                ectx.write(entity).await?;
-            }
+            let board = crate::types::Board::new("Untitled Board");
+            ctx.write_board(&board).await?;
         }
 
         // Execute the operation
@@ -82,10 +77,16 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         &self,
         ctx: &KanbanContext,
         log_entry: &LogEntry,
-        _affected_resources: &[String],
+        affected_resources: &[String],
     ) -> Result<()> {
-        // Global activity log only — per-entity logging is handled by EntityContext
+        // Global activity log (all operations)
         ctx.append_activity(log_entry).await?;
+
+        // Per-task logs (for operations that affect specific tasks)
+        for resource_id in affected_resources {
+            let task_id = TaskId::from_string(resource_id);
+            ctx.append_task_log(&task_id, log_entry).await?;
+        }
 
         Ok(())
     }
@@ -102,7 +103,6 @@ mod tests {
     use super::*;
     use crate::board::InitBoard;
     use crate::task::AddTask;
-    use crate::types::TaskId;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_processor_writes_entity_changelog() {
+    async fn test_processor_writes_per_task_log() {
         let (_temp, ctx) = setup().await;
         let processor = KanbanOperationProcessor::new();
 
@@ -144,13 +144,12 @@ mod tests {
         let result = processor.process(&cmd, &ctx).await.unwrap();
         let task_id = result["id"].as_str().unwrap();
 
-        // Check entity changelog (written by EntityContext::write)
+        // Check per-task log
         let task_log_path = ctx.task_log_path(&TaskId::from_string(task_id));
         let content = std::fs::read_to_string(task_log_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
 
-        // Only entity changelog entry (processor no longer writes per-entity logs)
-        assert_eq!(lines.len(), 1);
+        assert_eq!(lines.len(), 1); // Just add
     }
 
     #[tokio::test]

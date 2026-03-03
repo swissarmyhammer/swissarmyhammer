@@ -2,7 +2,6 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::swimlane::swimlane_entity_to_json;
 use crate::types::SwimlaneId;
 use serde::Deserialize;
 use serde_json::Value;
@@ -26,9 +25,16 @@ impl GetSwimlane {
 impl Execute<KanbanContext, KanbanError> for GetSwimlane {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
-            let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("swimlane", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
-            Ok(swimlane_entity_to_json(&entity))
+            let board = ctx.read_board().await?;
+
+            let swimlane =
+                board
+                    .find_swimlane(&self.id)
+                    .ok_or_else(|| KanbanError::SwimlaneNotFound {
+                        id: self.id.to_string(),
+                    })?;
+
+            Ok(serde_json::to_value(swimlane)?)
         }
         .await
         {

@@ -2,8 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::task_helpers::task_entity_to_json;
-use crate::types::{Ordinal, TaskId};
+use crate::types::{Ordinal, Position, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
@@ -36,53 +35,46 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("task", self.id.as_str()).await?;
+            let mut task = ctx.read_task(&self.id).await?;
+            let board = ctx.read_board().await?;
 
             // Get terminal column (highest order = done)
-            let all_columns = ectx.list("column").await?;
-            let terminal = all_columns
-                .iter()
-                .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+            let terminal = board
+                .terminal_column()
                 .ok_or_else(|| KanbanError::ColumnNotFound {
                     id: "done".to_string(),
                 })?;
 
             // Calculate ordinal at end of done column
-            let all_tasks = ectx.list("task").await?;
+            let task_ids = ctx.list_task_ids().await?;
             let mut last_ordinal: Option<Ordinal> = None;
 
-            for t in &all_tasks {
-                if t.id == self.id.as_str() {
+            for id in &task_ids {
+                if id == &self.id {
                     continue; // Skip the task being completed
                 }
-                if t.get_str("position_column") == Some(terminal.id.as_str()) {
-                    let ord = Ordinal::from_string(
-                        t.get_str("position_ordinal").unwrap_or("a0"),
-                    );
+                let t = ctx.read_task(id).await?;
+                if t.position.column == terminal.id {
                     last_ordinal = Some(match last_ordinal {
-                        None => ord,
-                        Some(ref o) if ord > *o => ord,
+                        None => t.position.ordinal.clone(),
+                        Some(ref o) if t.position.ordinal > *o => t.position.ordinal.clone(),
                         Some(o) => o,
                     });
                 }
             }
 
             // Update position to done column (preserving swimlane)
-            entity.set(
-                "position_column",
-                serde_json::json!(terminal.id.as_str()),
-            );
-            entity.set(
-                "position_ordinal",
-                serde_json::json!(match last_ordinal {
-                    Some(last) => Ordinal::after(&last).as_str().to_string(),
-                    None => Ordinal::first().as_str().to_string(),
-                }),
-            );
+            task.position = Position {
+                column: terminal.id.clone(),
+                swimlane: task.position.swimlane.clone(),
+                ordinal: match last_ordinal {
+                    Some(last) => Ordinal::after(&last),
+                    None => Ordinal::first(),
+                },
+            };
 
-            ectx.write(&entity).await?;
-            Ok(task_entity_to_json(&entity))
+            ctx.write_task(&task).await?;
+            Ok(serde_json::to_value(&task)?)
         }
         .await;
 
@@ -186,8 +178,12 @@ mod tests {
 
         // Move to doing column with swimlane
         use crate::task::MoveTask;
-        MoveTask::to_column_and_swimlane(task_id, "doing", "feature")
-            .execute(&ctx)
+        use crate::types::Position;
+        MoveTask::new(
+            task_id,
+            Position::new("doing".into(), Some("feature".into()), Ordinal::first()),
+        )
+        .execute(&ctx)
         .await
         .into_result()
         .unwrap();
@@ -213,6 +209,6 @@ mod tests {
             .await
             .into_result();
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(KanbanError::TaskNotFound { .. })));
     }
 }
