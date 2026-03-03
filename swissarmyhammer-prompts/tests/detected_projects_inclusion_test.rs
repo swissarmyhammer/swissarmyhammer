@@ -95,18 +95,14 @@ fn test_detected_projects_includes_rust_instructions() {
     println!("{}", rendered);
     println!("=== End of rendered output ===");
 
-    // Verify the output contains Rust-specific content
+    // Template now defers to treesitter tool for runtime detection
     assert!(
-        rendered.contains("Rust Project"),
-        "Should contain 'Rust Project' header"
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
     );
     assert!(
-        rendered.contains("cargo nextest"),
-        "Should contain Rust-specific testing instructions mentioning cargo nextest"
-    );
-    assert!(
-        rendered.contains("Cargo.toml"),
-        "Should contain marker file name"
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 }
 
@@ -153,26 +149,14 @@ fn test_detected_projects_includes_nodejs_instructions() {
     println!("{}", rendered);
     println!("=== End of rendered output ===");
 
-    // Verify the output contains Node.js-specific content
-    eprintln!("Looking for NodeJs in output...");
-    eprintln!(
-        "Contains 'NodeJs Project': {}",
-        rendered.contains("NodeJs Project")
-    );
-    eprintln!("Contains 'Node.js': {}", rendered.contains("Node.js"));
-
+    // Template now defers to treesitter tool for runtime detection
     assert!(
-        rendered.contains("NodeJs Project") || rendered.contains("Node.js"),
-        "Should contain Node.js project header. Rendered output:\n{}",
-        rendered
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
     );
     assert!(
-        rendered.contains("npm test") || rendered.contains("yarn test"),
-        "Should contain Node.js-specific testing instructions"
-    );
-    assert!(
-        rendered.contains("package.json"),
-        "Should contain marker file name"
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 }
 
@@ -219,18 +203,14 @@ fn test_detected_projects_includes_flutter_instructions() {
     println!("{}", rendered);
     println!("=== End of rendered output ===");
 
-    // Verify the output contains Flutter-specific content
+    // Template now defers to treesitter tool for runtime detection
     assert!(
-        rendered.contains("Flutter Project"),
-        "Should contain 'Flutter Project' header"
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
     );
     assert!(
-        rendered.contains("flutter test") || rendered.contains("fvm flutter test"),
-        "Should contain Flutter-specific testing instructions"
-    );
-    assert!(
-        rendered.contains("pubspec.yaml"),
-        "Should contain marker file name"
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 }
 
@@ -294,33 +274,13 @@ fn test_detected_projects_deduplicates_instructions() {
     println!("{}", rendered);
     println!("=== End of rendered output ===");
 
-    // Verify that both project locations are listed
+    // Template now defers to treesitter tool for runtime detection
     assert!(
-        rendered.contains("/test/project1"),
-        "Should list first Rust project"
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
     );
     assert!(
-        rendered.contains("/test/project2"),
-        "Should list second Rust project"
-    );
-    assert!(
-        rendered.contains("/test/frontend"),
-        "Should list Node.js project"
-    );
-
-    // Count occurrences of the Rust guidelines header
-    let rust_guideline_count = rendered.matches("Rust Project Guidelines").count();
-    assert_eq!(
-        rust_guideline_count, 1,
-        "Rust guidelines should appear exactly once, not {} times",
-        rust_guideline_count
-    );
-
-    // Count occurrences of cargo nextest (Rust-specific)
-    let nextest_count = rendered.matches("cargo nextest").count();
-    // Should appear multiple times in the Rust guidelines section, but the section itself should only appear once
-    assert!(
-        nextest_count >= 1,
-        "Should contain cargo nextest instructions"
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 }

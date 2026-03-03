@@ -1,6 +1,6 @@
 //! Validate command implementation
 //!
-//! Validates prompt files and workflows for syntax and best practices
+//! Validates prompt files and skills for syntax and best practices
 
 use crate::context::CliContext;
 use crate::exit_codes::EXIT_ERROR;
@@ -13,12 +13,8 @@ pub mod display;
 pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Handle the validate command using CliContext pattern
-pub async fn handle_command(
-    workflow_dirs: Vec<String>,
-    validate_tools: bool,
-    cli_context: &CliContext,
-) -> i32 {
-    match run_validate_with_context(workflow_dirs, validate_tools, cli_context).await {
+pub async fn handle_command(validate_tools: bool, cli_context: &CliContext) -> i32 {
+    match run_validate_with_context(validate_tools, cli_context).await {
         Ok(exit_code) => exit_code,
         Err(e) => {
             eprintln!("Validate command failed: {}", e);
@@ -28,15 +24,10 @@ pub async fn handle_command(
 }
 
 /// Run validation and display results using CliContext
-async fn run_validate_with_context(
-    workflow_dirs: Vec<String>,
-    validate_tools: bool,
-    cli_context: &CliContext,
-) -> Result<i32> {
+async fn run_validate_with_context(validate_tools: bool, cli_context: &CliContext) -> Result<i32> {
     // Run validation to get structured results
     let (validation_result, exit_code) =
-        validate::run_validate_command_structured(cli_context.quiet, workflow_dirs, validate_tools)
-            .await?;
+        validate::run_validate_command_structured(cli_context.quiet, validate_tools).await?;
 
     // Convert to display objects and output using comfy-table with colored status
     use comfy_table::{Cell, Color};

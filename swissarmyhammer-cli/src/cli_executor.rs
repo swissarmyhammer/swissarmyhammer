@@ -83,7 +83,7 @@ impl CliExecutor {
     pub async fn execute(&self, args: &[&str]) -> ExecutionResult {
         // Build CLI with Clap
         let cli_builder = CliBuilder::new(self.tool_registry.clone());
-        let cmd = cli_builder.build_cli_with_warnings(None);
+        let cmd = cli_builder.build_cli_with_warnings();
 
         // Parse args with program name prepended
         let args_with_program: Vec<String> = std::iter::once("sah".to_string())

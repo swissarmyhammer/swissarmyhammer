@@ -9,7 +9,6 @@ use swissarmyhammer_git::GitOperations;
 
 use crate::cli::OutputFormat;
 use swissarmyhammer_prompts::PromptLibrary;
-use swissarmyhammer_workflow::WorkflowStorage;
 
 /// Helper function to create error mapping closures with context
 fn map_error<E: std::fmt::Display>(
@@ -114,9 +113,6 @@ fn create_table_row(
 #[derive(derive_builder::Builder)]
 #[builder(pattern = "owned")]
 pub struct CliContext {
-    /// Workflow storage for loading and managing workflows
-    pub workflow_storage: Arc<WorkflowStorage>,
-
     /// Prompt library for managing prompts
     #[allow(dead_code)]
     pub prompt_library: Arc<PromptLibrary>,
@@ -297,18 +293,6 @@ impl CliContext {
 }
 
 impl CliContextBuilder {
-    /// Initialize storage with consistent error handling
-    ///
-    /// Generic helper to reduce error context duplication across storage initialization
-    fn with_storage_error_context<T, E: std::fmt::Display>(
-        storage_type: &str,
-        result: std::result::Result<T, E>,
-    ) -> Result<T> {
-        result.map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!("Failed to create {}: {}", storage_type, e),
-        })
-    }
-
     /// Validate that a required builder field is present
     fn require_field<T>(field: Option<T>, field_name: &str) -> Result<T> {
         field.ok_or_else(|| swissarmyhammer_common::SwissArmyHammerError::Other {
@@ -316,33 +300,8 @@ impl CliContextBuilder {
         })
     }
 
-    /// Generic async storage initialization helper
-    async fn initialize_storage<T, F, Fut, E>(storage_type: &str, initializer: F) -> Result<T>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = std::result::Result<T, E>>,
-        E: std::fmt::Display,
-    {
-        let result = initializer().await;
-        Self::with_storage_error_context(storage_type, result)
-    }
-
-    /// Initialize workflow storage with error context
-    async fn initialize_workflow_storage() -> Result<WorkflowStorage> {
-        Self::initialize_storage("workflow storage", || async {
-            tokio::task::spawn_blocking(WorkflowStorage::file_system)
-                .await
-                .map_err(map_error(
-                    "Failed to spawn blocking task for workflow storage",
-                ))?
-        })
-        .await
-    }
-
     /// Build the CliContext with async initialization of storage components
     pub async fn build_async(self) -> Result<CliContext> {
-        let workflow_storage = Arc::new(Self::initialize_workflow_storage().await?);
-
         let mut prompt_library = PromptLibrary::new();
 
         // Add default prompt sources
@@ -372,7 +331,6 @@ impl CliContextBuilder {
         };
 
         Ok(CliContext {
-            workflow_storage,
             prompt_library: Arc::new(prompt_library),
             git_operations,
             template_context: Self::require_field(self.template_context, "template_context")?,

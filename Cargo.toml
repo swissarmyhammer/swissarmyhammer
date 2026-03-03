@@ -16,7 +16,7 @@ members = [
     "swissarmyhammer-templating",
     "swissarmyhammer-prompts",
     "swissarmyhammer-modes",
-    "swissarmyhammer-workflow",
+
     "swissarmyhammer-agent",
     "swissarmyhammer-mcp-proxy",
     "swissarmyhammer-js",
@@ -25,7 +25,7 @@ members = [
     "llama-common",
     "llama-embedding",
     "llama-loader",
-    "mermaid-parser",
+
     "acp-conformance",
     "claude-agent",
     "agent-client-protocol-extras",
@@ -215,9 +215,6 @@ process-wrap = "8.0"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "rustls-tls"] }
 polars = { version = "0.41.0", features = ["lazy", "parquet", "dtype-struct", "streaming"] }
 jsonschema = "0.18"
-
-# Mermaid parser
-mermaid-parser = { path = "mermaid-parser" }
 
 # Ripgrep library
 grep = "0.4.1"

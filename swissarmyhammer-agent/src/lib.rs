@@ -13,7 +13,6 @@
 //!        └── Types: AcpAgentHandle, AcpError, AgentResponse, etc.
 //!
 //! Consumers:
-//!   - swissarmyhammer-workflow (for workflow prompt actions)
 //!   - swissarmyhammer-rules (for rule checking)
 //!   - swissarmyhammer-cli (for agent commands)
 //! ```
@@ -1049,7 +1048,7 @@ mod tests {
 
     // Note: Tests for create_agent() and execute_prompt() require external agent installations
     // (Claude CLI or Llama model). These functions are tested through integration tests
-    // in the swissarmyhammer-workflow and swissarmyhammer-cli crates where the agents are
-    // available in the test environment. The helper functions they use (extract_response_from_metadata,
+    // in the swissarmyhammer-cli crate where the agents are available in the test environment.
+    // The helper functions they use (extract_response_from_metadata,
     // build_agent_response, etc.) are tested above to ensure correctness of the core logic.
 }

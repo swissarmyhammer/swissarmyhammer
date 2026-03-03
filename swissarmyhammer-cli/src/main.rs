@@ -24,22 +24,9 @@ use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_js::JsState;
 
 /// Track if we've already performed shutdown to prevent double-shutdown
 static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
-
-/// Initialize global JS variables used by workflows
-///
-/// This ensures that common workflow variables exist before any workflows
-/// are loaded or executed, preventing "undeclared reference" errors.
-async fn initialize_global_js_variables() {
-    let js_state = JsState::global();
-
-    // Initialize are_tests_passing to false by default
-    // This variable is used by the test workflow to track test status
-    let _ = js_state.set("are_tests_passing", "false").await;
-}
 
 /// Perform graceful shutdown before process exit
 ///
@@ -124,7 +111,6 @@ fn load_cli_configuration() -> TemplateContext {
 /// # Usage Pattern
 /// This function provides consistent extraction of string vectors and is used in multiple
 /// locations to avoid code duplication:
-/// - Extracting workflow positional arguments
 /// - Extracting parameter lists
 /// - Extracting file patterns and paths
 ///
@@ -353,19 +339,6 @@ async fn initialize_tool_context(model_override: Option<&str>) -> Arc<CliToolCon
     Arc::new(context)
 }
 
-/// Initialize workflow storage for shortcuts
-///
-/// This function initializes the workflow storage used for generating shortcuts.
-fn initialize_workflow_storage() -> Option<swissarmyhammer_workflow::WorkflowStorage> {
-    match swissarmyhammer_workflow::WorkflowStorage::file_system() {
-        Ok(storage) => Some(storage),
-        Err(e) => {
-            tracing::warn!("Failed to initialize workflow storage: {}", e);
-            None
-        }
-    }
-}
-
 /// Handle CLI parse errors and exit appropriately
 ///
 /// This function handles different types of clap parsing errors,
@@ -395,15 +368,12 @@ fn handle_cli_parse_error(error: clap::Error) -> ! {
 /// Build and parse CLI with dynamic tool registration
 ///
 /// This function builds the CLI with dynamic tools and parses command-line arguments.
-fn build_and_parse_cli(
-    cli_builder: CliBuilder,
-    workflow_storage: Option<&swissarmyhammer_workflow::WorkflowStorage>,
-) -> clap::ArgMatches {
+fn build_and_parse_cli(cli_builder: CliBuilder) -> clap::ArgMatches {
     // Check for validation issues and report them
     report_validation_issues(&cli_builder, false, 5);
 
     // Build CLI with warnings for validation issues (graceful degradation)
-    let dynamic_cli = cli_builder.build_cli_with_warnings(workflow_storage);
+    let dynamic_cli = cli_builder.build_cli_with_warnings();
 
     // Parse arguments with dynamic CLI
     match dynamic_cli.try_get_matches() {
@@ -425,9 +395,6 @@ async fn main() {
     // Check for --cwd flag and change directory FIRST
     handle_cwd_flag(&args);
 
-    // Initialize global JS variables used by workflows
-    initialize_global_js_variables().await;
-
     // Extract --model flag for global override
     let model_override = extract_model_flag(&args);
 
@@ -440,11 +407,8 @@ async fn main() {
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
 
-    // Initialize workflow storage for generating shortcuts
-    let workflow_storage = initialize_workflow_storage();
-
     // Build CLI and parse arguments
-    let matches = build_and_parse_cli(cli_builder, workflow_storage.as_ref());
+    let matches = build_and_parse_cli(cli_builder);
 
     // Handle dynamic command dispatch
     let exit_code = handle_dynamic_matches(matches, cli_tool_context, template_context).await;
@@ -604,11 +568,6 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("deinit", sub_matches)) => handle_deinit_command(sub_matches),
         Some(("doctor", _)) => handle_doctor_command(context).await,
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, context).await,
-        // "rule" command is now dynamically generated from MCP tools
-        // Keeping this comment for now to track the migration
-        Some(("flow", sub_matches)) => {
-            handle_flow_command(sub_matches, context, cli_tool_context.clone()).await
-        }
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
         Some(("model", sub_matches)) => handle_model_command(sub_matches, context).await,
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
@@ -640,59 +599,11 @@ async fn route_mcp_tool_command(
     handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context).await
 }
 
-/// Route workflow shortcut commands
-///
-/// Handles workflow shortcut commands with the pattern: `sah <workflow_name> [positional_args...] [flags...]`
+/// Route category commands (MCP tools)
 ///
 /// # Arguments
-/// * `workflow_name` - The workflow name (e.g., "plan")
-/// * `sub_matches` - The workflow's positional arguments and flags
-/// * `context` - The CLI context
-/// * `cli_tool_context` - The tool context for MCP tool execution
-///
-/// # Returns
-/// Exit code from the handler
-async fn route_workflow_shortcut_command(
-    workflow_name: &str,
-    sub_matches: &clap::ArgMatches,
-    context: &CliContext,
-    cli_tool_context: Arc<CliToolContext>,
-) -> i32 {
-    handle_workflow_shortcut(workflow_name, sub_matches, context, cli_tool_context).await
-}
-
-/// Route category commands (MCP tools or workflow shortcuts)
-///
-/// This function determines whether a category command is an MCP tool or workflow shortcut
-/// based on the presence of a subcommand.
-///
-/// # Command Routing Logic
-///
-/// There are two distinct routing paths handled by this function:
-///
-/// 1. **MCP Tool Path** (with subcommand):
-///    - Pattern: `sah <category> <tool_name> [args...]`
-///    - Example: `sah files read --path foo.txt`
-///    - When `sub_matches.subcommand()` returns `Some((tool_name, tool_matches))`,
-///      this indicates an MCP tool command where:
-///      - `category` is the tool category (e.g., "files")
-///      - `tool_name` is the specific tool within that category (e.g., "read")
-///      - `tool_matches` contains the tool's specific arguments
-///    - Routes to: `route_mcp_tool_command()`
-///
-/// 2. **Workflow Shortcut Path** (without subcommand):
-///    - Pattern: `sah <workflow_name> [positional_args...] [flags...]`
-///    - Example: `sah plan spec.md --interactive`
-///    - When `sub_matches.subcommand()` returns `None`, this indicates
-///      a workflow shortcut where:
-///      - `category` is actually the workflow name (e.g., "plan")
-///      - `sub_matches` contains the workflow's positional arguments and flags
-///    - Routes to: `route_workflow_shortcut_command()`
-///
-/// # Arguments
-/// * `category` - The category name (for MCP tools) or workflow name (for shortcuts)
+/// * `category` - The tool category (e.g., "tool")
 /// * `sub_matches` - The subcommand matches
-/// * `context` - The CLI context
 /// * `cli_tool_context` - The tool context for MCP tool execution
 ///
 /// # Returns
@@ -700,16 +611,17 @@ async fn route_workflow_shortcut_command(
 async fn route_category_command(
     category: &str,
     sub_matches: &clap::ArgMatches,
-    context: &CliContext,
+    _context: &CliContext,
     cli_tool_context: Arc<CliToolContext>,
 ) -> i32 {
     match sub_matches.subcommand() {
         Some((tool_name, tool_matches)) => {
             route_mcp_tool_command(category, tool_name, tool_matches, cli_tool_context).await
         }
-        None => {
-            route_workflow_shortcut_command(category, sub_matches, context, cli_tool_context).await
-        }
+        None => report_error_and_exit(format!(
+            "No subcommand specified for '{}'. Use --help for usage information.",
+            category
+        )),
     }
 }
 
@@ -1185,60 +1097,6 @@ async fn handle_doctor_command(cli_context: &CliContext) -> i32 {
     commands::doctor::handle_command(cli_context).await
 }
 
-/// Handle workflow shortcut commands
-///
-/// Workflow shortcuts are top-level commands that directly execute workflows
-/// without needing the `flow` prefix. For example, `sah plan spec.md` instead
-/// of `sah flow plan spec.md`.
-///
-/// # Arguments
-/// * `workflow_name` - Name of the workflow (may have underscore prefix for conflicts)
-/// * `matches` - Argument matches from clap
-/// * `context` - CLI context
-///
-/// # Returns
-/// Exit code (0 for success, non-zero for error)
-async fn handle_workflow_shortcut(
-    workflow_name: &str,
-    matches: &clap::ArgMatches,
-    context: &CliContext,
-    cli_tool_context: Arc<CliToolContext>,
-) -> i32 {
-    use crate::cli::FlowSubcommand;
-
-    // Remove underscore prefix if present (from conflict resolution)
-    let actual_workflow_name = if let Some(stripped) = workflow_name.strip_prefix('_') {
-        stripped
-    } else {
-        workflow_name
-    };
-
-    // Extract positional arguments (may not exist if workflow has no required params)
-    let positional_args = extract_string_vec(matches, "positional");
-
-    // Extract --param arguments
-    let params = extract_string_vec(matches, "param");
-
-    // Extract flags
-    let interactive = matches.get_flag("interactive");
-    let dry_run = matches.get_flag("dry_run");
-    let quiet = matches.get_flag("quiet");
-
-    // Create FlowSubcommand::Execute
-    let subcommand = FlowSubcommand::Execute {
-        workflow: actual_workflow_name.to_string(),
-        positional_args,
-        params,
-        vars: vec![], // Shortcuts don't support deprecated --var
-        interactive,
-        dry_run,
-        quiet,
-    };
-
-    // Delegate to flow command handler
-    commands::flow::handle_command(subcommand, context, cli_tool_context).await
-}
-
 /// Handle prompt command routing using the new CliContext-based architecture.
 ///
 /// This function parses prompt subcommands using the new typed CLI system and routes
@@ -1261,48 +1119,10 @@ async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext)
     commands::prompt::handle_command_typed(command, context).await
 }
 
-/// Handle the rule subcommand
-///
-/// # Arguments
-/// * `matches` - Clap argument matches for the rule subcommand
-/// * `context` - CliContext containing global configuration and rule library access
-///
-/// # Returns
-/// Exit code (0 for success, non-zero for error)
-async fn handle_flow_command(
-    sub_matches: &clap::ArgMatches,
-    context: &CliContext,
-    cli_tool_context: Arc<CliToolContext>,
-) -> i32 {
-    // Get the args vector from the trailing_var_arg
-    let args: Vec<String> = sub_matches
-        .get_many::<String>("args")
-        .map(|vals| vals.map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-
-    // Parse the args into a FlowSubcommand using the new parser
-    let subcommand = match commands::flow::parse_flow_args(args) {
-        Ok(cmd) => cmd,
-        Err(e) => {
-            // Check if this is the special help message
-            if e.to_string().contains("__HELP_DISPLAYED__") {
-                return EXIT_SUCCESS;
-            }
-            eprintln!("Error parsing flow command: {}", e);
-            eprintln!("Use 'sah flow list' to see available workflows");
-            eprintln!("Use 'sah flow <workflow> --help' for workflow-specific help");
-            return report_error_and_exit("Flow command parsing failed");
-        }
-    };
-
-    commands::flow::handle_command(subcommand, context, cli_tool_context).await
-}
-
 async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
-    let workflow_dirs = extract_string_vec(matches, "workflow-dirs");
     let validate_tools = matches.get_flag("validate-tools");
 
-    commands::validate::handle_command(workflow_dirs, validate_tools, cli_context).await
+    commands::validate::handle_command(validate_tools, cli_context).await
 }
 
 /// Parse output format from clap matches with fallback

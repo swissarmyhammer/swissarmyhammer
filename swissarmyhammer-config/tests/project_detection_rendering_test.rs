@@ -85,22 +85,18 @@ fn test_rust_project_detection_renders_guidelines() {
     println!("{}", rendered);
     println!("=== End Output ===");
 
-    // Verify the rendered output contains Rust-specific content
+    // Template now defers to treesitter tool for runtime detection
     assert!(
-        rendered.contains("Rust Project"),
-        "Should contain 'Rust Project' header"
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
     );
     assert!(
-        rendered.contains("cargo nextest"),
-        "Should contain Rust-specific cargo nextest instructions"
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
     assert!(
-        rendered.contains("Cargo.toml"),
-        "Should contain Cargo.toml marker"
-    );
-    assert!(
-        rendered.contains("Project Guidelines"),
-        "Should contain Project Guidelines section"
+        rendered.contains("treesitter"),
+        "Should reference the treesitter tool"
     );
 
     // CurrentDirGuard automatically restores the original directory
@@ -175,14 +171,14 @@ fn test_nodejs_project_detection_renders_guidelines() {
     println!("{}", rendered);
     println!("=== End Output ===");
 
-    // Verify the guidelines section exists and is not empty
+    // Template now defers to treesitter tool for runtime detection
     assert!(
-        rendered.contains("Project Guidelines"),
-        "Should contain Project Guidelines section"
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
     );
     assert!(
-        rendered.contains("Common Commands") || rendered.contains("Testing Strategy"),
-        "Should contain project-specific guidelines"
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 
     // CurrentDirGuard automatically restores the original directory
@@ -265,16 +261,14 @@ fn test_multiple_rust_projects_renders_guidelines_once() {
     println!("{}", rendered);
     println!("=== End Output ===");
 
-    // Verify both project locations are listed
-    assert!(rendered.contains("project1"), "Should list project1");
-    assert!(rendered.contains("project2"), "Should list project2");
-
-    // Count occurrences of the Rust guidelines header - should appear exactly once
-    let rust_guideline_count = rendered.matches("Rust Project Guidelines").count();
-    assert_eq!(
-        rust_guideline_count, 1,
-        "Rust guidelines should appear exactly once, not {} times",
-        rust_guideline_count
+    // Template now defers to treesitter tool for runtime detection
+    assert!(
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
+    );
+    assert!(
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 
     // CurrentDirGuard automatically restores the original directory
@@ -355,18 +349,14 @@ fn test_mixed_projects_renders_multiple_guidelines() {
     println!("{}", rendered);
     println!("=== End Output ===");
 
-    // Verify both project locations are listed
-    assert!(rendered.contains("backend"), "Should list backend");
-    assert!(rendered.contains("frontend"), "Should list frontend");
-
-    // Verify both sets of guidelines appear exactly once each
-    let rust_count = rendered.matches("Rust Project Guidelines").count();
-    assert_eq!(rust_count, 1, "Rust guidelines should appear exactly once");
-
-    let nodejs_count = rendered.matches("Node.js Project Guidelines").count();
-    assert_eq!(
-        nodejs_count, 1,
-        "Node.js guidelines should appear exactly once"
+    // Template now defers to treesitter tool for runtime detection
+    assert!(
+        rendered.contains("Project Detection"),
+        "Should contain 'Project Detection' header"
+    );
+    assert!(
+        rendered.contains("detect projects"),
+        "Should contain treesitter detect projects instruction"
     );
 
     // CurrentDirGuard automatically restores the original directory

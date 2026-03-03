@@ -276,18 +276,9 @@ pub struct ToolContext {
     /// use this configuration to create appropriate executor instances.
     pub agent_config: Arc<ModelConfig>,
 
-    /// Optional notification sender for long-running operations (workflow state transitions)
+    /// Optional notification sender for long-running operations
     ///
-    /// When present, workflows can send flow notifications during execution.
-    /// This is specifically for workflow state machine transitions.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if let Some(sender) = &context.notification_sender {
-    ///     sender.send_flow_start("run_123", "workflow", json!({}), "start")?;
-    /// }
-    /// ```
+    /// When present, tools can send flow notifications during execution.
     pub notification_sender: Option<NotificationSender>,
 
     /// Optional plan sender for task management operations
@@ -306,12 +297,10 @@ pub struct ToolContext {
     /// ```
     pub plan_sender: Option<PlanSender>,
 
-    /// MCP server port (for workflow executors that need to connect to the server)
+    /// MCP server port (for tools that need to connect to the server)
     ///
-    /// When workflows are executed via MCP tools and need to use LlamaAgent,
-    /// they require the MCP server port to connect. This field is populated
-    /// by the HTTP server on startup. Uses interior mutability to allow updates
-    /// after context creation.
+    /// Populated by the HTTP server on startup. Uses interior mutability
+    /// to allow updates after context creation.
     pub mcp_server_port: Arc<RwLock<Option<u16>>>,
 
     /// Optional MCP peer for tools that need to communicate with the client
@@ -713,7 +702,7 @@ pub trait McpTool: Doctorable + Send + Sync {
             "outline" => Some("outline"),
             "notify" => Some("notify"),
             "kanban" => Some("kanban"),
-            "flow" => Some("flow"),
+
             "git" => Some("git"),
             "cel" => Some("cel"),
             "question" => Some("question"),
@@ -1755,11 +1744,6 @@ pub async fn register_file_tools(registry: &mut ToolRegistry) {
 }
 
 register_tool_category!(
-    register_flow_tools,
-    flow,
-    "Register all flow-related tools with the registry"
-);
-register_tool_category!(
     register_git_tools,
     git,
     "Register all git-related tools with the registry"
@@ -1805,7 +1789,6 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     // Register all tools exactly like McpServer does
     register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
-    register_flow_tools(&mut registry);
     register_git_tools(&mut registry);
     register_questions_tools(&mut registry);
     register_shell_tools(&mut registry);

@@ -6,7 +6,7 @@ use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
 /// Generate the MCP schema for the treesitter tool from operation metadata
 pub fn generate_treesitter_mcp_schema(operations: &[&dyn Operation]) -> Value {
     let config = SchemaConfig::new(
-        "Tree-sitter code intelligence operations. Use 'search code' for semantic similarity search, 'query ast' for structural pattern matching, 'find duplicates' for duplicate detection, and 'get status' to check index readiness.",
+        "Tree-sitter code intelligence operations. Use 'search code' for semantic similarity search, 'query ast' for structural pattern matching, 'find duplicates' for duplicate detection, 'get status' to check index readiness, and 'detect projects' to discover project types with language-specific guidelines.",
     )
     .with_examples(generate_treesitter_examples());
 
@@ -31,12 +31,17 @@ fn generate_treesitter_examples() -> Vec<Value> {
             "description": "Check index status",
             "value": {"op": "get status"}
         }),
+        json!({
+            "description": "Detect project types and get guidelines",
+            "value": {"op": "detect projects"}
+        }),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::tools::treesitter::detect::DetectProjects;
     use crate::mcp::tools::treesitter::duplicates::FindDuplicates;
     use crate::mcp::tools::treesitter::query::QueryAst;
     use crate::mcp::tools::treesitter::search::SearchCode;
@@ -48,6 +53,7 @@ mod tests {
             &QueryAst as &dyn Operation,
             &FindDuplicates as &dyn Operation,
             &GetStatus as &dyn Operation,
+            &DetectProjects as &dyn Operation,
         ]
     }
 
@@ -72,11 +78,12 @@ mod tests {
         let op_enum = schema["properties"]["op"]["enum"]
             .as_array()
             .expect("op should have enum");
-        assert_eq!(op_enum.len(), 4);
+        assert_eq!(op_enum.len(), 5);
         assert!(op_enum.contains(&json!("search code")));
         assert!(op_enum.contains(&json!("query ast")));
         assert!(op_enum.contains(&json!("find duplicates")));
         assert!(op_enum.contains(&json!("get status")));
+        assert!(op_enum.contains(&json!("detect projects")));
     }
 
     #[test]
@@ -96,7 +103,7 @@ mod tests {
         let schema = generate_treesitter_mcp_schema(&ops);
 
         assert!(schema["examples"].is_array());
-        assert_eq!(schema["examples"].as_array().unwrap().len(), 4);
+        assert_eq!(schema["examples"].as_array().unwrap().len(), 5);
     }
 
     #[test]
@@ -127,6 +134,6 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 4);
+        assert_eq!(op_schemas.len(), 5);
     }
 }

@@ -20,9 +20,9 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_file_tools, register_flow_tools, register_git_tools, register_js_tools,
-    register_kanban_tools, register_questions_tools, register_shell_tools,
-    register_treesitter_tools, register_web_tools, ToolContext, ToolRegistry,
+    register_file_tools, register_git_tools, register_js_tools, register_kanban_tools,
+    register_questions_tools, register_shell_tools, register_treesitter_tools, register_web_tools,
+    ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -399,25 +399,27 @@ impl McpServer {
         prompt_library: Arc<RwLock<PromptLibrary>>,
         agent_mode: bool,
     ) {
-        // Register all tools unconditionally
-        register_flow_tools(tool_registry);
+        // Always register domain-specific tools
         register_git_tools(tool_registry);
         register_kanban_tools(tool_registry);
         register_questions_tools(tool_registry);
         register_web_tools(tool_registry);
         register_treesitter_tools(tool_registry);
         register_js_tools(tool_registry);
-        register_shell_tools(tool_registry);
-        register_agent_tools(tool_registry, agent_library, prompt_library.clone());
-        register_file_tools(tool_registry).await;
-        register_skill_tools(tool_registry, skill_library, prompt_library);
 
-        // Filter out agent-only tools when not in agent mode.
-        // Tools that return is_agent_tool() == true are duplicates of
-        // capabilities that off-the-shelf agents already have natively.
-        if !agent_mode {
-            tool_registry.remove_agent_tools();
-            tracing::debug!("Removed agent-only tools (agent_mode=false)");
+        // Agent discovery is always available — coding agents like Claude Code
+        // need to discover and delegate to subagents via MCP sidecar mode
+        register_agent_tools(tool_registry, agent_library, prompt_library.clone());
+
+        // Agent tools: only register when powering a full agent
+        // Off-the-shelf agents like Claude Code already have these capabilities natively
+        if agent_mode {
+            register_file_tools(tool_registry).await;
+            register_shell_tools(tool_registry);
+            register_skill_tools(tool_registry, skill_library, prompt_library);
+            tracing::debug!("Registered agent tools (agent_mode=true)");
+        } else {
+            tracing::debug!("Skipped agent tools (agent_mode=false)");
         }
 
         tracing::debug!("Registered all tool handlers");

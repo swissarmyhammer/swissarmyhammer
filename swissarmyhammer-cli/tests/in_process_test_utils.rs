@@ -146,34 +146,6 @@ fn parse_var_args(
     vars
 }
 
-/// Helper function to check if a workflow is known (test or builtin)
-fn is_known_workflow(name: &str) -> bool {
-    const TEST_CREATED_WORKFLOWS: &[&str] = &[
-        "test-template",
-        "equals-test",
-        "special-chars-test",
-        "template-workflow",
-        "missing-vars",
-        "complex-templates",
-        "malformed-templates",
-        "injection-test",
-        "empty-value-test",
-        "conflict-test",
-        "some-workflow",
-    ];
-    const BUILTIN_WORKFLOWS: &[&str] = &[
-        "example-actions",
-        "greeting",
-        "hello-world",
-        "plan",
-        "document",
-        "test",
-        "review",
-        "kanban",
-    ];
-    TEST_CREATED_WORKFLOWS.contains(&name) || BUILTIN_WORKFLOWS.contains(&name)
-}
-
 /// Execute any CLI command with explicit working directory
 ///
 /// This version allows specifying the working directory explicitly to avoid global state issues
@@ -382,7 +354,6 @@ fn can_run_in_process(cli: &Cli) -> bool {
         cli.command,
         Some(Commands::Validate { .. })
             | Some(Commands::Completion { .. })
-            | Some(Commands::Flow { .. })
             | Some(Commands::Prompt { .. })
             | None
     )
@@ -453,19 +424,11 @@ async fn run_sah_command_in_process_inner_with_dir(
 async fn handle_validate_command(
     quiet: bool,
     format: swissarmyhammer_cli::cli::OutputFormat,
-    workflow_dirs: Vec<String>,
     validate_tools: bool,
 ) -> (String, String, i32) {
     use swissarmyhammer_cli::exit_codes::EXIT_ERROR;
 
-    match validate::run_validate_command_with_dirs_captured(
-        quiet,
-        format,
-        workflow_dirs,
-        validate_tools,
-    )
-    .await
-    {
+    match validate::run_validate_command_with_dirs_captured(quiet, format, validate_tools).await {
         Ok((output, exit_code)) => (output, String::new(), exit_code),
         Err(e) => {
             let stderr_str = format!("{}", e);
@@ -577,109 +540,6 @@ fn handle_completion_command(shell: clap_complete::Shell) -> (String, String, i3
     (completion_output, String::new(), EXIT_SUCCESS)
 }
 
-// Note: Abort functionality has been migrated to JS global state.
-// Workflow abort is now handled via JS variables, not abort files.
-
-/// Validate flow variables format
-fn validate_flow_variables(vars: Vec<String>) -> Result<(), (String, String, i32)> {
-    use swissarmyhammer_cli::exit_codes::EXIT_ERROR;
-
-    for var in vars {
-        if !var.contains('=') {
-            return Err((String::new(), format!("Invalid variable format: '{}'. Expected 'key=value' format. Example: --var input=test", var), EXIT_ERROR));
-        }
-    }
-    Ok(())
-}
-
-/// Format workflow execution output
-fn format_workflow_output(workflow: &str, dry_run: bool) -> String {
-    let mut output = if dry_run {
-        format!("🔍 Dry run mode\nRunning workflow: {}", workflow)
-    } else {
-        format!("Running workflow: {}", workflow)
-    };
-
-    if !output.contains(workflow) {
-        output = format!("{}\n{}", output, workflow);
-    }
-
-    output
-}
-
-/// Execute or simulate workflow
-fn execute_or_simulate_workflow(workflow: &str, dry_run: bool) -> (String, String, i32) {
-    use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
-
-    if !is_known_workflow(workflow) {
-        return (
-            String::new(),
-            format!("Error: Workflow '{}' not found", workflow),
-            EXIT_ERROR,
-        );
-    }
-
-    let output = format_workflow_output(workflow, dry_run);
-    (output, String::new(), EXIT_SUCCESS)
-}
-
-/// Result type for flow parsing that distinguishes help from errors
-enum FlowParseResult {
-    Success(swissarmyhammer_cli::cli::FlowSubcommand),
-    HelpDisplayed,
-    Error(String),
-}
-
-/// Parse flow subcommand with explicit help handling
-fn parse_flow_subcommand(args: Vec<String>) -> FlowParseResult {
-    match swissarmyhammer_cli::commands::flow::parse_flow_args(args) {
-        Ok(cmd) => FlowParseResult::Success(cmd),
-        Err(e) => {
-            let err_str = e.to_string();
-            if err_str.contains("__HELP_DISPLAYED__") {
-                FlowParseResult::HelpDisplayed
-            } else {
-                FlowParseResult::Error(format!("Failed to parse flow args: {}", e))
-            }
-        }
-    }
-}
-
-/// Handle flow execute subcommand
-fn handle_flow_execute(
-    workflow: String,
-    vars: Vec<String>,
-    dry_run: bool,
-) -> Result<(String, String, i32)> {
-    if let Err(validation_error) = validate_flow_variables(vars) {
-        return Ok(validation_error);
-    }
-
-    Ok(execute_or_simulate_workflow(&workflow, dry_run))
-}
-
-/// Handle flow command execution
-async fn handle_flow_command(args: Vec<String>) -> Result<(String, String, i32)> {
-    use swissarmyhammer_cli::cli::FlowSubcommand;
-    use swissarmyhammer_cli::exit_codes::EXIT_SUCCESS;
-
-    match parse_flow_subcommand(args) {
-        FlowParseResult::Success(FlowSubcommand::Execute {
-            workflow,
-            vars,
-            dry_run,
-            ..
-        }) => handle_flow_execute(workflow, vars, dry_run),
-        FlowParseResult::Success(_) => Ok((
-            "Flow command executed".to_string(),
-            String::new(),
-            EXIT_SUCCESS,
-        )),
-        FlowParseResult::HelpDisplayed => Ok((String::new(), String::new(), EXIT_SUCCESS)),
-        FlowParseResult::Error(msg) => Err(anyhow::anyhow!(msg)),
-    }
-}
-
 /// Execute a parsed CLI command with stdout/stderr capture
 async fn execute_cli_command_with_capture(
     cli: Cli,
@@ -695,9 +555,8 @@ async fn execute_cli_command_with_capture(
         Some(Commands::Validate {
             quiet,
             format,
-            workflow_dirs,
             validate_tools,
-        }) => handle_validate_command(quiet, format, workflow_dirs, validate_tools).await,
+        }) => handle_validate_command(quiet, format, validate_tools).await,
 
         Some(Commands::Prompt { args }) => {
             handle_prompt_command(args, &stdout_buffer, &stderr_buffer)
@@ -705,125 +564,12 @@ async fn execute_cli_command_with_capture(
 
         Some(Commands::Completion { shell }) => handle_completion_command(shell),
 
-        Some(Commands::Flow { args }) => handle_flow_command(args).await?,
-
         None => (String::new(), String::new(), EXIT_SUCCESS),
 
         _ => unreachable!("Tried to execute unsupported command in-process"),
     };
 
     Ok((stdout, stderr, exit_code))
-}
-
-/// Test wrapper for in-process flow command execution
-pub async fn run_flow_test_in_process(
-    workflow_name: &str,
-    vars: Vec<String>,
-    _timeout: Option<String>,
-    quiet: bool,
-) -> Result<CapturedOutput> {
-    // Build command args for "flow <workflow> --dry-run" (replaces deprecated "flow test")
-    let mut args = vec!["flow", workflow_name, "--dry-run"];
-
-    // Add vars
-    for var in &vars {
-        args.push("--var");
-        args.push(var.as_str());
-    }
-
-    // Timeout removed - no longer supported in CLI
-
-    // Add quiet flag
-    if quiet {
-        args.push("--quiet");
-    }
-
-    run_sah_command_in_process(&args).await
-}
-
-/// Helper to run a simple workflow test in-process
-pub async fn simple_workflow_test(workflow_name: &str) -> Result<bool> {
-    let result = run_flow_test_in_process(workflow_name, vec![], None, false).await?;
-    Ok(result.exit_code == 0)
-}
-
-/// Helper to run workflow test with variables
-pub async fn workflow_test_with_vars(workflow_name: &str, vars: Vec<(&str, &str)>) -> Result<bool> {
-    let var_strings: Vec<String> = vars
-        .into_iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect();
-
-    let result = run_flow_test_in_process(workflow_name, var_strings, None, false).await?;
-    Ok(result.exit_code == 0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Helper function to set up test environment
-    fn setup_test() {
-        // Note: Abort functionality has been migrated to JS global state.
-        // No cleanup needed for abort files.
-    }
-
-    #[tokio::test]
-    async fn test_in_process_utilities() {
-        setup_test();
-        println!("=== STARTING TEST ===");
-
-        // Test with a workflow that should succeed - get detailed info first
-        println!("Running detailed test...");
-        let detailed_result = run_flow_test_in_process("hello-world", vec![], None, false).await;
-
-        debug_captured_output("Detailed", &detailed_result);
-
-        if let Err(e) = &detailed_result {
-            panic!("Failed to run detailed test: {}", e);
-        }
-
-        println!("Running simple test...");
-        let result = simple_workflow_test("hello-world").await;
-
-        println!("Simple result analysis:");
-        match &result {
-            Ok(success) => {
-                println!("  Test result: success = {}", success);
-                if !*success {
-                    println!("  WORKFLOW FAILED - exit code was not 0");
-                    debug_captured_output("Final", &detailed_result);
-                }
-            }
-            Err(e) => {
-                println!("  Test error: {}", e);
-                panic!("Simple workflow test failed with error: {}", e);
-            }
-        }
-
-        // Only assert if we've printed debug info
-        let success = result.unwrap();
-        if !success {
-            panic!("Workflow should have succeeded but failed with non-zero exit code");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_workflow_with_vars() {
-        setup_test();
-
-        // Test with variables
-        let result = workflow_test_with_vars(
-            "test-workflow",
-            vec![("param1", "value1"), ("param2", "value2")],
-        )
-        .await;
-
-        assert!(
-            result.is_ok(),
-            "Should handle workflow with vars gracefully"
-        );
-    }
 }
 
 // ============================================================================

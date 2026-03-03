@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use swissarmyhammer_operations::Operation;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
-use swissarmyhammer_workflow::WorkflowStorage;
 use tokio::sync::RwLock;
 
 /// Multiplier for converting decimal ratios to percentage values (0.0-1.0 → 0.0-100.0)
@@ -259,12 +258,6 @@ impl ArgSpec {
     /// Set the value parser
     fn value_parser(mut self, parser: ArgSpecValueParser) -> Self {
         self.value_parser = Some(parser);
-        self
-    }
-
-    /// Set whether to hide the argument
-    fn hide(mut self, hide: bool) -> Self {
-        self.hide = hide;
         self
     }
 
@@ -597,106 +590,6 @@ impl ArgBuilder {
     }
 }
 
-/// Processor for workflow parameters
-///
-/// Handles the conversion of workflow parameter definitions into clap arguments.
-/// Separates the concern of parameter processing from command construction.
-struct WorkflowParameterProcessor;
-
-impl WorkflowParameterProcessor {
-    /// Add positional arguments for required workflow parameters
-    ///
-    /// Extracts required parameters and creates a multi-value positional argument.
-    fn add_required_positional_args(
-        cmd: Command,
-        workflow: &swissarmyhammer_workflow::Workflow,
-    ) -> Command {
-        let required_params: Vec<_> = workflow.parameters.iter().filter(|p| p.required).collect();
-
-        if required_params.is_empty() {
-            return cmd;
-        }
-
-        let value_names: Vec<&'static str> = required_params
-            .iter()
-            .map(|p| intern_string(p.name.clone()))
-            .collect();
-
-        cmd.arg(
-            Arg::new("positional")
-                .num_args(required_params.len())
-                .value_names(value_names)
-                .required(true)
-                .help("Required workflow parameters"),
-        )
-    }
-
-    /// Add the --param flag for optional workflow parameters
-    ///
-    /// Creates a repeatable flag for key=value parameter pairs.
-    fn add_optional_param_flag(cmd: Command) -> Command {
-        cmd.arg(
-            Arg::new("param")
-                .long("param")
-                .short('p')
-                .action(ArgAction::Append)
-                .value_name("KEY=VALUE")
-                .help("Optional workflow parameter"),
-        )
-    }
-
-    /// Apply all parameter processing to a command
-    ///
-    /// Adds both required positional arguments and optional --param flag.
-    fn process_parameters(cmd: Command, workflow: &swissarmyhammer_workflow::Workflow) -> Command {
-        let cmd = Self::add_required_positional_args(cmd, workflow);
-        Self::add_optional_param_flag(cmd)
-    }
-}
-
-/// Resolver for workflow command name conflicts
-///
-/// Ensures workflow shortcuts don't conflict with built-in commands by
-/// automatically prefixing conflicting names with an underscore.
-struct WorkflowCommandNameResolver;
-
-impl WorkflowCommandNameResolver {
-    /// Get reserved command names from actual static commands
-    ///
-    /// Dynamically generates the list of reserved names from the static commands,
-    /// ensuring the list stays in sync with the actual CLI structure.
-    fn get_reserved_names() -> Vec<String> {
-        // Build a temporary CLI with static commands to extract their names
-        let temp_cli = CliBuilder::add_static_commands(Command::new("temp"));
-
-        let mut reserved = Vec::new();
-        for subcommand in temp_cli.get_subcommands() {
-            reserved.push(subcommand.get_name().to_string());
-        }
-
-        // Add special flow subcommands that shouldn't conflict
-        reserved.push("list".to_string());
-
-        reserved
-    }
-
-    /// Resolve command name conflicts by prefixing with underscore if reserved
-    ///
-    /// # Examples
-    ///
-    /// - "list" -> "_list" (conflicts with flow list)
-    /// - "serve" -> "_serve" (conflicts with serve command)
-    /// - "deploy" -> "deploy" (no conflict)
-    fn resolve(workflow_name: &str) -> String {
-        let reserved_names = Self::get_reserved_names();
-        if reserved_names.iter().any(|name| name == workflow_name) {
-            format!("_{}", workflow_name)
-        } else {
-            workflow_name.to_string()
-        }
-    }
-}
-
 impl CliBuilder {
     /// Build a vector of Args from argument specifications
     ///
@@ -739,18 +632,15 @@ impl Clone for SubcommandSpec {
 const BASE_CLI_LONG_ABOUT: &str = "
 SwissArmyHammer - The only coding assistant you'll ever need
 
-Commands are organized into three types:
-- Static commands (serve, init, deinit, doctor, validate, model, prompt, rule, flow)
-- Workflow shortcuts (do, plan, review, etc.) - use 'sah flow list' to see all
-- Tool commands (file, issue, memo, search, shell, web-search)
+Commands are organized into two types:
+- Static commands (serve, init, deinit, doctor, validate, model, prompt, agent)
+- Tool commands (treesitter, git, kanban, shell, web, js, questions)
 
 Examples:
   sah serve                    Run as MCP server
   sah doctor                   Diagnose configuration
-  sah flow list                List all workflows
-  sah do                       Execute do workflow (shortcut)
-  sah plan spec.md             Execute plan workflow (shortcut)
-  sah file read path.txt       Read a file via MCP tool
+  sah tool treesitter          Use treesitter tools
+  sah tool git                 Use git tools
 ";
 
 const SERVE_COMMAND_LONG_ABOUT: &str = "
@@ -787,7 +677,7 @@ Initialize SwissArmyHammer for use with Claude Code.
 
 This command:
 1. Registers sah as an MCP server in Claude Code settings
-2. Creates the .swissarmyhammer/ project directory (workflows/) and .prompts/
+2. Creates the .swissarmyhammer/ project directory and .prompts/
 
 The command is idempotent - safe to run multiple times.
 
@@ -835,22 +725,21 @@ Example:
 ";
 
 const VALIDATE_COMMAND_LONG_ABOUT: &str = "
-Validates BOTH prompt files AND workflows for syntax errors and best practices.
+Validates prompt files and skills for syntax errors and best practices.
 
 This command comprehensively validates:
 - All prompt files from builtin, user, and local directories
-- All workflow files from standard locations (builtin, user, local)
+- All skills from standard locations
 
 Validation checks:
 - YAML front matter syntax (skipped for .liquid files with {% partial %} marker)
 - Required fields (title, description)
 - Template variables match arguments
 - Liquid template syntax
-- Workflow structure and connectivity
 - Best practice recommendations
 
 Examples:
-  swissarmyhammer validate                 # Validate all prompts and workflows
+  swissarmyhammer validate                 # Validate all prompts and skills
   swissarmyhammer validate --quiet         # CI/CD mode - only shows errors, hides warnings
   swissarmyhammer validate --format json   # JSON output for tooling
 ";
@@ -988,21 +877,6 @@ When variables are not provided via --var, the command prompts interactively:
     --var version=2.1 \\
     --var language=Python \\
     --var files=src/main.py,tests/test_main.py
-";
-
-const FLOW_COMMAND_LONG_ABOUT: &str = "Execute workflows or list available workflows.
-
-Usage:
-  sah flow list                List all workflows
-  sah flow <workflow> [args]   Execute a workflow
-
-Special case: 'list' shows all available workflows
-All other names execute the named workflow.
-
-Examples:
-  sah flow list --verbose
-  sah flow do
-  sah flow plan spec.md
 ";
 
 const MODEL_COMMAND_LONG_ABOUT: &str = "
@@ -1355,59 +1229,10 @@ impl CliBuilder {
     }
 
     /// Build the complete CLI with dynamic commands generated from MCP tools
-    ///
-    /// # Parameters
-    ///
-    /// * `workflow_storage` - Optional workflow storage for generating shortcut commands.
-    ///   If None, shortcuts will not be generated.
-    pub fn build_cli(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
+    pub fn build_cli(&self) -> Command {
         let cli = Self::build_base_cli();
-        let cli = Self::add_core_commands(cli);
-        let cli = self.build_with_workflow_shortcuts(cli, workflow_storage);
-        // All tools are now accessible via unified `sah tool <toolname>` command
+        let cli = Self::add_static_commands(cli);
         self.add_unified_tool_command(cli)
-    }
-
-    /// Build CLI with workflow shortcuts integrated
-    ///
-    /// Extracts the workflow shortcuts logic to reduce complexity in build_cli.
-    /// This method encapsulates the conditional workflow shortcut generation.
-    ///
-    /// # Parameters
-    ///
-    /// * `cli` - Base CLI command to extend
-    /// * `workflow_storage` - Optional workflow storage for generating shortcut commands
-    ///
-    /// # Returns
-    ///
-    /// CLI command with workflow shortcuts added (if storage was provided)
-    fn build_with_workflow_shortcuts(
-        &self,
-        cli: Command,
-        workflow_storage: Option<&WorkflowStorage>,
-    ) -> Command {
-        match workflow_storage {
-            Some(storage) => self.add_workflow_shortcuts_from_storage(cli, storage),
-            None => cli,
-        }
-    }
-
-    /// Add workflow shortcuts from storage to CLI
-    fn add_workflow_shortcuts_from_storage(
-        &self,
-        mut cli: Command,
-        storage: &WorkflowStorage,
-    ) -> Command {
-        let shortcuts = Self::get_sorted_workflow_shortcuts(storage);
-        for shortcut in shortcuts {
-            cli = cli.subcommand(shortcut);
-        }
-        cli
-    }
-
-    /// Add core static commands to the CLI
-    fn add_core_commands(cli: Command) -> Command {
-        Self::add_static_commands(cli)
     }
 
     /// Build the base CLI command with global arguments
@@ -1477,13 +1302,6 @@ impl CliBuilder {
                 .value_name("MODEL")
                 .global(true),
         )
-    }
-
-    /// Get sorted workflow shortcuts
-    fn get_sorted_workflow_shortcuts(storage: &WorkflowStorage) -> Vec<Command> {
-        let mut shortcuts = Self::build_workflow_shortcuts(storage);
-        shortcuts.sort_by(|a, b| a.get_name().cmp(b.get_name()));
-        shortcuts
     }
 
     /// Add unified tool command with all MCP tools as subcommands
@@ -1588,14 +1406,10 @@ impl CliBuilder {
     /// This method builds the CLI but logs warnings for any validation issues,
     /// skipping problematic tools rather than failing completely.
     ///
-    /// # Parameters
-    ///
-    /// * `workflow_storage` - Optional workflow storage for generating shortcut commands
-    ///
     /// # Returns
     ///
     /// Always returns a `Command`, but may skip invalid tools with warnings
-    pub fn build_cli_with_warnings(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
+    pub fn build_cli_with_warnings(&self) -> Command {
         let warnings = self.get_validation_warnings();
 
         if !warnings.is_empty() {
@@ -1610,7 +1424,7 @@ impl CliBuilder {
 
         // The build_cli method already includes graceful degradation
         // by skipping tools that fail validation
-        self.build_cli(workflow_storage)
+        self.build_cli()
     }
 
     /// Validate all tools that should appear in CLI
@@ -1899,7 +1713,7 @@ impl CliBuilder {
         Self::build_command_with_args(
             CommandConfig {
                 name: "validate",
-                about: "Validate prompt files and workflows for syntax and best practices",
+                about: "Validate prompt files and skills for syntax and best practices",
                 long_about: VALIDATE_COMMAND_LONG_ABOUT,
             },
             Self::create_validate_command_args(),
@@ -1908,9 +1722,7 @@ impl CliBuilder {
 
     /// Create arguments for the validate command
     fn create_validate_command_args() -> Vec<Arg> {
-        let mut args = Self::create_validate_output_args();
-        args.extend(Self::create_validate_deprecated_args());
-        args
+        Self::create_validate_output_args()
     }
 
     /// Create output control arguments for validate command
@@ -1933,26 +1745,14 @@ impl CliBuilder {
         ])
     }
 
-    /// Create deprecated arguments for validate command
-    fn create_validate_deprecated_args() -> Vec<Arg> {
-        Self::build_args_from_specs(&[
-            ArgSpec::new("workflow-dirs", "[DEPRECATED] This parameter is ignored. Workflows are now only loaded from standard locations.")
-                .long("workflow-dir")
-                .action(ArgSpecAction::Append)
-                .hide(true),
-        ])
-    }
-
     /// Add static commands to the CLI
     ///
     /// Commands are organized into semantic groups for maintainability:
-    /// - Server commands: serve, doctor, validate
-    /// - Content commands: prompt, model
-    /// - Workflow commands: flow
+    /// - Server commands: serve, init, deinit, doctor, validate
+    /// - Content commands: prompt, model, agent
     fn add_static_commands(cli: Command) -> Command {
         let cli = Self::add_server_commands(cli);
-        let cli = Self::add_content_commands(cli);
-        Self::add_workflow_commands(cli)
+        Self::add_content_commands(cli)
     }
 
     /// Add server-related commands (serve, init, deinit, doctor, validate)
@@ -1969,11 +1769,6 @@ impl CliBuilder {
         cli.subcommand(Self::build_prompt_command())
             .subcommand(Self::build_model_command())
             .subcommand(Self::build_agent_command())
-    }
-
-    /// Add workflow-related commands (flow)
-    fn add_workflow_commands(cli: Command) -> Command {
-        cli.subcommand(Self::build_flow_command())
     }
 
     /// Build the prompt command with all its subcommands
@@ -2129,7 +1924,7 @@ impl CliBuilder {
     /// Build the prompt validate subcommand
     fn build_prompt_validate_subcommand() -> Command {
         Command::new("validate")
-            .about("Validate prompt files and workflows")
+            .about("Validate prompt files and skills")
             .arg(
                 Arg::new("verbose")
                     .short('v')
@@ -2137,22 +1932,6 @@ impl CliBuilder {
                     .help("Show verbose validation output")
                     .action(ArgAction::SetTrue),
             )
-    }
-
-    /// Build the flow command with all its subcommands
-    fn build_flow_command() -> Command {
-        Self::build_command_with_docs(CommandConfig {
-            name: "flow",
-            about: "Execute or list workflows",
-            long_about: FLOW_COMMAND_LONG_ABOUT,
-        })
-        .trailing_var_arg(true)
-        .allow_external_subcommands(true)
-        .arg(
-            Arg::new("args")
-                .num_args(0..)
-                .help("Workflow name (or 'list') followed by arguments"),
-        )
     }
 
     /// Build the model command with all its subcommands
@@ -2303,151 +2082,6 @@ impl CliBuilder {
             },
             Self::build_subcommands_from_specs(&subcommand_specs),
         )
-    }
-
-    /// Generate workflow shortcut commands dynamically
-    ///
-    /// Creates top-level CLI commands for each workflow, enabling direct access like
-    /// `sah plan spec.md` instead of `sah flow plan spec.md`.
-    ///
-    /// # Conflict Resolution
-    ///
-    /// Workflows that conflict with reserved command names get an underscore prefix:
-    /// - Reserved: serve, doctor, prompt, rule, flow, model, validate, plan, implement, list
-    /// - Example: A workflow named "list" becomes "_list"
-    ///
-    /// # Parameters
-    ///
-    /// * `workflow_storage` - Storage instance to load available workflows
-    ///
-    /// # Returns
-    ///
-    /// Vector of clap Commands, one for each workflow with proper argument handling
-    pub fn build_workflow_shortcuts(workflow_storage: &WorkflowStorage) -> Vec<Command> {
-        let workflows = Self::load_available_workflows(workflow_storage);
-        Self::create_shortcuts_from_workflows(workflows)
-    }
-
-    /// Load available workflows from storage
-    fn load_available_workflows(
-        workflow_storage: &WorkflowStorage,
-    ) -> Vec<swissarmyhammer_workflow::Workflow> {
-        match workflow_storage.list_workflows() {
-            Ok(workflows) => workflows,
-            Err(e) => {
-                tracing::warn!("Failed to load workflows for shortcuts: {}", e);
-                Vec::new()
-            }
-        }
-    }
-
-    /// Create shortcut commands from workflows
-    fn create_shortcuts_from_workflows(
-        workflows: Vec<swissarmyhammer_workflow::Workflow>,
-    ) -> Vec<Command> {
-        workflows
-            .into_iter()
-            .map(Self::create_workflow_shortcut_command)
-            .collect()
-    }
-
-    /// Create a single workflow shortcut command
-    fn create_workflow_shortcut_command(workflow: swissarmyhammer_workflow::Workflow) -> Command {
-        let workflow_name = workflow.name.to_string();
-        let command_name = WorkflowCommandNameResolver::resolve(&workflow_name);
-
-        Self::build_shortcut_command(command_name, &workflow_name, &workflow)
-    }
-
-    /// Standard workflow execution flag definitions
-    ///
-    /// These flags are applied uniformly to all workflows by design, providing consistent
-    /// execution control across the workflow system. Each workflow inherits these flags
-    /// automatically when registered as a CLI command.
-    ///
-    /// # Design Rationale
-    ///
-    /// These flags are intentionally standardized rather than derived from workflow metadata because:
-    ///
-    /// 1. **Consistent UX**: Users expect the same execution controls across all workflows
-    /// 2. **Workflow Engine Contract**: These map to the core execution model defined in
-    ///    `RunCommandConfig` and used by all workflow execution paths
-    /// 3. **CLI Convention**: These are standard CLI patterns (--interactive, --dry-run, --quiet)
-    /// 4. **Composability**: Workflows shouldn't need to redefine common execution modes
-    /// 5. **Single Source of Truth**: The workflow engine's execution contract (RunCommandConfig)
-    ///    is the authoritative source - these CLI flags must match that contract exactly
-    ///
-    /// The flags defined here mirror the execution parameters in:
-    /// - `swissarmyhammer-cli/src/commands/flow/run.rs::RunCommandConfig`
-    /// - MCP flow tool parameters
-    /// - Workflow execution context variables (`_quiet`, etc.)
-    ///
-    /// If a workflow needs custom flags, those should be defined as workflow parameters
-    /// in the workflow definition itself, not as execution flags.
-    ///
-    /// Format: (name, long, short, help)
-    const WORKFLOW_FLAGS: &'static [(&'static str, &'static str, Option<char>, &'static str)] = &[
-        (
-            "interactive",
-            "interactive",
-            Some('i'),
-            "Interactive mode - prompt at each state",
-        ),
-        (
-            "dry_run",
-            "dry-run",
-            None,
-            "Dry run - show execution plan without running",
-        ),
-        ("quiet", "quiet", Some('q'), "Quiet mode - only show errors"),
-    ];
-
-    /// Add standard workflow execution flags to a command
-    ///
-    /// Adds the three standard workflow flags: interactive, dry-run, and quiet
-    fn add_workflow_execution_flags(cmd: Command) -> Command {
-        Self::WORKFLOW_FLAGS
-            .iter()
-            .fold(cmd, |cmd, (name, long, short, help)| {
-                cmd.arg(Self::create_flag_arg(name, long, *short, help))
-            })
-    }
-
-    /// Build a single workflow shortcut command
-    ///
-    /// Creates a clap Command for a workflow shortcut with:
-    /// - Positional arguments for required parameters
-    /// - --param flag for optional parameters
-    /// - Standard flow execution flags (--interactive, --dry-run, --quiet)
-    ///
-    /// # Parameters
-    ///
-    /// * `command_name` - CLI command name (may have underscore prefix for conflicts)
-    /// * `workflow_name` - Original workflow name
-    /// * `workflow` - Workflow definition with parameters
-    fn build_shortcut_command(
-        command_name: String,
-        workflow_name: &str,
-        workflow: &swissarmyhammer_workflow::Workflow,
-    ) -> Command {
-        let mut cmd = Command::new(intern_string(command_name.clone()));
-
-        // Set description indicating this is a shortcut
-        let about_text = format!(
-            "{} (shortcut for 'flow {}')",
-            workflow.description, workflow_name
-        );
-        cmd = cmd
-            .about(intern_string(about_text))
-            .subcommand_help_heading("Workflows");
-
-        // Add workflow parameters using the processor
-        cmd = WorkflowParameterProcessor::process_parameters(cmd, workflow);
-
-        // Add standard workflow execution flags
-        cmd = Self::add_workflow_execution_flags(cmd);
-
-        cmd
     }
 }
 
