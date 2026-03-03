@@ -381,8 +381,8 @@ pub async fn get_entity_schema(
     let field_defs: Vec<Value> = fields_ctx
         .fields_for_entity(&entity_type)
         .iter()
-        .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
-        .collect();
+        .map(|f| serde_json::to_value(f).map_err(|e| format!("failed to serialize field '{}': {}", f.name, e)))
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(json!({
         "entity": serde_json::to_value(entity_def).map_err(|e| e.to_string())?,
