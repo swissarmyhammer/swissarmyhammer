@@ -1,11 +1,6 @@
 ---
+position_column: done
+position_ordinal: g5
 title: Remove vestigial columns/swimlanes fields from Board struct
-position:
-  column: todo
-  ordinal: d3
 ---
-In `types/board.rs`, the `Board` struct still has `columns: Vec<Column>` and `swimlanes: Vec<Swimlane>` fields annotated with `#[serde(default, skip_serializing)]`. These are vestigial from the typed storage model and can be removed once the deprecated path is gone.
-
-- [ ] Remove `columns` and `swimlanes` fields from `Board` struct
-- [ ] Remove any code that populates these fields
-- [ ] Verify tests still pass
+**Done.** Removed `columns: Vec<Column>` and `swimlanes: Vec<Swimlane>` fields from Board struct, along with the legacy deserialization test. Board is now just name + description.\n\n- [x] Remove columns and swimlanes fields\n- [x] Remove legacy migration test\n- [x] 211 tests pass, clippy clean

@@ -11,12 +11,6 @@ pub struct Board {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Legacy: columns stored inline. Used only during migration from old format.
-    #[serde(default, skip_serializing)]
-    pub columns: Vec<Column>,
-    /// Legacy: swimlanes stored inline. Used only during migration from old format.
-    #[serde(default, skip_serializing)]
-    pub swimlanes: Vec<Swimlane>,
 }
 
 impl Board {
@@ -25,8 +19,6 @@ impl Board {
         Self {
             name: name.into(),
             description: None,
-            columns: Vec::new(),
-            swimlanes: Vec::new(),
         }
     }
 
@@ -247,35 +239,6 @@ mod tests {
         let json = serde_json::to_string_pretty(&board).unwrap();
         let parsed: Board = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, board.name);
-        // New format: columns are NOT serialized into board.json
-        assert!(parsed.columns.is_empty());
-    }
-
-    #[test]
-    fn test_board_reads_legacy_columns() {
-        // Test that old board.json with embedded columns can still be read (for migration)
-        let json_with_old_fields = r#"{
-            "name": "Test Board",
-            "columns": [
-                {"id": "todo", "name": "To Do", "order": 0}
-            ],
-            "swimlanes": [],
-            "actors": [
-                {"type": "human", "id": "alice", "name": "Alice"}
-            ]
-        }"#;
-
-        let result: Result<Board, _> = serde_json::from_str(json_with_old_fields);
-        assert!(
-            result.is_ok(),
-            "Should deserialize old format, got: {:?}",
-            result
-        );
-
-        let board = result.unwrap();
-        assert_eq!(board.name, "Test Board");
-        // Legacy columns are readable for migration purposes
-        assert_eq!(board.columns.len(), 1);
     }
 
     #[test]
