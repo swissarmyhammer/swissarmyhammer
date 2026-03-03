@@ -68,7 +68,12 @@ export interface RecentBoard {
 }
 
 // ---------------------------------------------------------------------------
-// Field & Entity schema types (mirrors Rust swissarmyhammer-fields types)
+// Field & Entity schema types
+//
+// These are intentionally open — kind, editor, display, and sort are plain
+// strings so new field types can be added via YAML without touching TS.
+// Type-specific properties live in the FieldType bag keyed by convention
+// (e.g. "options" for select, "derive" for computed, "entity" for reference).
 // ---------------------------------------------------------------------------
 
 export interface SelectOption {
@@ -79,38 +84,11 @@ export interface SelectOption {
   order: number;
 }
 
-/** Discriminated union matching Rust FieldType (tagged on `kind`, kebab-case). */
-export type FieldType =
-  | { kind: "text"; single_line: boolean }
-  | { kind: "markdown"; single_line: boolean }
-  | { kind: "date" }
-  | { kind: "number"; min?: number; max?: number }
-  | { kind: "color" }
-  | { kind: "select"; options: SelectOption[] }
-  | { kind: "multi-select"; options: SelectOption[] }
-  | { kind: "reference"; entity: string; multiple: boolean }
-  | { kind: "computed"; derive: string };
-
-export type Editor =
-  | "markdown"
-  | "select"
-  | "multi-select"
-  | "date"
-  | "color-palette"
-  | "number"
-  | "none";
-
-export type Display =
-  | "markdown"
-  | "badge"
-  | "badge-list"
-  | "avatar"
-  | "date"
-  | "color-swatch"
-  | "number"
-  | "text";
-
-export type SortKind = "alphanumeric" | "option-order" | "datetime" | "numeric";
+/** Field type descriptor — `kind` discriminates, extra keys vary by kind. */
+export interface FieldType {
+  kind: string;
+  [key: string]: unknown;
+}
 
 export interface FieldDef {
   id: string;
@@ -118,9 +96,9 @@ export interface FieldDef {
   description?: string;
   type: FieldType;
   default?: string;
-  editor?: Editor;
-  display?: Display;
-  sort?: SortKind;
+  editor?: string;
+  display?: string;
+  sort?: string;
   filter?: string;
   group?: string;
   validate?: string;
