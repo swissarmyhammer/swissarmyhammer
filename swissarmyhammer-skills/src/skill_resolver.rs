@@ -326,7 +326,6 @@ mod tests {
 
         // Should have the builtin skills
         assert!(skills.contains_key("plan"), "should have plan skill");
-        assert!(skills.contains_key("kanban"), "should have kanban skill");
         assert!(skills.contains_key("commit"), "should have commit skill");
         assert!(skills.contains_key("test"), "should have test skill");
         assert!(

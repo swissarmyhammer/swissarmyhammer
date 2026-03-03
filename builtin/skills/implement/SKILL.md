@@ -36,15 +36,9 @@ Get the full description and subtasks. Understand the task before writing code.
 
 Read relevant code to understand patterns before writing. Never modify code you haven't read.
 
-### 5. Implement using TDD
+### 5. Implement the work
 
-Follow test-driven development for each subtask:
-
-1. **Red**: Write a failing test that defines what you want
-2. **Green**: Write the minimum code to make the test pass
-3. **Refactor**: Clean up while keeping tests green
-
-Run tests after each change to catch problems early.
+Do the work described in the card and its subtasks.
 
 ### 6. Complete the card
 

@@ -82,6 +82,10 @@ Initialize the board:
 Create tags for review severities:
 
 ```json
+{"op": "add tag", "id": "review-finding", "name": "Review Finding", "color": "9900cc", "description": "Code review finding"}
+```
+
+```json
 {"op": "add tag", "id": "blocker", "name": "Blocker", "color": "ff0000", "description": "Must fix before merge"}
 ```
 
@@ -89,10 +93,10 @@ Create tags for review severities:
 {"op": "add tag", "id": "warning", "name": "Warning", "color": "ff8800", "description": "Should fix"}
 ```
 
-Each **blocker** and **warning** becomes a kanban card:
+Each **blocker** and **warning** becomes a kanban card. Always include the `review-finding` tag so the implement workflow can pick up review cards:
 
 ```json
-{"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<what and why>\n\n<suggestion>", "tags": ["blocker"]}
+{"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<what and why>\n\n<suggestion>", "tags": ["review-finding", "blocker"]}
 ```
 
 Add subtasks for each fix step. Every card MUST include a verification subtask.
