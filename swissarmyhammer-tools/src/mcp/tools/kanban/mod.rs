@@ -767,11 +767,6 @@ mod tests {
         data["id"].as_str().expect("Expected id field").to_string()
     }
 
-    /// Helper to extract ID from result (generic)
-    fn extract_id(result: &CallToolResult) -> String {
-        let data = parse_json(result);
-        data["id"].as_str().expect("Expected id field").to_string()
-    }
 
     #[tokio::test]
     async fn test_init_board() {
@@ -1447,7 +1442,7 @@ mod tests {
         tag_args.insert("color".to_string(), json!("ff0000"));
         let tag_result = tool.execute(tag_args, &context).await.unwrap();
         let tag_data = parse_json(&tag_result);
-        let tag_id = tag_data["id"].as_str().unwrap().to_string();
+        assert!(tag_data["id"].as_str().is_some(), "Tag should have an id");
 
         // Add a task
         let mut task_args = serde_json::Map::new();
@@ -1499,7 +1494,7 @@ mod tests {
         tag_args.insert("color".to_string(), json!("ff0000"));
         let tag_result = tool.execute(tag_args, &context).await.unwrap();
         let tag_data = parse_json(&tag_result);
-        let tag_id = tag_data["id"].as_str().unwrap().to_string();
+        assert!(tag_data["id"].as_str().is_some(), "Tag should have an id");
 
         // Add a task
         let mut task_args = serde_json::Map::new();

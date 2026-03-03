@@ -1278,7 +1278,7 @@ mod tests {
 
         // tools/ has a tool
         let tool_dir = dir.path().join("tools").join("my-tool");
-        std::fs::create_dir(&dir.path().join("tools")).unwrap();
+        std::fs::create_dir(dir.path().join("tools")).unwrap();
         std::fs::create_dir(&tool_dir).unwrap();
         std::fs::write(
             tool_dir.join("TOOL.md"),
@@ -1288,7 +1288,7 @@ mod tests {
 
         // plugins/ has a plugin
         let plugin_dir = dir.path().join("plugins").join("my-plugin");
-        std::fs::create_dir(&dir.path().join("plugins")).unwrap();
+        std::fs::create_dir(dir.path().join("plugins")).unwrap();
         std::fs::create_dir_all(plugin_dir.join(".claude-plugin")).unwrap();
         std::fs::write(
             plugin_dir.join(".claude-plugin/plugin.json"),

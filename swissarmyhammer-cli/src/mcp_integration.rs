@@ -234,8 +234,9 @@ pub mod response_formatting {
     use rmcp::model::{CallToolResult, RawContent};
     use serde_json::Value;
 
-    /// Format successful tool result for display
-    /// This is the ONE PLACE where we convert JSON output to YAML for display
+    /// Format successful tool result for display.
+    ///
+    /// This is the ONE PLACE where we convert JSON output to YAML for display.
     pub fn format_success_response(result: &CallToolResult) -> String {
         // First check if there's structured content - serialize it to YAML
         if let Some(ref data) = result.structured_content {
@@ -246,19 +247,16 @@ pub mod response_formatting {
         }
 
         // Try to extract text content and parse as JSON, then convert to YAML
-        if let Some(text) = extract_text_content(result) {
-            // Try to parse as JSON
-            if let Ok(json_value) = serde_json::from_str::<Value>(&text) {
-                // Successfully parsed as JSON - convert to YAML with leading newline
-                return serde_yaml::to_string(&json_value)
-                    .map(|yaml| format!("\n{}", yaml))
-                    .unwrap_or(text); // Fall back to original text if YAML serialization fails
-            }
-            // Not JSON, return as-is
-            return text;
+        if let Ok(json_value) = extract_json_data(result) {
+            // Successfully parsed as JSON - convert to YAML with leading newline
+            let text = extract_text_content(result).unwrap_or_default();
+            return serde_yaml::to_string(&json_value)
+                .map(|yaml| format!("\n{}", yaml))
+                .unwrap_or(text);
         }
 
-        "Operation successful".to_string()
+        // Not JSON or no content - return raw text or default
+        extract_text_content(result).unwrap_or_else(|| "Operation successful".to_string())
     }
 
     /// Format error tool result for display

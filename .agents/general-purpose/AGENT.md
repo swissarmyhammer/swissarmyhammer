@@ -2,7 +2,6 @@
 name: general-purpose
 description: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks
 model: default
-tools: "*"
 ---
 
 You are a general-purpose AI agent capable of handling a wide variety of tasks including:

@@ -13,8 +13,11 @@ use serial_test::serial;
 use std::time::Duration;
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 
-async fn create_test_session_manager() -> claude_agent::session::SessionManager {
-    claude_agent::session::SessionManager::new()
+/// Create a session manager with explicit temp storage to avoid depending
+/// on `current_dir()`, which can fail under heavy concurrent test load.
+fn create_test_session_manager() -> claude_agent::session::SessionManager {
+    let tmp = std::env::temp_dir().join(format!("sah-test-sessions-{}", ulid::Ulid::new()));
+    claude_agent::session::SessionManager::new().with_storage_path(Some(tmp))
 }
 
 fn create_client_capabilities_with_terminal() -> agent_client_protocol::ClientCapabilities {
@@ -50,12 +53,10 @@ async fn test_rate_limiting_terminal_create() {
         .set_client_capabilities(create_client_capabilities_with_terminal())
         .await;
 
-    let session_manager = create_test_session_manager().await;
+    let session_manager = create_test_session_manager();
 
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    // Use /tmp directly to avoid flaky behavior from current_dir() under concurrent test load
+    let cwd = std::path::PathBuf::from("/tmp");
     let session_id = session_manager.create_session(cwd, None).unwrap();
     let session_id_str = session_id.to_string();
 
@@ -123,8 +124,9 @@ async fn test_rate_limiting_terminal_execute() {
         .set_client_capabilities(create_client_capabilities_with_terminal())
         .await;
 
-    // Create a terminal
-    let terminal_id = manager.create_terminal(None).await.unwrap();
+    // Create a terminal with an explicit working directory to avoid depending
+    // on current_dir() which can be unreliable under concurrent test load
+    let terminal_id = manager.create_terminal(Some("/tmp".to_string())).await.unwrap();
 
     // First 2 executions should succeed (cost 2 each = 4 tokens)
     for i in 0..2 {
@@ -172,12 +174,10 @@ async fn test_rate_limiting_different_sessions() {
         .set_client_capabilities(create_client_capabilities_with_terminal())
         .await;
 
-    let session_manager = create_test_session_manager().await;
+    let session_manager = create_test_session_manager();
 
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    // Use /tmp directly to avoid flaky behavior from current_dir() under concurrent test load
+    let cwd = std::path::PathBuf::from("/tmp");
 
     // Create two different sessions
     let session_id1 = session_manager.create_session(cwd.clone(), None).unwrap();
@@ -257,12 +257,10 @@ async fn test_rate_limiting_get_output_allowed() {
         .set_client_capabilities(create_client_capabilities_with_terminal())
         .await;
 
-    let session_manager = create_test_session_manager().await;
+    let session_manager = create_test_session_manager();
 
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    // Use /tmp directly to avoid flaky behavior from current_dir() under concurrent test load
+    let cwd = std::path::PathBuf::from("/tmp");
     let session_id = session_manager.create_session(cwd, None).unwrap();
     let session_id_str = session_id.to_string();
 
@@ -310,12 +308,10 @@ async fn test_rate_limiting_kill_terminal() {
         .set_client_capabilities(create_client_capabilities_with_terminal())
         .await;
 
-    let session_manager = create_test_session_manager().await;
+    let session_manager = create_test_session_manager();
 
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    // Use /tmp directly to avoid flaky behavior from current_dir() under concurrent test load
+    let cwd = std::path::PathBuf::from("/tmp");
     let session_id = session_manager.create_session(cwd, None).unwrap();
     let session_id_str = session_id.to_string();
 
@@ -385,12 +381,10 @@ async fn test_rate_limiting_release_terminal() {
         .set_client_capabilities(create_client_capabilities_with_terminal())
         .await;
 
-    let session_manager = create_test_session_manager().await;
+    let session_manager = create_test_session_manager();
 
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    // Use /tmp directly to avoid flaky behavior from current_dir() under concurrent test load
+    let cwd = std::path::PathBuf::from("/tmp");
     let session_id = session_manager.create_session(cwd, None).unwrap();
     let session_id_str = session_id.to_string();
 

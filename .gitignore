@@ -141,3 +141,6 @@ mirdan-lock.json
 .kanban.zip
 
 .github/copilot
+
+# Claude Code local settings
+.claude/settings.local.json

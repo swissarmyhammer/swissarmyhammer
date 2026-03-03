@@ -44,9 +44,9 @@ fn load_shared_partials(library: &mut PromptLibrary) {
 
 /// Strip YAML frontmatter (---\n...\n---\n) from content
 fn strip_frontmatter(content: &str) -> String {
-    if content.starts_with("---") {
-        if let Some(end) = content[3..].find("\n---") {
-            return content[3 + end + 4..].to_string();
+    if let Some(after_prefix) = content.strip_prefix("---") {
+        if let Some(end) = after_prefix.find("\n---") {
+            return after_prefix[end + 4..].to_string();
         }
     }
     content.to_string()

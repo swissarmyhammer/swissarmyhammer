@@ -47,7 +47,7 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
             let ectx = ctx.entity_context().await?;
 
             // Auto-create Tag entity if it doesn't exist
-            if !tag_name_exists_entity(&ectx, &slug).await {
+            if !tag_name_exists_entity(ectx, &slug).await {
                 let color = auto_color::auto_color(&slug).to_string();
                 let tag_id = ulid::Ulid::new().to_string();
                 let mut tag_entity = Entity::new("tag", &tag_id);

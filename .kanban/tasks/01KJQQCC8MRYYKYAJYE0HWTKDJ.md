@@ -1,8 +1,7 @@
 ---
+position_column: done
+position_ordinal: d9
 title: to_json silently overwrites fields named "id" or "entity_type"
-position:
-  column: todo
-  ordinal: a6
 ---
 `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-entity/src/entity.rs` lines 82-90
 

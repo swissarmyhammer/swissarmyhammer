@@ -2,7 +2,6 @@
 name: tester
 description: Delegate test execution and fixing to this agent. It runs the full test suite, fixes every failure and warning, and reports back. Keeps verbose test output out of the parent context.
 model: default
-tools: "*"
 skills:
   - test
 ---

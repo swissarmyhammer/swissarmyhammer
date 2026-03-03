@@ -185,19 +185,6 @@ impl AppState {
         }
     }
 
-    /// Close a board, removing it from the open set.
-    pub async fn close_board(&self, path: &Path) {
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let mut boards = self.boards.write().await;
-        boards.remove(&canonical);
-
-        // If this was the active board, clear active or switch to another
-        let mut active = self.active_board.write().await;
-        if active.as_deref() == Some(&canonical) {
-            *active = boards.keys().next().cloned();
-        }
-    }
-
     /// Get the handle for the active board.
     pub async fn active_handle(&self) -> Option<Arc<BoardHandle>> {
         let active = self.active_board.read().await;

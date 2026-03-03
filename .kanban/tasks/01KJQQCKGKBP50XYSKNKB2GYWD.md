@@ -1,8 +1,7 @@
 ---
+position_column: done
+position_ordinal: e0
 title: delete_entity_files uses sync path.exists() -- TOCTOU race and sync in async
-position:
-  column: todo
-  ordinal: a7
 ---
 `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-entity/src/io.rs` lines 124-137
 

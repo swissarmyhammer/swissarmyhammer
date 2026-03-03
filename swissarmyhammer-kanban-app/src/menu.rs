@@ -1,7 +1,7 @@
 //! Native menu bar construction and event handling.
 
 use crate::state::{resolve_kanban_path, AppConfig, AppState, RecentBoard};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -261,7 +261,7 @@ fn handle_open_recent(app: &AppHandle, path: PathBuf) {
 }
 
 /// Open a board, rebuild the menu, and emit a frontend event.
-async fn open_and_notify(handle: &AppHandle, path: &PathBuf) {
+async fn open_and_notify(handle: &AppHandle, path: &Path) {
     let state = handle.state::<AppState>();
     match state.open_board(path).await {
         Ok(_) => {

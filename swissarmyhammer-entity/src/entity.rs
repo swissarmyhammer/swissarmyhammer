@@ -117,12 +117,12 @@ mod tests {
     fn get_typed_accessors() {
         let mut e = Entity::new("task", "01ABC");
         e.set("count", serde_json::json!(42));
-        e.set("ratio", serde_json::json!(3.14));
+        e.set("ratio", serde_json::json!(0.75));
         e.set("done", serde_json::json!(true));
         e.set("tags", serde_json::json!(["bug", "urgent"]));
 
         assert_eq!(e.get_i64("count"), Some(42));
-        assert_eq!(e.get_f64("ratio"), Some(3.14));
+        assert_eq!(e.get_f64("ratio"), Some(0.75));
         assert_eq!(e.get_bool("done"), Some(true));
         assert_eq!(e.get_string_list("tags"), vec!["bug", "urgent"]);
         assert!(e.get_string_list("missing").is_empty());

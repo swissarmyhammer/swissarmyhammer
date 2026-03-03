@@ -36,7 +36,7 @@ impl Execute<KanbanContext, KanbanError> for GetTag {
             }
 
             // Fall back to name lookup
-            if let Some(entity) = find_tag_entity_by_name(&ectx, &self.id).await {
+            if let Some(entity) = find_tag_entity_by_name(ectx, &self.id).await {
                 return Ok(tag_entity_to_json(&entity));
             }
 

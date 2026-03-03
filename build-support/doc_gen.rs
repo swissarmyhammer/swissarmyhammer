@@ -86,6 +86,62 @@ fn inject_install_section(md: &str, formula: &str) -> String {
     }
 }
 
+/// Generate a ROFF man page and write it to `<dir>/<name>.1`.
+///
+/// Uses `clap_mangen` to render `cmd` into a roff-format man page.
+///
+/// # Errors
+///
+/// Returns an error if the output directory cannot be created, the man page
+/// cannot be rendered, or the file cannot be written.
+pub fn generate_manpage(
+    cmd: &clap::Command,
+    dir: &Path,
+    name: &str,
+) -> std::io::Result<GeneratedFile> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| io_context(format!("failed to create directory {}", dir.display()), e))?;
+    let man = clap_mangen::Man::new(cmd.clone());
+    let mut buf = Vec::new();
+    man.render(&mut buf)
+        .map_err(|e| io_context(format!("failed to render man page for {name}"), e))?;
+    let filename = format!("{name}.1");
+    let path = dir.join(&filename);
+    let size = buf.len();
+    std::fs::write(&path, &buf)
+        .map_err(|e| io_context(format!("failed to write {}", path.display()), e))?;
+    Ok(GeneratedFile { path, size })
+}
+
+/// Generate shell completion scripts for Bash, Zsh, and Fish.
+///
+/// Writes one completion file per shell into `dir`, named according to each
+/// shell's convention (e.g. `_name` for Zsh, `name.bash` for Bash).
+///
+/// # Errors
+///
+/// Returns an error if the output directory cannot be created or any
+/// completion script cannot be generated.
+pub fn generate_completions(
+    mut cmd: clap::Command,
+    dir: &Path,
+    name: &str,
+) -> std::io::Result<Vec<PathBuf>> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| io_context(format!("failed to create directory {}", dir.display()), e))?;
+    let mut paths = Vec::new();
+    for shell in [
+        clap_complete::Shell::Bash,
+        clap_complete::Shell::Zsh,
+        clap_complete::Shell::Fish,
+    ] {
+        let path = clap_complete::generate_to(shell, &mut cmd, name, dir)
+            .map_err(|e| io_context(format!("failed to generate {shell:?} completions"), e))?;
+        paths.push(path);
+    }
+    Ok(paths)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,60 +282,4 @@ mod tests {
             assert!(path.exists());
         }
     }
-}
-
-/// Generate a ROFF man page and write it to `<dir>/<name>.1`.
-///
-/// Uses `clap_mangen` to render `cmd` into a roff-format man page.
-///
-/// # Errors
-///
-/// Returns an error if the output directory cannot be created, the man page
-/// cannot be rendered, or the file cannot be written.
-pub fn generate_manpage(
-    cmd: &clap::Command,
-    dir: &Path,
-    name: &str,
-) -> std::io::Result<GeneratedFile> {
-    std::fs::create_dir_all(dir)
-        .map_err(|e| io_context(format!("failed to create directory {}", dir.display()), e))?;
-    let man = clap_mangen::Man::new(cmd.clone());
-    let mut buf = Vec::new();
-    man.render(&mut buf)
-        .map_err(|e| io_context(format!("failed to render man page for {name}"), e))?;
-    let filename = format!("{name}.1");
-    let path = dir.join(&filename);
-    let size = buf.len();
-    std::fs::write(&path, &buf)
-        .map_err(|e| io_context(format!("failed to write {}", path.display()), e))?;
-    Ok(GeneratedFile { path, size })
-}
-
-/// Generate shell completion scripts for Bash, Zsh, and Fish.
-///
-/// Writes one completion file per shell into `dir`, named according to each
-/// shell's convention (e.g. `_name` for Zsh, `name.bash` for Bash).
-///
-/// # Errors
-///
-/// Returns an error if the output directory cannot be created or any
-/// completion script cannot be generated.
-pub fn generate_completions(
-    mut cmd: clap::Command,
-    dir: &Path,
-    name: &str,
-) -> std::io::Result<Vec<PathBuf>> {
-    std::fs::create_dir_all(dir)
-        .map_err(|e| io_context(format!("failed to create directory {}", dir.display()), e))?;
-    let mut paths = Vec::new();
-    for shell in [
-        clap_complete::Shell::Bash,
-        clap_complete::Shell::Zsh,
-        clap_complete::Shell::Fish,
-    ] {
-        let path = clap_complete::generate_to(shell, &mut cmd, name, dir)
-            .map_err(|e| io_context(format!("failed to generate {shell:?} completions"), e))?;
-        paths.push(path);
-    }
-    Ok(paths)
 }

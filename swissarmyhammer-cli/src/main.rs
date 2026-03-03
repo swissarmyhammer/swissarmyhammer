@@ -8,7 +8,9 @@ mod dynamic_cli;
 mod error;
 mod exit_codes;
 mod logging;
-mod mcp_integration;
+/// Re-export from the lib crate so that `crate::mcp_integration` resolves
+/// for modules shared between the binary and the library.
+pub use swissarmyhammer_cli::mcp_integration;
 mod schema_conversion;
 mod schema_validation;
 mod signal_handler;

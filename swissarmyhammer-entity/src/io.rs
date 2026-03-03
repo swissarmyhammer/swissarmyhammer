@@ -163,23 +163,31 @@ pub async fn read_entity_dir(
 pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     fs::create_dir_all(trash_dir).await?;
 
-    // Move data file
-    if path.exists() {
+    // Move data file (try-rename, ignore NotFound to avoid TOCTOU race)
+    {
         let filename = path
             .file_name()
             .expect("entity path must have a filename");
         let dest = trash_dir.join(filename);
-        fs::rename(path, &dest).await?;
+        match fs::rename(path, &dest).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
 
-    // Move changelog
+    // Move changelog (try-rename, ignore NotFound to avoid TOCTOU race)
     let log_path = path.with_extension("jsonl");
-    if log_path.exists() {
+    {
         let log_filename = log_path
             .file_name()
             .expect("changelog path must have a filename");
         let log_dest = trash_dir.join(log_filename);
-        fs::rename(&log_path, &log_dest).await?;
+        match fs::rename(&log_path, &log_dest).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
 
     Ok(())

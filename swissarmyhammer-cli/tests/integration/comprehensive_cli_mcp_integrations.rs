@@ -91,9 +91,8 @@ async fn test_mcp_error_propagation() -> Result<()> {
     let result = context.execute_tool("kanban", empty_args).await;
     // With auto-init and forgiving parsing, empty args might succeed (treated as list)
     // or fail with parse error - both are acceptable
-    if result.is_err() {
+    if let Err(error) = result {
         // If it errors, should be a parse error
-        let error = result.unwrap_err();
         let error_msg = format!("{:?}", error);
         assert!(
             error_msg.contains("parse")
@@ -252,8 +251,7 @@ async fn test_error_message_formatting() -> Result<()> {
 
     // With auto-init, board initialization succeeds, but empty args should still fail parsing
     // If it succeeds (e.g., interpreted as list operation), that's also acceptable
-    if result.is_err() {
-        let error = result.unwrap_err();
+    if let Err(error) = result {
         // Accept parsing errors
         assert_error_contains_any(&error, &["required", "missing", "op", "parse", "invalid"]);
     }

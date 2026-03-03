@@ -50,7 +50,7 @@ fn main() {
             menu::rebuild_menu(app.handle());
             Ok(())
         })
-        .on_menu_event(|app, event| menu::handle_menu_event(app, event))
+        .on_menu_event(menu::handle_menu_event)
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

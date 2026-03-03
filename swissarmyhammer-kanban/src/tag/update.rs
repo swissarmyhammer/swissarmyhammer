@@ -73,7 +73,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
                 let normalized = tag_parser::normalize_slug(name);
                 if normalized != old_name {
                     // Check that no other tag has this name
-                    if let Some(existing) = find_tag_entity_by_name(&ectx, &normalized).await {
+                    if let Some(existing) = find_tag_entity_by_name(ectx, &normalized).await {
                         if existing.id != self.id.as_str() {
                             return Err(KanbanError::duplicate_id("tag", normalized));
                         }

@@ -1,8 +1,7 @@
 ---
+position_column: done
+position_ordinal: d8
 title: Entity type missing standard trait impls (PartialEq, Default, Serialize)
-position:
-  column: todo
-  ordinal: a5
 ---
 `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-entity/src/entity.rs` lines 16-21
 
