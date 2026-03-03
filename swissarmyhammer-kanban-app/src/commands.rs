@@ -404,6 +404,15 @@ pub async fn update_entity_field(
     let handle = state.active_handle().await.ok_or("No active board")?;
     let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
 
+    // Validate field_name against the entity's schema
+    let entity_def = ectx.entity_def(&entity_type).map_err(|e| e.to_string())?;
+    if !entity_def.fields.contains(&field_name) {
+        return Err(format!(
+            "field '{}' is not defined for entity type '{}'",
+            field_name, entity_type
+        ));
+    }
+
     let mut entity = ectx
         .read(&entity_type, &id)
         .await
