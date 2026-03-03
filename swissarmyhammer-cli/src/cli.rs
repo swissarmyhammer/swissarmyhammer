@@ -851,6 +851,4 @@ mod tests {
         let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "doctor"]);
         assert!(result.is_err());
     }
-
 }
-

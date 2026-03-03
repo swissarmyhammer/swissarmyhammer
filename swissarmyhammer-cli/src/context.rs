@@ -302,7 +302,6 @@ impl CliContextBuilder {
 
     /// Build the CliContext with async initialization of storage components
     pub async fn build_async(self) -> Result<CliContext> {
-
         let mut prompt_library = PromptLibrary::new();
 
         // Add default prompt sources

@@ -146,7 +146,6 @@ fn parse_var_args(
     vars
 }
 
-
 /// Execute any CLI command with explicit working directory
 ///
 /// This version allows specifying the working directory explicitly to avoid global state issues
@@ -429,13 +428,7 @@ async fn handle_validate_command(
 ) -> (String, String, i32) {
     use swissarmyhammer_cli::exit_codes::EXIT_ERROR;
 
-    match validate::run_validate_command_with_dirs_captured(
-        quiet,
-        format,
-        validate_tools,
-    )
-    .await
-    {
+    match validate::run_validate_command_with_dirs_captured(quiet, format, validate_tools).await {
         Ok((output, exit_code)) => (output, String::new(), exit_code),
         Err(e) => {
             let stderr_str = format!("{}", e);
@@ -546,7 +539,6 @@ fn handle_completion_command(shell: clap_complete::Shell) -> (String, String, i3
     let completion_output = String::from_utf8_lossy(buf.get_ref()).to_string();
     (completion_output, String::new(), EXIT_SUCCESS)
 }
-
 
 /// Execute a parsed CLI command with stdout/stderr capture
 async fn execute_cli_command_with_capture(

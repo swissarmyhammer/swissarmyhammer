@@ -2083,7 +2083,6 @@ impl CliBuilder {
             Self::build_subcommands_from_specs(&subcommand_specs),
         )
     }
-
 }
 
 #[cfg(test)]

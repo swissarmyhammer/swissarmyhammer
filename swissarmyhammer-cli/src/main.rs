@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
 
-
 /// Track if we've already performed shutdown to prevent double-shutdown
 static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
 
@@ -617,12 +616,10 @@ async fn route_category_command(
         Some((tool_name, tool_matches)) => {
             route_mcp_tool_command(category, tool_name, tool_matches, cli_tool_context).await
         }
-        None => {
-            report_error_and_exit(format!(
-                "No subcommand specified for '{}'. Use --help for usage information.",
-                category
-            ))
-        }
+        None => report_error_and_exit(format!(
+            "No subcommand specified for '{}'. Use --help for usage information.",
+            category
+        )),
     }
 }
 

@@ -64,7 +64,6 @@ pub use swissarmyhammer_templating::{Template, TemplateEngine};
 
 pub use swissarmyhammer_common::*;
 
-
 // sah.toml configuration types removed (migrated to swissarmyhammer-config)
 // All TOML configuration functionality now provided by swissarmyhammer-config crate using figment
 

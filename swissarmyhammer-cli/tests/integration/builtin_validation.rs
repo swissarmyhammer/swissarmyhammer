@@ -47,10 +47,7 @@ fn test_builtin_prompts_validate_directly() -> Result<()> {
     println!("Files checked: {}", result.files_checked);
     println!("Errors: {}", result.errors);
 
-    assert_eq!(
-        result.errors, 0,
-        "All builtin prompts should be valid"
-    );
+    assert_eq!(result.errors, 0, "All builtin prompts should be valid");
     assert!(
         result.files_checked > 0,
         "Should have validated at least some files"

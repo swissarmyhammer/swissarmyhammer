@@ -53,12 +53,14 @@ struct DetectRequest {
 }
 
 // Include guideline files at compile time
-static GUIDELINES_RUST: &str = include_str!("../../../../../../builtin/_partials/project-types/rust.md");
+static GUIDELINES_RUST: &str =
+    include_str!("../../../../../../builtin/_partials/project-types/rust.md");
 static GUIDELINES_NODEJS: &str =
     include_str!("../../../../../../builtin/_partials/project-types/nodejs.md");
 static GUIDELINES_PYTHON: &str =
     include_str!("../../../../../../builtin/_partials/project-types/python.md");
-static GUIDELINES_GO: &str = include_str!("../../../../../../builtin/_partials/project-types/go.md");
+static GUIDELINES_GO: &str =
+    include_str!("../../../../../../builtin/_partials/project-types/go.md");
 static GUIDELINES_JAVA_MAVEN: &str =
     include_str!("../../../../../../builtin/_partials/project-types/java-maven.md");
 static GUIDELINES_JAVA_GRADLE: &str =
@@ -167,7 +169,10 @@ fn format_detected_projects(
             .to_string();
     }
 
-    let mut output = format!("## Detected Project Types\n\nFound {} project(s):\n\n", projects.len());
+    let mut output = format!(
+        "## Detected Project Types\n\nFound {} project(s):\n\n",
+        projects.len()
+    );
 
     for (i, project) in projects.iter().enumerate() {
         let name = project_type_name(project.project_type);
@@ -234,9 +239,8 @@ pub async fn execute_detect(
         max_depth
     );
 
-    let projects = detect_projects(&root_path, Some(max_depth)).map_err(|e| {
-        McpError::internal_error(format!("Failed to detect projects: {}", e), None)
-    })?;
+    let projects = detect_projects(&root_path, Some(max_depth))
+        .map_err(|e| McpError::internal_error(format!("Failed to detect projects: {}", e), None))?;
 
     // Use the canonicalized root for relative path computation
     let canonical_root = root_path.canonicalize().unwrap_or(root_path);
@@ -272,7 +276,8 @@ mod tests {
 
     #[test]
     fn test_strip_frontmatter_with_frontmatter() {
-        let content = "---\ntitle: Test\ndescription: A test\npartial: true\n---\n\n### Hello\n\nWorld";
+        let content =
+            "---\ntitle: Test\ndescription: A test\npartial: true\n---\n\n### Hello\n\nWorld";
         let result = strip_frontmatter(content);
         assert_eq!(result, "### Hello\n\nWorld");
     }

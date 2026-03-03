@@ -300,7 +300,6 @@ fn assert_items_before_categories(ctx: &TestContext, items: &[(&str, &str)]) {
     }
 }
 
-
 #[test]
 fn test_string_interning() {
     // Table-driven test for string interning behavior

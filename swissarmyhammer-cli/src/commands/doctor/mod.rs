@@ -259,5 +259,4 @@ mod tests {
         let exit_code = doctor.get_exit_code();
         assert!(exit_code <= 2);
     }
-
 }
