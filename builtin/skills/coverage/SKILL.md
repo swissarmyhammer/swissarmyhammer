@@ -1,14 +1,18 @@
 ---
 name: coverage
-description: Analyze test coverage gaps on changed code. Scans branch changes, maps functions to tests structurally, and produces kanban cards for untested code. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests.
+description: Analyze test coverage gaps on changed code. Scans branch changes, maps functions to tests structurally, and produces kanban cards for untested code. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent.
+context: fork
+agent: tester
 metadata:
   author: swissarmyhammer
-  version: "2.0"
+  version: "3.0"
 ---
 
 # Coverage
 
 Identify test coverage gaps in changed code and produce a concrete work list of what needs tests.
+
+**This is a coverage analysis task, not a test execution task.** Do not run or fix tests — analyze what's untested.
 
 ## Process
 
@@ -17,27 +21,50 @@ Identify test coverage gaps in changed code and produce a concrete work list of 
 - Default: files changed on the current branch vs `main`
 - If the user specified files or a package, scope to that
 
-### 2. Delegate to a tester subagent
+Use `git` with `op: "get changes"` to get the list of changed files:
 
-Spawn a **tester** subagent with the specific goal of **coverage analysis, not test execution**. Tell it to:
+```json
+{"op": "get changes"}
+```
 
-- Scope to the changed files (use `git_changes` or `treesitter` as needed)
-- For each changed function/method, determine whether a test exists that exercises it
-- Create kanban cards for untested functions, tagged `["coverage-gap"]`
-- Return a summary: what's covered, what's not, total gap count
+### 2. Analyze each changed file
 
-This keeps verbose analysis (AST queries, file-by-file scanning) in the subagent's context instead of cluttering yours.
+For each changed file:
 
-### 3. Relay results
+- Read the full file content
+- Use `treesitter` with `op: "get status"` to check the index is ready
+- Identify all public functions, methods, and types
+- For each, determine whether a test exists that exercises it
+- Look in the standard test locations for the project type
 
-When the subagent returns, present the summary to the user:
+### 3. Track coverage gaps on the kanban board
 
+Initialize the board and create a coverage-gap tag:
+
+```json
+{"op": "init board"}
+```
+
+```json
+{"op": "add tag", "id": "coverage-gap", "name": "Coverage Gap", "color": "ff8800", "description": "Function or method lacking test coverage"}
+```
+
+Create a kanban card for each untested function:
+
+```json
+{"op": "add task", "title": "Add tests for <function_name>", "description": "<file:lines>\n\n<function signature>\n\n<what it does and what to test>", "tags": ["coverage-gap"]}
+```
+
+### 4. Summarize
+
+Report:
 - Count of functions analyzed vs untested
 - List of kanban cards created for coverage gaps
 - Recommendation on where to start writing tests
 
 ## Guidelines
 
-- The subagent does the analysis. You are the dispatcher — scope the work, delegate, relay results.
+- Do NOT run or fix tests — this is analysis only.
 - Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
+- Report only actionable gaps. Ignore: trivial getters/setters, trait impl boilerplate, generated code.
 - If the user wants to write the missing tests, use the implement skill to pick up the kanban cards.

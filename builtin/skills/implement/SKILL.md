@@ -1,9 +1,11 @@
 ---
 name: implement
-description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and delegates the work to an implementer subagent. Consider delegating to an implementation-focused agent to keep the main context clean.
+description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent.
+context: fork
+agent: implementer
 metadata:
   author: swissarmyhammer
-  version: "2.0"
+  version: "3.0"
 ---
 
 # Implement
@@ -18,33 +20,58 @@ Use `kanban` with `op: "next task"` to find the next actionable card. If there a
 
 ### 2. Move the card to doing
 
-Use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
+```json
+{"op": "move task", "id": "<task-id>", "column": "doing"}
+```
 
 ### 3. Read the card
 
-Use `kanban` with `op: "get task"`, `id: "<task-id>"` to get the full description and subtasks.
+```json
+{"op": "get task", "id": "<task-id>"}
+```
 
-### 4. Delegate to a subagent
+Get the full description and subtasks. Understand the task before writing code.
 
-Spawn an **implementer** subagent to do the actual work. Pass it the card details — title, description, subtasks, and any relevant context about the codebase. The subagent does the implementation, runs tests, and reports back.
+### 4. Read existing code
 
-This keeps verbose implementation output (compiler errors, test output, file reads) in the subagent's context instead of cluttering yours.
+Read relevant code to understand patterns before writing. Never modify code you haven't read.
 
-### 5. Complete the card
+### 5. Implement using TDD
 
-When the subagent reports success, complete the card: `kanban` with `op: "complete task"`, `id: "<task-id>"`. A card left in "doing" is not finished.
+Follow test-driven development for each subtask:
 
-If the subagent reports failure or partial progress, do NOT complete the card. Add a comment describing what happened and tell the user.
+1. **Red**: Write a failing test that defines what you want
+2. **Green**: Write the minimum code to make the test pass
+3. **Refactor**: Clean up while keeping tests green
 
-### 6. Stop for review
+Run tests after each change to catch problems early.
 
-**Always stop after completing a card.** Present the user with a summary of what was done and what the subagent reported. The user decides when to move to the next card — you do not auto-continue.
+### 6. Complete the card
+
+When all subtasks pass:
+
+```json
+{"op": "complete task", "id": "<task-id>"}
+```
+
+A card left in "doing" is not finished.
+
+If you cannot complete the task, do NOT complete the card. Add a comment describing what happened and report back.
+
+### 7. Stop for review
+
+**Always stop after completing a card.** Present a summary of what was done and what tests pass. The user decides when to move to the next card — you do not auto-continue.
 
 Only exception: if the card description explicitly says **auto-continue** or **chain to next**, proceed to the next card without stopping.
 
-## Guidelines
+## Rules
 
-- One card, one subagent. Don't try to do multiple cards in a single agent.
-- The subagent does the work. You are the dispatcher — get the card, delegate, complete, report.
+- One card at a time. Don't try to do multiple cards in one pass.
+- Do the work. No excuses, no "too complex". Find a way.
+- Don't over-engineer — write the simplest code that works.
+- Don't refactor unrelated code while implementing.
+- Stay focused on the task you were given.
+- ALL tests must pass before you report success. Zero failures, zero warnings.
 - Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
-- If you discover new work while reviewing the subagent's output, add it as a new kanban card.
+- If you discover new work, add it as a new kanban card.
+- If you get stuck, report what you tried and where you're blocked — don't silently give up.

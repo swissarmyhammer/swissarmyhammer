@@ -1,33 +1,59 @@
 ---
 name: test
-description: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — consider delegating to a test-focused agent to keep the main context clean.
+description: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent.
+context: fork
+agent: tester
 metadata:
   author: swissarmyhammer
-  version: "2.0"
+  version: "3.0"
 ---
 
-## Goal
+# Test
 
 **Zero failures. Zero warnings. Zero skipped tests. The build is either clean or it's broken.**
 
 ## Process
 
-Delegate test execution to a **tester** subagent. This keeps verbose test output, compiler errors, and fix iterations in the subagent's context instead of cluttering yours.
+### 1. Run the full test suite
 
-### 1. Spawn a tester subagent
+Run the full test suite for the detected project type. Use the project detection system to determine the correct command.
 
-Tell it to:
-- Run the full test suite for the detected project type
-- Run type checking and linting with warnings as errors (e.g. `cargo clippy -- -D warnings`)
-- Check for skipped/ignored tests — fix or delete each one
-- Fix every failure and every warning, re-running after each fix
-- Report back: pass/fail, what was fixed, what's left
+### 2. Run type checking and linting
 
-### 2. Review the results
+Run type checking and linting with warnings as errors (e.g. `cargo clippy -- -D warnings`).
 
-When the subagent returns:
-- If everything passed: report the clean result to the user
-- If there are remaining failures: create kanban cards for each one using `kanban` with `op: "add task"`, tagged `["test-failure"]`
+### 3. Check for skipped/ignored tests
+
+Find any skipped or ignored tests. Fix or delete each one — skipped tests are not acceptable.
+
+### 4. Fix every failure and warning
+
+Fix every failure and every warning, re-running after each fix. Understanding why something fails is not the end — it's the start. The reason it fails is the path to making it pass. Follow that path.
+
+### 5. Track failures on the kanban board
+
+Ensure a `test-failure` tag exists:
+
+```json
+{"op": "add tag", "id": "test-failure", "name": "Test Failure", "color": "ff0000", "description": "Failing test or type check"}
+```
+
+Create kanban cards for each remaining failure:
+
+```json
+{"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<error message>\n\n<what you tried>", "tags": ["test-failure"]}
+```
+
+### 6. Record the overall result
+
+Record the result using the `js` tool:
+
+- All pass: `js` with `op: "set expression"`, `name: "are_tests_passing"`, `expression: "true"`
+- Any fail: `js` with `op: "set expression"`, `name: "are_tests_passing"`, `expression: "false"`
+
+### 7. Report back
+
+Report: pass/fail, what was fixed, what's left. If you get stuck, report what you tried and where you're blocked — don't silently give up.
 
 ## Rules
 
@@ -35,6 +61,5 @@ When the subagent returns:
 - ALL compiler and linter warnings must be resolved. Warnings are bugs that haven't bitten yet.
 - Skipped tests are not acceptable. A skipped test is either broken (fix it) or dead (delete it).
 - Every failing test is your responsibility to fix. No exceptions.
-- Understanding why something fails is not the end — it's the start. The reason it fails is the path to making it pass. Follow that path.
 - Do not add `#[allow(...)]`, `@suppress`, `// eslint-disable`, or any other mechanism to silence warnings.
 - Do not add `#[ignore]` or `skip` to make a test stop failing.
