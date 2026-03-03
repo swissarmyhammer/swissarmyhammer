@@ -2,6 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::types::Board;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
@@ -39,11 +40,6 @@ impl InitBoard {
     }
 }
 
-/// Default column definitions: (id, name, order)
-fn default_columns() -> Vec<(&'static str, &'static str, usize)> {
-    vec![("todo", "To Do", 0), ("doing", "Doing", 1), ("done", "Done", 2)]
-}
-
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for InitBoard {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
@@ -71,13 +67,15 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             ectx.write(&board_entity).await?;
 
             // Write default columns as entities
+            let default_cols = Board::default_column_entities();
             let mut columns_json: Vec<Value> = Vec::new();
-            for (id, name, order) in default_columns() {
-                let mut entity = Entity::new("column", id);
-                entity.set("name", json!(name));
-                entity.set("order", json!(order));
-                ectx.write(&entity).await?;
-                columns_json.push(json!({"id": id, "name": name, "order": order}));
+            for entity in &default_cols {
+                ectx.write(entity).await?;
+                columns_json.push(json!({
+                    "id": entity.id,
+                    "name": entity.get_str("name").unwrap_or(""),
+                    "order": entity.get_i64("order").unwrap_or(0),
+                }));
             }
 
             // Return board with columns in response (for API compatibility)

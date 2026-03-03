@@ -1,7 +1,6 @@
 ---
+position_column: done
+position_ordinal: f5
 title: Deduplicate default column definitions (3 copies)
-position:
-  column: todo
-  ordinal: c3
 ---
-## Files\n- `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-kanban/src/board/init.rs:44-46`\n- `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-kanban/src/processor.rs:49`\n- `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-kanban/src/types/board.rs:39-57`\n\n## What\nThe default column set (todo/doing/done) is defined in THREE separate places:\n1. `Board::default_columns()` in `types/board.rs` -- returns `Vec<Column>` (the canonical one)\n2. `default_columns()` in `board/init.rs:44` -- returns `Vec<(&str, &str, usize)>` tuples\n3. An inline array literal in `processor.rs:49`\n\n## Why\nIf the defaults ever need to change (add a \"review\" column, rename \"To Do\"), the change must be synchronized in three places. The tuple vs struct representations also diverge in type -- `init.rs` uses tuples converted to Entity, `processor.rs` uses inline tuples, while `board.rs` uses `Column` structs. This is a maintenance hazard.\n\n## Suggestion\nKeep only `Board::default_columns()` and convert from `Column` to `Entity` at the call site. Both `init.rs` and `processor.rs` should call `Board::default_columns()` and map to entities.\n\n- [ ] Remove `fn default_columns()` from `board/init.rs`\n- [ ] Remove inline column tuple from `processor.rs`\n- [ ] Have both call `Board::default_columns()` and convert Column -> Entity\n- [ ] Verify tests still pass\n\n#warning" #warning
+**Done.** Unified default column definitions to `Board::default_column_entities()` as single source of truth.\n\n- [x] Remove `fn default_columns()` from `board/init.rs`\n- [x] Remove inline column tuple from `processor.rs`\n- [x] Have both call `Board::default_column_entities()`\n- [x] Verify tests pass (226 tests, clippy clean)

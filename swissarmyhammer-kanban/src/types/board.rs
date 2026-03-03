@@ -2,6 +2,7 @@
 
 use super::ids::{ActorId, ColumnId, SwimlaneId, TagId};
 use serde::{Deserialize, Serialize};
+use swissarmyhammer_entity::Entity;
 
 /// The kanban board - just metadata (name + description).
 /// Columns and swimlanes are stored as individual files for git-friendly merging.
@@ -54,6 +55,22 @@ impl Board {
                 order: 2,
             },
         ]
+    }
+
+    /// Get the default columns as entities ready to write.
+    ///
+    /// Single source of truth for the default column set (todo/doing/done).
+    /// Used by both `InitBoard` and auto-initialization in the processor.
+    pub fn default_column_entities() -> Vec<Entity> {
+        Self::default_columns()
+            .into_iter()
+            .map(|col| {
+                let mut entity = Entity::new("column", col.id.as_str());
+                entity.set("name", serde_json::json!(col.name));
+                entity.set("order", serde_json::json!(col.order));
+                entity
+            })
+            .collect()
     }
 }
 
