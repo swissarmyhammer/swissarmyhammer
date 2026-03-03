@@ -176,6 +176,9 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
             if let Some(s) = size {
                 attachment.set("attachment_size", json!(s));
             }
+            // Two-phase write: create attachment entity first, then update task.
+            // If the task update fails, we get an orphan attachment (recoverable)
+            // rather than a dangling reference in the task (harder to detect).
             ectx.write(&attachment).await?;
 
             // Add attachment ID to the task's attachments reference list

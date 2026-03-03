@@ -52,7 +52,9 @@ impl Execute<KanbanContext, KanbanError> for DeleteAttachment {
                 });
             }
 
-            // Delete the standalone attachment entity
+            // Two-phase write: delete attachment entity first, then update task.
+            // If the task update fails, the stale ID in the task's list is
+            // silently skipped by ListAttachments (tolerant of missing IDs).
             ectx.delete("attachment", &self.id).await?;
 
             // Remove the attachment ID from the task's attachments list
