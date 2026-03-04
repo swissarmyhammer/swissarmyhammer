@@ -2,8 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { KeymapProvider } from "@/lib/keymap-context";
+import { AppModeProvider } from "@/lib/app-mode-context";
+import { UndoStackProvider } from "@/lib/undo-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AppShell } from "@/components/app-shell";
 import { NavBar } from "@/components/nav-bar";
+import { ModeIndicator } from "@/components/mode-indicator";
 import { BoardView } from "@/components/board-view";
 import { TaskDetailPanel } from "@/components/task-detail-panel";
 import { TagInspector } from "@/components/tag-inspector";
@@ -100,21 +104,6 @@ function App() {
     };
   }, [refresh]);
 
-  // Global Escape handler — pops the panel stack
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key !== "Escape" || panelStack.length === 0) return;
-      // Don't close if an editable field is focused
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      // Don't close if a CodeMirror editor is focused
-      if ((e.target as HTMLElement)?.closest?.(".cm-editor")) return;
-      closeTopPanel();
-    }
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [panelStack.length, closeTopPanel]);
-
   // Tag context menu listener
   useEffect(() => {
     const unlisten = listen<TagContextMenuPayload>("tag-context-menu", async (event) => {
@@ -156,6 +145,9 @@ function App() {
   return (
     <TooltipProvider delayDuration={400}>
     <KeymapProvider>
+    <AppModeProvider>
+    <UndoStackProvider>
+    <AppShell>
     <div className="h-screen bg-background text-foreground flex flex-col">
       <NavBar
         board={board}
@@ -217,7 +209,11 @@ function App() {
           </p>
         </main>
       )}
+      <ModeIndicator />
     </div>
+    </AppShell>
+    </UndoStackProvider>
+    </AppModeProvider>
     </KeymapProvider>
     </TooltipProvider>
   );

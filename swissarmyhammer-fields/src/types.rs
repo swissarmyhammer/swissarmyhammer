@@ -5,9 +5,8 @@
 //! fields belong to a given entity type.
 
 use serde::{Deserialize, Serialize};
-use ulid::Ulid;
 
-use crate::id_types::{EntityTypeName, FieldName};
+use crate::id_types::{EntityTypeName, FieldDefId, FieldName};
 
 /// A single option in a select or multi-select field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -23,7 +22,7 @@ pub struct SelectOption {
     pub order: i32,
 }
 
-/// The type of a field — determines what shape the value takes.
+/// The type of a field -- determines what shape the value takes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum FieldType {
@@ -55,7 +54,7 @@ pub enum FieldType {
         #[serde(default)]
         multiple: bool,
     },
-    /// Read-only derived value — no stored triple.
+    /// Read-only derived value -- no stored triple.
     Computed {
         derive: String,
     },
@@ -99,10 +98,10 @@ pub enum SortKind {
     Numeric,
 }
 
-/// A field definition — the complete schema for a single named attribute.
+/// A field definition -- the complete schema for a single named attribute.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FieldDef {
-    pub id: Ulid,
+    pub id: FieldDefId,
     pub name: FieldName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -179,7 +178,7 @@ impl FieldDef {
     }
 }
 
-/// An entity definition — a template declaring which fields belong to an entity type.
+/// An entity definition -- a template declaring which fields belong to an entity type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityDef {
     pub name: EntityTypeName,
@@ -281,7 +280,7 @@ mod tests {
     #[test]
     fn field_def_yaml_round_trip() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "status".into(),
             description: Some("Current workflow state".into()),
             type_: FieldType::Select {
@@ -317,7 +316,7 @@ mod tests {
     #[test]
     fn field_def_type_renames_to_type_in_yaml() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "title".into(),
             description: None,
             type_: FieldType::Markdown { single_line: true },
@@ -372,7 +371,7 @@ mod tests {
     #[test]
     fn effective_editor_inferred() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "test".into(),
             description: None,
             type_: FieldType::Date,
@@ -390,7 +389,7 @@ mod tests {
     #[test]
     fn effective_editor_explicit_overrides() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "test".into(),
             description: None,
             type_: FieldType::Text { single_line: true },
@@ -408,7 +407,7 @@ mod tests {
     #[test]
     fn computed_field_infers_no_editor() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "tags".into(),
             description: None,
             type_: FieldType::Computed {
@@ -428,7 +427,7 @@ mod tests {
     #[test]
     fn reference_field_infers_editor_display() {
         let single = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "assignee".into(),
             description: None,
             type_: FieldType::Reference {
@@ -446,7 +445,7 @@ mod tests {
         assert_eq!(single.effective_display(), Display::Badge);
 
         let multi = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "assignees".into(),
             description: None,
             type_: FieldType::Reference {
@@ -650,7 +649,7 @@ fields:
     #[test]
     fn effective_sort_returns_lexical_when_none() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "test".into(),
             description: None,
             type_: FieldType::Text { single_line: true },
@@ -667,7 +666,7 @@ fields:
     #[test]
     fn effective_sort_returns_explicit_when_some() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "test".into(),
             description: None,
             type_: FieldType::Date,
@@ -684,7 +683,7 @@ fields:
     #[test]
     fn effective_sort_date_defaults_to_datetime() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "due".into(),
             description: None,
             type_: FieldType::Date,
@@ -701,7 +700,7 @@ fields:
     #[test]
     fn effective_sort_number_defaults_to_numeric() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "priority".into(),
             description: None,
             type_: FieldType::Number {
@@ -721,7 +720,7 @@ fields:
     #[test]
     fn effective_sort_select_defaults_to_option_order() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "status".into(),
             description: None,
             type_: FieldType::Select {
@@ -744,7 +743,7 @@ fields:
 
         // Also verify MultiSelect infers the same.
         let multi = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "tags".into(),
             description: None,
             type_: FieldType::MultiSelect {
@@ -769,7 +768,7 @@ fields:
     #[test]
     fn effective_sort_text_defaults_to_lexical() {
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "title".into(),
             description: None,
             type_: FieldType::Text { single_line: true },
@@ -787,7 +786,7 @@ fields:
     fn effective_sort_explicit_overrides_inference() {
         // Date would normally infer Datetime, but explicit Lexical overrides it.
         let field = FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: "created".into(),
             description: None,
             type_: FieldType::Date,

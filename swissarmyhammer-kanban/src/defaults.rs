@@ -324,7 +324,7 @@ mod tests {
     async fn parse_body_tags_derivation() {
         let engine = kanban_compute_engine();
         let field = swissarmyhammer_fields::FieldDef {
-            id: ulid::Ulid::new(),
+            id: swissarmyhammer_fields::FieldDefId::new(),
             name: "tags".into(),
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
@@ -353,7 +353,7 @@ mod tests {
     async fn parse_body_progress_derivation() {
         let engine = kanban_compute_engine();
         let field = swissarmyhammer_fields::FieldDef {
-            id: ulid::Ulid::new(),
+            id: swissarmyhammer_fields::FieldDefId::new(),
             name: "progress".into(),
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
@@ -402,7 +402,7 @@ mod tests {
     async fn parse_body_progress_empty_body() {
         let engine = kanban_compute_engine();
         let field = swissarmyhammer_fields::FieldDef {
-            id: ulid::Ulid::new(),
+            id: swissarmyhammer_fields::FieldDefId::new(),
             name: "progress".into(),
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {

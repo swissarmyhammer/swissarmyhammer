@@ -1,7 +1,7 @@
 //! Field registry and entity template system
 //!
 //! `swissarmyhammer-fields` is a standalone, schema-only crate that manages field
-//! definitions and entity templates. It knows nothing about kanban, tasks, or tags —
+//! definitions and entity templates. It knows nothing about kanban, tasks, or tags --
 //! consumers provide their own built-in definitions via YAML files.
 //!
 //! # Architecture
@@ -21,6 +21,6 @@ pub mod validation;
 pub use compute::{ComputeEngine, DeriveFn};
 pub use context::{load_yaml_dir, FieldsContext, FieldsContextBuilder};
 pub use error::{FieldsError, Result};
-pub use id_types::{EntityTypeName, FieldName};
+pub use id_types::{EntityTypeName, FieldDefId, FieldName};
 pub use types::{Display, Editor, EntityDef, FieldDef, FieldType, SelectOption, SortKind};
 pub use validation::{EntityLookup, ValidationEngine};

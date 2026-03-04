@@ -109,11 +109,11 @@ impl Default for ComputeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ulid::Ulid;
+    use crate::id_types::FieldDefId;
 
     fn make_computed_field(name: &str, derive: &str) -> FieldDef {
         FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: name.into(),
             description: None,
             type_: FieldType::Computed {
@@ -130,7 +130,7 @@ mod tests {
 
     fn make_text_field(name: &str) -> FieldDef {
         FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: name.into(),
             description: None,
             type_: FieldType::Text { single_line: true },

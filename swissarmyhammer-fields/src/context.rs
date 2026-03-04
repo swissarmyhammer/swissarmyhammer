@@ -1,22 +1,21 @@
-//! FieldsContext — main API surface for the fields registry.
+//! FieldsContext -- main API surface for the fields registry.
 //!
 //! Manages field definitions and entity templates. Provides in-memory
-//! indexes for fast lookup by both name and ULID.
+//! indexes for fast lookup by both name and ID.
 //!
 //! Two ways to create a FieldsContext:
 //!
-//! 1. `from_yaml_sources()` — from pre-loaded YAML content (VFS / embedded)
-//! 2. `open().build()` — from a directory on disk (for tests / standalone)
+//! 1. `from_yaml_sources()` -- from pre-loaded YAML content (VFS / embedded)
+//! 2. `open().build()` -- from a directory on disk (for tests / standalone)
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tokio::fs;
 use tracing::debug;
-use ulid::Ulid;
 
 use crate::error::{FieldsError, Result};
-use crate::id_types::{EntityTypeName, FieldName};
+use crate::id_types::{EntityTypeName, FieldDefId, FieldName};
 use crate::types::{EntityDef, FieldDef};
 
 /// Builder for `FieldsContext`. Created by `FieldsContext::open()`.
@@ -64,16 +63,16 @@ impl FieldsContextBuilder {
 /// Owns a writable directory on disk with the structure:
 /// ```text
 /// fields/
-///   definitions/    ← one .yaml per field
-///   entities/       ← one .yaml per entity type
-///   lib/            ← JS modules for validation
+///   definitions/    <- one .yaml per field
+///   entities/       <- one .yaml per entity type
+///   lib/            <- JS modules for validation
 /// ```
 pub struct FieldsContext {
     root: PathBuf,
     fields: Vec<FieldDef>,
     entities: Vec<EntityDef>,
     name_index: HashMap<FieldName, usize>,
-    id_index: HashMap<Ulid, usize>,
+    id_index: HashMap<FieldDefId, usize>,
     entity_index: HashMap<EntityTypeName, usize>,
 }
 
@@ -111,12 +110,13 @@ impl FieldsContext {
                     let idx = ctx.fields.len();
                     // Later entries override earlier ones (same name)
                     if let Some(&old_idx) = ctx.name_index.get(&def.name) {
-                        ctx.id_index.remove(&ctx.fields[old_idx].id);
+                        let old_id = ctx.fields[old_idx].id.clone();
+                        ctx.id_index.remove(&old_id);
                         ctx.fields[old_idx] = def.clone();
-                        ctx.id_index.insert(def.id, old_idx);
+                        ctx.id_index.insert(def.id.clone(), old_idx);
                     } else {
                         ctx.name_index.insert(def.name.clone(), idx);
-                        ctx.id_index.insert(def.id, idx);
+                        ctx.id_index.insert(def.id.clone(), idx);
                         ctx.fields.push(def);
                     }
                 }
@@ -168,9 +168,9 @@ impl FieldsContext {
         self.name_index.get(name).map(|&i| &self.fields[i])
     }
 
-    /// Get a field definition by ULID.
-    pub fn get_field_by_id(&self, id: &Ulid) -> Option<&FieldDef> {
-        self.id_index.get(id).map(|&i| &self.fields[i])
+    /// Get a field definition by ID.
+    pub fn get_field_by_id(&self, id: impl AsRef<str>) -> Option<&FieldDef> {
+        self.id_index.get(id.as_ref()).map(|&i| &self.fields[i])
     }
 
     /// All field definitions.
@@ -189,7 +189,7 @@ impl FieldsContext {
 
         // Update in-memory state
         if let Some(&idx) = self.id_index.get(&def.id) {
-            // Existing field — might be renamed
+            // Existing field -- might be renamed
             let old_name = self.fields[idx].name.clone();
             if old_name != def.name {
                 self.name_index.remove(&old_name);
@@ -204,14 +204,15 @@ impl FieldsContext {
             let idx = self.fields.len();
             self.fields.push(def.clone());
             self.name_index.insert(def.name.clone(), idx);
-            self.id_index.insert(def.id, idx);
+            self.id_index.insert(def.id.clone(), idx);
         }
 
         Ok(())
     }
 
-    /// Delete a field definition by ULID.
-    pub async fn delete_field(&mut self, id: &Ulid) -> Result<()> {
+    /// Delete a field definition by ID.
+    pub async fn delete_field(&mut self, id: impl AsRef<str>) -> Result<()> {
+        let id = id.as_ref();
         let idx = self
             .id_index
             .get(id)
@@ -223,15 +224,16 @@ impl FieldsContext {
         let _ = fs::remove_file(&path).await;
 
         let name = def.name.clone();
+        let field_id = def.id.clone();
         self.name_index.remove(&name);
-        self.id_index.remove(id);
+        self.id_index.remove(&field_id);
 
         // Swap-remove and fix indexes
         self.fields.swap_remove(idx);
         if idx < self.fields.len() {
             let moved = &self.fields[idx];
             self.name_index.insert(moved.name.clone(), idx);
-            self.id_index.insert(moved.id, idx);
+            self.id_index.insert(moved.id.clone(), idx);
         }
 
         Ok(())
@@ -283,9 +285,9 @@ impl FieldsContext {
             .collect()
     }
 
-    /// Resolve a field name to its ULID.
-    pub fn resolve_name_to_id(&self, name: &str) -> Option<Ulid> {
-        self.get_field_by_name(name).map(|f| f.id)
+    /// Resolve a field name to its ID.
+    pub fn resolve_name_to_id(&self, name: &str) -> Option<&FieldDefId> {
+        self.get_field_by_name(name).map(|f| &f.id)
     }
 
     /// The root directory path.
@@ -321,7 +323,7 @@ impl FieldsContext {
                 Ok(def) => {
                     let idx = self.fields.len();
                     self.name_index.insert(def.name.clone(), idx);
-                    self.id_index.insert(def.id, idx);
+                    self.id_index.insert(def.id.clone(), idx);
                     self.fields.push(def);
                 }
                 Err(e) => {
@@ -364,7 +366,7 @@ async fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no parent dir"))?;
-    let tmp = dir.join(format!(".tmp_{}", Ulid::new()));
+    let tmp = dir.join(format!(".tmp_{}", FieldDefId::new()));
     fs::write(&tmp, data).await?;
     fs::rename(&tmp, path).await?;
     Ok(())
@@ -411,12 +413,13 @@ pub fn load_yaml_dir(dir: &Path) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::id_types::FieldDefId;
     use crate::types::{Editor, EntityDef, FieldDef, FieldType};
     use tempfile::TempDir;
 
     fn make_test_field(name: &str) -> FieldDef {
         FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: name.into(),
             description: None,
             type_: FieldType::Text { single_line: true },
@@ -575,13 +578,13 @@ type:
         let mut ctx = FieldsContext::open(&root).build().await.unwrap();
 
         let field = make_test_field("status");
-        let id = field.id;
+        let id = field.id.clone();
         ctx.write_field(&field).await.unwrap();
 
         assert_eq!(ctx.all_fields().len(), 1);
         assert_eq!(ctx.get_field_by_name("status").unwrap().id, id);
         assert_eq!(ctx.get_field_by_id(&id).unwrap().name, "status");
-        assert_eq!(ctx.resolve_name_to_id("status"), Some(id));
+        assert_eq!(ctx.resolve_name_to_id("status"), Some(&id));
 
         let path = root.join("definitions/status.yaml");
         assert!(path.exists());
@@ -594,7 +597,7 @@ type:
         let mut ctx = FieldsContext::open(&root).build().await.unwrap();
 
         let mut field = make_test_field("status");
-        let id = field.id;
+        let id = field.id.clone();
         ctx.write_field(&field).await.unwrap();
 
         field.description = Some("Updated".into());
@@ -614,7 +617,7 @@ type:
         let mut ctx = FieldsContext::open(&root).build().await.unwrap();
 
         let mut field = make_test_field("status");
-        let id = field.id;
+        let id = field.id.clone();
         ctx.write_field(&field).await.unwrap();
 
         field.name = "state".into();
@@ -634,7 +637,7 @@ type:
         let mut ctx = FieldsContext::open(&root).build().await.unwrap();
 
         let field = make_test_field("status");
-        let id = field.id;
+        let id = field.id.clone();
         ctx.write_field(&field).await.unwrap();
         ctx.delete_field(&id).await.unwrap();
 
@@ -650,7 +653,7 @@ type:
         let root = tmp.path().join("fields");
         let mut ctx = FieldsContext::open(&root).build().await.unwrap();
 
-        let result = ctx.delete_field(&Ulid::new()).await;
+        let result = ctx.delete_field(&FieldDefId::new()).await;
         assert!(result.is_err());
     }
 
@@ -735,7 +738,7 @@ type:
         let fields: Vec<_> = ["title", "status", "priority", "due", "body"]
             .iter()
             .map(|n| FieldDef {
-                id: Ulid::new(),
+                id: FieldDefId::new(),
                 name: FieldName::from(*n),
                 description: None,
                 type_: FieldType::Text { single_line: true },
@@ -768,7 +771,7 @@ type:
         let f1 = make_test_field("a");
         let f2 = make_test_field("b");
         let f3 = make_test_field("c");
-        let id2 = f2.id;
+        let id2 = f2.id.clone();
 
         ctx.write_field(&f1).await.unwrap();
         ctx.write_field(&f2).await.unwrap();

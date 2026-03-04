@@ -20,6 +20,7 @@ define_id!(
     EntityTypeName,
     "An entity type name (e.g. \"task\", \"tag\", \"column\")"
 );
+define_id!(FieldDefId, "A field definition ID (ULID)");
 
 #[cfg(test)]
 mod tests {

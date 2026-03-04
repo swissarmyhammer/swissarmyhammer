@@ -228,8 +228,8 @@ impl Default for ValidationEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::id_types::FieldDefId;
     use crate::types::FieldType;
-    use ulid::Ulid;
 
     /// Test lookup that stores entities in memory
     struct MockLookup {
@@ -266,7 +266,7 @@ mod tests {
 
     fn make_field(name: &str, type_: FieldType) -> FieldDef {
         FieldDef {
-            id: Ulid::new(),
+            id: FieldDefId::new(),
             name: name.into(),
             description: None,
             type_,
