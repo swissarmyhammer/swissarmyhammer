@@ -4822,6 +4822,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "model-embedding"
+version = "0.8.0"
+dependencies = [
+ "async-trait",
+ "md5",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
