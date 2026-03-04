@@ -25,6 +25,6 @@ pub use context::EntityContext;
 pub use entity::Entity;
 pub use error::{EntityError, Result};
 pub use io::{
-    entity_extension, entity_file_path, read_entity, read_entity_dir, trash_entity_files,
-    write_entity,
+    entity_extension, entity_file_path, read_entity, read_entity_dir, restore_entity_files,
+    trash_entity_files, write_entity,
 };

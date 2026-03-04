@@ -395,12 +395,16 @@ impl KanbanContext {
     }
 
     /// Write an entity with automatic changelog.
-    pub async fn write_entity_generic(&self, entity: &Entity) -> Result<()> {
+    ///
+    /// Returns `Ok(Some(ulid))` when changes were logged, `Ok(None)` when no changes.
+    pub async fn write_entity_generic(&self, entity: &Entity) -> Result<Option<String>> {
         Ok(self.entity_context().await?.write(entity).await?)
     }
 
     /// Delete an entity by type and ID.
-    pub async fn delete_entity_generic(&self, entity_type: &str, id: &str) -> Result<()> {
+    ///
+    /// Returns `Ok(Some(ulid))` when a delete entry was logged, `Ok(None)` otherwise.
+    pub async fn delete_entity_generic(&self, entity_type: &str, id: &str) -> Result<Option<String>> {
         Ok(self.entity_context().await?.delete(entity_type, id).await?)
     }
 

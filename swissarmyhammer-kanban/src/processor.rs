@@ -4,6 +4,7 @@ use crate::types::default_column_entities;
 use crate::{KanbanContext, KanbanError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
+use swissarmyhammer_entity::EntityContext;
 use swissarmyhammer_operations::{Execute, LogEntry, OperationProcessor};
 
 /// Kanban-specific operation processor
@@ -52,8 +53,18 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
             }
         }
 
+        // Generate a transaction ID and set it on the EntityContext.
+        // All write/delete calls during operation execution get this stamped,
+        // enabling compound undo/redo as a single unit.
+        let tx_id = EntityContext::generate_transaction_id();
+        let ectx = ctx.entity_context().await?;
+        ectx.set_transaction(tx_id.clone()).await;
+
         // Execute the operation
         let exec_result = operation.execute(ctx).await;
+
+        // Clear the transaction after execution
+        ectx.clear_transaction().await;
 
         // Split into result and log entry
         let (result, mut log_entry) = exec_result.split();
@@ -75,7 +86,17 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
             }
         }
 
-        result
+        // Add the operation_id (transaction ULID) to the result JSON
+        // so callers can use it for undo/redo.
+        match result {
+            Ok(mut value) => {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("operation_id".to_string(), Value::String(tx_id));
+                }
+                Ok(value)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn write_log(

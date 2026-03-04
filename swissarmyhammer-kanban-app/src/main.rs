@@ -30,9 +30,6 @@ fn main() {
             commands::list_tasks,
             commands::move_task,
             commands::add_task,
-            commands::rename_column,
-            commands::update_task_title,
-            commands::update_task_description,
             commands::reorder_columns,
             commands::update_tag,
             commands::show_tag_context_menu,
@@ -45,6 +42,14 @@ fn main() {
             commands::set_keymap_mode,
             commands::get_entity_schema,
             commands::update_entity_field,
+            commands::delete_task,
+            commands::delete_tag,
+            commands::delete_column,
+            commands::delete_actor,
+            commands::delete_swimlane,
+            commands::delete_attachment,
+            commands::undo_operation,
+            commands::redo_operation,
         ])
         .setup(|app| {
             menu::rebuild_menu(app.handle());

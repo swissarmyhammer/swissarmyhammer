@@ -40,6 +40,10 @@ pub enum EntityError {
     #[error("patch apply error: {0}")]
     PatchApply(String),
 
+    /// A changelog ULID was not found in the index.
+    #[error("changelog entry not found: {ulid}")]
+    ChangelogEntryNotFound { ulid: String },
+
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

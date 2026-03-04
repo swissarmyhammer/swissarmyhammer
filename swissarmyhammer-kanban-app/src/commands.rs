@@ -5,12 +5,15 @@ use crate::state::AppState;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use swissarmyhammer_kanban::{
+    actor::DeleteActor,
+    attachment::DeleteAttachment,
     board::GetBoard,
-    column::UpdateColumn,
-    tag::UpdateTag,
-    task::{AddTask, ListTasks, MoveTask, UntagTask, UpdateTask},
+    column::{DeleteColumn, UpdateColumn},
+    swimlane::DeleteSwimlane,
+    tag::{DeleteTag, UpdateTag},
+    task::{AddTask, DeleteTask, ListTasks, MoveTask, UntagTask},
     types::{Ordinal, Position},
-    OperationProcessor,
+    EntityContext, OperationProcessor,
 };
 use tauri::menu::{ContextMenu, MenuBuilder, PredefinedMenuItem};
 use tauri::{AppHandle, State, Window};
@@ -173,63 +176,6 @@ pub async fn add_task(
     Ok(result)
 }
 
-/// Rename a column.
-#[tauri::command]
-pub async fn rename_column(
-    state: State<'_, AppState>,
-    id: String,
-    name: String,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-
-    let cmd = UpdateColumn::new(id).with_name(name);
-    let result = handle
-        .processor
-        .process(&cmd, &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(result)
-}
-
-/// Update a task's title.
-#[tauri::command]
-pub async fn update_task_title(
-    state: State<'_, AppState>,
-    id: String,
-    title: String,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-
-    let cmd = UpdateTask::new(id).with_title(title);
-    let result = handle
-        .processor
-        .process(&cmd, &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(result)
-}
-
-/// Update a task's description.
-#[tauri::command]
-pub async fn update_task_description(
-    state: State<'_, AppState>,
-    id: String,
-    description: String,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-
-    let cmd = UpdateTask::new(id).with_description(description);
-    let result = handle
-        .processor
-        .process(&cmd, &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(result)
-}
-
 /// Update a tag's name, color, or description.
 /// When name changes, bulk find-replaces `#old-name` → `#new-name` across all tasks.
 #[tauri::command]
@@ -306,7 +252,10 @@ pub async fn untag_task(
 }
 
 /// Reorder columns by updating their order fields.
-/// Takes a list of {id, order} pairs and applies them.
+///
+/// Takes a list of {id, order} pairs and applies them. Each column update
+/// goes through the processor and gets its own transaction. Returns the
+/// list of `operation_id` values (one per column updated).
 #[tauri::command]
 pub async fn reorder_columns(
     state: State<'_, AppState>,
@@ -314,16 +263,20 @@ pub async fn reorder_columns(
 ) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
 
+    let mut operation_ids: Vec<String> = Vec::new();
     for col in &columns {
         let cmd = UpdateColumn::new(col.id.clone()).with_order(col.order);
-        handle
+        let result = handle
             .processor
             .process(&cmd, &handle.ctx)
             .await
             .map_err(|e| e.to_string())?;
+        if let Some(op_id) = result.get("operation_id").and_then(|v| v.as_str()) {
+            operation_ids.push(op_id.to_string());
+        }
     }
 
-    Ok(json!({ "updated": columns.len() }))
+    Ok(json!({ "updated": columns.len(), "operation_ids": operation_ids }))
 }
 
 #[derive(serde::Deserialize)]
@@ -392,7 +345,8 @@ pub async fn get_entity_schema(
 
 /// Update a single field on an entity.
 ///
-/// Generic command that works with any entity type.
+/// Generic command that works with any entity type. Wraps the write in a
+/// transaction so the returned `operation_id` can be used for undo/redo.
 #[tauri::command]
 pub async fn update_entity_field(
     state: State<'_, AppState>,
@@ -424,7 +378,109 @@ pub async fn update_entity_field(
         entity.set(&field_name, value);
     }
 
+    // Wrap in a transaction so the operation_id is trackable for undo/redo
+    let tx_id = EntityContext::generate_transaction_id();
+    ectx.set_transaction(tx_id.clone()).await;
     ectx.write(&entity).await.map_err(|e| e.to_string())?;
+    ectx.clear_transaction().await;
 
-    Ok(entity.to_json())
+    let mut result = entity.to_json();
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert("operation_id".to_string(), Value::String(tx_id));
+    }
+    Ok(result)
+}
+
+/// Delete a task from the active board.
+#[tauri::command]
+pub async fn delete_task(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    handle
+        .processor
+        .process(&DeleteTask::new(id), &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a tag from the active board.
+#[tauri::command]
+pub async fn delete_tag(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    handle
+        .processor
+        .process(&DeleteTag::new(id), &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a column from the active board.
+#[tauri::command]
+pub async fn delete_column(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    handle
+        .processor
+        .process(&DeleteColumn::new(id), &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete an actor from the active board.
+#[tauri::command]
+pub async fn delete_actor(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    handle
+        .processor
+        .process(&DeleteActor::new(id), &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a swimlane from the active board.
+#[tauri::command]
+pub async fn delete_swimlane(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    handle
+        .processor
+        .process(&DeleteSwimlane::new(id), &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete an attachment from a task on the active board.
+#[tauri::command]
+pub async fn delete_attachment(
+    state: State<'_, AppState>,
+    task_id: String,
+    id: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    handle
+        .processor
+        .process(&DeleteAttachment::new(task_id, id), &handle.ctx)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Undo a previously executed operation by its ULID.
+///
+/// Accepts either a single changelog ULID or a transaction ULID (which
+/// undoes all constituent entries in reverse order).
+#[tauri::command]
+pub async fn undo_operation(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
+    let result_ulid = ectx.undo(&id).await.map_err(|e| e.to_string())?;
+    Ok(json!({ "undone": id, "operation_id": result_ulid }))
+}
+
+/// Redo a previously undone operation by its ULID.
+///
+/// Accepts either a single changelog ULID or a transaction ULID (which
+/// redoes all constituent entries in forward order).
+#[tauri::command]
+pub async fn redo_operation(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
+    let result_ulid = ectx.redo(&id).await.map_err(|e| e.to_string())?;
+    Ok(json!({ "redone": id, "operation_id": result_ulid }))
 }

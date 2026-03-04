@@ -94,6 +94,7 @@ pub use processor::KanbanOperationProcessor;
 
 // Re-export entity types for dynamic entity access
 pub use swissarmyhammer_entity::Entity;
+pub use swissarmyhammer_entity::EntityContext;
 pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
 
 // Re-export commonly used types

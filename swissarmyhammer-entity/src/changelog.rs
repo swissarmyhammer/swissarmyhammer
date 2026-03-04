@@ -67,27 +67,68 @@ pub enum FieldChange {
 pub struct ChangeEntry {
     pub id: String,
     pub timestamp: DateTime<Utc>,
+    #[serde(default)]
+    pub entity_type: String,
+    #[serde(default)]
+    pub entity_id: String,
     pub op: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<String>,
     pub changes: Vec<(String, FieldChange)>,
+    /// References the original changelog entry being undone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undone_id: Option<String>,
+    /// References the original changelog entry being redone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redone_id: Option<String>,
+    /// Groups entries into a logical transaction (for future use).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction_id: Option<String>,
 }
 
 impl ChangeEntry {
-    /// Create a new change entry with the given operation and changes.
-    pub fn new(op: impl Into<String>, changes: Vec<(String, FieldChange)>) -> Self {
+    /// Create a new change entry with the given entity type, entity ID, operation, and changes.
+    pub fn new(
+        entity_type: impl Into<String>,
+        entity_id: impl Into<String>,
+        op: impl Into<String>,
+        changes: Vec<(String, FieldChange)>,
+    ) -> Self {
         Self {
             id: Ulid::new().to_string(),
             timestamp: Utc::now(),
+            entity_type: entity_type.into(),
+            entity_id: entity_id.into(),
             op: op.into(),
             actor: None,
             changes,
+            undone_id: None,
+            redone_id: None,
+            transaction_id: None,
         }
     }
 
     /// Set the actor who made this change.
     pub fn with_actor(mut self, actor: impl Into<String>) -> Self {
         self.actor = Some(actor.into());
+        self
+    }
+
+    /// Set the ULID of the changelog entry being undone.
+    pub fn with_undone_id(mut self, ulid: impl Into<String>) -> Self {
+        self.undone_id = Some(ulid.into());
+        self
+    }
+
+    /// Set the ULID of the changelog entry being redone.
+    pub fn with_redone_id(mut self, ulid: impl Into<String>) -> Self {
+        self.redone_id = Some(ulid.into());
+        self
+    }
+
+    /// Set the transaction ID for grouping related entries.
+    pub fn with_transaction_id(mut self, txn_id: impl Into<String>) -> Self {
+        self.transaction_id = Some(txn_id.into());
         self
     }
 }
@@ -272,6 +313,21 @@ pub async fn read_changelog(path: &Path) -> Result<Vec<ChangeEntry>> {
         }
     }
 
+    Ok(entries)
+}
+
+/// Read all change entries, falling back to a secondary path if the primary does not exist.
+///
+/// Tries the `primary` path first. If the file is not found there, tries the `fallback` path.
+/// This is useful for reading changelogs of deleted entities whose files have been moved to trash.
+pub async fn read_changelog_with_fallback(
+    primary: &Path,
+    fallback: &Path,
+) -> Result<Vec<ChangeEntry>> {
+    let entries = read_changelog(primary).await?;
+    if entries.is_empty() && !primary.exists() {
+        return read_changelog(fallback).await;
+    }
     Ok(entries)
 }
 
@@ -595,6 +651,8 @@ mod tests {
     #[test]
     fn change_entry_serializes_to_json() {
         let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
             "update",
             vec![(
                 "title".to_string(),
@@ -629,6 +687,8 @@ mod tests {
         let log_path = dir.path().join("test.jsonl");
 
         let entry1 = ChangeEntry::new(
+            "task",
+            "01ABC",
             "create",
             vec![(
                 "title".to_string(),
@@ -638,6 +698,8 @@ mod tests {
             )],
         );
         let entry2 = ChangeEntry::new(
+            "task",
+            "01ABC",
             "update",
             vec![(
                 "title".to_string(),
@@ -672,6 +734,8 @@ mod tests {
 
         // Write a valid entry, a malformed line, and another valid entry
         let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
             "create",
             vec![(
                 "title".to_string(),

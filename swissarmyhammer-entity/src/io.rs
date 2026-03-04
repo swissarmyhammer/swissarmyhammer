@@ -200,6 +200,48 @@ pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Restore an entity's data file and changelog from a trash directory back to live storage.
+///
+/// Inverse of [`trash_entity_files`]. Moves both the data file (.yaml/.md) and
+/// the changelog (.jsonl) from the trash directory back to the original location.
+/// Creates the destination directory if it doesn't exist.
+/// Returns an error if the source files are not found in trash.
+pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
+    // Ensure the destination directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
+    // Move data file back from trash
+    {
+        let filename = path
+            .file_name()
+            .expect("entity path must have a filename");
+        let src = trash_dir.join(filename);
+        match fs::rename(&src, path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    // Move changelog back from trash
+    let log_path = path.with_extension("jsonl");
+    {
+        let log_filename = log_path
+            .file_name()
+            .expect("changelog path must have a filename");
+        let log_src = trash_dir.join(log_filename);
+        match fs::rename(&log_src, &log_path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(())
+}
+
 // --- Internal helpers ---
 
 /// Parse a frontmatter+body file into an Entity.
