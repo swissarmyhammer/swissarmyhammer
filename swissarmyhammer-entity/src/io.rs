@@ -212,7 +212,7 @@ pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
         fs::create_dir_all(parent).await?;
     }
 
-    // Move data file back from trash
+    // Move data file back from trash — error if missing (nothing to restore)
     {
         let filename = path
             .file_name()
@@ -220,7 +220,11 @@ pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
         let src = trash_dir.join(filename);
         match fs::rename(&src, path).await {
             Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(EntityError::RestoreFromTrashFailed {
+                    path: src,
+                });
+            }
             Err(e) => return Err(e.into()),
         }
     }
@@ -902,5 +906,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn restore_entity_files_missing_data_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live").join("bug.yaml");
+        let trash_dir = dir.path().join(".trash").join("tags");
+        // Create the trash directory but leave it empty — no data file to restore
+        fs::create_dir_all(&trash_dir).await.unwrap();
+
+        let result = restore_entity_files(&path, &trash_dir).await;
+        assert!(result.is_err(), "restore should fail when data file is missing in trash");
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot restore from trash"),
+            "error message should mention restore from trash, got: {msg}"
+        );
+        assert!(matches!(err, EntityError::RestoreFromTrashFailed { .. }));
+    }
+
+    #[tokio::test]
+    async fn restore_entity_files_missing_changelog_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let live_dir = dir.path().join("live");
+        let trash_dir = dir.path().join(".trash").join("tags");
+        fs::create_dir_all(&trash_dir).await.unwrap();
+
+        // Put only the data file in trash — no changelog
+        let data_content = "tag_name: bug\ncolor: ff0000\n";
+        fs::write(trash_dir.join("bug.yaml"), data_content).await.unwrap();
+
+        let path = live_dir.join("bug.yaml");
+        let result = restore_entity_files(&path, &trash_dir).await;
+        assert!(result.is_ok(), "restore should succeed when only changelog is missing");
+
+        // Data file should be back in the live dir
+        assert!(path.exists());
+        // Changelog should not exist (it was never there)
+        assert!(!path.with_extension("jsonl").exists());
     }
 }

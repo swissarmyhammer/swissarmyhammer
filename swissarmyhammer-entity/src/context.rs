@@ -355,7 +355,9 @@ impl EntityContext {
             "update" => self.undo_update(entity_type, entity_id, &original_entry).await,
             "create" => self.undo_create(entity_type, entity_id, &original_entry).await,
             "delete" => self.undo_delete(entity_type, entity_id, &original_entry).await,
-            _ => Ok(None),
+            other => Err(EntityError::UnsupportedUndoOp {
+                op: other.to_string(),
+            }),
         }
     }
 
@@ -363,11 +365,17 @@ impl EntityContext {
     ///
     /// Returns `Ok(Some(tx_ulid))` where `tx_ulid` is the original transaction ULID,
     /// to be used for redo.
+    ///
+    /// If an undo fails midway, attempts to roll back already-undone entries by
+    /// redoing them in forward order. Returns `TransactionPartialFailure` with
+    /// details about the failure and whether rollback succeeded.
     async fn undo_transaction(
         &self,
         tx_ulid: &str,
         entry_ulids: &[String],
     ) -> Result<Option<String>> {
+        let mut completed: Vec<String> = Vec::new();
+
         // Undo in reverse order so later writes are reversed before earlier ones
         for ulid in entry_ulids.iter().rev() {
             // Clone and drop the read guard before calling undo_single
@@ -376,7 +384,41 @@ impl EntityContext {
                 lookup.ok_or_else(|| EntityError::ChangelogEntryNotFound {
                     ulid: ulid.clone(),
                 })?;
-            self.undo_single(ulid, &entity_type, &entity_id).await?;
+
+            match self.undo_single(ulid, &entity_type, &entity_id).await {
+                Ok(_) => {
+                    completed.push(ulid.clone());
+                }
+                Err(e) => {
+                    // Attempt rollback: redo each completed entry in forward order
+                    // (reverse of the order they were undone) to restore consistency
+                    let mut rollback_succeeded = true;
+                    for done_ulid in completed.iter().rev() {
+                        let rb_lookup = self
+                            .changelog_index
+                            .read()
+                            .await
+                            .get(done_ulid.as_str())
+                            .cloned();
+                        if let Some((rb_type, rb_id)) = rb_lookup {
+                            if self.redo_single(done_ulid, &rb_type, &rb_id).await.is_err() {
+                                rollback_succeeded = false;
+                                break;
+                            }
+                        } else {
+                            rollback_succeeded = false;
+                            break;
+                        }
+                    }
+
+                    return Err(EntityError::TransactionPartialFailure {
+                        original_error: e.to_string(),
+                        completed,
+                        failed_entry: ulid.clone(),
+                        rollback_succeeded,
+                    });
+                }
+            }
         }
         Ok(Some(tx_ulid.to_string()))
     }
@@ -571,18 +613,26 @@ impl EntityContext {
             "update" => self.redo_update(entity_type, entity_id, &original_entry).await,
             "create" => self.redo_create(entity_type, entity_id, &original_entry).await,
             "delete" => self.redo_delete(entity_type, entity_id, &original_entry).await,
-            _ => Ok(None),
+            other => Err(EntityError::UnsupportedUndoOp {
+                op: other.to_string(),
+            }),
         }
     }
 
     /// Redo an entire transaction by redoing each constituent entry in forward order.
     ///
     /// Returns `Ok(Some(tx_ulid))` where `tx_ulid` is the original transaction ULID.
+    ///
+    /// If a redo fails midway, attempts to roll back already-redone entries by
+    /// undoing them in reverse order. Returns `TransactionPartialFailure` with
+    /// details about the failure and whether rollback succeeded.
     async fn redo_transaction(
         &self,
         tx_ulid: &str,
         entry_ulids: &[String],
     ) -> Result<Option<String>> {
+        let mut completed: Vec<String> = Vec::new();
+
         // Redo in forward order (same order they were originally executed)
         for ulid in entry_ulids.iter() {
             // Clone and drop the read guard before calling redo_single
@@ -591,7 +641,41 @@ impl EntityContext {
                 lookup.ok_or_else(|| EntityError::ChangelogEntryNotFound {
                     ulid: ulid.clone(),
                 })?;
-            self.redo_single(ulid, &entity_type, &entity_id).await?;
+
+            match self.redo_single(ulid, &entity_type, &entity_id).await {
+                Ok(_) => {
+                    completed.push(ulid.clone());
+                }
+                Err(e) => {
+                    // Attempt rollback: undo each completed entry in reverse order
+                    // to restore the pre-redo state
+                    let mut rollback_succeeded = true;
+                    for done_ulid in completed.iter().rev() {
+                        let rb_lookup = self
+                            .changelog_index
+                            .read()
+                            .await
+                            .get(done_ulid.as_str())
+                            .cloned();
+                        if let Some((rb_type, rb_id)) = rb_lookup {
+                            if self.undo_single(done_ulid, &rb_type, &rb_id).await.is_err() {
+                                rollback_succeeded = false;
+                                break;
+                            }
+                        } else {
+                            rollback_succeeded = false;
+                            break;
+                        }
+                    }
+
+                    return Err(EntityError::TransactionPartialFailure {
+                        original_error: e.to_string(),
+                        completed,
+                        failed_entry: ulid.clone(),
+                        rollback_succeeded,
+                    });
+                }
+            }
         }
         Ok(Some(tx_ulid.to_string()))
     }
@@ -897,37 +981,9 @@ impl EntityContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::test_fields_context;
     use serde_json::json;
-    use std::sync::Arc;
     use tempfile::TempDir;
-
-    fn test_fields_context() -> Arc<FieldsContext> {
-        let defs = vec![
-            (
-                "tag_name",
-                "id: 00000000000000000000000TAG\nname: tag_name\ntype:\n  kind: text\n  single_line: true\n",
-            ),
-            (
-                "color",
-                "id: 00000000000000000000000COL\nname: color\ntype:\n  kind: color\n",
-            ),
-            (
-                "title",
-                "id: 00000000000000000000000TTL\nname: title\ntype:\n  kind: text\n  single_line: true\n",
-            ),
-            (
-                "body",
-                "id: 00000000000000000000000BDY\nname: body\ntype:\n  kind: markdown\n",
-            ),
-        ];
-        let entities = vec![
-            ("tag", "name: tag\nfields:\n  - tag_name\n  - color\n"),
-            ("task", "name: task\nbody_field: body\nfields:\n  - title\n  - body\n"),
-        ];
-
-        let dir = TempDir::new().unwrap();
-        Arc::new(FieldsContext::from_yaml_sources(dir.path(), &defs, &entities).unwrap())
-    }
 
     #[tokio::test]
     async fn entity_dir_pluralizes() {

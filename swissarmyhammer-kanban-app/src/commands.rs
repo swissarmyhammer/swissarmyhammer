@@ -9,11 +9,12 @@ use swissarmyhammer_kanban::{
     attachment::DeleteAttachment,
     board::GetBoard,
     column::{DeleteColumn, UpdateColumn},
+    entity::UpdateEntityField,
     swimlane::DeleteSwimlane,
     tag::{DeleteTag, UpdateTag},
     task::{AddTask, DeleteTask, ListTasks, MoveTask, UntagTask},
     types::{Ordinal, Position},
-    EntityContext, OperationProcessor,
+    OperationProcessor,
 };
 use tauri::menu::{ContextMenu, MenuBuilder, PredefinedMenuItem};
 use tauri::{AppHandle, State, Window};
@@ -345,8 +346,9 @@ pub async fn get_entity_schema(
 
 /// Update a single field on an entity.
 ///
-/// Generic command that works with any entity type. Wraps the write in a
-/// transaction so the returned `operation_id` can be used for undo/redo.
+/// Generic command that works with any entity type. Routes through the
+/// KanbanOperationProcessor for automatic transaction management, activity
+/// logging, and auto-init.
 #[tauri::command]
 pub async fn update_entity_field(
     state: State<'_, AppState>,
@@ -356,39 +358,12 @@ pub async fn update_entity_field(
     value: Value,
 ) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
-    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
-
-    // Validate field_name against the entity's schema
-    let entity_def = ectx.entity_def(&entity_type).map_err(|e| e.to_string())?;
-    if !entity_def.fields.contains(&field_name) {
-        return Err(format!(
-            "field '{}' is not defined for entity type '{}'",
-            field_name, entity_type
-        ));
-    }
-
-    let mut entity = ectx
-        .read(&entity_type, &id)
+    let op = UpdateEntityField::new(entity_type, id, field_name, value);
+    handle
+        .processor
+        .process(&op, &handle.ctx)
         .await
-        .map_err(|e| e.to_string())?;
-
-    if value.is_null() {
-        entity.remove(&field_name);
-    } else {
-        entity.set(&field_name, value);
-    }
-
-    // Wrap in a transaction so the operation_id is trackable for undo/redo
-    let tx_id = EntityContext::generate_transaction_id();
-    ectx.set_transaction(tx_id.clone()).await;
-    ectx.write(&entity).await.map_err(|e| e.to_string())?;
-    ectx.clear_transaction().await;
-
-    let mut result = entity.to_json();
-    if let Some(obj) = result.as_object_mut() {
-        obj.insert("operation_id".to_string(), Value::String(tx_id));
-    }
-    Ok(result)
+        .map_err(|e| e.to_string())
 }
 
 /// Delete a task from the active board.

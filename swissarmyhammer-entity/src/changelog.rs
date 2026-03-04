@@ -243,7 +243,20 @@ pub fn apply_changes(entity: &mut Entity, changes: &[(String, FieldChange)]) -> 
             FieldChange::Removed { .. } => {
                 entity.remove(key);
             }
-            FieldChange::Changed { new_value, .. } => {
+            FieldChange::Changed { old_value, new_value } => {
+                // Stale detection: the entity's current value must match old_value.
+                // For forward changes, old_value is the pre-change value.
+                // For reversed changes (undo), reverse_changes swaps old/new,
+                // so old_value is the value we expect to find in the entity.
+                if let Some(current) = entity.get(key) {
+                    if current != old_value {
+                        return Err(crate::error::EntityError::StaleChange {
+                            field: key.clone(),
+                            expected: old_value.clone(),
+                            actual: current.clone(),
+                        });
+                    }
+                }
                 entity.set(key, new_value.clone());
             }
             FieldChange::TextDiff { forward_patch, .. } => {
@@ -994,5 +1007,84 @@ mod tests {
             let parsed: FieldChange = serde_json::from_str(&json).unwrap();
             assert_eq!(*variant, parsed, "round-trip failed for: {}", json);
         }
+    }
+
+    #[test]
+    fn apply_changed_stale_value_returns_error() {
+        // Entity has count=99, but the change expects old_value=1.
+        // This is stale — apply_changes should reject it.
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set("count", serde_json::json!(99));
+        let changes = vec![(
+            "count".to_string(),
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+        )];
+        let result = apply_changes(&mut entity, &changes);
+        assert!(result.is_err(), "stale Changed should error");
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("stale"), "error should mention stale: {}", msg);
+        assert!(msg.contains("count"), "error should mention field name: {}", msg);
+        // Entity should NOT have been modified
+        assert_eq!(entity.get_i64("count"), Some(99));
+    }
+
+    #[test]
+    fn apply_changed_matching_value_succeeds() {
+        // Entity has count=1, change expects old_value=1 — should apply fine.
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set("count", serde_json::json!(1));
+        let changes = vec![(
+            "count".to_string(),
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+        )];
+        apply_changes(&mut entity, &changes).unwrap();
+        assert_eq!(entity.get_i64("count"), Some(2));
+    }
+
+    #[test]
+    fn apply_changed_missing_field_applies_without_error() {
+        // Entity does NOT have the field at all. The Changed variant should
+        // still apply (field was missing, old_value check is skipped when
+        // there's no current value).
+        let mut entity = Entity::new("task", "01ABC");
+        let changes = vec![(
+            "count".to_string(),
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+        )];
+        apply_changes(&mut entity, &changes).unwrap();
+        assert_eq!(entity.get_i64("count"), Some(2));
+    }
+
+    #[test]
+    fn apply_reversed_changed_stale_value_returns_error() {
+        // Simulate an undo scenario where the entity has been modified since
+        // the original change. reverse_changes swaps old/new, so the reversed
+        // old_value is the original new_value. If the entity doesn't match,
+        // it's stale.
+        let original_changes = vec![(
+            "order".to_string(),
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+        )];
+        let reversed = reverse_changes(&original_changes);
+
+        // Entity currently has order=99 (stale), but the reversed change
+        // expects old_value=2 (the original new_value).
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set("order", serde_json::json!(99));
+        let result = apply_changes(&mut entity, &reversed);
+        assert!(result.is_err(), "stale reversed Changed should error");
     }
 }

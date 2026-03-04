@@ -60,7 +60,7 @@ pub enum FieldType {
 }
 
 /// How a field value is edited.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum Editor {
     Markdown,
@@ -73,7 +73,7 @@ pub enum Editor {
 }
 
 /// How a field value is displayed.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum Display {
     Markdown,
@@ -87,7 +87,7 @@ pub enum Display {
 }
 
 /// How a field sorts.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum SortKind {
     Alphanumeric,
@@ -163,12 +163,17 @@ impl FieldDef {
         }
     }
 
-    /// Return the explicit sort kind, or `Lexical` as the default.
+    /// Infer sort kind from field type if not explicitly set.
     pub fn effective_sort(&self) -> SortKind {
         if let Some(ref s) = self.sort {
             return s.clone();
         }
-        SortKind::Lexical
+        match &self.type_ {
+            FieldType::Date => SortKind::Datetime,
+            FieldType::Number { .. } => SortKind::Numeric,
+            FieldType::Select { .. } | FieldType::MultiSelect { .. } => SortKind::OptionOrder,
+            _ => SortKind::Lexical,
+        }
     }
 }
 
@@ -672,5 +677,125 @@ fields:
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Datetime);
+    }
+
+    #[test]
+    fn effective_sort_date_defaults_to_datetime() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "due".into(),
+            description: None,
+            type_: FieldType::Date,
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Datetime);
+    }
+
+    #[test]
+    fn effective_sort_number_defaults_to_numeric() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "priority".into(),
+            description: None,
+            type_: FieldType::Number {
+                min: None,
+                max: None,
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Numeric);
+    }
+
+    #[test]
+    fn effective_sort_select_defaults_to_option_order() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "status".into(),
+            description: None,
+            type_: FieldType::Select {
+                options: vec![SelectOption {
+                    value: "A".into(),
+                    label: None,
+                    color: None,
+                    icon: None,
+                    order: 0,
+                }],
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::OptionOrder);
+
+        // Also verify MultiSelect infers the same.
+        let multi = FieldDef {
+            id: Ulid::new(),
+            name: "tags".into(),
+            description: None,
+            type_: FieldType::MultiSelect {
+                options: vec![SelectOption {
+                    value: "X".into(),
+                    label: None,
+                    color: None,
+                    icon: None,
+                    order: 0,
+                }],
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(multi.effective_sort(), SortKind::OptionOrder);
+    }
+
+    #[test]
+    fn effective_sort_text_defaults_to_lexical() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "title".into(),
+            description: None,
+            type_: FieldType::Text { single_line: true },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn effective_sort_explicit_overrides_inference() {
+        // Date would normally infer Datetime, but explicit Lexical overrides it.
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "created".into(),
+            description: None,
+            type_: FieldType::Date,
+            default: None,
+            editor: None,
+            display: None,
+            sort: Some(SortKind::Lexical),
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
 }

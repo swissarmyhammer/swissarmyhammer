@@ -92,15 +92,23 @@ impl ValidationEngine {
         });
 
         // Build a self-executing function that:
-        // 1. Creates the ctx object
+        // 1. Creates the ctx object via JSON.parse (safe from injection)
         // 2. Runs the validation function body
         // 3. Returns the result (or throws)
+        //
+        // We double-encode: serde_json::to_string on the JSON string produces
+        // a properly escaped JS string literal (with quotes). JSON.parse then
+        // safely reconstructs the object. No JS syntax injection is possible
+        // because the data is always inside a string literal.
+        let ctx_json_str = serde_json::to_string(&ctx_obj).unwrap_or_default();
+        let ctx_json_string_literal =
+            serde_json::to_string(&ctx_json_str).unwrap_or_default();
         let js_code = format!(
             r#"(function() {{
-    var ctx = {ctx_json};
+    var ctx = JSON.parse({ctx_json_string});
     {validate_body}
 }})()"#,
-            ctx_json = serde_json::to_string(&ctx_obj).unwrap_or_default(),
+            ctx_json_string = ctx_json_string_literal,
             validate_body = validate_fn.trim(),
         );
 
@@ -181,12 +189,17 @@ impl ValidationEngine {
             "fields": fields.clone(),
         });
 
+        // Double-encode via JSON.parse to prevent JS injection.
+        // See run_js_validation for detailed rationale.
+        let ctx_json_str = serde_json::to_string(&ctx_obj).unwrap_or_default();
+        let ctx_json_string_literal =
+            serde_json::to_string(&ctx_json_str).unwrap_or_default();
         let js_code = format!(
             r#"(function() {{
-    var ctx = {ctx_json};
+    var ctx = JSON.parse({ctx_json_string});
     {validate_body}
 }})()"#,
-            ctx_json = serde_json::to_string(&ctx_obj).unwrap_or_default(),
+            ctx_json_string = ctx_json_string_literal,
             validate_body = validate_fn.trim(),
         );
 
@@ -533,5 +546,79 @@ mod tests {
 
         let result = engine.validate_entity(&entity_def, &mut fields).await;
         assert!(result.is_err());
+    }
+
+    /// Adversarial test: field values that look like JS code injection attempts
+    /// must be treated as data, not executed as code.
+    #[tokio::test]
+    async fn field_validation_resists_js_injection_in_value() {
+        let engine = ValidationEngine::new();
+        let mut field = make_field("title", FieldType::Text { single_line: true });
+        // Simple passthrough — just return the value unchanged
+        field.validate = Some("return ctx.value;".to_string());
+
+        // This adversarial value would break out of the old `var ctx = {json};`
+        // pattern if interpolated directly, executing arbitrary code.
+        let adversarial = r#"}})(); globalThis.__pwned = true; (function(){"#;
+        let value = serde_json::json!(adversarial);
+
+        let result = engine
+            .validate(&field, value.clone(), &HashMap::new())
+            .await;
+        assert!(result.is_ok(), "validation should succeed, got: {:?}", result);
+        assert_eq!(
+            result.unwrap(),
+            value,
+            "adversarial value must pass through unchanged as data"
+        );
+    }
+
+    /// Adversarial test: sibling field values containing JS injection attempts
+    /// must be treated as data within the ctx.fields object.
+    #[tokio::test]
+    async fn field_validation_resists_js_injection_in_siblings() {
+        let engine = ValidationEngine::new();
+        let mut field = make_field("safe", FieldType::Text { single_line: true });
+        field.validate = Some("return ctx.fields.evil;".to_string());
+
+        let mut siblings = HashMap::new();
+        let adversarial = r#"}})(); globalThis.__pwned2 = true; (function(){"#;
+        siblings.insert("evil".to_string(), serde_json::json!(adversarial));
+
+        let result = engine
+            .validate(&field, serde_json::json!("ok"), &siblings)
+            .await;
+        assert!(result.is_ok(), "validation should succeed, got: {:?}", result);
+        assert_eq!(
+            result.unwrap(),
+            serde_json::json!(adversarial),
+            "adversarial sibling value must be returned as data"
+        );
+    }
+
+    /// Adversarial test: entity-level validation with injected field values
+    /// must not execute the malicious payload.
+    #[tokio::test]
+    async fn entity_validation_resists_js_injection() {
+        let engine = ValidationEngine::new();
+        let entity_def = EntityDef {
+            name: "task".into(),
+            body_field: None,
+            fields: vec!["title".into()],
+            validate: Some("return ctx.fields;".to_string()),
+        };
+
+        let adversarial = r#"}})(); globalThis.__pwned3 = true; (function(){"#;
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!(adversarial));
+
+        let result = engine.validate_entity(&entity_def, &mut fields).await;
+        assert!(result.is_ok(), "entity validation should succeed, got: {:?}", result);
+        // The adversarial string should remain as-is in the title field
+        assert_eq!(
+            fields.get("title").unwrap(),
+            &serde_json::json!(adversarial),
+            "adversarial field value must not be altered"
+        );
     }
 }

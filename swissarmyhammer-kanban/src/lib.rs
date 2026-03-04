@@ -77,6 +77,7 @@ pub mod actor;
 pub mod attachment;
 pub mod board;
 pub mod column;
+pub mod entity;
 pub mod schema;
 pub mod swimlane;
 pub mod tag;

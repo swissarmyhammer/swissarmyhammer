@@ -5,47 +5,10 @@
 //! cycles. Basic round-trip tests already exist in `context.rs` unit tests;
 //! this file adds thorough coverage for sequences and edge cases.
 
-use std::sync::Arc;
-
 use serde_json::json;
+use swissarmyhammer_entity::test_utils::test_fields_context;
 use swissarmyhammer_entity::{Entity, EntityContext};
-use swissarmyhammer_fields::FieldsContext;
 use tempfile::TempDir;
-
-/// Build a FieldsContext with tag and task entity types for testing.
-///
-/// Tag: plain YAML entity with tag_name and color fields.
-/// Task: frontmatter+body entity with title and body fields.
-fn test_fields_context() -> Arc<FieldsContext> {
-    let defs = vec![
-        (
-            "tag_name",
-            "id: 00000000000000000000000TAG\nname: tag_name\ntype:\n  kind: text\n  single_line: true\n",
-        ),
-        (
-            "color",
-            "id: 00000000000000000000000COL\nname: color\ntype:\n  kind: color\n",
-        ),
-        (
-            "title",
-            "id: 00000000000000000000000TTL\nname: title\ntype:\n  kind: text\n  single_line: true\n",
-        ),
-        (
-            "body",
-            "id: 00000000000000000000000BDY\nname: body\ntype:\n  kind: markdown\n",
-        ),
-    ];
-    let entities = vec![
-        ("tag", "name: tag\nfields:\n  - tag_name\n  - color\n"),
-        (
-            "task",
-            "name: task\nbody_field: body\nfields:\n  - title\n  - body\n",
-        ),
-    ];
-
-    let dir = TempDir::new().unwrap();
-    Arc::new(FieldsContext::from_yaml_sources(dir.path(), &defs, &entities).unwrap())
-}
 
 // =========================================================================
 // Basic round-trips
@@ -496,7 +459,11 @@ async fn undo_create_after_modification_trashes_modified_entity() {
     assert!(trash_dir.join("t1.yaml").exists());
 }
 
-/// Undo of delete when trash files have been manually removed should error gracefully.
+/// Undo of delete when trash data file has been manually removed should error.
+///
+/// The restore_entity_files function requires the data file to be present
+/// in trash. If someone manually deletes it, undo must fail with a clear error
+/// rather than silently succeeding with nothing restored.
 #[tokio::test]
 async fn undo_delete_missing_trash_files_returns_error_or_empty() {
     let dir = TempDir::new().unwrap();
@@ -508,27 +475,49 @@ async fn undo_delete_missing_trash_files_returns_error_or_empty() {
 
     let delete_ulid = ctx.delete("tag", "t1").await.unwrap().unwrap();
 
-    // Manually remove the trash files
+    // Manually remove both trash files
     let trash_dir = dir.path().join(".trash").join("tags");
     let _ = tokio::fs::remove_file(trash_dir.join("t1.yaml")).await;
     let _ = tokio::fs::remove_file(trash_dir.join("t1.jsonl")).await;
 
-    // Attempting to undo should fail (can't read entity from trash,
-    // or can't find changelog in trash)
+    // Attempting to undo must fail — the trash files are gone.
+    // May error on changelog lookup or on restore_entity_files depending
+    // on which file is checked first.
     let result = ctx.undo(&delete_ulid).await;
-    // The undo should either error (can't find trash files) or succeed
-    // but produce an entity that can't be read. Either way, the entity
-    // should not be magically readable.
-    if result.is_ok() {
-        // If restore_entity_files silently succeeds when files are missing,
-        // the read will fail because the entity file doesn't exist
-        let read_result = ctx.read("tag", "t1").await;
-        assert!(
-            read_result.is_err(),
-            "entity should not be readable after trash files were removed"
-        );
-    }
-    // If result is Err, that's also acceptable - the test passes
+    assert!(
+        result.is_err(),
+        "undo of delete should fail when trash files are missing"
+    );
+}
+
+/// Undo of delete when only the trash data file is removed (changelog still present)
+/// should error with RestoreFromTrashFailed.
+#[tokio::test]
+async fn undo_delete_missing_trash_data_file_returns_restore_error() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Bug"));
+    ctx.write(&tag).await.unwrap();
+
+    let delete_ulid = ctx.delete("tag", "t1").await.unwrap().unwrap();
+
+    // Remove only the data file — leave the changelog so undo_single can
+    // find the original entry and reach restore_entity_files
+    let trash_dir = dir.path().join(".trash").join("tags");
+    let _ = tokio::fs::remove_file(trash_dir.join("t1.yaml")).await;
+
+    let result = ctx.undo(&delete_ulid).await;
+    assert!(
+        result.is_err(),
+        "undo of delete should fail when trash data file is missing"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("cannot restore from trash"),
+        "error should mention restore from trash, got: {err}"
+    );
 }
 
 /// Empty changes (write with no actual diff) -- no changelog entry, returns None.
@@ -1038,4 +1027,486 @@ async fn list_includes_undone_deleted_entity() {
     ctx.undo(&delete_ulid).await.unwrap();
     let tags = ctx.list("tag").await.unwrap();
     assert_eq!(tags.len(), 2);
+}
+
+// =========================================================================
+// Partial transaction undo/redo failure with rollback
+// =========================================================================
+
+/// Transaction undo where one entry fails midway should roll back completed
+/// entries and return TransactionPartialFailure with rollback_succeeded = true.
+///
+/// Setup: create a transaction with two updates across two entities. Make one
+/// entity stale so its undo fails. The other entity's undo should be rolled back.
+#[tokio::test]
+async fn partial_transaction_undo_rolls_back_on_failure() {
+    use swissarmyhammer_entity::EntityError;
+
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    // Create two tags
+    let mut tag_a = Entity::new("tag", "a");
+    tag_a.set("tag_name", json!("AlphaOrig"));
+    ctx.write(&tag_a).await.unwrap();
+
+    let mut tag_b = Entity::new("tag", "b");
+    tag_b.set("tag_name", json!("BetaOrig"));
+    ctx.write(&tag_b).await.unwrap();
+
+    // Create a transaction that updates both tags
+    let tx_id = EntityContext::generate_transaction_id();
+    ctx.set_transaction(tx_id.clone()).await;
+
+    tag_a.set("tag_name", json!("AlphaNew"));
+    ctx.write(&tag_a).await.unwrap();
+
+    tag_b.set("tag_name", json!("BetaNew"));
+    ctx.write(&tag_b).await.unwrap();
+
+    ctx.clear_transaction().await;
+
+    // Verify transaction state
+    let loaded_a = ctx.read("tag", "a").await.unwrap();
+    assert_eq!(loaded_a.get_str("tag_name"), Some("AlphaNew"));
+    let loaded_b = ctx.read("tag", "b").await.unwrap();
+    assert_eq!(loaded_b.get_str("tag_name"), Some("BetaNew"));
+
+    // Make tag_a stale by writing another update OUTSIDE the transaction.
+    // Transaction undo reverses entries in reverse order: first undo B, then A.
+    // A is stale so its undo will fail after B has been undone.
+    tag_a.set("tag_name", json!("AlphaStale"));
+    ctx.write(&tag_a).await.unwrap();
+
+    // Attempt to undo the transaction — should fail with TransactionPartialFailure
+    let result = ctx.undo(&tx_id).await;
+    assert!(result.is_err(), "undo should fail due to stale entry");
+
+    let err = result.unwrap_err();
+    match &err {
+        EntityError::TransactionPartialFailure {
+            original_error,
+            completed,
+            failed_entry: _,
+            rollback_succeeded,
+        } => {
+            // B was undone first (reverse order), then A failed
+            assert_eq!(completed.len(), 1, "one entry should have been completed before failure");
+            assert!(
+                original_error.contains("patch"),
+                "original error should be about patch failure, got: {}",
+                original_error
+            );
+            assert!(
+                *rollback_succeeded,
+                "rollback should succeed (re-redo the undone B entry)"
+            );
+        }
+        other => panic!(
+            "expected TransactionPartialFailure, got: {:?}",
+            other
+        ),
+    }
+
+    // After successful rollback, both entities should be in their
+    // post-transaction state (plus the stale write on A)
+    let loaded_a = ctx.read("tag", "a").await.unwrap();
+    assert_eq!(
+        loaded_a.get_str("tag_name"),
+        Some("AlphaStale"),
+        "tag A should still have the stale value"
+    );
+
+    let loaded_b = ctx.read("tag", "b").await.unwrap();
+    assert_eq!(
+        loaded_b.get_str("tag_name"),
+        Some("BetaNew"),
+        "tag B should be rolled back to post-transaction state"
+    );
+}
+
+/// Transaction redo where one entry fails midway should roll back completed
+/// entries and return TransactionPartialFailure.
+#[tokio::test]
+async fn partial_transaction_redo_rolls_back_on_failure() {
+    use swissarmyhammer_entity::EntityError;
+
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    // Create two tags
+    let mut tag_a = Entity::new("tag", "a");
+    tag_a.set("tag_name", json!("AlphaOrig"));
+    ctx.write(&tag_a).await.unwrap();
+
+    let mut tag_b = Entity::new("tag", "b");
+    tag_b.set("tag_name", json!("BetaOrig"));
+    ctx.write(&tag_b).await.unwrap();
+
+    // Create a transaction that updates both tags
+    let tx_id = EntityContext::generate_transaction_id();
+    ctx.set_transaction(tx_id.clone()).await;
+
+    tag_a.set("tag_name", json!("AlphaNew"));
+    ctx.write(&tag_a).await.unwrap();
+
+    tag_b.set("tag_name", json!("BetaNew"));
+    ctx.write(&tag_b).await.unwrap();
+
+    ctx.clear_transaction().await;
+
+    // Undo the whole transaction (clean undo, no staleness)
+    ctx.undo(&tx_id).await.unwrap();
+
+    // Verify undo worked
+    let loaded_a = ctx.read("tag", "a").await.unwrap();
+    assert_eq!(loaded_a.get_str("tag_name"), Some("AlphaOrig"));
+    let loaded_b = ctx.read("tag", "b").await.unwrap();
+    assert_eq!(loaded_b.get_str("tag_name"), Some("BetaOrig"));
+
+    // Make tag_b stale by writing another update.
+    // Redo processes entries in forward order: A first, then B.
+    // B is stale so its redo will fail after A has been redone.
+    tag_b.set("tag_name", json!("BetaStale"));
+    ctx.write(&tag_b).await.unwrap();
+
+    // Attempt to redo the transaction — should fail with TransactionPartialFailure
+    let result = ctx.redo(&tx_id).await;
+    assert!(result.is_err(), "redo should fail due to stale entry");
+
+    let err = result.unwrap_err();
+    match &err {
+        EntityError::TransactionPartialFailure {
+            original_error,
+            completed,
+            failed_entry: _,
+            rollback_succeeded,
+        } => {
+            // A was redone first (forward order), then B failed
+            assert_eq!(completed.len(), 1, "one entry should have been completed before failure");
+            assert!(
+                original_error.contains("patch"),
+                "original error should be about patch failure, got: {}",
+                original_error
+            );
+            assert!(
+                *rollback_succeeded,
+                "rollback should succeed (re-undo the redone A entry)"
+            );
+        }
+        other => panic!(
+            "expected TransactionPartialFailure, got: {:?}",
+            other
+        ),
+    }
+
+    // After successful rollback, entities should be in their pre-redo state
+    let loaded_a = ctx.read("tag", "a").await.unwrap();
+    assert_eq!(
+        loaded_a.get_str("tag_name"),
+        Some("AlphaOrig"),
+        "tag A should be rolled back to pre-redo state"
+    );
+
+    let loaded_b = ctx.read("tag", "b").await.unwrap();
+    assert_eq!(
+        loaded_b.get_str("tag_name"),
+        Some("BetaStale"),
+        "tag B should still have the stale value"
+    );
+}
+
+/// Transaction undo where a single entry succeeds cleanly should
+/// still work as before (no rollback needed).
+#[tokio::test]
+async fn transaction_undo_succeeds_when_all_entries_are_clean() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    // Create two tags
+    let mut tag_a = Entity::new("tag", "a");
+    tag_a.set("tag_name", json!("AlphaOrig"));
+    ctx.write(&tag_a).await.unwrap();
+
+    let mut tag_b = Entity::new("tag", "b");
+    tag_b.set("tag_name", json!("BetaOrig"));
+    ctx.write(&tag_b).await.unwrap();
+
+    // Create a transaction that updates both
+    let tx_id = EntityContext::generate_transaction_id();
+    ctx.set_transaction(tx_id.clone()).await;
+
+    tag_a.set("tag_name", json!("AlphaNew"));
+    ctx.write(&tag_a).await.unwrap();
+
+    tag_b.set("tag_name", json!("BetaNew"));
+    ctx.write(&tag_b).await.unwrap();
+
+    ctx.clear_transaction().await;
+
+    // Undo the transaction (no staleness — should succeed cleanly)
+    ctx.undo(&tx_id).await.unwrap();
+
+    let loaded_a = ctx.read("tag", "a").await.unwrap();
+    assert_eq!(loaded_a.get_str("tag_name"), Some("AlphaOrig"));
+    let loaded_b = ctx.read("tag", "b").await.unwrap();
+    assert_eq!(loaded_b.get_str("tag_name"), Some("BetaOrig"));
+
+    // Redo should also work cleanly
+    ctx.redo(&tx_id).await.unwrap();
+
+    let loaded_a = ctx.read("tag", "a").await.unwrap();
+    assert_eq!(loaded_a.get_str("tag_name"), Some("AlphaNew"));
+    let loaded_b = ctx.read("tag", "b").await.unwrap();
+    assert_eq!(loaded_b.get_str("tag_name"), Some("BetaNew"));
+}
+
+/// TransactionPartialFailure error message includes useful information.
+#[tokio::test]
+async fn partial_failure_error_display_is_informative() {
+    use swissarmyhammer_entity::EntityError;
+
+    let err = EntityError::TransactionPartialFailure {
+        original_error: "patch apply error: context mismatch".to_string(),
+        completed: vec!["ULID_A".to_string(), "ULID_B".to_string()],
+        failed_entry: "ULID_C".to_string(),
+        rollback_succeeded: true,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("ULID_C"), "should mention the failed entry");
+    assert!(msg.contains("2 entries"), "should mention completed count");
+    assert!(msg.contains("succeeded"), "should mention rollback status");
+
+    let err_failed = EntityError::TransactionPartialFailure {
+        original_error: "some error".to_string(),
+        completed: vec!["ULID_X".to_string()],
+        failed_entry: "ULID_Y".to_string(),
+        rollback_succeeded: false,
+    };
+    let msg_failed = err_failed.to_string();
+    assert!(msg_failed.contains("failed"), "should mention rollback failed");
+}
+
+// =========================================================================
+// Non-string stale detection
+// =========================================================================
+
+/// Update a non-string field (JSON number), modify the entity behind the
+/// changelog's back, then undo. The undo should fail because the current value
+/// no longer matches what the changelog entry expects.
+///
+/// Uses JSON numbers to ensure the diff produces `Changed` (not `TextDiff`),
+/// exercising the new stale detection on the Changed variant.
+#[tokio::test]
+async fn non_string_stale_undo_errors() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    // Create tag with a numeric "color" value (non-string → Changed diff)
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Red"));
+    tag.set("color", json!(100));
+    ctx.write(&tag).await.unwrap();
+
+    // Update color from 100 → 200 (produces a Changed changelog entry)
+    tag.set("color", json!(200));
+    let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+    // Modify color to 999 behind the changelog's back.
+    // The entity now has color=999 but the changelog expects color=200 for undo.
+    tag.set("color", json!(999));
+    ctx.write(&tag).await.unwrap();
+
+    // Attempt undo — should fail because current (999) != expected (200)
+    let result = ctx.undo(&update_ulid).await;
+    assert!(
+        result.is_err(),
+        "undo of a stale non-string field should fail"
+    );
+
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("stale"),
+        "error should mention stale change, got: {}",
+        msg
+    );
+    assert!(
+        msg.contains("color"),
+        "error should mention the field name, got: {}",
+        msg
+    );
+}
+
+/// Update a non-string field, undo it, modify the entity behind the
+/// changelog's back, then redo. The redo should fail because the current
+/// value no longer matches what the changelog entry expects.
+#[tokio::test]
+async fn non_string_stale_redo_errors() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    // Create tag with numeric color
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Red"));
+    tag.set("color", json!(100));
+    ctx.write(&tag).await.unwrap();
+
+    // Update color from 100 → 200
+    tag.set("color", json!(200));
+    let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+    // Undo the update (clean — should succeed, restores color to 100)
+    ctx.undo(&update_ulid).await.unwrap();
+    let after_undo = ctx.read("tag", "t1").await.unwrap();
+    assert_eq!(after_undo.get_i64("color"), Some(100));
+
+    // Modify color to 999 behind the changelog's back
+    let mut stale_tag = after_undo.clone();
+    stale_tag.set("color", json!(999));
+    ctx.write(&stale_tag).await.unwrap();
+
+    // Attempt redo — should fail because current (999) != expected (100)
+    let result = ctx.redo(&update_ulid).await;
+    assert!(
+        result.is_err(),
+        "redo of a stale non-string field should fail"
+    );
+
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("stale"),
+        "error should mention stale change, got: {}",
+        msg
+    );
+}
+
+/// Update a non-string field, undo, verify undo succeeds (happy path).
+/// Ensures the stale detection check does not break clean undo/redo.
+#[tokio::test]
+async fn non_string_clean_undo_succeeds() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    // Create tag with numeric color
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Red"));
+    tag.set("color", json!(100));
+    ctx.write(&tag).await.unwrap();
+
+    // Update color from 100 → 200
+    tag.set("color", json!(200));
+    let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+    // Undo — no intervening changes, should succeed
+    ctx.undo(&update_ulid).await.unwrap();
+    let restored = ctx.read("tag", "t1").await.unwrap();
+    assert_eq!(restored.get_i64("color"), Some(100));
+
+    // Redo — should also succeed cleanly
+    ctx.redo(&update_ulid).await.unwrap();
+    let re_applied = ctx.read("tag", "t1").await.unwrap();
+    assert_eq!(re_applied.get_i64("color"), Some(200));
+}
+
+// =========================================================================
+// Unsupported undo/redo op type errors
+// =========================================================================
+
+/// Attempting to undo an "undo" changelog entry should return an
+/// `UnsupportedUndoOp` error instead of silently succeeding.
+#[tokio::test]
+async fn undo_of_undo_entry_returns_error() {
+    use swissarmyhammer_entity::EntityError;
+
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    // Create a tag entity.
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Red"));
+    tag.set("color", json!("ff0000"));
+    ctx.write(&tag).await.unwrap();
+
+    // Update the tag (produces an "update" changelog entry).
+    tag.set("color", json!("00ff00"));
+    let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+    // Undo the update — this creates an "undo" changelog entry and returns its ULID.
+    let undo_ulid = ctx.undo(&update_ulid).await.unwrap().unwrap();
+
+    // Now attempt to undo the undo entry itself — should error.
+    let result = ctx.undo(&undo_ulid).await;
+    assert!(
+        result.is_err(),
+        "undoing an 'undo' entry should return an error"
+    );
+
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unsupported undo/redo operation type"),
+        "error should mention unsupported op type, got: {msg}"
+    );
+    assert!(
+        msg.contains("undo"),
+        "error should mention the 'undo' op, got: {msg}"
+    );
+
+    // Verify it's the right variant.
+    assert!(
+        matches!(err, EntityError::UnsupportedUndoOp { ref op } if op == "undo"),
+        "expected UnsupportedUndoOp with op='undo', got: {err:?}"
+    );
+}
+
+/// Attempting to undo a "redo" changelog entry should return an
+/// `UnsupportedUndoOp` error instead of silently succeeding.
+#[tokio::test]
+async fn undo_of_redo_entry_returns_error() {
+    use swissarmyhammer_entity::EntityError;
+
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    // Create a tag entity.
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Blue"));
+    tag.set("color", json!("0000ff"));
+    ctx.write(&tag).await.unwrap();
+
+    // Update the tag.
+    tag.set("color", json!("ff00ff"));
+    let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+    // Undo the update.
+    ctx.undo(&update_ulid).await.unwrap();
+
+    // Redo the update — this creates a "redo" changelog entry and returns its ULID.
+    let redo_ulid = ctx.redo(&update_ulid).await.unwrap().unwrap();
+
+    // Now attempt to undo the redo entry itself — should error.
+    let result = ctx.undo(&redo_ulid).await;
+    assert!(
+        result.is_err(),
+        "undoing a 'redo' entry should return an error"
+    );
+
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unsupported undo/redo operation type"),
+        "error should mention unsupported op type, got: {msg}"
+    );
+    assert!(
+        msg.contains("redo"),
+        "error should mention the 'redo' op, got: {msg}"
+    );
+
+    // Verify it's the right variant.
+    assert!(
+        matches!(err, EntityError::UnsupportedUndoOp { ref op } if op == "redo"),
+        "expected UnsupportedUndoOp with op='redo', got: {err:?}"
+    );
 }

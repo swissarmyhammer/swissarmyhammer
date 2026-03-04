@@ -371,6 +371,15 @@ async fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 ///
 /// Scans for `.yaml` files, returns the file stem as the name.
 /// Silently skips non-existent directories.
+///
+/// # Why synchronous
+///
+/// This function intentionally uses `std::fs` (blocking I/O) rather than
+/// `tokio::fs`. It is called during context construction via
+/// `FieldsContext::from_yaml_sources`, which follows a synchronous builder
+/// pattern. The target directories are small (a handful of YAML files), so
+/// the blocking cost is negligible. Converting to async would require the
+/// builder itself to be async, adding complexity for no practical benefit.
 pub fn load_yaml_dir(dir: &Path) -> Vec<(String, String)> {
     let mut entries = Vec::new();
     if !dir.exists() {
