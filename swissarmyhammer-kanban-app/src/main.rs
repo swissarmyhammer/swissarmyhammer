@@ -11,6 +11,14 @@ use cli::Cli;
 use state::AppState;
 
 fn main() {
+    // Initialize tracing subscriber so log output is visible.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let cli = Cli::parse();
 
     // If a CLI subcommand was given (and it's not `gui`), handle it and exit
@@ -20,6 +28,7 @@ fn main() {
     }
 
     // Otherwise, launch the Tauri GUI
+    tracing::info!("Launching Tauri GUI");
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());
     tauri::Builder::default()

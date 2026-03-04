@@ -22,6 +22,7 @@ use tauri::{AppHandle, State, Window};
 /// Get the board metadata for the active (or specified) board.
 #[tauri::command]
 pub async fn get_board(state: State<'_, AppState>, path: Option<String>) -> Result<Value, String> {
+    tracing::debug!(path = ?path, "get_board called");
     let handle = if let Some(p) = path {
         let canonical = PathBuf::from(&p)
             .canonicalize()
@@ -32,6 +33,9 @@ pub async fn get_board(state: State<'_, AppState>, path: Option<String>) -> Resu
             .cloned()
             .ok_or_else(|| format!("Board not open: {}", p))?
     } else {
+        let active = state.active_board.read().await;
+        tracing::debug!(active_board = ?*active, "get_board: checking active board");
+        drop(active);
         state.active_handle().await.ok_or("No active board")?
     };
 
@@ -39,8 +43,12 @@ pub async fn get_board(state: State<'_, AppState>, path: Option<String>) -> Resu
         .processor
         .process(&GetBoard::default(), &handle.ctx)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "get_board: processor failed");
+            e.to_string()
+        })?;
 
+    tracing::debug!(result_keys = ?result.as_object().map(|o| o.keys().collect::<Vec<_>>()), "get_board: returning result");
     Ok(result)
 }
 

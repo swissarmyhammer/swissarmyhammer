@@ -110,6 +110,7 @@ impl AppState {
     /// Open a board at the given path, resolving to its .kanban directory.
     /// Returns the canonical path used as the map key.
     pub async fn open_board(&self, path: &Path) -> Result<PathBuf, String> {
+        tracing::info!("Opening board at {}", path.display());
         let kanban_path = resolve_kanban_path(path).map_err(|e| e.to_string())?;
 
         let canonical = kanban_path
@@ -157,27 +158,83 @@ impl AppState {
         Ok(canonical)
     }
 
-    /// Auto-open a board at startup by walking up from cwd, falling back to home dir.
+    /// Auto-open a board at startup by walking up from CWD looking for a `.kanban` directory.
+    ///
+    /// If no `.kanban` directory is found in any ancestor, the app starts without
+    /// a board (the frontend shows the "No board loaded" prompt).
     pub async fn auto_open_board(&self) {
-        // Walk up from cwd looking for a .kanban/ directory
-        let target = std::env::current_dir()
-            .ok()
-            .and_then(|cwd| {
-                let mut current = cwd;
-                loop {
-                    if current.join(".kanban").is_dir() {
-                        return Some(current);
-                    }
-                    if !current.pop() {
-                        return None;
+        let cwd = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                tracing::warn!("Cannot determine current directory: {e}");
+                return;
+            }
+        };
+        tracing::info!(cwd = %cwd.display(), "auto_open_board: starting discovery");
+
+        // Strategy 1: walk up from CWD
+        let mut board_dir = discover_board(&cwd);
+        if let Some(ref dir) = board_dir {
+            tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via CWD walk");
+        } else {
+            tracing::info!("auto_open_board: no .kanban found walking up from CWD");
+        }
+
+        // Strategy 2: if CWD walk didn't pass through home, check home as backstop
+        if board_dir.is_none() {
+            if let Some(home) = dirs::home_dir() {
+                let walked_through_home = cwd.starts_with(&home);
+                tracing::info!(
+                    home = %home.display(),
+                    walked_through_home,
+                    "auto_open_board: checking home dir backstop"
+                );
+                if !walked_through_home {
+                    board_dir = discover_board(&home);
+                    if let Some(ref dir) = board_dir {
+                        tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via home backstop");
                     }
                 }
-            })
-            .or_else(dirs::home_dir);
+            }
+        }
 
-        if let Some(path) = target {
-            if let Err(e) = self.open_board(&path).await {
-                tracing::warn!("Failed to auto-open board at {}: {}", path.display(), e);
+        // Strategy 3: fall back to MRU — the most recently opened board
+        if board_dir.is_none() {
+            let config = self.config.read().await;
+            if let Some(recent) = config.recent_boards.first() {
+                let path = &recent.path;
+                tracing::info!(
+                    path = %path.display(),
+                    name = %recent.name,
+                    "auto_open_board: falling back to MRU board"
+                );
+                // MRU stores the canonical .kanban path — check its parent exists
+                if path.is_dir() {
+                    board_dir = Some(path.clone());
+                } else {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "auto_open_board: MRU path no longer exists"
+                    );
+                }
+            } else {
+                tracing::info!("auto_open_board: no MRU boards in config");
+            }
+        }
+
+        match board_dir {
+            Some(ref dir) => {
+                tracing::info!(path = %dir.display(), "auto_open_board: opening board");
+                if let Err(e) = self.open_board(dir).await {
+                    tracing::warn!(
+                        path = %dir.display(),
+                        error = %e,
+                        "auto_open_board: failed to open board"
+                    );
+                }
+            }
+            None => {
+                tracing::info!("auto_open_board: no board found, starting without one");
             }
         }
     }
@@ -194,6 +251,24 @@ impl AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Walk up from `start_dir` looking for a `.kanban` subdirectory.
+///
+/// Returns the parent directory containing `.kanban` (not the `.kanban` dir itself),
+/// or `None` if no ancestor contains one.
+pub fn discover_board(start_dir: &Path) -> Option<PathBuf> {
+    let mut current = start_dir.to_path_buf();
+    loop {
+        let candidate = current.join(".kanban");
+        tracing::debug!("Checking for board at {}", candidate.display());
+        if candidate.is_dir() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
     }
 }
 
@@ -317,6 +392,37 @@ mod tests {
     }
 
     #[test]
+    fn test_discover_board_found_in_cwd() {
+        let tmp = TempDir::new().unwrap();
+        let kanban_dir = tmp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let result = discover_board(tmp.path());
+        assert_eq!(result, Some(tmp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_discover_board_found_in_ancestor() {
+        let tmp = TempDir::new().unwrap();
+        let kanban_dir = tmp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let nested = tmp.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let result = discover_board(&nested);
+        assert_eq!(result, Some(tmp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_discover_board_not_found() {
+        let tmp = TempDir::new().unwrap();
+        // No .kanban anywhere
+        let result = discover_board(tmp.path());
+        assert_eq!(result, None);
+    }
+
+    #[test]
     fn test_mru_deduplicates() {
         let mut config = AppConfig::default();
         let path = PathBuf::from("/board/a");
@@ -327,5 +433,87 @@ mod tests {
 
         assert_eq!(config.recent_boards.len(), 2);
         assert_eq!(config.recent_boards[0].name, "Board A Updated");
+    }
+
+    // =========================================================================
+    // Integration tests for auto_open_board
+    // =========================================================================
+
+    /// Helper: create a minimal .kanban board structure that the entity system
+    /// can load. This means .kanban/boards/board.yaml must exist (the entity
+    /// location, not just the legacy root-level board.yaml).
+    fn create_board_at(root: &Path, name: &str) {
+        let kanban_dir = root.join(".kanban");
+        let boards_dir = kanban_dir.join("boards");
+        std::fs::create_dir_all(&boards_dir).unwrap();
+        std::fs::write(
+            boards_dir.join("board.yaml"),
+            format!("name: {}\n", name),
+        )
+        .unwrap();
+        // Also create columns dir so the processor doesn't try to auto-init
+        std::fs::create_dir_all(kanban_dir.join("columns")).unwrap();
+        std::fs::create_dir_all(kanban_dir.join("tasks")).unwrap();
+        std::fs::create_dir_all(kanban_dir.join("tags")).unwrap();
+        std::fs::create_dir_all(kanban_dir.join("actors")).unwrap();
+        std::fs::create_dir_all(kanban_dir.join("swimlanes")).unwrap();
+        std::fs::create_dir_all(kanban_dir.join("activity")).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_auto_open_board_from_cwd() {
+        let tmp = TempDir::new().unwrap();
+        create_board_at(tmp.path(), "Test Board");
+
+        // Simulate CWD being inside the project
+        let subdir = tmp.path().join("src").join("components");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        let state = AppState::new();
+        // Manually run discovery from the subdir (can't change real CWD in tests)
+        let board_dir = discover_board(&subdir);
+        assert_eq!(board_dir, Some(tmp.path().to_path_buf()));
+
+        // Open it
+        let result = state.open_board(board_dir.as_ref().unwrap()).await;
+        assert!(result.is_ok(), "open_board failed: {:?}", result.err());
+
+        // Verify active board is set
+        let handle = state.active_handle().await;
+        assert!(handle.is_some(), "active_handle should be Some after open");
+    }
+
+    #[tokio::test]
+    async fn test_auto_open_board_no_kanban_dir() {
+        let tmp = TempDir::new().unwrap();
+        // No .kanban anywhere
+
+        let result = discover_board(tmp.path());
+        assert_eq!(result, None);
+
+        let state = AppState::new();
+        // No board opened — active_handle should be None
+        let handle = state.active_handle().await;
+        assert!(handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_open_board_sets_active_and_appears_in_boards() {
+        let tmp = TempDir::new().unwrap();
+        create_board_at(tmp.path(), "My Board");
+
+        let state = AppState::new();
+        let result = state.open_board(tmp.path()).await;
+        assert!(result.is_ok());
+
+        let canonical = result.unwrap();
+
+        // active_board should be set
+        let active = state.active_board.read().await;
+        assert_eq!(*active, Some(canonical.clone()));
+
+        // boards map should contain the handle
+        let boards = state.boards.read().await;
+        assert!(boards.contains_key(&canonical));
     }
 }
