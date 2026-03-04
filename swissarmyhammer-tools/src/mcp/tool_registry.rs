@@ -218,7 +218,6 @@
 //! }
 //! ```
 
-use super::notifications::NotificationSender;
 use super::plan_notifications::PlanSender;
 use super::tool_handlers::ToolHandlers;
 use owo_colors::OwoColorize;
@@ -275,11 +274,6 @@ pub struct ToolContext {
     /// and associated settings. Tools that need to execute agent operations should
     /// use this configuration to create appropriate executor instances.
     pub agent_config: Arc<ModelConfig>,
-
-    /// Optional notification sender for long-running operations
-    ///
-    /// When present, tools can send flow notifications during execution.
-    pub notification_sender: Option<NotificationSender>,
 
     /// Optional plan sender for task management operations
     ///
@@ -375,7 +369,6 @@ impl ToolContext {
             tool_handlers,
             git_ops,
             agent_config,
-            notification_sender: None,
             plan_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
@@ -383,29 +376,6 @@ impl ToolContext {
             working_dir: None,
             mcp_server: Arc::new(RwLock::new(None)),
         }
-    }
-
-    /// Create a new tool context with workflow notification support
-    ///
-    /// # Arguments
-    ///
-    /// * `tool_handlers` - The tool handlers instance
-    /// * `git_ops` - Git operations
-    /// * `agent_config` - Agent configuration
-    /// * `notification_sender` - Notification sender for workflow state transitions
-    ///
-    /// # Returns
-    ///
-    /// A new `ToolContext` with workflow notification support enabled
-    pub fn with_notifications(
-        tool_handlers: Arc<ToolHandlers>,
-        git_ops: Arc<Mutex<Option<GitOperations>>>,
-        agent_config: Arc<ModelConfig>,
-        notification_sender: NotificationSender,
-    ) -> Self {
-        let mut context = Self::new(tool_handlers, git_ops, agent_config);
-        context.notification_sender = Some(notification_sender);
-        context
     }
 
     /// Set the plan sender for plan notifications

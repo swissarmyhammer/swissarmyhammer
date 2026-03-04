@@ -22,7 +22,7 @@ pub fn detect_projects(
         .canonicalize()
         .map_err(|e| format!("Failed to canonicalize root path: {}", e))?;
 
-    detect_projects_recursive(&root, &root, 0, max_depth, &mut projects, &mut visited_dirs)?;
+    detect_projects_recursive(&root, 0, max_depth, &mut projects, &mut visited_dirs)?;
 
     // Sort projects by path for consistent output
     projects.sort_by(|a, b| a.path.cmp(&b.path));
@@ -32,7 +32,6 @@ pub fn detect_projects(
 
 /// Recursive directory traversal to find projects
 fn detect_projects_recursive(
-    _root: &Path,
     current: &Path,
     depth: usize,
     max_depth: usize,
@@ -88,7 +87,7 @@ fn detect_projects_recursive(
         }
 
         // Recurse into subdirectory
-        detect_projects_recursive(_root, &path, depth + 1, max_depth, projects, visited_dirs)?;
+        detect_projects_recursive(&path, depth + 1, max_depth, projects, visited_dirs)?;
     }
 
     Ok(())
