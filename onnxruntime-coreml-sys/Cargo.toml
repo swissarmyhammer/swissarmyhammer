@@ -1,0 +1,15 @@
+[package]
+name = "onnxruntime-coreml-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Static ONNX Runtime build with CoreML execution provider for Apple Neural Engine"
+links = "onnxruntime"
+
+[build-dependencies]
+cmake = "0.1"
+cc = "1"
+
+[dev-dependencies]

@@ -1,0 +1,3 @@
+[submodule "onnxruntime-coreml-sys/onnxruntime"]
+	path = onnxruntime-coreml-sys/onnxruntime
+	url = https://github.com/microsoft/onnxruntime.git
