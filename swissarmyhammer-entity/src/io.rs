@@ -33,8 +33,8 @@ pub fn entity_extension(entity_def: &EntityDef) -> &'static str {
 ///
 /// The id is sanitized to prevent path traversal — slashes, backslashes,
 /// null bytes, and `..` components are rejected.
-pub fn entity_file_path(dir: &Path, id: &str, entity_def: &EntityDef) -> PathBuf {
-    let safe_id = sanitize_id(id);
+pub fn entity_file_path(dir: &Path, id: impl AsRef<str>, entity_def: &EntityDef) -> PathBuf {
+    let safe_id = sanitize_id(id.as_ref());
     dir.join(format!("{}.{}", safe_id, entity_extension(entity_def)))
 }
 
@@ -56,10 +56,12 @@ fn sanitize_id(id: &str) -> String {
 /// The EntityDef determines the file format.
 pub async fn read_entity(
     path: &Path,
-    entity_type: &str,
-    id: &str,
+    entity_type: impl AsRef<str>,
+    id: impl AsRef<str>,
     entity_def: &EntityDef,
 ) -> Result<Entity> {
+    let entity_type = entity_type.as_ref();
+    let id = id.as_ref();
     let content = fs::read_to_string(path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             EntityError::NotFound {
@@ -84,11 +86,7 @@ pub async fn read_entity(
 /// Each write gets a unique temp filename, so concurrent writes
 /// to the same entity won't collide. The temp file is cleaned up
 /// if the rename step fails.
-pub async fn write_entity(
-    path: &Path,
-    entity: &Entity,
-    entity_def: &EntityDef,
-) -> Result<()> {
+pub async fn write_entity(path: &Path, entity: &Entity, entity_def: &EntityDef) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
     }
@@ -123,9 +121,10 @@ pub async fn write_entity(
 /// I/O errors (permission denied, disk failure) are propagated.
 pub async fn read_entity_dir(
     dir: &Path,
-    entity_type: &str,
+    entity_type: impl AsRef<str>,
     entity_def: &EntityDef,
 ) -> Result<Vec<Entity>> {
+    let entity_type = entity_type.as_ref();
     let ext = entity_extension(entity_def);
     let mut entities = Vec::new();
 
@@ -172,9 +171,7 @@ pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
 
     // Move data file (try-rename, ignore NotFound to avoid TOCTOU race)
     {
-        let filename = path
-            .file_name()
-            .expect("entity path must have a filename");
+        let filename = path.file_name().expect("entity path must have a filename");
         let dest = trash_dir.join(filename);
         match fs::rename(path, &dest).await {
             Ok(()) => {}
@@ -200,16 +197,61 @@ pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Restore an entity's data file and changelog from a trash directory back to live storage.
+///
+/// Inverse of [`trash_entity_files`]. Moves both the data file (.yaml/.md) and
+/// the changelog (.jsonl) from the trash directory back to the original location.
+/// Creates the destination directory if it doesn't exist.
+/// Returns an error if the source files are not found in trash.
+pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
+    // Ensure the destination directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
+    // Move data file back from trash — error if missing (nothing to restore)
+    {
+        let filename = path.file_name().expect("entity path must have a filename");
+        let src = trash_dir.join(filename);
+        match fs::rename(&src, path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(EntityError::RestoreFromTrashFailed { path: src });
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    // Move changelog back from trash
+    let log_path = path.with_extension("jsonl");
+    {
+        let log_filename = log_path
+            .file_name()
+            .expect("changelog path must have a filename");
+        let log_src = trash_dir.join(log_filename);
+        match fs::rename(&log_src, &log_path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(())
+}
+
 // --- Internal helpers ---
 
 /// Parse a frontmatter+body file into an Entity.
 fn parse_frontmatter_body(
     content: &str,
-    entity_type: &str,
-    id: &str,
-    body_field: &str,
+    entity_type: impl AsRef<str>,
+    id: impl AsRef<str>,
+    body_field: impl AsRef<str>,
     path: &Path,
 ) -> Result<Entity> {
+    let entity_type = entity_type.as_ref();
+    let id = id.as_ref();
+    let body_field = body_field.as_ref();
     // Split on --- delimiters: ["", frontmatter, body]
     let parts: Vec<&str> = content.splitn(3, "---").collect();
     if parts.len() < 3 {
@@ -255,10 +297,12 @@ fn flatten_into(entity: &mut Entity, key: &str, value: Value) {
 /// Parse a plain YAML file into an Entity.
 fn parse_plain_yaml(
     content: &str,
-    entity_type: &str,
-    id: &str,
+    entity_type: impl AsRef<str>,
+    id: impl AsRef<str>,
     path: &Path,
 ) -> Result<Entity> {
+    let entity_type = entity_type.as_ref();
+    let id = id.as_ref();
     let yaml_map: HashMap<String, Value> =
         serde_yaml::from_str(content).map_err(|e| EntityError::Yaml {
             path: path.to_path_buf(),
@@ -274,11 +318,9 @@ fn parse_plain_yaml(
 }
 
 /// Format an entity as frontmatter + markdown body.
-fn format_frontmatter_body(entity: &Entity, body_field: &str) -> Result<String> {
-    let body = entity
-        .get_str(body_field)
-        .unwrap_or("")
-        .to_string();
+fn format_frontmatter_body(entity: &Entity, body_field: impl AsRef<str>) -> Result<String> {
+    let body_field = body_field.as_ref();
+    let body = entity.get_str(body_field).unwrap_or("").to_string();
 
     // Build frontmatter from all fields except the body field
     let mut frontmatter_map = serde_json::Map::new();
@@ -289,12 +331,11 @@ fn format_frontmatter_body(entity: &Entity, body_field: &str) -> Result<String> 
     }
 
     let frontmatter_value = Value::Object(frontmatter_map);
-    let frontmatter_yaml = serde_yaml::to_string(&frontmatter_value).map_err(|e| {
-        EntityError::Yaml {
+    let frontmatter_yaml =
+        serde_yaml::to_string(&frontmatter_value).map_err(|e| EntityError::Yaml {
             path: PathBuf::from("<serialization>"),
             source: e,
-        }
-    })?;
+        })?;
 
     Ok(format!("---\n{}---\n{}", frontmatter_yaml, body))
 }
@@ -384,7 +425,10 @@ mod tests {
     fn parse_frontmatter_body_round_trip() {
         let mut entity = Entity::new("task", "01ABC");
         entity.set("title", Value::String("My Task".into()));
-        entity.set("body", Value::String("This is the body.\nWith multiple lines.".into()));
+        entity.set(
+            "body",
+            Value::String("This is the body.\nWith multiple lines.".into()),
+        );
 
         let content = format_frontmatter_body(&entity, "body").unwrap();
 
@@ -409,8 +453,7 @@ mod tests {
 
         let content = format_plain_yaml(&entity).unwrap();
 
-        let parsed =
-            parse_plain_yaml(&content, "tag", "bug", Path::new("test.yaml")).unwrap();
+        let parsed = parse_plain_yaml(&content, "tag", "bug", Path::new("test.yaml")).unwrap();
 
         assert_eq!(parsed.entity_type, "tag");
         assert_eq!(parsed.id, "bug");
@@ -421,8 +464,7 @@ mod tests {
     #[test]
     fn parse_frontmatter_missing_delimiters() {
         let content = "just some text without frontmatter";
-        let result =
-            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md"));
+        let result = parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md"));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("frontmatter"));
@@ -452,7 +494,10 @@ mod tests {
 
         let mut entity = Entity::new("task", "01ABC");
         entity.set("title", Value::String("Test Task".into()));
-        entity.set("body", Value::String("Task body content.\n\nWith paragraphs.".into()));
+        entity.set(
+            "body",
+            Value::String("Task body content.\n\nWith paragraphs.".into()),
+        );
 
         write_entity(&path, &entity, &entity_def).await.unwrap();
 
@@ -481,9 +526,7 @@ mod tests {
 
         write_entity(&path, &entity, &entity_def).await.unwrap();
 
-        let loaded = read_entity(&path, "tag", "bug", &entity_def)
-            .await
-            .unwrap();
+        let loaded = read_entity(&path, "tag", "bug", &entity_def).await.unwrap();
 
         assert_eq!(loaded.entity_type, "tag");
         assert_eq!(loaded.id, "bug");
@@ -555,7 +598,9 @@ mod tests {
         let entity_def = tag_entity_def(); // expects .yaml
 
         // Write a .md file (wrong extension for tags)
-        fs::write(dir.path().join("stray.md"), "# Not a tag").await.unwrap();
+        fs::write(dir.path().join("stray.md"), "# Not a tag")
+            .await
+            .unwrap();
 
         // Write a valid .yaml file
         let path = entity_file_path(dir.path(), "bug", &entity_def);
@@ -735,7 +780,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(loaded.get_str("title"), Some("Complex Task"));
-        assert_eq!(loaded.get_string_list("assignees"), vec!["actor1", "actor2"]);
+        assert_eq!(
+            loaded.get_string_list("assignees"),
+            vec!["actor1", "actor2"]
+        );
         assert_eq!(loaded.get_string_list("depends_on"), vec!["task1"]);
         assert_eq!(loaded.get_str("body"), Some("Body with #tags"));
     }
@@ -747,8 +795,7 @@ mod tests {
         let content = "---\ntitle: My Task\nposition:\n  column: todo\n  ordinal: a0\n  swimlane: feature\nassignees: []\n---\nBody text\n";
 
         let parsed =
-            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md"))
-                .unwrap();
+            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md")).unwrap();
 
         assert_eq!(parsed.get_str("title"), Some("My Task"));
         assert_eq!(parsed.get_str("position_column"), Some("todo"));
@@ -762,11 +809,11 @@ mod tests {
     #[test]
     fn parse_frontmatter_flat_fields_unchanged() {
         // New-format task files with flat position_column, position_ordinal
-        let content = "---\ntitle: My Task\nposition_column: todo\nposition_ordinal: a0\n---\nBody\n";
+        let content =
+            "---\ntitle: My Task\nposition_column: todo\nposition_ordinal: a0\n---\nBody\n";
 
         let parsed =
-            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md"))
-                .unwrap();
+            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md")).unwrap();
 
         assert_eq!(parsed.get_str("position_column"), Some("todo"));
         assert_eq!(parsed.get_str("position_ordinal"), Some("a0"));
@@ -776,9 +823,7 @@ mod tests {
     fn parse_plain_yaml_flattens_nested_objects() {
         let content = "name: To Do\norder: 0\nmetadata:\n  color: red\n  icon: star\n";
 
-        let parsed =
-            parse_plain_yaml(content, "column", "todo", Path::new("test.yaml"))
-                .unwrap();
+        let parsed = parse_plain_yaml(content, "column", "todo", Path::new("test.yaml")).unwrap();
 
         assert_eq!(parsed.get_str("name"), Some("To Do"));
         assert_eq!(parsed.get_str("metadata_color"), Some("red"));
@@ -823,10 +868,7 @@ mod tests {
         let mut count = 0;
         while let Some(entry) = entries.next_entry().await.unwrap() {
             let name = entry.file_name().to_string_lossy().to_string();
-            assert!(
-                !name.contains("tmp"),
-                "leftover temp file found: {name}"
-            );
+            assert!(!name.contains("tmp"), "leftover temp file found: {name}");
             count += 1;
         }
         assert_eq!(count, 1, "should have exactly one entity file");
@@ -847,18 +889,66 @@ mod tests {
         entity.set("tag_name", Value::String("bug".into()));
 
         let result = write_entity(&path, &entity, &entity_def).await;
-        assert!(result.is_err(), "write should fail when target is a directory");
+        assert!(
+            result.is_err(),
+            "write should fail when target is a directory"
+        );
 
         // No temp files should be left behind
         let mut entries = fs::read_dir(dir.path()).await.unwrap();
         while let Some(entry) = entries.next_entry().await.unwrap() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name != "blocker.yaml" {
-                assert!(
-                    !name.contains("tmp"),
-                    "leftover temp file found: {name}"
-                );
+                assert!(!name.contains("tmp"), "leftover temp file found: {name}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn restore_entity_files_missing_data_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live").join("bug.yaml");
+        let trash_dir = dir.path().join(".trash").join("tags");
+        // Create the trash directory but leave it empty — no data file to restore
+        fs::create_dir_all(&trash_dir).await.unwrap();
+
+        let result = restore_entity_files(&path, &trash_dir).await;
+        assert!(
+            result.is_err(),
+            "restore should fail when data file is missing in trash"
+        );
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot restore from trash"),
+            "error message should mention restore from trash, got: {msg}"
+        );
+        assert!(matches!(err, EntityError::RestoreFromTrashFailed { .. }));
+    }
+
+    #[tokio::test]
+    async fn restore_entity_files_missing_changelog_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let live_dir = dir.path().join("live");
+        let trash_dir = dir.path().join(".trash").join("tags");
+        fs::create_dir_all(&trash_dir).await.unwrap();
+
+        // Put only the data file in trash — no changelog
+        let data_content = "tag_name: bug\ncolor: ff0000\n";
+        fs::write(trash_dir.join("bug.yaml"), data_content)
+            .await
+            .unwrap();
+
+        let path = live_dir.join("bug.yaml");
+        let result = restore_entity_files(&path, &trash_dir).await;
+        assert!(
+            result.is_ok(),
+            "restore should succeed when only changelog is missing"
+        );
+
+        // Data file should be back in the live dir
+        assert!(path.exists());
+        // Changelog should not exist (it was never there)
+        assert!(!path.with_extension("jsonl").exists());
     }
 }

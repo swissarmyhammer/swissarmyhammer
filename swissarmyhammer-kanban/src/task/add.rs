@@ -101,7 +101,7 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
                         .iter()
                         .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                         .expect("board must have at least one column");
-                    first.id.clone()
+                    first.id.to_string()
                 }
             };
 
@@ -159,7 +159,7 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
                 if !tag_name_exists_entity(ectx, tag_name).await {
                     let color = auto_color::auto_color(tag_name).to_string();
                     let tag_id = ulid::Ulid::new().to_string();
-                    let mut tag_entity = Entity::new("tag", &tag_id);
+                    let mut tag_entity = Entity::new("tag", tag_id.as_str());
                     tag_entity.set("tag_name", json!(tag_name));
                     tag_entity.set("color", json!(color));
                     ectx.write(&tag_entity).await?;

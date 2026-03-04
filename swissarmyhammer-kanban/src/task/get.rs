@@ -32,7 +32,10 @@ impl Execute<KanbanContext, KanbanError> for GetTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("task", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            let entity = ectx
+                .read("task", self.id.as_str())
+                .await
+                .map_err(KanbanError::from_entity_error)?;
 
             let all_columns = ectx.list("column").await?;
             let all_tasks = ectx.list("task").await?;
@@ -43,7 +46,11 @@ impl Execute<KanbanContext, KanbanError> for GetTask {
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            Ok(task_entity_to_rich_json(&entity, &all_tasks, terminal_column))
+            Ok(task_entity_to_rich_json(
+                &entity,
+                &all_tasks,
+                terminal_column,
+            ))
         }
         .await
         {

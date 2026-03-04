@@ -33,13 +33,14 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use swissarmyhammer_fields::EntityTypeName;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tracing::warn;
-use ulid::Ulid;
 
 use crate::entity::Entity;
 use crate::error::Result;
+use crate::id_types::{ChangeEntryId, EntityId, TransactionId};
 
 /// What happened to a single field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,29 +66,70 @@ pub enum FieldChange {
 /// A single change event for an entity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChangeEntry {
-    pub id: String,
+    pub id: ChangeEntryId,
     pub timestamp: DateTime<Utc>,
+    #[serde(default)]
+    pub entity_type: EntityTypeName,
+    #[serde(default)]
+    pub entity_id: EntityId,
     pub op: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<String>,
     pub changes: Vec<(String, FieldChange)>,
+    /// References the original changelog entry being undone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undone_id: Option<ChangeEntryId>,
+    /// References the original changelog entry being redone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redone_id: Option<ChangeEntryId>,
+    /// Groups entries into a logical transaction (for future use).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction_id: Option<TransactionId>,
 }
 
 impl ChangeEntry {
-    /// Create a new change entry with the given operation and changes.
-    pub fn new(op: impl Into<String>, changes: Vec<(String, FieldChange)>) -> Self {
+    /// Create a new change entry with the given entity type, entity ID, operation, and changes.
+    pub fn new(
+        entity_type: impl Into<EntityTypeName>,
+        entity_id: impl Into<EntityId>,
+        op: impl Into<String>,
+        changes: Vec<(String, FieldChange)>,
+    ) -> Self {
         Self {
-            id: Ulid::new().to_string(),
+            id: ChangeEntryId::new(),
             timestamp: Utc::now(),
+            entity_type: entity_type.into(),
+            entity_id: entity_id.into(),
             op: op.into(),
             actor: None,
             changes,
+            undone_id: None,
+            redone_id: None,
+            transaction_id: None,
         }
     }
 
     /// Set the actor who made this change.
     pub fn with_actor(mut self, actor: impl Into<String>) -> Self {
         self.actor = Some(actor.into());
+        self
+    }
+
+    /// Set the ULID of the changelog entry being undone.
+    pub fn with_undone_id(mut self, ulid: impl Into<ChangeEntryId>) -> Self {
+        self.undone_id = Some(ulid.into());
+        self
+    }
+
+    /// Set the ULID of the changelog entry being redone.
+    pub fn with_redone_id(mut self, ulid: impl Into<ChangeEntryId>) -> Self {
+        self.redone_id = Some(ulid.into());
+        self
+    }
+
+    /// Set the transaction ID for grouping related entries.
+    pub fn with_transaction_id(mut self, txn_id: impl Into<TransactionId>) -> Self {
+        self.transaction_id = Some(txn_id.into());
         self
     }
 }
@@ -130,7 +172,12 @@ pub fn diff_entities(old: &Entity, new: &Entity) -> Vec<(String, FieldChange)> {
             }
             None => {
                 // New field
-                changes.push((key.clone(), FieldChange::Set { value: new_val.clone() }));
+                changes.push((
+                    key.clone(),
+                    FieldChange::Set {
+                        value: new_val.clone(),
+                    },
+                ));
             }
         }
     }
@@ -202,22 +249,39 @@ pub fn apply_changes(entity: &mut Entity, changes: &[(String, FieldChange)]) -> 
             FieldChange::Removed { .. } => {
                 entity.remove(key);
             }
-            FieldChange::Changed { new_value, .. } => {
+            FieldChange::Changed {
+                old_value,
+                new_value,
+            } => {
+                // Stale detection: the entity's current value must match old_value.
+                // For forward changes, old_value is the pre-change value.
+                // For reversed changes (undo), reverse_changes swaps old/new,
+                // so old_value is the value we expect to find in the entity.
+                if let Some(current) = entity.get(key) {
+                    if current != old_value {
+                        return Err(crate::error::EntityError::StaleChange {
+                            field: key.clone(),
+                            expected: old_value.clone(),
+                            actual: current.clone(),
+                        });
+                    }
+                }
                 entity.set(key, new_value.clone());
             }
             FieldChange::TextDiff { forward_patch, .. } => {
-                let current = entity
-                    .get_str(key)
-                    .unwrap_or("")
-                    .to_string();
-                let patch = diffy::Patch::from_str(forward_patch)
-                    .map_err(|e| crate::error::EntityError::PatchApply(format!(
-                        "failed to parse patch for field '{}': {}", key, e
-                    )))?;
-                let result = diffy::apply(&current, &patch)
-                    .map_err(|e| crate::error::EntityError::PatchApply(format!(
-                        "failed to apply patch to field '{}': {}", key, e
-                    )))?;
+                let current = entity.get_str(key).unwrap_or("").to_string();
+                let patch = diffy::Patch::from_str(forward_patch).map_err(|e| {
+                    crate::error::EntityError::PatchApply(format!(
+                        "failed to parse patch for field '{}': {}",
+                        key, e
+                    ))
+                })?;
+                let result = diffy::apply(&current, &patch).map_err(|e| {
+                    crate::error::EntityError::PatchApply(format!(
+                        "failed to apply patch to field '{}': {}",
+                        key, e
+                    ))
+                })?;
                 entity.set(key, Value::String(result));
             }
         }
@@ -272,6 +336,21 @@ pub async fn read_changelog(path: &Path) -> Result<Vec<ChangeEntry>> {
         }
     }
 
+    Ok(entries)
+}
+
+/// Read all change entries, falling back to a secondary path if the primary does not exist.
+///
+/// Tries the `primary` path first. If the file is not found there, tries the `fallback` path.
+/// This is useful for reading changelogs of deleted entities whose files have been moved to trash.
+pub async fn read_changelog_with_fallback(
+    primary: &Path,
+    fallback: &Path,
+) -> Result<Vec<ChangeEntry>> {
+    let entries = read_changelog(primary).await?;
+    if entries.is_empty() && !primary.exists() {
+        return read_changelog(fallback).await;
+    }
     Ok(entries)
 }
 
@@ -554,10 +633,10 @@ mod tests {
         let old_text = old_lines.join("\n");
 
         let mut new_lines = old_lines.clone();
-        new_lines[2] = "MODIFIED line 3".into();           // edit near top
+        new_lines[2] = "MODIFIED line 3".into(); // edit near top
         new_lines.insert(10, "INSERTED after line 10".into()); // insert in middle
-        new_lines[40] = "MODIFIED line 40".into();          // edit near bottom
-        new_lines.push("APPENDED line 51".into());          // append at end
+        new_lines[40] = "MODIFIED line 40".into(); // edit near bottom
+        new_lines.push("APPENDED line 51".into()); // append at end
         let new_text = new_lines.join("\n");
 
         let mut old = Entity::new("task", "01ABC");
@@ -595,6 +674,8 @@ mod tests {
     #[test]
     fn change_entry_serializes_to_json() {
         let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
             "update",
             vec![(
                 "title".to_string(),
@@ -629,6 +710,8 @@ mod tests {
         let log_path = dir.path().join("test.jsonl");
 
         let entry1 = ChangeEntry::new(
+            "task",
+            "01ABC",
             "create",
             vec![(
                 "title".to_string(),
@@ -638,6 +721,8 @@ mod tests {
             )],
         );
         let entry2 = ChangeEntry::new(
+            "task",
+            "01ABC",
             "update",
             vec![(
                 "title".to_string(),
@@ -672,6 +757,8 @@ mod tests {
 
         // Write a valid entry, a malformed line, and another valid entry
         let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
             "create",
             vec![(
                 "title".to_string(),
@@ -718,7 +805,7 @@ mod tests {
         // Delete lines near the top (lines 3-4)
         new_lines.remove(3); // "line 4"
         new_lines.remove(2); // "line 3"
-        // Delete a line near the bottom (original "line 25", now shifted)
+                             // Delete a line near the bottom (original "line 25", now shifted)
         new_lines.retain(|l| l != "line 25");
         let new_text = new_lines.join("\n");
 
@@ -801,22 +888,56 @@ mod tests {
                 let rev_lines: Vec<&str> = reverse_patch.lines().collect();
 
                 // Headers must start with exactly "--- " and "+++ "
-                assert!(fwd_lines[0].starts_with("--- "), "forward header line 1: {}", fwd_lines[0]);
-                assert!(fwd_lines[1].starts_with("+++ "), "forward header line 2: {}", fwd_lines[1]);
-                assert!(rev_lines[0].starts_with("--- "), "reverse header line 1: {}", rev_lines[0]);
-                assert!(rev_lines[1].starts_with("+++ "), "reverse header line 2: {}", rev_lines[1]);
+                assert!(
+                    fwd_lines[0].starts_with("--- "),
+                    "forward header line 1: {}",
+                    fwd_lines[0]
+                );
+                assert!(
+                    fwd_lines[1].starts_with("+++ "),
+                    "forward header line 2: {}",
+                    fwd_lines[1]
+                );
+                assert!(
+                    rev_lines[0].starts_with("--- "),
+                    "reverse header line 1: {}",
+                    rev_lines[0]
+                );
+                assert!(
+                    rev_lines[1].starts_with("+++ "),
+                    "reverse header line 2: {}",
+                    rev_lines[1]
+                );
 
                 // Headers must NOT have malformed prefixes like "+++--" or "---++"
-                assert!(!fwd_lines[0].starts_with("---+"), "malformed forward header: {}", fwd_lines[0]);
-                assert!(!fwd_lines[1].starts_with("+++-"), "malformed forward header: {}", fwd_lines[1]);
-                assert!(!rev_lines[0].starts_with("---+"), "malformed reverse header: {}", rev_lines[0]);
-                assert!(!rev_lines[1].starts_with("+++-"), "malformed reverse header: {}", rev_lines[1]);
+                assert!(
+                    !fwd_lines[0].starts_with("---+"),
+                    "malformed forward header: {}",
+                    fwd_lines[0]
+                );
+                assert!(
+                    !fwd_lines[1].starts_with("+++-"),
+                    "malformed forward header: {}",
+                    fwd_lines[1]
+                );
+                assert!(
+                    !rev_lines[0].starts_with("---+"),
+                    "malformed reverse header: {}",
+                    rev_lines[0]
+                );
+                assert!(
+                    !rev_lines[1].starts_with("+++-"),
+                    "malformed reverse header: {}",
+                    rev_lines[1]
+                );
 
                 // Both patches must parse and apply cleanly
-                let patch = diffy::Patch::from_str(forward_patch).expect("forward_patch should parse");
+                let patch =
+                    diffy::Patch::from_str(forward_patch).expect("forward_patch should parse");
                 diffy::apply("line1\nmodified\nline3", &patch).expect("forward_patch should apply");
 
-                let patch = diffy::Patch::from_str(reverse_patch).expect("reverse_patch should parse");
+                let patch =
+                    diffy::Patch::from_str(reverse_patch).expect("reverse_patch should parse");
                 diffy::apply("line1\nline2\nline3", &patch).expect("reverse_patch should apply");
             }
             _ => panic!("expected TextDiff"),
@@ -837,12 +958,20 @@ mod tests {
         // Forward: old → new
         let mut forward = old.clone();
         apply_changes(&mut forward, &changes).unwrap();
-        assert_eq!(forward.get_str("body"), Some("xyz\n"), "forward apply should add trailing newline");
+        assert_eq!(
+            forward.get_str("body"),
+            Some("xyz\n"),
+            "forward apply should add trailing newline"
+        );
 
         // Reverse: new → old
         let mut back = new.clone();
         apply_changes(&mut back, &reversed).unwrap();
-        assert_eq!(back.get_str("body"), Some("abc"), "reverse apply should remove trailing newline");
+        assert_eq!(
+            back.get_str("body"),
+            Some("abc"),
+            "reverse apply should remove trailing newline"
+        );
     }
 
     #[test]
@@ -859,12 +988,20 @@ mod tests {
         // Forward: old → new
         let mut forward = old.clone();
         apply_changes(&mut forward, &changes).unwrap();
-        assert_eq!(forward.get_str("body"), Some("xyz"), "forward apply should remove trailing newline");
+        assert_eq!(
+            forward.get_str("body"),
+            Some("xyz"),
+            "forward apply should remove trailing newline"
+        );
 
         // Reverse: new → old
         let mut back = new.clone();
         apply_changes(&mut back, &reversed).unwrap();
-        assert_eq!(back.get_str("body"), Some("abc\n"), "reverse apply should add trailing newline");
+        assert_eq!(
+            back.get_str("body"),
+            Some("abc\n"),
+            "reverse apply should add trailing newline"
+        );
     }
 
     #[test]
@@ -901,10 +1038,16 @@ mod tests {
 
         // Now apply that diff to a DIFFERENT text (stale/modified content)
         let mut stale = Entity::new("task", "01ABC");
-        stale.set("body", Value::String("line1\nTOTALLY_DIFFERENT\nline3".into()));
+        stale.set(
+            "body",
+            Value::String("line1\nTOTALLY_DIFFERENT\nline3".into()),
+        );
 
         let result = apply_changes(&mut stale, &changes);
-        assert!(result.is_err(), "applying a stale diff should return an error, not silently corrupt data");
+        assert!(
+            result.is_err(),
+            "applying a stale diff should return an error, not silently corrupt data"
+        );
     }
 
     #[test]
@@ -930,5 +1073,88 @@ mod tests {
             let parsed: FieldChange = serde_json::from_str(&json).unwrap();
             assert_eq!(*variant, parsed, "round-trip failed for: {}", json);
         }
+    }
+
+    #[test]
+    fn apply_changed_stale_value_returns_error() {
+        // Entity has count=99, but the change expects old_value=1.
+        // This is stale — apply_changes should reject it.
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set("count", serde_json::json!(99));
+        let changes = vec![(
+            "count".to_string(),
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+        )];
+        let result = apply_changes(&mut entity, &changes);
+        assert!(result.is_err(), "stale Changed should error");
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("stale"), "error should mention stale: {}", msg);
+        assert!(
+            msg.contains("count"),
+            "error should mention field name: {}",
+            msg
+        );
+        // Entity should NOT have been modified
+        assert_eq!(entity.get_i64("count"), Some(99));
+    }
+
+    #[test]
+    fn apply_changed_matching_value_succeeds() {
+        // Entity has count=1, change expects old_value=1 — should apply fine.
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set("count", serde_json::json!(1));
+        let changes = vec![(
+            "count".to_string(),
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+        )];
+        apply_changes(&mut entity, &changes).unwrap();
+        assert_eq!(entity.get_i64("count"), Some(2));
+    }
+
+    #[test]
+    fn apply_changed_missing_field_applies_without_error() {
+        // Entity does NOT have the field at all. The Changed variant should
+        // still apply (field was missing, old_value check is skipped when
+        // there's no current value).
+        let mut entity = Entity::new("task", "01ABC");
+        let changes = vec![(
+            "count".to_string(),
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+        )];
+        apply_changes(&mut entity, &changes).unwrap();
+        assert_eq!(entity.get_i64("count"), Some(2));
+    }
+
+    #[test]
+    fn apply_reversed_changed_stale_value_returns_error() {
+        // Simulate an undo scenario where the entity has been modified since
+        // the original change. reverse_changes swaps old/new, so the reversed
+        // old_value is the original new_value. If the entity doesn't match,
+        // it's stale.
+        let original_changes = vec![(
+            "order".to_string(),
+            FieldChange::Changed {
+                old_value: serde_json::json!(1),
+                new_value: serde_json::json!(2),
+            },
+        )];
+        let reversed = reverse_changes(&original_changes);
+
+        // Entity currently has order=99 (stale), but the reversed change
+        // expects old_value=2 (the original new_value).
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set("order", serde_json::json!(99));
+        let result = apply_changes(&mut entity, &reversed);
+        assert!(result.is_err(), "stale reversed Changed should error");
     }
 }

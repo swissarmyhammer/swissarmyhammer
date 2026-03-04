@@ -395,13 +395,31 @@ impl KanbanContext {
     }
 
     /// Write an entity with automatic changelog.
-    pub async fn write_entity_generic(&self, entity: &Entity) -> Result<()> {
-        Ok(self.entity_context().await?.write(entity).await?)
+    ///
+    /// Returns `Ok(Some(ulid))` when changes were logged, `Ok(None)` when no changes.
+    pub async fn write_entity_generic(&self, entity: &Entity) -> Result<Option<String>> {
+        Ok(self
+            .entity_context()
+            .await?
+            .write(entity)
+            .await?
+            .map(|id| id.to_string()))
     }
 
     /// Delete an entity by type and ID.
-    pub async fn delete_entity_generic(&self, entity_type: &str, id: &str) -> Result<()> {
-        Ok(self.entity_context().await?.delete(entity_type, id).await?)
+    ///
+    /// Returns `Ok(Some(ulid))` when a delete entry was logged, `Ok(None)` otherwise.
+    pub async fn delete_entity_generic(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .entity_context()
+            .await?
+            .delete(entity_type, id)
+            .await?
+            .map(|id| id.to_string()))
     }
 
     /// List all entities of a given type.
@@ -415,7 +433,11 @@ impl KanbanContext {
         entity_type: &str,
         id: &str,
     ) -> Result<Vec<ChangeEntry>> {
-        Ok(self.entity_context().await?.read_changelog(entity_type, id).await?)
+        Ok(self
+            .entity_context()
+            .await?
+            .read_changelog(entity_type, id)
+            .await?)
     }
 
     // =========================================================================
@@ -781,7 +803,10 @@ type:
 
         let mut task = swissarmyhammer_entity::Entity::new("task", "01ABC");
         task.set("title", serde_json::json!("Fix the bug"));
-        task.set("body", serde_json::json!("This needs fixing.\n\n- [ ] Step 1\n- [ ] Step 2"));
+        task.set(
+            "body",
+            serde_json::json!("This needs fixing.\n\n- [ ] Step 1\n- [ ] Step 2"),
+        );
 
         ctx.write_entity_generic(&task).await.unwrap();
 

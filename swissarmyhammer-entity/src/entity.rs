@@ -6,22 +6,35 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
+use swissarmyhammer_fields::EntityTypeName;
+
+use crate::id_types::EntityId;
 
 /// A dynamic, field-driven entity.
 ///
 /// The `entity_type` identifies the kind (e.g. "task", "tag") and determines
 /// which EntityDef schema applies. The `id` is a ULID or slug extracted from
 /// the filename. All data fields live in the `fields` HashMap.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entity {
-    pub entity_type: String,
-    pub id: String,
+    pub entity_type: EntityTypeName,
+    pub id: EntityId,
     pub fields: HashMap<String, Value>,
+}
+
+impl Default for Entity {
+    fn default() -> Self {
+        Self {
+            entity_type: EntityTypeName::from(""),
+            id: EntityId::from(""),
+            fields: HashMap::new(),
+        }
+    }
 }
 
 impl Entity {
     /// Create a new entity with the given type and id.
-    pub fn new(entity_type: impl Into<String>, id: impl Into<String>) -> Self {
+    pub fn new(entity_type: impl Into<EntityTypeName>, id: impl Into<EntityId>) -> Self {
         Self {
             entity_type: entity_type.into(),
             id: id.into(),
@@ -87,8 +100,11 @@ impl Entity {
             map.insert(k.clone(), v.clone());
         }
         // Insert after fields so metadata always wins
-        map.insert("id".into(), Value::String(self.id.clone()));
-        map.insert("entity_type".into(), Value::String(self.entity_type.clone()));
+        map.insert("id".into(), Value::String(self.id.to_string()));
+        map.insert(
+            "entity_type".into(),
+            Value::String(self.entity_type.to_string()),
+        );
         Value::Object(map)
     }
 }

@@ -16,7 +16,9 @@ use crate::types::{FieldDef, FieldType};
 ///
 /// Receives the entity's field values as a HashMap and returns the derived value.
 pub type DeriveFn = Box<
-    dyn Fn(&HashMap<String, serde_json::Value>) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send>>
+    dyn Fn(
+            &HashMap<String, serde_json::Value>,
+        ) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send>>
         + Send
         + Sync,
 >;
@@ -55,7 +57,7 @@ impl ComputeEngine {
             FieldType::Computed { derive } => {
                 let f = self.derivations.get(derive.as_str()).ok_or_else(|| {
                     FieldsError::ComputeError {
-                        field: field.name.clone(),
+                        field: field.name.to_string(),
                         message: format!("unregistered derivation: {}", derive),
                     }
                 })?;
@@ -65,7 +67,19 @@ impl ComputeEngine {
         }
     }
 
-    /// Compute all computed fields on an entity, inserting results into entity_fields.
+    /// Compute all computed fields on an entity, inserting results into `entity_fields`.
+    ///
+    /// # Field ordering
+    ///
+    /// Fields are derived in the order they appear in `field_defs`. Each
+    /// computed field's result is inserted into `entity_fields` immediately,
+    /// so if computed field B reads from computed field A's output, A **must**
+    /// appear before B in the slice.
+    ///
+    /// Currently all computed fields read from stored fields only, so ordering
+    /// does not matter in practice. No topological sort is performed — ordering
+    /// responsibility is on the caller. If chained computed fields are added in
+    /// the future, the caller must ensure correct ordering in `field_defs`.
     pub async fn derive_all(
         &self,
         entity_fields: &mut HashMap<String, serde_json::Value>,
@@ -74,7 +88,7 @@ impl ComputeEngine {
         for field in field_defs {
             if matches!(&field.type_, FieldType::Computed { .. }) {
                 let value = self.derive(field, entity_fields).await?;
-                entity_fields.insert(field.name.clone(), value);
+                entity_fields.insert(field.name.to_string(), value);
             }
         }
         Ok(())
@@ -100,7 +114,7 @@ mod tests {
     fn make_computed_field(name: &str, derive: &str) -> FieldDef {
         FieldDef {
             id: Ulid::new(),
-            name: name.to_string(),
+            name: name.into(),
             description: None,
             type_: FieldType::Computed {
                 derive: derive.to_string(),
@@ -117,7 +131,7 @@ mod tests {
     fn make_text_field(name: &str) -> FieldDef {
         FieldDef {
             id: Ulid::new(),
-            name: name.to_string(),
+            name: name.into(),
             description: None,
             type_: FieldType::Text { single_line: true },
             default: None,
@@ -135,10 +149,7 @@ mod tests {
         engine.register(
             "double-title",
             Box::new(|fields| {
-                let title = fields
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let title = fields.get("title").and_then(|v| v.as_str()).unwrap_or("");
                 let doubled = format!("{}{}", title, title);
                 Box::pin(async move { serde_json::Value::String(doubled) })
             }),

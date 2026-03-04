@@ -54,7 +54,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateColumn {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("column", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            let mut entity = ectx
+                .read("column", self.id.as_str())
+                .await
+                .map_err(KanbanError::from_entity_error)?;
 
             if let Some(name) = &self.name {
                 entity.set("name", json!(name));

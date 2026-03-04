@@ -14,11 +14,13 @@
 pub mod compute;
 pub mod context;
 pub mod error;
+pub mod id_types;
 pub mod types;
 pub mod validation;
 
 pub use compute::{ComputeEngine, DeriveFn};
 pub use context::{load_yaml_dir, FieldsContext, FieldsContextBuilder};
 pub use error::{FieldsError, Result};
+pub use id_types::{EntityTypeName, FieldName};
 pub use types::{Display, Editor, EntityDef, FieldDef, FieldType, SelectOption, SortKind};
 pub use validation::{EntityLookup, ValidationEngine};

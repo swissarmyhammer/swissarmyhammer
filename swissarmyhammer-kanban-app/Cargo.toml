@@ -23,6 +23,7 @@ dirs = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

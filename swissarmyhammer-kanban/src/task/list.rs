@@ -112,7 +112,10 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
 
                     // Filter by assignee
                     if let Some(ref assignee) = self.assignee {
-                        if !t.get_string_list("assignees").contains(&assignee.to_string()) {
+                        if !t
+                            .get_string_list("assignees")
+                            .contains(&assignee.to_string())
+                        {
                             return false;
                         }
                     }

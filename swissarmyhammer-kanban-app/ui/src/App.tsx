@@ -137,7 +137,7 @@ function App() {
 
   const handleUpdateTitle = useCallback(async (taskId: string, title: string) => {
     try {
-      await invoke("update_task_title", { id: taskId, title });
+      await invoke("update_entity_field", { entity_type: "task", id: taskId, field_name: "title", value: title });
       refresh();
     } catch (e) {
       console.error("Failed to update task title:", e);
@@ -146,7 +146,7 @@ function App() {
 
   const handleUpdateDescription = useCallback(async (taskId: string, description: string) => {
     try {
-      await invoke("update_task_description", { id: taskId, description });
+      await invoke("update_entity_field", { entity_type: "task", id: taskId, field_name: "body", value: description });
       refresh();
     } catch (e) {
       console.error("Failed to update task description:", e);

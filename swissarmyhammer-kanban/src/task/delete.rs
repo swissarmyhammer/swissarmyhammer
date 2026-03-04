@@ -38,7 +38,10 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
             let ectx = ctx.entity_context().await?;
 
             // Read the task first to verify it exists and get its data
-            let entity = ectx.read("task", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            let entity = ectx
+                .read("task", self.id.as_str())
+                .await
+                .map_err(KanbanError::from_entity_error)?;
             let title = entity.get_str("title").unwrap_or("").to_string();
 
             // Remove this task from the depends_on list of all other tasks
@@ -50,10 +53,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
 
                 let deps = t.get_string_list("depends_on");
                 if deps.contains(&self.id.to_string()) {
-                    let new_deps: Vec<String> = deps
-                        .into_iter()
-                        .filter(|d| d != self.id.as_str())
-                        .collect();
+                    let new_deps: Vec<String> =
+                        deps.into_iter().filter(|d| d != self.id.as_str()).collect();
                     t.set("depends_on", serde_json::to_value(&new_deps)?);
                     ectx.write(&t).await?;
                 }

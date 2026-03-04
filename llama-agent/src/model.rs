@@ -681,12 +681,18 @@ mod tests {
         assert!(first.is_ok(), "First call should succeed");
 
         let second = get_or_init_backend();
-        assert!(second.is_ok(), "Second call should also succeed (idempotent)");
+        assert!(
+            second.is_ok(),
+            "Second call should also succeed (idempotent)"
+        );
 
         // Both calls should return the same Arc (same underlying backend)
         let a = first.unwrap();
         let b = second.unwrap();
-        assert!(Arc::ptr_eq(&a, &b), "Both calls should return the same backend instance");
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "Both calls should return the same backend instance"
+        );
     }
 
     #[tokio::test]

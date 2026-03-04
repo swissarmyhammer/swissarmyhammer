@@ -101,7 +101,10 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
 
                     // Filter by assignee if specified
                     if let Some(ref assignee) = self.assignee {
-                        if !t.get_string_list("assignees").contains(&assignee.to_string()) {
+                        if !t
+                            .get_string_list("assignees")
+                            .contains(&assignee.to_string())
+                        {
                             return false;
                         }
                     }

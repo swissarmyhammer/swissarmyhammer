@@ -90,8 +90,11 @@ pub fn task_blocked_by(
 pub fn task_blocks(entity: &Entity, all_tasks: &[Entity]) -> Vec<String> {
     all_tasks
         .iter()
-        .filter(|t| t.get_string_list("depends_on").contains(&entity.id))
-        .map(|t| t.id.clone())
+        .filter(|t| {
+            t.get_string_list("depends_on")
+                .contains(&entity.id.to_string())
+        })
+        .map(|t| t.id.to_string())
         .collect()
 }
 
@@ -189,10 +192,7 @@ mod tests {
         completed: u32,
     ) -> Entity {
         let mut e = make_task(id, title, body, column);
-        e.set(
-            "tags",
-            json!(tags),
-        );
+        e.set("tags", json!(tags));
         let percent = if total > 0 {
             (completed as f64 / total as f64 * 100.0).round() as u32
         } else {
@@ -207,7 +207,15 @@ mod tests {
 
     #[test]
     fn test_task_tags_from_computed_field() {
-        let e = make_task_computed("t1", "Test", "Fix the #bug in #login", "todo", vec!["bug", "login"], 0, 0);
+        let e = make_task_computed(
+            "t1",
+            "Test",
+            "Fix the #bug in #login",
+            "todo",
+            vec!["bug", "login"],
+            0,
+            0,
+        );
         let tags = task_tags(&e);
         assert_eq!(tags.len(), 2);
         assert!(tags.contains(&"bug".to_string()));
@@ -305,7 +313,15 @@ mod tests {
 
     #[test]
     fn test_task_entity_to_json() {
-        let mut e = make_task_computed("t1", "Test Task", "Some #bug description", "todo", vec!["bug"], 0, 0);
+        let mut e = make_task_computed(
+            "t1",
+            "Test Task",
+            "Some #bug description",
+            "todo",
+            vec!["bug"],
+            0,
+            0,
+        );
         e.set("position_swimlane", json!("feature"));
         e.set("position_ordinal", json!("a1"));
         e.set("assignees", json!(["alice"]));

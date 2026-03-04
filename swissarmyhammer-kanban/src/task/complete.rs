@@ -57,9 +57,7 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
                     continue; // Skip the task being completed
                 }
                 if t.get_str("position_column") == Some(terminal.id.as_str()) {
-                    let ord = Ordinal::from_string(
-                        t.get_str("position_ordinal").unwrap_or("a0"),
-                    );
+                    let ord = Ordinal::from_string(t.get_str("position_ordinal").unwrap_or("a0"));
                     last_ordinal = Some(match last_ordinal {
                         None => ord,
                         Some(ref o) if ord > *o => ord,
@@ -69,10 +67,7 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
             }
 
             // Update position to done column (preserving swimlane)
-            entity.set(
-                "position_column",
-                serde_json::json!(terminal.id.as_str()),
-            );
+            entity.set("position_column", serde_json::json!(terminal.id.as_str()));
             entity.set(
                 "position_ordinal",
                 serde_json::json!(match last_ordinal {
@@ -188,9 +183,9 @@ mod tests {
         use crate::task::MoveTask;
         MoveTask::to_column_and_swimlane(task_id, "doing", "feature")
             .execute(&ctx)
-        .await
-        .into_result()
-        .unwrap();
+            .await
+            .into_result()
+            .unwrap();
 
         // Complete the task
         let result = CompleteTask::new(task_id)

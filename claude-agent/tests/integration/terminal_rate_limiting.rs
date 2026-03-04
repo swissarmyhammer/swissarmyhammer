@@ -126,7 +126,10 @@ async fn test_rate_limiting_terminal_execute() {
 
     // Create a terminal with an explicit working directory to avoid depending
     // on current_dir() which can be unreliable under concurrent test load
-    let terminal_id = manager.create_terminal(Some("/tmp".to_string())).await.unwrap();
+    let terminal_id = manager
+        .create_terminal(Some("/tmp".to_string()))
+        .await
+        .unwrap();
 
     // First 2 executions should succeed (cost 2 each = 4 tokens)
     for i in 0..2 {

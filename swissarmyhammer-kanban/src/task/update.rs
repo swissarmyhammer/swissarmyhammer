@@ -89,7 +89,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("task", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            let mut entity = ectx
+                .read("task", self.id.as_str())
+                .await
+                .map_err(KanbanError::from_entity_error)?;
 
             // Apply updates
             if let Some(title) = &self.title {
@@ -124,7 +127,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
                 if !tag_name_exists_entity(ectx, tag_name).await {
                     let color = auto_color::auto_color(tag_name).to_string();
                     let tag_id = ulid::Ulid::new().to_string();
-                    let mut tag_entity = Entity::new("tag", &tag_id);
+                    let mut tag_entity = Entity::new("tag", tag_id.as_str());
                     tag_entity.set("tag_name", serde_json::json!(tag_name));
                     tag_entity.set("color", serde_json::json!(color));
                     ectx.write(&tag_entity).await?;

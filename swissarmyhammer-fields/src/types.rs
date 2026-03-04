@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
+use crate::id_types::{EntityTypeName, FieldName};
+
 /// A single option in a select or multi-select field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SelectOption {
@@ -49,7 +51,7 @@ pub enum FieldType {
     },
     /// Stores entity IDs (ULIDs) pointing to another entity type.
     Reference {
-        entity: String,
+        entity: EntityTypeName,
         #[serde(default)]
         multiple: bool,
     },
@@ -60,7 +62,7 @@ pub enum FieldType {
 }
 
 /// How a field value is edited.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum Editor {
     Markdown,
@@ -73,7 +75,7 @@ pub enum Editor {
 }
 
 /// How a field value is displayed.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum Display {
     Markdown,
@@ -87,7 +89,7 @@ pub enum Display {
 }
 
 /// How a field sorts.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum SortKind {
     Alphanumeric,
@@ -101,13 +103,13 @@ pub enum SortKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FieldDef {
     pub id: Ulid,
-    pub name: String,
+    pub name: FieldName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(rename = "type")]
     pub type_: FieldType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
+    pub default: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor: Option<Editor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,23 +165,28 @@ impl FieldDef {
         }
     }
 
-    /// Return the explicit sort kind, or `Lexical` as the default.
+    /// Infer sort kind from field type if not explicitly set.
     pub fn effective_sort(&self) -> SortKind {
         if let Some(ref s) = self.sort {
             return s.clone();
         }
-        SortKind::Lexical
+        match &self.type_ {
+            FieldType::Date => SortKind::Datetime,
+            FieldType::Number { .. } => SortKind::Numeric,
+            FieldType::Select { .. } | FieldType::MultiSelect { .. } => SortKind::OptionOrder,
+            _ => SortKind::Lexical,
+        }
     }
 }
 
 /// An entity definition — a template declaring which fields belong to an entity type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityDef {
-    pub name: String,
+    pub name: EntityTypeName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body_field: Option<String>,
+    pub body_field: Option<FieldName>,
     #[serde(default)]
-    pub fields: Vec<String>,
+    pub fields: Vec<FieldName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
 }
@@ -295,7 +302,7 @@ mod tests {
                     },
                 ],
             },
-            default: Some("Backlog".into()),
+            default: Some(serde_json::json!("Backlog")),
             editor: Some(Editor::Select),
             display: Some(Display::Badge),
             sort: Some(SortKind::OptionOrder),
@@ -488,7 +495,7 @@ sort: option-order
 "#;
         let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "status");
-        assert_eq!(field.default, Some("Backlog".into()));
+        assert_eq!(field.default, Some(serde_json::json!("Backlog")));
         assert_eq!(field.editor, Some(Editor::Select));
         assert_eq!(field.display, Some(Display::Badge));
         assert_eq!(field.sort, Some(SortKind::OptionOrder));
@@ -627,8 +634,8 @@ fields:
         assert_eq!(entity.name, "task");
         assert_eq!(entity.body_field, Some("body".into()));
         assert_eq!(entity.fields.len(), 8);
-        assert!(entity.fields.contains(&"assignees".to_string()));
-        assert!(entity.fields.contains(&"depends_on".to_string()));
+        assert!(entity.fields.contains(&FieldName::from("assignees")));
+        assert!(entity.fields.contains(&FieldName::from("depends_on")));
     }
 
     #[test]
@@ -672,5 +679,125 @@ fields:
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Datetime);
+    }
+
+    #[test]
+    fn effective_sort_date_defaults_to_datetime() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "due".into(),
+            description: None,
+            type_: FieldType::Date,
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Datetime);
+    }
+
+    #[test]
+    fn effective_sort_number_defaults_to_numeric() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "priority".into(),
+            description: None,
+            type_: FieldType::Number {
+                min: None,
+                max: None,
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Numeric);
+    }
+
+    #[test]
+    fn effective_sort_select_defaults_to_option_order() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "status".into(),
+            description: None,
+            type_: FieldType::Select {
+                options: vec![SelectOption {
+                    value: "A".into(),
+                    label: None,
+                    color: None,
+                    icon: None,
+                    order: 0,
+                }],
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::OptionOrder);
+
+        // Also verify MultiSelect infers the same.
+        let multi = FieldDef {
+            id: Ulid::new(),
+            name: "tags".into(),
+            description: None,
+            type_: FieldType::MultiSelect {
+                options: vec![SelectOption {
+                    value: "X".into(),
+                    label: None,
+                    color: None,
+                    icon: None,
+                    order: 0,
+                }],
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(multi.effective_sort(), SortKind::OptionOrder);
+    }
+
+    #[test]
+    fn effective_sort_text_defaults_to_lexical() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "title".into(),
+            description: None,
+            type_: FieldType::Text { single_line: true },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn effective_sort_explicit_overrides_inference() {
+        // Date would normally infer Datetime, but explicit Lexical overrides it.
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "created".into(),
+            description: None,
+            type_: FieldType::Date,
+            default: None,
+            editor: None,
+            display: None,
+            sort: Some(SortKind::Lexical),
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
 }

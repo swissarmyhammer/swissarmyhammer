@@ -151,7 +151,12 @@ impl KanbanError {
                 "actor" => return Self::ActorNotFound { id: id.clone() },
                 "tag" => return Self::TagNotFound { id: id.clone() },
                 "comment" => return Self::CommentNotFound { id: id.clone() },
-                _ => return Self::NotFound { resource: entity_type.clone(), id: id.clone() },
+                _ => {
+                    return Self::NotFound {
+                        resource: entity_type.clone(),
+                        id: id.clone(),
+                    }
+                }
             }
         }
         Self::EntityError(err)

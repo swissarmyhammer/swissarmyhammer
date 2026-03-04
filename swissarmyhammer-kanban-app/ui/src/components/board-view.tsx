@@ -334,7 +334,7 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
   const handleRenameColumn = useCallback(
     async (columnId: string, name: string) => {
       try {
-        await invoke("rename_column", { id: columnId, name });
+        await invoke("update_entity_field", { entity_type: "column", id: columnId, field_name: "name", value: name });
         onTaskMoved?.();
       } catch (e) {
         console.error("Failed to rename column:", e);

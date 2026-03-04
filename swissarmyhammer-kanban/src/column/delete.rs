@@ -37,7 +37,9 @@ impl Execute<KanbanContext, KanbanError> for DeleteColumn {
             let ectx = ctx.entity_context().await?;
 
             // Check column exists (read will error if not found)
-            ectx.read("column", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            ectx.read("column", self.id.as_str())
+                .await
+                .map_err(KanbanError::from_entity_error)?;
 
             // Check for tasks in this column
             let tasks = ectx.list("task").await?;

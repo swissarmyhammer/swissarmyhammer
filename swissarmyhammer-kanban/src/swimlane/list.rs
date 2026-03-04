@@ -22,9 +22,8 @@ impl Execute<KanbanContext, KanbanError> for ListSwimlanes {
         match async {
             let ectx = ctx.entity_context().await?;
             let mut swimlanes = ectx.list("swimlane").await?;
-            swimlanes.sort_by_key(|s| {
-                s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
-            });
+            swimlanes
+                .sort_by_key(|s| s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
 
             let swimlanes_json: Vec<Value> =
                 swimlanes.iter().map(swimlane_entity_to_json).collect();

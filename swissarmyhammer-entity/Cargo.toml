@@ -16,9 +16,15 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 ulid = { workspace = true }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 diffy = { workspace = true }
+tempfile = { workspace = true, optional = true }
+
+[features]
+test-support = ["dep:tempfile"]
 
 [dev-dependencies]
+swissarmyhammer-entity = { path = ".", features = ["test-support"] }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }

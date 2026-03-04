@@ -1357,11 +1357,11 @@ impl BufferedStreamingParser {
 #[cfg(test)]
 mod qwen3coder_model_integration {
     use super::*;
+    use crate::model::get_or_init_backend;
     use crate::types::{
         MCPServerConfig, Message, MessageRole, ModelConfig, ModelSource, ProcessServerConfig,
         RetryConfig, Session, SessionId, ToolDefinition,
     };
-    use crate::model::get_or_init_backend;
     use llama_cpp_2::{
         context::params::LlamaContextParams,
         model::{params::LlamaModelParams, LlamaModel},

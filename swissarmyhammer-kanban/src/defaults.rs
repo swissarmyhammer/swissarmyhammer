@@ -19,12 +19,10 @@ use crate::tag_parser;
 use crate::task_helpers;
 
 /// Builtin field definition YAML files, embedded at compile time.
-static BUILTIN_DEFINITIONS: Dir =
-    include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/definitions");
+static BUILTIN_DEFINITIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/definitions");
 
 /// Builtin entity definition YAML files, embedded at compile time.
-static BUILTIN_ENTITIES: Dir =
-    include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/entities");
+static BUILTIN_ENTITIES: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/entities");
 
 /// Load builtin field definitions as `(name, yaml_content)` pairs.
 pub fn builtin_field_definitions() -> Vec<(&'static str, &'static str)> {
@@ -58,16 +56,10 @@ pub fn kanban_compute_engine() -> ComputeEngine {
     engine.register(
         "parse-body-tags",
         Box::new(|fields| {
-            let body = fields
-                .get("body")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let body = fields.get("body").and_then(|v| v.as_str()).unwrap_or("");
             let tags = tag_parser::parse_tags(body);
-            let value = serde_json::Value::Array(
-                tags.into_iter()
-                    .map(serde_json::Value::String)
-                    .collect(),
-            );
+            let value =
+                serde_json::Value::Array(tags.into_iter().map(serde_json::Value::String).collect());
             Box::pin(async move { value })
         }),
     );
@@ -76,10 +68,7 @@ pub fn kanban_compute_engine() -> ComputeEngine {
     engine.register(
         "parse-body-progress",
         Box::new(|fields| {
-            let body = fields
-                .get("body")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let body = fields.get("body").and_then(|v| v.as_str()).unwrap_or("");
             let (total, completed) = task_helpers::parse_checklist_counts(body);
             let percent = if total > 0 {
                 (completed as f64 / total as f64 * 100.0).round() as u32
@@ -165,7 +154,7 @@ impl EntityLookup for KanbanLookup {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use swissarmyhammer_fields::{EntityDef, FieldDef};
+    use swissarmyhammer_fields::{EntityDef, FieldDef, FieldName};
 
     #[test]
     fn builtin_field_definitions_load() {
@@ -245,12 +234,12 @@ mod tests {
 
         assert_eq!(entity.name, "task");
         assert_eq!(entity.body_field, Some("body".into()));
-        assert!(entity.fields.contains(&"title".to_string()));
-        assert!(entity.fields.contains(&"position_column".to_string()));
-        assert!(entity.fields.contains(&"position_swimlane".to_string()));
-        assert!(entity.fields.contains(&"position_ordinal".to_string()));
-        assert!(entity.fields.contains(&"attachments".to_string()));
-        assert!(entity.fields.contains(&"progress".to_string()));
+        assert!(entity.fields.iter().any(|f| f == "title"));
+        assert!(entity.fields.iter().any(|f| f == "position_column"));
+        assert!(entity.fields.iter().any(|f| f == "position_swimlane"));
+        assert!(entity.fields.iter().any(|f| f == "position_ordinal"));
+        assert!(entity.fields.iter().any(|f| f == "attachments"));
+        assert!(entity.fields.iter().any(|f| f == "progress"));
     }
 
     #[test]
@@ -260,8 +249,8 @@ mod tests {
         let entity: EntityDef = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(entity.name, "board");
-        assert!(entity.fields.contains(&"name".to_string()));
-        assert!(entity.fields.contains(&"description".to_string()));
+        assert!(entity.fields.iter().any(|f| f == "name"));
+        assert!(entity.fields.iter().any(|f| f == "description"));
     }
 
     #[test]
@@ -271,17 +260,17 @@ mod tests {
         let entity: EntityDef = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(entity.name, "attachment");
-        assert!(entity.fields.contains(&"attachment_name".to_string()));
-        assert!(entity.fields.contains(&"attachment_path".to_string()));
-        assert!(entity.fields.contains(&"attachment_mime_type".to_string()));
-        assert!(entity.fields.contains(&"attachment_size".to_string()));
-        assert!(!entity.fields.contains(&"attachment_task".to_string()));
+        assert!(entity.fields.iter().any(|f| f == "attachment_name"));
+        assert!(entity.fields.iter().any(|f| f == "attachment_path"));
+        assert!(entity.fields.iter().any(|f| f == "attachment_mime_type"));
+        assert!(entity.fields.iter().any(|f| f == "attachment_size"));
+        assert!(!entity.fields.iter().any(|f| f == "attachment_task"));
     }
 
     #[test]
     fn builtin_entity_fields_reference_existing_field_defs() {
         let field_defs = builtin_field_definitions();
-        let field_names: Vec<String> = field_defs
+        let field_names: Vec<FieldName> = field_defs
             .iter()
             .map(|(_, yaml)| {
                 let def: FieldDef = serde_yaml::from_str(yaml).unwrap();
@@ -336,7 +325,7 @@ mod tests {
         let engine = kanban_compute_engine();
         let field = swissarmyhammer_fields::FieldDef {
             id: ulid::Ulid::new(),
-            name: "tags".to_string(),
+            name: "tags".into(),
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-tags".to_string(),
@@ -365,7 +354,7 @@ mod tests {
         let engine = kanban_compute_engine();
         let field = swissarmyhammer_fields::FieldDef {
             id: ulid::Ulid::new(),
-            name: "progress".to_string(),
+            name: "progress".into(),
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-progress".to_string(),
@@ -414,7 +403,7 @@ mod tests {
         let engine = kanban_compute_engine();
         let field = swissarmyhammer_fields::FieldDef {
             id: ulid::Ulid::new(),
-            name: "progress".to_string(),
+            name: "progress".into(),
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-progress".to_string(),

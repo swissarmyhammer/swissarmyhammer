@@ -41,35 +41,29 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let ectx = ctx.entity_context().await?;
-            let board = ectx.read("board", "board").await.map_err(|_| {
-                KanbanError::NotInitialized {
-                    path: ctx.root().to_path_buf(),
-                }
-            })?;
+            let board =
+                ectx.read("board", "board")
+                    .await
+                    .map_err(|_| KanbanError::NotInitialized {
+                        path: ctx.root().to_path_buf(),
+                    })?;
             let board_name = board.get_str("name").unwrap_or("");
             let board_description = board.get_str("description");
             let mut all_columns = ectx.list("column").await?;
-            all_columns.sort_by_key(|c| {
-                c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
-            });
+            all_columns
+                .sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
             let mut all_swimlanes = ectx.list("swimlane").await?;
-            all_swimlanes.sort_by_key(|s| {
-                s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize
-            });
+            all_swimlanes
+                .sort_by_key(|s| s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
 
             // If counts are not requested, return basic board structure
             if !self.include_counts {
                 let all_tags = ectx.list("tag").await?;
                 let columns_json: Vec<Value> =
                     all_columns.iter().map(column_entity_to_json).collect();
-                let swimlanes_json: Vec<Value> = all_swimlanes
-                    .iter()
-                    .map(swimlane_entity_to_json)
-                    .collect();
-                let tags_json: Vec<Value> = all_tags
-                    .iter()
-                    .map(tag_entity_to_json)
-                    .collect();
+                let swimlanes_json: Vec<Value> =
+                    all_swimlanes.iter().map(swimlane_entity_to_json).collect();
+                let tags_json: Vec<Value> = all_tags.iter().map(tag_entity_to_json).collect();
                 return Ok(json!({
                     "name": board_name,
                     "description": board_description,
@@ -92,7 +86,10 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
 
             for task in &all_tasks {
-                let col = task.get_str("position_column").unwrap_or("todo").to_string();
+                let col = task
+                    .get_str("position_column")
+                    .unwrap_or("todo")
+                    .to_string();
                 *column_counts.entry(col.clone()).or_insert(0) += 1;
 
                 if task_is_ready(task, &all_tasks, terminal_id) {
@@ -124,7 +121,10 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .iter()
                 .map(|col| {
                     let count = column_counts.get(col.id.as_str()).copied().unwrap_or(0);
-                    let ready = column_ready_counts.get(col.id.as_str()).copied().unwrap_or(0);
+                    let ready = column_ready_counts
+                        .get(col.id.as_str())
+                        .copied()
+                        .unwrap_or(0);
 
                     json!({
                         "id": col.id,

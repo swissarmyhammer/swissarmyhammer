@@ -7979,6 +7979,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "swissarmyhammer-common",
+ "swissarmyhammer-entity",
  "swissarmyhammer-fields",
  "tempfile",
  "thiserror 1.0.69",
@@ -7996,6 +7998,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "swissarmyhammer-common",
  "swissarmyhammer-js",
  "tempfile",
  "thiserror 1.0.69",
@@ -8080,6 +8083,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

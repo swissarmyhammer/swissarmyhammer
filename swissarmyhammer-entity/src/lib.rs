@@ -19,12 +19,22 @@ pub mod changelog;
 pub mod context;
 pub mod entity;
 pub mod error;
+pub mod id_types;
 pub mod io;
 
 pub use context::EntityContext;
 pub use entity::Entity;
 pub use error::{EntityError, Result};
+pub use id_types::{ChangeEntryId, EntityId, TransactionId};
 pub use io::{
-    entity_extension, entity_file_path, read_entity, read_entity_dir, trash_entity_files,
-    write_entity,
+    entity_extension, entity_file_path, read_entity, read_entity_dir, restore_entity_files,
+    trash_entity_files, write_entity,
 };
+
+/// Test utilities shared between unit tests and integration tests.
+///
+/// Available when running tests (`#[cfg(test)]`) or when the `test-support`
+/// feature is enabled. Integration tests enable `test-support` via
+/// dev-dependency features.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_utils;

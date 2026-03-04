@@ -29,7 +29,6 @@ use swissarmyhammer_kanban::{
     },
     board::{GetBoard, InitBoard, UpdateBoard},
     column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn},
-
     parse::parse_input,
     swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
     tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
@@ -771,7 +770,6 @@ mod tests {
         let data = parse_json(result);
         data["id"].as_str().expect("Expected id field").to_string()
     }
-
 
     #[tokio::test]
     async fn test_init_board() {

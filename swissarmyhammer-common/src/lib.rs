@@ -21,6 +21,7 @@
 
 pub mod constants;
 pub mod directory;
+pub mod id_types;
 pub mod editor;
 pub mod env_loader;
 pub mod error;

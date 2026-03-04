@@ -50,7 +50,7 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
             if !tag_name_exists_entity(ectx, &slug).await {
                 let color = auto_color::auto_color(&slug).to_string();
                 let tag_id = ulid::Ulid::new().to_string();
-                let mut tag_entity = Entity::new("tag", &tag_id);
+                let mut tag_entity = Entity::new("tag", tag_id.as_str());
                 tag_entity.set("tag_name", json!(slug));
                 tag_entity.set("color", json!(color));
                 ectx.write(&tag_entity).await?;

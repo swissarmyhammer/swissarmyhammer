@@ -66,7 +66,7 @@ impl Execute<KanbanContext, KanbanError> for AddTag {
                 .unwrap_or_else(|| auto_color::auto_color(&self.name).to_string());
 
             let tag_id = ulid::Ulid::new().to_string();
-            let mut entity = Entity::new("tag", &tag_id);
+            let mut entity = Entity::new("tag", tag_id.as_str());
             entity.set("tag_name", json!(self.name));
             entity.set("color", json!(color));
             if let Some(desc) = &self.description {

@@ -11,6 +11,14 @@ use cli::Cli;
 use state::AppState;
 
 fn main() {
+    // Initialize tracing subscriber so log output is visible.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let cli = Cli::parse();
 
     // If a CLI subcommand was given (and it's not `gui`), handle it and exit
@@ -20,6 +28,7 @@ fn main() {
     }
 
     // Otherwise, launch the Tauri GUI
+    tracing::info!("Launching Tauri GUI");
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());
     tauri::Builder::default()
@@ -30,9 +39,6 @@ fn main() {
             commands::list_tasks,
             commands::move_task,
             commands::add_task,
-            commands::rename_column,
-            commands::update_task_title,
-            commands::update_task_description,
             commands::reorder_columns,
             commands::update_tag,
             commands::show_tag_context_menu,
@@ -45,6 +51,14 @@ fn main() {
             commands::set_keymap_mode,
             commands::get_entity_schema,
             commands::update_entity_field,
+            commands::delete_task,
+            commands::delete_tag,
+            commands::delete_column,
+            commands::delete_actor,
+            commands::delete_swimlane,
+            commands::delete_attachment,
+            commands::undo_operation,
+            commands::redo_operation,
         ])
         .setup(|app| {
             menu::rebuild_menu(app.handle());

@@ -16,6 +16,7 @@ use tracing::debug;
 use ulid::Ulid;
 
 use crate::error::{FieldsError, Result};
+use crate::id_types::{EntityTypeName, FieldName};
 use crate::types::{EntityDef, FieldDef};
 
 /// Builder for `FieldsContext`. Created by `FieldsContext::open()`.
@@ -71,9 +72,9 @@ pub struct FieldsContext {
     root: PathBuf,
     fields: Vec<FieldDef>,
     entities: Vec<EntityDef>,
-    name_index: HashMap<String, usize>,
+    name_index: HashMap<FieldName, usize>,
     id_index: HashMap<Ulid, usize>,
-    entity_index: HashMap<String, usize>,
+    entity_index: HashMap<EntityTypeName, usize>,
 }
 
 impl FieldsContext {
@@ -278,7 +279,7 @@ impl FieldsContext {
         entity
             .fields
             .iter()
-            .filter_map(|name| self.get_field_by_name(name))
+            .filter_map(|name| self.get_field_by_name(name.as_str()))
             .collect()
     }
 
@@ -294,11 +295,13 @@ impl FieldsContext {
 
     // --- Internal ---
 
-    fn definition_path(&self, name: &str) -> PathBuf {
+    fn definition_path(&self, name: impl AsRef<str>) -> PathBuf {
+        let name = name.as_ref();
         self.root.join("definitions").join(format!("{name}.yaml"))
     }
 
-    fn entity_path(&self, name: &str) -> PathBuf {
+    fn entity_path(&self, name: impl AsRef<str>) -> PathBuf {
+        let name = name.as_ref();
         self.root.join("entities").join(format!("{name}.yaml"))
     }
 
@@ -371,6 +374,15 @@ async fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 ///
 /// Scans for `.yaml` files, returns the file stem as the name.
 /// Silently skips non-existent directories.
+///
+/// # Why synchronous
+///
+/// This function intentionally uses `std::fs` (blocking I/O) rather than
+/// `tokio::fs`. It is called during context construction via
+/// `FieldsContext::from_yaml_sources`, which follows a synchronous builder
+/// pattern. The target directories are small (a handful of YAML files), so
+/// the blocking cost is negligible. Converting to async would require the
+/// builder itself to be async, adding complexity for no practical benefit.
 pub fn load_yaml_dir(dir: &Path) -> Vec<(String, String)> {
     let mut entries = Vec::new();
     if !dir.exists() {
@@ -405,7 +417,7 @@ mod tests {
     fn make_test_field(name: &str) -> FieldDef {
         FieldDef {
             id: Ulid::new(),
-            name: name.to_string(),
+            name: name.into(),
             description: None,
             type_: FieldType::Text { single_line: true },
             default: None,
@@ -724,7 +736,7 @@ type:
             .iter()
             .map(|n| FieldDef {
                 id: Ulid::new(),
-                name: n.to_string(),
+                name: FieldName::from(*n),
                 description: None,
                 type_: FieldType::Text { single_line: true },
                 default: None,
@@ -742,7 +754,7 @@ type:
 
         assert_eq!(ctx.all_fields().len(), 5);
         for f in &fields {
-            assert_eq!(ctx.get_field_by_name(&f.name).unwrap().id, f.id);
+            assert_eq!(ctx.get_field_by_name(f.name.as_str()).unwrap().id, f.id);
             assert_eq!(ctx.get_field_by_id(&f.id).unwrap().name, f.name);
         }
     }

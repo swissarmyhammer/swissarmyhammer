@@ -37,7 +37,9 @@ impl Execute<KanbanContext, KanbanError> for DeleteActor {
             let ectx = ctx.entity_context().await?;
 
             // Check actor exists
-            ectx.read("actor", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            ectx.read("actor", self.id.as_str())
+                .await
+                .map_err(KanbanError::from_entity_error)?;
 
             // Remove actor from all task assignee lists
             let all_tasks = ectx.list("task").await?;
@@ -170,7 +172,9 @@ mod tests {
         // Verify assignment
         let ectx = ctx.entity_context().await.unwrap();
         let task = ectx.read("task", task_id).await.unwrap();
-        assert!(task.get_string_list("assignees").contains(&"assistant".to_string()));
+        assert!(task
+            .get_string_list("assignees")
+            .contains(&"assistant".to_string()));
 
         // Delete actor
         DeleteActor::new("assistant")
@@ -181,6 +185,8 @@ mod tests {
 
         // Verify task no longer has assignment
         let task = ectx.read("task", task_id).await.unwrap();
-        assert!(!task.get_string_list("assignees").contains(&"assistant".to_string()));
+        assert!(!task
+            .get_string_list("assignees")
+            .contains(&"assistant".to_string()));
     }
 }
