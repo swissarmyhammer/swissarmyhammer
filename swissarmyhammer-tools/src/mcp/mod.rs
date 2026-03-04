@@ -26,14 +26,14 @@
 //!
 //! ### Starting a Server
 //!
-//! ```rust
+//! ```rust,no_run
 //! use swissarmyhammer_tools::mcp::{McpServer, start_mcp_server, McpServerMode};
 //! use swissarmyhammer_prompts::PromptLibrary;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create and start an MCP server in stdio mode
 //! let library = PromptLibrary::new();
-//! let handle = start_mcp_server(library, None, McpServerMode::Stdio, None).await?;
+//! let handle = start_mcp_server(McpServerMode::Stdio, Some(library), None, None).await?;
 //!
 //! // Server is now running and handling requests
 //! # Ok(())
@@ -42,14 +42,14 @@
 //!
 //! ### Registering Tools
 //!
-//! ```rust
+//! ```rust,no_run
 //! use swissarmyhammer_tools::mcp::{ToolRegistry, register_file_tools, register_shell_tools};
 //!
-//! # fn example() {
+//! # async fn example() {
 //! let mut registry = ToolRegistry::new();
 //!
 //! // Register tool categories
-//! register_file_tools(&mut registry);
+//! register_file_tools(&mut registry).await;
 //! register_shell_tools(&mut registry);
 //!
 //! println!("Registered {} tools", registry.list_tools().len());
@@ -59,7 +59,6 @@
 // Module declarations
 pub mod error_handling;
 pub mod file_watcher;
-pub mod notifications;
 pub mod notify_types;
 pub mod plan_notifications;
 pub mod responses;
@@ -79,9 +78,6 @@ pub mod test_utils;
 mod tests;
 
 // Re-export commonly used items from submodules
-pub use notifications::{
-    FlowNotification, FlowNotificationMetadata, NotificationSender, SendError as FlowSendError,
-};
 pub use plan_notifications::{
     PlanEntry, PlanEntryPriority, PlanEntryStatus, PlanNotification, PlanSender,
     SendError as PlanSendError,

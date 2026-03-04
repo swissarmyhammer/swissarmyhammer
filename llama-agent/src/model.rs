@@ -18,7 +18,7 @@ use tracing::{debug, info, warn};
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
-static GLOBAL_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
+static GLOBAL_BACKEND: OnceLock<Result<Arc<LlamaBackend>, String>> = OnceLock::new();
 
 /// Get or initialize the global LlamaBackend singleton.
 ///
@@ -29,40 +29,20 @@ static GLOBAL_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 /// every caller shares the same `Arc<LlamaBackend>` stored in `GLOBAL_BACKEND`,
 /// preventing "Backend already initialized" errors when tests or other code
 /// paths race to initialize the backend.
+///
+/// Uses `OnceLock::get_or_init` to guarantee that exactly one thread performs
+/// initialization, eliminating TOCTOU races between checking the lock and
+/// calling `LlamaBackend::init()`.
 pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, ModelError> {
-    // Fast path: backend already initialized
-    if let Some(backend) = GLOBAL_BACKEND.get() {
-        return Ok(backend.clone());
-    }
+    let result = GLOBAL_BACKEND.get_or_init(|| {
+        LlamaBackend::init()
+            .map(Arc::new)
+            .map_err(|e| format!("Failed to initialize LlamaBackend: {}", e))
+    });
 
-    // Slow path: try to initialize
-    let new_backend = match LlamaBackend::init() {
-        Ok(backend) => Arc::new(backend),
-        Err(llama_cpp_2::LLamaCppError::BackendAlreadyInitialized) => {
-            // Another thread may have raced us and populated the OnceLock
-            // between our get() check and init() call.
-            if let Some(backend) = GLOBAL_BACKEND.get() {
-                return Ok(backend.clone());
-            }
-            // Backend was initialized by code that bypassed this function.
-            // This should not happen if all callers use get_or_init_backend().
-            return Err(ModelError::LoadingFailed(
-                "Backend already initialized by external code".to_string(),
-            ));
-        }
-        Err(e) => {
-            return Err(ModelError::LoadingFailed(format!(
-                "Failed to initialize LlamaBackend: {}",
-                e
-            )));
-        }
-    };
-
-    // Store globally; if another thread beat us, use theirs
-    if GLOBAL_BACKEND.set(new_backend.clone()).is_err() {
-        Ok(GLOBAL_BACKEND.get().unwrap().clone())
-    } else {
-        Ok(new_backend)
+    match result {
+        Ok(backend) => Ok(backend.clone()),
+        Err(e) => Err(ModelError::LoadingFailed(e.clone())),
     }
 }
 

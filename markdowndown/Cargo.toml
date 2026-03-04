@@ -45,3 +45,4 @@ wiremock = { workspace = true }
 mockito = { workspace = true }
 proptest = { workspace = true }
 futures = { workspace = true }
+serial_test = { workspace = true }

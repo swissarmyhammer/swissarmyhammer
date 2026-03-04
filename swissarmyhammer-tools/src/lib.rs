@@ -18,7 +18,7 @@
 //!
 //! ### Basic Server Setup
 //!
-//! ```rust
+//! ```rust,no_run
 //! use swissarmyhammer_tools::{McpServer, ToolRegistry, ToolContext};
 //! use swissarmyhammer_prompts::PromptLibrary;
 //! use std::sync::Arc;
@@ -28,7 +28,7 @@
 //! let library = PromptLibrary::new();
 //!
 //! // Create the MCP server
-//! let server = McpServer::new(library, None).await?;
+//! let server = McpServer::new(library).await?;
 //!
 //! // Initialize to register all tools
 //! server.initialize().await?;
@@ -40,20 +40,20 @@
 //!
 //! ### Registering Custom Tools
 //!
-//! ```rust
+//! ```rust,no_run
 //! use swissarmyhammer_tools::ToolRegistry;
 //!
-//! # fn example() {
+//! # async fn example() {
 //! let mut registry = ToolRegistry::new();
 //!
 //! // Register individual tool categories
-//! swissarmyhammer_tools::register_file_tools(&mut registry);
+//! swissarmyhammer_tools::register_file_tools(&mut registry).await;
 //! swissarmyhammer_tools::register_shell_tools(&mut registry);
 //!
 //! // Access registered tools
 //! let tool_names: Vec<_> = registry.list_tools().iter()
-//!     .map(|t| t.name)
-//!     .collect();
+//!     .map(|t| t.name.clone())
+//!     .collect::<Vec<_>>();
 //! println!("Registered {} tools", tool_names.len());
 //! # }
 //! ```

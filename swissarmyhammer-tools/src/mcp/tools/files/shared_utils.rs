@@ -948,6 +948,7 @@ impl SecureFileAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
@@ -961,6 +962,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_validate_file_path_relative() {
         use std::fs;
         use tempfile::TempDir;
@@ -1129,6 +1131,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_file_path_validator_relative_paths() {
         // Use validator without workspace restrictions for basic testing
         let validator = FilePathValidator::new();
@@ -1174,6 +1177,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_file_path_validator_relative_with_workspace() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
