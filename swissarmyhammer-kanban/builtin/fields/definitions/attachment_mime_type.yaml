@@ -6,3 +6,4 @@ type:
   derive: attachment-mime-type
 editor: none
 display: text
+width: 120

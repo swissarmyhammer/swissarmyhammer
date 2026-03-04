@@ -7,4 +7,4 @@ type:
   multiple: true
 editor: multi-select
 display: badge-list
-filter: substring
+width: 200

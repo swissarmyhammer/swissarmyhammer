@@ -6,3 +6,4 @@ type:
   single_line: false
 editor: markdown
 display: markdown
+width: 400

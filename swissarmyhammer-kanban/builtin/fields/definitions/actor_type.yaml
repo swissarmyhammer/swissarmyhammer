@@ -10,3 +10,4 @@ type:
       order: 1
 editor: select
 display: badge
+width: 120

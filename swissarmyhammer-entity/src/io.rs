@@ -323,6 +323,7 @@ mod tests {
             name: "task".into(),
             body_field: Some("body".into()),
             fields: vec!["title".into(), "body".into()],
+            validate: None,
         }
     }
 
@@ -331,6 +332,7 @@ mod tests {
             name: "tag".into(),
             body_field: None,
             fields: vec!["tag_name".into(), "color".into()],
+            validate: None,
         }
     }
 

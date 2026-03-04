@@ -109,8 +109,7 @@ mod tests {
             editor: None,
             display: None,
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         }
     }
@@ -125,8 +124,7 @@ mod tests {
             editor: None,
             display: None,
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         }
     }

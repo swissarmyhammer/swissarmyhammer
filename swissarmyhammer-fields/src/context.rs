@@ -412,8 +412,7 @@ mod tests {
             editor: Some(Editor::Markdown),
             display: None,
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         }
     }
@@ -653,6 +652,7 @@ type:
             name: "task".into(),
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into()],
+            validate: None,
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -677,6 +677,7 @@ type:
             name: "task".into(),
             body_field: None,
             fields: vec!["title".into(), "status".into(), "missing".into()],
+            validate: None,
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -699,6 +700,7 @@ type:
                 name: "task".into(),
                 body_field: Some("body".into()),
                 fields: vec!["title".into(), "status".into()],
+                validate: None,
             })
             .await
             .unwrap();
@@ -729,8 +731,7 @@ type:
                 editor: None,
                 display: None,
                 sort: None,
-                filter: None,
-                group: None,
+                width: None,
                 validate: None,
             })
             .collect();

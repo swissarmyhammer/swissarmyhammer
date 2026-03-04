@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use swissarmyhammer_js::JsState;
 
 use crate::error::Result;
-use crate::types::{FieldDef, FieldType};
+use crate::types::{EntityDef, FieldDef, FieldType};
 
 /// Consumer-provided entity lookup for validation and computed fields.
 ///
@@ -161,6 +161,51 @@ impl ValidationEngine {
             }
         }
     }
+
+    /// Run entity-level cross-field validation after all field-level validations pass.
+    ///
+    /// If the `EntityDef` has a `validate` JS function body, it runs with `ctx` containing
+    /// the entity name and all validated fields. If the function returns an object, its
+    /// values are merged back into the fields map.
+    pub async fn validate_entity(
+        &self,
+        entity_def: &EntityDef,
+        fields: &mut HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        let Some(ref validate_fn) = entity_def.validate else {
+            return Ok(());
+        };
+
+        let ctx_obj = serde_json::json!({
+            "entity": entity_def.name,
+            "fields": fields.clone(),
+        });
+
+        let js_code = format!(
+            r#"(function() {{
+    var ctx = {ctx_json};
+    {validate_body}
+}})()"#,
+            ctx_json = serde_json::to_string(&ctx_obj).unwrap_or_default(),
+            validate_body = validate_fn.trim(),
+        );
+
+        let result = self.js.get(&js_code).await.map_err(|e| {
+            crate::error::FieldsError::ValidationFailed {
+                field: format!("entity:{}", entity_def.name),
+                message: e,
+            }
+        })?;
+
+        // If the result is an object, merge its values back into the fields map
+        if let serde_json::Value::Object(map) = result {
+            for (k, v) in map {
+                fields.insert(k, v);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for ValidationEngine {
@@ -218,8 +263,7 @@ mod tests {
             editor: None,
             display: None,
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         }
     }
@@ -414,5 +458,80 @@ mod tests {
             .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), value);
+    }
+
+    #[test]
+    fn entity_def_yaml_round_trip_with_validate() {
+        let entity = EntityDef {
+            name: "task".into(),
+            body_field: Some("body".into()),
+            fields: vec!["title".into(), "status".into()],
+            validate: Some("if (!ctx.fields.title) throw new Error('title required');".into()),
+        };
+        let yaml = serde_yaml::to_string(&entity).unwrap();
+        let parsed: EntityDef = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(entity, parsed);
+    }
+
+    #[tokio::test]
+    async fn validate_entity_noop_when_none() {
+        let engine = ValidationEngine::new();
+        let entity_def = EntityDef {
+            name: "task".into(),
+            body_field: None,
+            fields: vec!["title".into()],
+            validate: None,
+        };
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Hello"));
+
+        let result = engine.validate_entity(&entity_def, &mut fields).await;
+        assert!(result.is_ok());
+        assert_eq!(fields.get("title").unwrap(), &serde_json::json!("Hello"));
+    }
+
+    #[tokio::test]
+    async fn validate_entity_runs_js_and_transforms() {
+        let engine = ValidationEngine::new();
+        let entity_def = EntityDef {
+            name: "task".into(),
+            body_field: None,
+            fields: vec!["title".into(), "status".into()],
+            validate: Some(
+                r#"
+                var f = ctx.fields;
+                if (!f.status) f.status = "Backlog";
+                return f;
+                "#
+                .to_string(),
+            ),
+        };
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("My Task"));
+
+        let result = engine.validate_entity(&entity_def, &mut fields).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            fields.get("status").unwrap(),
+            &serde_json::json!("Backlog")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_entity_can_reject_with_error() {
+        let engine = ValidationEngine::new();
+        let entity_def = EntityDef {
+            name: "task".into(),
+            body_field: None,
+            fields: vec!["title".into()],
+            validate: Some(
+                r#"throw new Error("entity validation failed");"#.to_string(),
+            ),
+        };
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Test"));
+
+        let result = engine.validate_entity(&entity_def, &mut fields).await;
+        assert!(result.is_err());
     }
 }

@@ -287,6 +287,16 @@ impl EntityContext {
             entity.set(name.clone(), validated);
         }
 
+        // Entity-level cross-field validation (runs after all field validations)
+        let entity_def = self.entity_def(entity_type)?;
+        engine
+            .validate_entity(entity_def, &mut entity.fields)
+            .await
+            .map_err(|e| EntityError::ValidationFailed {
+                field: format!("entity:{}", entity_type),
+                message: e.to_string(),
+            })?;
+
         Ok(())
     }
 

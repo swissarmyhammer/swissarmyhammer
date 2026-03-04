@@ -6,4 +6,4 @@ type:
   derive: parse-body-tags
 editor: none
 display: badge-list
-filter: substring
+width: 200

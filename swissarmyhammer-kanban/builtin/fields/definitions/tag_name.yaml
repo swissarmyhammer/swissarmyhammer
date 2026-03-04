@@ -12,3 +12,4 @@ validate: |
   let v = value.trim().replace(/ +/g, "_").replace(/\0/g, "");
   if (v.length === 0) throw new Error("tag_name cannot be empty");
   return v;
+width: 200

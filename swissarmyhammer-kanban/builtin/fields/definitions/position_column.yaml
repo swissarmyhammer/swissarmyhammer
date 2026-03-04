@@ -7,3 +7,4 @@ type:
   multiple: false
 editor: select
 display: badge
+width: 120

@@ -7,3 +7,4 @@ type:
   multiple: true
 editor: multi-select
 display: badge-list
+width: 200

@@ -5,3 +5,4 @@ type:
   kind: color
 editor: color-palette
 display: color-swatch
+width: 80

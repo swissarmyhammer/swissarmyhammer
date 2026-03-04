@@ -91,6 +91,7 @@ pub enum Display {
 #[serde(rename_all = "kebab-case")]
 pub enum SortKind {
     Alphanumeric,
+    Lexical,
     OptionOrder,
     Datetime,
     Numeric,
@@ -114,9 +115,7 @@ pub struct FieldDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort: Option<SortKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filter: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
+    pub width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
 }
@@ -163,6 +162,14 @@ impl FieldDef {
             FieldType::Computed { .. } => Display::Text,
         }
     }
+
+    /// Return the explicit sort kind, or `Lexical` as the default.
+    pub fn effective_sort(&self) -> SortKind {
+        if let Some(ref s) = self.sort {
+            return s.clone();
+        }
+        SortKind::Lexical
+    }
 }
 
 /// An entity definition — a template declaring which fields belong to an entity type.
@@ -173,6 +180,8 @@ pub struct EntityDef {
     pub body_field: Option<String>,
     #[serde(default)]
     pub fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validate: Option<String>,
 }
 
 #[cfg(test)]
@@ -290,8 +299,7 @@ mod tests {
             editor: Some(Editor::Select),
             display: Some(Display::Badge),
             sort: Some(SortKind::OptionOrder),
-            filter: Some("exact".into()),
-            group: Some("value".into()),
+            width: Some(120),
             validate: None,
         };
         let yaml = serde_yaml::to_string(&field).unwrap();
@@ -310,8 +318,7 @@ mod tests {
             editor: Some(Editor::Markdown),
             display: Some(Display::Markdown),
             sort: Some(SortKind::Alphanumeric),
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         };
         let yaml = serde_yaml::to_string(&field).unwrap();
@@ -334,6 +341,7 @@ mod tests {
                 "depends_on".into(),
                 "body".into(),
             ],
+            validate: None,
         };
         let yaml = serde_yaml::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml::from_str(&yaml).unwrap();
@@ -346,6 +354,7 @@ mod tests {
             name: "tag".into(),
             body_field: None,
             fields: vec!["tag_name".into(), "color".into(), "description".into()],
+            validate: None,
         };
         let yaml = serde_yaml::to_string(&entity).unwrap();
         assert!(!yaml.contains("body_field"));
@@ -364,8 +373,7 @@ mod tests {
             editor: None,
             display: None,
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         };
         assert_eq!(field.effective_editor(), Editor::Date);
@@ -383,8 +391,7 @@ mod tests {
             editor: Some(Editor::None),
             display: Some(Display::Badge),
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         };
         assert_eq!(field.effective_editor(), Editor::None);
@@ -404,8 +411,7 @@ mod tests {
             editor: None,
             display: None,
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         };
         assert_eq!(field.effective_editor(), Editor::None);
@@ -426,8 +432,7 @@ mod tests {
             editor: None,
             display: None,
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         };
         assert_eq!(single.effective_editor(), Editor::Select);
@@ -445,8 +450,7 @@ mod tests {
             editor: None,
             display: None,
             sort: None,
-            filter: None,
-            group: None,
+            width: None,
             validate: None,
         };
         assert_eq!(multi.effective_editor(), Editor::MultiSelect);
@@ -481,8 +485,6 @@ default: Backlog
 editor: select
 display: badge
 sort: option-order
-filter: exact
-group: value
 "#;
         let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "status");
@@ -515,7 +517,6 @@ type:
   derive: parse-body-tags
 editor: none
 display: badge-list
-filter: substring
 "#;
         let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "tags");
@@ -592,7 +593,6 @@ type:
   multiple: true
 editor: multi-select
 display: badge-list
-filter: substring
 "#;
         let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "depends_on");
@@ -629,5 +629,48 @@ fields:
         assert_eq!(entity.fields.len(), 8);
         assert!(entity.fields.contains(&"assignees".to_string()));
         assert!(entity.fields.contains(&"depends_on".to_string()));
+    }
+
+    #[test]
+    fn sort_kind_lexical_yaml_round_trip() {
+        let sort = SortKind::Lexical;
+        let yaml = serde_yaml::to_string(&sort).unwrap();
+        assert!(yaml.contains("lexical"));
+        let parsed: SortKind = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(sort, parsed);
+    }
+
+    #[test]
+    fn effective_sort_returns_lexical_when_none() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "test".into(),
+            description: None,
+            type_: FieldType::Text { single_line: true },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn effective_sort_returns_explicit_when_some() {
+        let field = FieldDef {
+            id: Ulid::new(),
+            name: "test".into(),
+            description: None,
+            type_: FieldType::Date,
+            default: None,
+            editor: None,
+            display: None,
+            sort: Some(SortKind::Datetime),
+            width: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_sort(), SortKind::Datetime);
     }
 }

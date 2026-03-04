@@ -7,3 +7,4 @@ type:
 editor: none
 display: number
 sort: numeric
+width: 100

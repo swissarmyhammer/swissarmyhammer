@@ -6,3 +6,4 @@ type:
   derive: parse-body-progress
 editor: none
 display: number
+width: 100
