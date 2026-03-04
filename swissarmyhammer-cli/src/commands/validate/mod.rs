@@ -69,7 +69,11 @@ async fn run_validate_with_context(validate_tools: bool, cli_context: &CliContex
         }
     }
 
-    println!("{table}");
+    if validation_result.issues.is_empty() {
+        println!("✓ All files valid — no issues found.");
+    } else {
+        println!("{table}");
+    }
 
     Ok(exit_code)
 }
