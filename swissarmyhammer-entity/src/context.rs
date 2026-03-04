@@ -8,12 +8,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use swissarmyhammer_fields::{ComputeEngine, EntityDef, FieldType, FieldsContext, ValidationEngine};
+use swissarmyhammer_fields::{
+    ComputeEngine, EntityDef, EntityTypeName, FieldType, FieldsContext, ValidationEngine,
+};
 use tokio::sync::RwLock;
 
 use crate::changelog::{self, ChangeEntry, FieldChange};
 use crate::entity::Entity;
 use crate::error::{EntityError, Result};
+use crate::id_types::{ChangeEntryId, EntityId, TransactionId};
 use crate::io;
 
 /// Root-aware I/O coordinator for dynamic entities.
@@ -26,11 +29,11 @@ pub struct EntityContext {
     validation: Option<Arc<ValidationEngine>>,
     compute: Option<Arc<ComputeEngine>>,
     /// Maps ChangeEntry ULID to (entity_type, entity_id) for reverse lookups.
-    changelog_index: RwLock<HashMap<String, (String, String)>>,
+    changelog_index: RwLock<HashMap<ChangeEntryId, (EntityTypeName, EntityId)>>,
     /// Active transaction ULID — when set, all ChangeEntries get this stamped.
-    current_transaction: RwLock<Option<String>>,
+    current_transaction: RwLock<Option<TransactionId>>,
     /// Maps transaction ULID to the ordered list of ChangeEntry ULIDs it contains.
-    transaction_index: RwLock<HashMap<String, Vec<String>>>,
+    transaction_index: RwLock<HashMap<TransactionId, Vec<ChangeEntryId>>>,
 }
 
 impl EntityContext {
@@ -76,8 +79,8 @@ impl EntityContext {
     ///
     /// This is a static helper — it does not set the transaction on the context.
     /// Use [`set_transaction`] to activate it.
-    pub fn generate_transaction_id() -> String {
-        ulid::Ulid::new().to_string()
+    pub fn generate_transaction_id() -> TransactionId {
+        TransactionId::new()
     }
 
     /// Set the active transaction ID.
@@ -85,8 +88,8 @@ impl EntityContext {
     /// All subsequent `write()` and `delete()` calls will stamp this
     /// transaction ID on their ChangeEntry and register the entry ULID
     /// in the transaction index.
-    pub async fn set_transaction(&self, tx_id: String) {
-        *self.current_transaction.write().await = Some(tx_id);
+    pub async fn set_transaction(&self, tx_id: impl Into<TransactionId>) {
+        *self.current_transaction.write().await = Some(tx_id.into());
     }
 
     /// Clear the active transaction ID.
@@ -97,32 +100,42 @@ impl EntityContext {
     }
 
     /// Look up the EntityDef for an entity type.
-    pub fn entity_def(&self, entity_type: &str) -> Result<&EntityDef> {
-        self.fields.get_entity(entity_type).ok_or_else(|| {
-            EntityError::UnknownEntityType {
+    pub fn entity_def(&self, entity_type: impl AsRef<str>) -> Result<&EntityDef> {
+        let entity_type = entity_type.as_ref();
+        self.fields
+            .get_entity(entity_type)
+            .ok_or_else(|| EntityError::UnknownEntityType {
                 entity_type: entity_type.into(),
-            }
-        })
+            })
     }
 
     /// Get the storage directory for an entity type.
     ///
     /// Maps entity type → `{root}/{type}s/` (e.g. "task" → "tasks/",
     /// "board" → "boards/").
-    pub fn entity_dir(&self, entity_type: &str) -> PathBuf {
-        self.root.join(format!("{}s", entity_type))
+    pub fn entity_dir(&self, entity_type: impl AsRef<str>) -> PathBuf {
+        self.root.join(format!("{}s", entity_type.as_ref()))
     }
 
     /// Get the file path for a specific entity.
     ///
     /// Includes the correct extension (.md or .yaml) based on the EntityDef.
-    pub fn entity_path(&self, entity_type: &str, id: &str) -> Result<PathBuf> {
+    pub fn entity_path(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<PathBuf> {
+        let entity_type = entity_type.as_ref();
         let def = self.entity_def(entity_type)?;
         Ok(io::entity_file_path(&self.entity_dir(entity_type), id, def))
     }
 
     /// Get the changelog path for a specific entity.
-    pub fn changelog_path(&self, entity_type: &str, id: &str) -> Result<PathBuf> {
+    pub fn changelog_path(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<PathBuf> {
         let path = self.entity_path(entity_type, id)?;
         Ok(path.with_extension("jsonl"))
     }
@@ -130,14 +143,18 @@ impl EntityContext {
     /// Get the trash directory for an entity type.
     ///
     /// Maps entity type → `{root}/.trash/{type}s/` (e.g. "task" → ".trash/tasks/").
-    pub fn trash_dir(&self, entity_type: &str) -> PathBuf {
-        self.root.join(".trash").join(format!("{}s", entity_type))
+    pub fn trash_dir(&self, entity_type: impl AsRef<str>) -> PathBuf {
+        self.root
+            .join(".trash")
+            .join(format!("{}s", entity_type.as_ref()))
     }
 
     /// Read a single entity by type and ID.
     ///
     /// If a `ComputeEngine` is attached, computed fields are derived after reading.
-    pub async fn read(&self, entity_type: &str, id: &str) -> Result<Entity> {
+    pub async fn read(&self, entity_type: impl AsRef<str>, id: impl AsRef<str>) -> Result<Entity> {
+        let entity_type = entity_type.as_ref();
+        let id = id.as_ref();
         let def = self.entity_def(entity_type)?;
         let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
         let mut entity = io::read_entity(&path, entity_type, id, def).await?;
@@ -154,7 +171,7 @@ impl EntityContext {
     ///
     /// Returns `Ok(Some(ulid))` when changes were logged, or `Ok(None)` when
     /// no changes were detected (idempotent write).
-    pub async fn write(&self, entity: &Entity) -> Result<Option<String>> {
+    pub async fn write(&self, entity: &Entity) -> Result<Option<ChangeEntryId>> {
         let def = self.entity_def(&entity.entity_type)?;
         let dir = self.entity_dir(&entity.entity_type);
 
@@ -167,10 +184,9 @@ impl EntityContext {
         let path = io::entity_file_path(&dir, &entity.id, def);
 
         // Read previous state for diffing (if it exists)
-        let previous =
-            io::read_entity(&path, &entity.entity_type, &entity.id, def)
-                .await
-                .ok();
+        let previous = io::read_entity(&path, &entity.entity_type, &entity.id, def)
+            .await
+            .ok();
 
         // Write the entity
         io::write_entity(&path, &entity, def).await?;
@@ -191,13 +207,17 @@ impl EntityContext {
         };
 
         if !changes.is_empty() {
-            let op = if previous.is_some() { "update" } else { "create" };
-            let mut entry = ChangeEntry::new(&entity_type, &entity_id, op, changes);
+            let op = if previous.is_some() {
+                "update"
+            } else {
+                "create"
+            };
+            let mut entry = ChangeEntry::new(entity_type.clone(), entity_id.clone(), op, changes);
 
             // Stamp transaction ID if one is active
             let tx_id = self.current_transaction.read().await.clone();
             if let Some(ref tx) = tx_id {
-                entry = entry.with_transaction_id(tx);
+                entry = entry.with_transaction_id(tx.clone());
             }
 
             let log_path = path.with_extension("jsonl");
@@ -234,7 +254,13 @@ impl EntityContext {
     ///
     /// Returns `Ok(Some(ulid))` when a delete changelog entry was logged,
     /// or `Ok(None)` if the entity had no fields to record.
-    pub async fn delete(&self, entity_type: &str, id: &str) -> Result<Option<String>> {
+    pub async fn delete(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<Option<ChangeEntryId>> {
+        let entity_type = entity_type.as_ref();
+        let id = id.as_ref();
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
@@ -263,17 +289,17 @@ impl EntityContext {
                 // Stamp transaction ID if one is active
                 let tx_id = self.current_transaction.read().await.clone();
                 if let Some(ref tx) = tx_id {
-                    entry = entry.with_transaction_id(tx);
+                    entry = entry.with_transaction_id(tx.clone());
                 }
 
                 let log_path = path.with_extension("jsonl");
                 changelog::append_changelog(&log_path, &entry).await?;
 
                 let ulid = entry.id.clone();
-                self.changelog_index
-                    .write()
-                    .await
-                    .insert(ulid.clone(), (entity_type.to_string(), id.to_string()));
+                self.changelog_index.write().await.insert(
+                    ulid.clone(),
+                    (EntityTypeName::from(entity_type), EntityId::from(id)),
+                );
 
                 // Register in transaction index if applicable
                 if let Some(ref tx) = tx_id {
@@ -308,13 +334,16 @@ impl EntityContext {
     /// Returns an error if the ULID is not found in the changelog index, if
     /// the changelog entry cannot be found, or if a text diff cannot be applied
     /// (stale entity).
-    pub async fn undo(&self, ulid: &str) -> Result<Option<String>> {
+    pub async fn undo(&self, ulid: impl AsRef<str>) -> Result<Option<ChangeEntryId>> {
+        let ulid = ulid.as_ref();
         // 1. Check if it's a single-entity changelog entry.
         //    Clone the result and drop the read guard before calling undo_single,
         //    which needs write access to changelog_index.
         let single_lookup = self.changelog_index.read().await.get(ulid).cloned();
         if let Some((entity_type, entity_id)) = single_lookup {
-            return self.undo_single(ulid, &entity_type, &entity_id).await;
+            return self
+                .undo_single(ulid, entity_type.as_str(), entity_id.as_str())
+                .await;
         }
 
         // 2. Check if it's a transaction (group of entries).
@@ -336,7 +365,7 @@ impl EntityContext {
         ulid: &str,
         entity_type: &str,
         entity_id: &str,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ChangeEntryId>> {
         // Read the changelog (with trash fallback so deleted entities work)
         let entries = self
             .read_changelog_with_trash_fallback(entity_type, entity_id)
@@ -352,9 +381,18 @@ impl EntityContext {
             .clone();
 
         match original_entry.op.as_str() {
-            "update" => self.undo_update(entity_type, entity_id, &original_entry).await,
-            "create" => self.undo_create(entity_type, entity_id, &original_entry).await,
-            "delete" => self.undo_delete(entity_type, entity_id, &original_entry).await,
+            "update" => {
+                self.undo_update(entity_type, entity_id, &original_entry)
+                    .await
+            }
+            "create" => {
+                self.undo_create(entity_type, entity_id, &original_entry)
+                    .await
+            }
+            "delete" => {
+                self.undo_delete(entity_type, entity_id, &original_entry)
+                    .await
+            }
             other => Err(EntityError::UnsupportedUndoOp {
                 op: other.to_string(),
             }),
@@ -372,22 +410,30 @@ impl EntityContext {
     async fn undo_transaction(
         &self,
         tx_ulid: &str,
-        entry_ulids: &[String],
-    ) -> Result<Option<String>> {
+        entry_ulids: &[ChangeEntryId],
+    ) -> Result<Option<ChangeEntryId>> {
         let mut completed: Vec<String> = Vec::new();
 
         // Undo in reverse order so later writes are reversed before earlier ones
         for ulid in entry_ulids.iter().rev() {
             // Clone and drop the read guard before calling undo_single
-            let lookup = self.changelog_index.read().await.get(ulid.as_str()).cloned();
+            let lookup = self
+                .changelog_index
+                .read()
+                .await
+                .get(ulid.as_str())
+                .cloned();
             let (entity_type, entity_id) =
                 lookup.ok_or_else(|| EntityError::ChangelogEntryNotFound {
-                    ulid: ulid.clone(),
+                    ulid: ulid.to_string(),
                 })?;
 
-            match self.undo_single(ulid, &entity_type, &entity_id).await {
+            match self
+                .undo_single(ulid.as_str(), entity_type.as_str(), entity_id.as_str())
+                .await
+            {
                 Ok(_) => {
-                    completed.push(ulid.clone());
+                    completed.push(ulid.to_string());
                 }
                 Err(e) => {
                     // Attempt rollback: redo each completed entry in forward order
@@ -401,7 +447,11 @@ impl EntityContext {
                             .get(done_ulid.as_str())
                             .cloned();
                         if let Some((rb_type, rb_id)) = rb_lookup {
-                            if self.redo_single(done_ulid, &rb_type, &rb_id).await.is_err() {
+                            if self
+                                .redo_single(done_ulid, rb_type.as_str(), rb_id.as_str())
+                                .await
+                                .is_err()
+                            {
                                 rollback_succeeded = false;
                                 break;
                             }
@@ -414,13 +464,13 @@ impl EntityContext {
                     return Err(EntityError::TransactionPartialFailure {
                         original_error: e.to_string(),
                         completed,
-                        failed_entry: ulid.clone(),
+                        failed_entry: ulid.to_string(),
                         rollback_succeeded,
                     });
                 }
             }
         }
-        Ok(Some(tx_ulid.to_string()))
+        Ok(Some(ChangeEntryId::from(tx_ulid)))
     }
 
     /// Undo an "update" operation by reversing its field changes.
@@ -433,7 +483,7 @@ impl EntityContext {
         entity_type: &str,
         entity_id: &str,
         original_entry: &ChangeEntry,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ChangeEntryId>> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, entity_id, def);
@@ -450,15 +500,15 @@ impl EntityContext {
 
         // Create and append the undo changelog entry
         let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", reversed)
-            .with_undone_id(&original_entry.id);
+            .with_undone_id(original_entry.id.clone());
         let log_path = path.with_extension("jsonl");
         changelog::append_changelog(&log_path, &undo_entry).await?;
 
         let undo_ulid = undo_entry.id.clone();
-        self.changelog_index
-            .write()
-            .await
-            .insert(undo_ulid.clone(), (entity_type.to_string(), entity_id.to_string()));
+        self.changelog_index.write().await.insert(
+            undo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
 
         Ok(Some(undo_ulid))
     }
@@ -472,7 +522,7 @@ impl EntityContext {
         entity_type: &str,
         entity_id: &str,
         original_entry: &ChangeEntry,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ChangeEntryId>> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, entity_id, def);
@@ -495,15 +545,15 @@ impl EntityContext {
 
         // Append undo changelog entry before trashing (so it goes with the files)
         let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", changes)
-            .with_undone_id(&original_entry.id);
+            .with_undone_id(original_entry.id.clone());
         let log_path = path.with_extension("jsonl");
         changelog::append_changelog(&log_path, &undo_entry).await?;
 
         let undo_ulid = undo_entry.id.clone();
-        self.changelog_index
-            .write()
-            .await
-            .insert(undo_ulid.clone(), (entity_type.to_string(), entity_id.to_string()));
+        self.changelog_index.write().await.insert(
+            undo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
 
         // Move files to trash
         let trash = self.trash_dir(entity_type);
@@ -521,7 +571,7 @@ impl EntityContext {
         entity_type: &str,
         entity_id: &str,
         original_entry: &ChangeEntry,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ChangeEntryId>> {
         // Restore files from trash to live storage
         self.restore_from_trash(entity_type, entity_id).await?;
 
@@ -540,15 +590,15 @@ impl EntityContext {
 
         // Append undo entry to the restored changelog
         let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", changes)
-            .with_undone_id(&original_entry.id);
+            .with_undone_id(original_entry.id.clone());
         let log_path = path.with_extension("jsonl");
         changelog::append_changelog(&log_path, &undo_entry).await?;
 
         let undo_ulid = undo_entry.id.clone();
-        self.changelog_index
-            .write()
-            .await
-            .insert(undo_ulid.clone(), (entity_type.to_string(), entity_id.to_string()));
+        self.changelog_index.write().await.insert(
+            undo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
 
         Ok(Some(undo_ulid))
     }
@@ -566,13 +616,16 @@ impl EntityContext {
     /// Returns an error if the ULID is not found in the changelog index, if
     /// the changelog entry cannot be found, or if a text diff cannot be applied
     /// (stale entity).
-    pub async fn redo(&self, ulid: &str) -> Result<Option<String>> {
+    pub async fn redo(&self, ulid: impl AsRef<str>) -> Result<Option<ChangeEntryId>> {
+        let ulid = ulid.as_ref();
         // 1. Check if it's a single-entity changelog entry.
         //    Clone the result and drop the read guard before calling redo_single,
         //    which needs write access to changelog_index.
         let single_lookup = self.changelog_index.read().await.get(ulid).cloned();
         if let Some((entity_type, entity_id)) = single_lookup {
-            return self.redo_single(ulid, &entity_type, &entity_id).await;
+            return self
+                .redo_single(ulid, entity_type.as_str(), entity_id.as_str())
+                .await;
         }
 
         // 2. Check if it's a transaction (group of entries).
@@ -594,7 +647,7 @@ impl EntityContext {
         ulid: &str,
         entity_type: &str,
         entity_id: &str,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ChangeEntryId>> {
         // Read the changelog (with trash fallback so deleted entities work)
         let entries = self
             .read_changelog_with_trash_fallback(entity_type, entity_id)
@@ -610,9 +663,18 @@ impl EntityContext {
             .clone();
 
         match original_entry.op.as_str() {
-            "update" => self.redo_update(entity_type, entity_id, &original_entry).await,
-            "create" => self.redo_create(entity_type, entity_id, &original_entry).await,
-            "delete" => self.redo_delete(entity_type, entity_id, &original_entry).await,
+            "update" => {
+                self.redo_update(entity_type, entity_id, &original_entry)
+                    .await
+            }
+            "create" => {
+                self.redo_create(entity_type, entity_id, &original_entry)
+                    .await
+            }
+            "delete" => {
+                self.redo_delete(entity_type, entity_id, &original_entry)
+                    .await
+            }
             other => Err(EntityError::UnsupportedUndoOp {
                 op: other.to_string(),
             }),
@@ -629,22 +691,30 @@ impl EntityContext {
     async fn redo_transaction(
         &self,
         tx_ulid: &str,
-        entry_ulids: &[String],
-    ) -> Result<Option<String>> {
+        entry_ulids: &[ChangeEntryId],
+    ) -> Result<Option<ChangeEntryId>> {
         let mut completed: Vec<String> = Vec::new();
 
         // Redo in forward order (same order they were originally executed)
         for ulid in entry_ulids.iter() {
             // Clone and drop the read guard before calling redo_single
-            let lookup = self.changelog_index.read().await.get(ulid.as_str()).cloned();
+            let lookup = self
+                .changelog_index
+                .read()
+                .await
+                .get(ulid.as_str())
+                .cloned();
             let (entity_type, entity_id) =
                 lookup.ok_or_else(|| EntityError::ChangelogEntryNotFound {
-                    ulid: ulid.clone(),
+                    ulid: ulid.to_string(),
                 })?;
 
-            match self.redo_single(ulid, &entity_type, &entity_id).await {
+            match self
+                .redo_single(ulid.as_str(), entity_type.as_str(), entity_id.as_str())
+                .await
+            {
                 Ok(_) => {
-                    completed.push(ulid.clone());
+                    completed.push(ulid.to_string());
                 }
                 Err(e) => {
                     // Attempt rollback: undo each completed entry in reverse order
@@ -658,7 +728,11 @@ impl EntityContext {
                             .get(done_ulid.as_str())
                             .cloned();
                         if let Some((rb_type, rb_id)) = rb_lookup {
-                            if self.undo_single(done_ulid, &rb_type, &rb_id).await.is_err() {
+                            if self
+                                .undo_single(done_ulid, rb_type.as_str(), rb_id.as_str())
+                                .await
+                                .is_err()
+                            {
                                 rollback_succeeded = false;
                                 break;
                             }
@@ -671,13 +745,13 @@ impl EntityContext {
                     return Err(EntityError::TransactionPartialFailure {
                         original_error: e.to_string(),
                         completed,
-                        failed_entry: ulid.clone(),
+                        failed_entry: ulid.to_string(),
                         rollback_succeeded,
                     });
                 }
             }
         }
-        Ok(Some(tx_ulid.to_string()))
+        Ok(Some(ChangeEntryId::from(tx_ulid)))
     }
 
     /// Redo an "update" operation by re-applying its forward field changes.
@@ -690,7 +764,7 @@ impl EntityContext {
         entity_type: &str,
         entity_id: &str,
         original_entry: &ChangeEntry,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ChangeEntryId>> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, entity_id, def);
@@ -705,17 +779,21 @@ impl EntityContext {
         io::write_entity(&path, &entity, def).await?;
 
         // Create and append the redo changelog entry
-        let redo_entry =
-            ChangeEntry::new(entity_type, entity_id, "redo", original_entry.changes.clone())
-                .with_redone_id(&original_entry.id);
+        let redo_entry = ChangeEntry::new(
+            entity_type,
+            entity_id,
+            "redo",
+            original_entry.changes.clone(),
+        )
+        .with_redone_id(original_entry.id.clone());
         let log_path = path.with_extension("jsonl");
         changelog::append_changelog(&log_path, &redo_entry).await?;
 
         let redo_ulid = redo_entry.id.clone();
-        self.changelog_index
-            .write()
-            .await
-            .insert(redo_ulid.clone(), (entity_type.to_string(), entity_id.to_string()));
+        self.changelog_index.write().await.insert(
+            redo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
 
         Ok(Some(redo_ulid))
     }
@@ -730,7 +808,7 @@ impl EntityContext {
         entity_type: &str,
         entity_id: &str,
         original_entry: &ChangeEntry,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ChangeEntryId>> {
         // Restore files from trash to live storage
         self.restore_from_trash(entity_type, entity_id).await?;
 
@@ -749,15 +827,15 @@ impl EntityContext {
 
         // Append redo entry to the restored changelog
         let redo_entry = ChangeEntry::new(entity_type, entity_id, "redo", changes)
-            .with_redone_id(&original_entry.id);
+            .with_redone_id(original_entry.id.clone());
         let log_path = path.with_extension("jsonl");
         changelog::append_changelog(&log_path, &redo_entry).await?;
 
         let redo_ulid = redo_entry.id.clone();
-        self.changelog_index
-            .write()
-            .await
-            .insert(redo_ulid.clone(), (entity_type.to_string(), entity_id.to_string()));
+        self.changelog_index.write().await.insert(
+            redo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
 
         Ok(Some(redo_ulid))
     }
@@ -772,7 +850,7 @@ impl EntityContext {
         entity_type: &str,
         entity_id: &str,
         original_entry: &ChangeEntry,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ChangeEntryId>> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, entity_id, def);
@@ -795,15 +873,15 @@ impl EntityContext {
 
         // Append redo changelog entry before trashing (so it goes with the files)
         let redo_entry = ChangeEntry::new(entity_type, entity_id, "redo", changes)
-            .with_redone_id(&original_entry.id);
+            .with_redone_id(original_entry.id.clone());
         let log_path = path.with_extension("jsonl");
         changelog::append_changelog(&log_path, &redo_entry).await?;
 
         let redo_ulid = redo_entry.id.clone();
-        self.changelog_index
-            .write()
-            .await
-            .insert(redo_ulid.clone(), (entity_type.to_string(), entity_id.to_string()));
+        self.changelog_index.write().await.insert(
+            redo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
 
         // Move files to trash
         let trash = self.trash_dir(entity_type);
@@ -817,7 +895,13 @@ impl EntityContext {
     /// Moves the entity data file and changelog from the trash directory
     /// (`{root}/.trash/{type}s/`) back to the live storage directory.
     /// This is the inverse of the trash operation performed by `delete()`.
-    pub async fn restore_from_trash(&self, entity_type: &str, id: &str) -> Result<()> {
+    pub async fn restore_from_trash(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<()> {
+        let entity_type = entity_type.as_ref();
+        let id = id.as_ref();
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
@@ -828,7 +912,8 @@ impl EntityContext {
     /// List all entities of a given type.
     ///
     /// If a `ComputeEngine` is attached, computed fields are derived for each entity.
-    pub async fn list(&self, entity_type: &str) -> Result<Vec<Entity>> {
+    pub async fn list(&self, entity_type: impl AsRef<str>) -> Result<Vec<Entity>> {
+        let entity_type = entity_type.as_ref();
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let mut entities = io::read_entity_dir(&dir, entity_type, def).await?;
@@ -839,7 +924,11 @@ impl EntityContext {
     }
 
     /// Read the changelog for an entity.
-    pub async fn read_changelog(&self, entity_type: &str, id: &str) -> Result<Vec<ChangeEntry>> {
+    pub async fn read_changelog(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<Vec<ChangeEntry>> {
         let log_path = self.changelog_path(entity_type, id)?;
         changelog::read_changelog(&log_path).await
     }
@@ -848,9 +937,11 @@ impl EntityContext {
     /// if the live changelog does not exist (e.g. the entity was deleted).
     pub async fn read_changelog_with_trash_fallback(
         &self,
-        entity_type: &str,
-        id: &str,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
     ) -> Result<Vec<ChangeEntry>> {
+        let entity_type = entity_type.as_ref();
+        let id = id.as_ref();
         let live_path = self.changelog_path(entity_type, id)?;
         let def = self.entity_def(entity_type)?;
         let trash_dir = self.trash_dir(entity_type);
@@ -869,8 +960,15 @@ impl EntityContext {
     /// Returns `Some((entity_type, entity_id))` if the ULID is in the in-memory index,
     /// or `None` if not found. The index is populated by `write()` and `delete()` calls
     /// during this context's lifetime.
-    pub async fn lookup_changelog_entry(&self, ulid: &str) -> Option<(String, String)> {
-        self.changelog_index.read().await.get(ulid).cloned()
+    pub async fn lookup_changelog_entry(
+        &self,
+        ulid: impl AsRef<str>,
+    ) -> Option<(EntityTypeName, EntityId)> {
+        self.changelog_index
+            .read()
+            .await
+            .get(ulid.as_ref())
+            .cloned()
     }
 
     // =========================================================================
@@ -883,7 +981,12 @@ impl EntityContext {
     /// - Skip `Computed` fields (remove from entity — they are derived on read).
     /// - If a validation engine is present, validate and possibly transform the value.
     /// - If a field has a default and is missing from the entity, insert the default.
-    async fn apply_validation(&self, entity_type: &str, entity: &mut Entity) -> Result<()> {
+    async fn apply_validation(
+        &self,
+        entity_type: impl AsRef<str>,
+        entity: &mut Entity,
+    ) -> Result<()> {
+        let entity_type = entity_type.as_ref();
         let field_defs = self.fields.fields_for_entity(entity_type);
         if field_defs.is_empty() {
             return Ok(());
@@ -892,7 +995,7 @@ impl EntityContext {
         // Strip computed fields — they must never be persisted.
         for fd in &field_defs {
             if matches!(&fd.type_, FieldType::Computed { .. }) {
-                entity.fields.remove(&fd.name);
+                entity.fields.remove(fd.name.as_str());
             }
         }
 
@@ -901,12 +1004,9 @@ impl EntityContext {
             if matches!(&fd.type_, FieldType::Computed { .. }) {
                 continue;
             }
-            if !entity.fields.contains_key(&fd.name) {
+            if !entity.fields.contains_key(fd.name.as_str()) {
                 if let Some(ref default) = fd.default {
-                    entity.set(
-                        fd.name.clone(),
-                        serde_json::Value::String(default.clone()),
-                    );
+                    entity.set(fd.name.to_string(), default.clone());
                 }
             }
         }
@@ -920,8 +1020,8 @@ impl EntityContext {
         let names_to_validate: Vec<String> = field_defs
             .iter()
             .filter(|fd| !matches!(&fd.type_, FieldType::Computed { .. }))
-            .filter(|fd| entity.fields.contains_key(&fd.name))
-            .map(|fd| fd.name.clone())
+            .filter(|fd| entity.fields.contains_key(fd.name.as_str()))
+            .map(|fd| fd.name.to_string())
             .collect();
 
         // Snapshot sibling fields once before the loop — validation functions
@@ -929,15 +1029,14 @@ impl EntityContext {
         let siblings = entity.fields.clone();
 
         for name in &names_to_validate {
-            let fd = field_defs.iter().find(|f| &f.name == name).unwrap();
+            let fd = field_defs.iter().find(|f| f.name == name.as_str()).unwrap();
             let value = entity.fields.get(name).cloned().unwrap();
-            let validated = engine
-                .validate(fd, value, &siblings)
-                .await
-                .map_err(|e| EntityError::ValidationFailed {
+            let validated = engine.validate(fd, value, &siblings).await.map_err(|e| {
+                EntityError::ValidationFailed {
                     field: name.clone(),
                     message: e.to_string(),
-                })?;
+                }
+            })?;
             entity.set(name.clone(), validated);
         }
 

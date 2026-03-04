@@ -33,13 +33,14 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use swissarmyhammer_fields::EntityTypeName;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tracing::warn;
-use ulid::Ulid;
 
 use crate::entity::Entity;
 use crate::error::Result;
+use crate::id_types::{ChangeEntryId, EntityId, TransactionId};
 
 /// What happened to a single field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,37 +66,37 @@ pub enum FieldChange {
 /// A single change event for an entity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChangeEntry {
-    pub id: String,
+    pub id: ChangeEntryId,
     pub timestamp: DateTime<Utc>,
     #[serde(default)]
-    pub entity_type: String,
+    pub entity_type: EntityTypeName,
     #[serde(default)]
-    pub entity_id: String,
+    pub entity_id: EntityId,
     pub op: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<String>,
     pub changes: Vec<(String, FieldChange)>,
     /// References the original changelog entry being undone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub undone_id: Option<String>,
+    pub undone_id: Option<ChangeEntryId>,
     /// References the original changelog entry being redone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub redone_id: Option<String>,
+    pub redone_id: Option<ChangeEntryId>,
     /// Groups entries into a logical transaction (for future use).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transaction_id: Option<String>,
+    pub transaction_id: Option<TransactionId>,
 }
 
 impl ChangeEntry {
     /// Create a new change entry with the given entity type, entity ID, operation, and changes.
     pub fn new(
-        entity_type: impl Into<String>,
-        entity_id: impl Into<String>,
+        entity_type: impl Into<EntityTypeName>,
+        entity_id: impl Into<EntityId>,
         op: impl Into<String>,
         changes: Vec<(String, FieldChange)>,
     ) -> Self {
         Self {
-            id: Ulid::new().to_string(),
+            id: ChangeEntryId::new(),
             timestamp: Utc::now(),
             entity_type: entity_type.into(),
             entity_id: entity_id.into(),
@@ -115,19 +116,19 @@ impl ChangeEntry {
     }
 
     /// Set the ULID of the changelog entry being undone.
-    pub fn with_undone_id(mut self, ulid: impl Into<String>) -> Self {
+    pub fn with_undone_id(mut self, ulid: impl Into<ChangeEntryId>) -> Self {
         self.undone_id = Some(ulid.into());
         self
     }
 
     /// Set the ULID of the changelog entry being redone.
-    pub fn with_redone_id(mut self, ulid: impl Into<String>) -> Self {
+    pub fn with_redone_id(mut self, ulid: impl Into<ChangeEntryId>) -> Self {
         self.redone_id = Some(ulid.into());
         self
     }
 
     /// Set the transaction ID for grouping related entries.
-    pub fn with_transaction_id(mut self, txn_id: impl Into<String>) -> Self {
+    pub fn with_transaction_id(mut self, txn_id: impl Into<TransactionId>) -> Self {
         self.transaction_id = Some(txn_id.into());
         self
     }
@@ -171,7 +172,12 @@ pub fn diff_entities(old: &Entity, new: &Entity) -> Vec<(String, FieldChange)> {
             }
             None => {
                 // New field
-                changes.push((key.clone(), FieldChange::Set { value: new_val.clone() }));
+                changes.push((
+                    key.clone(),
+                    FieldChange::Set {
+                        value: new_val.clone(),
+                    },
+                ));
             }
         }
     }
@@ -243,7 +249,10 @@ pub fn apply_changes(entity: &mut Entity, changes: &[(String, FieldChange)]) -> 
             FieldChange::Removed { .. } => {
                 entity.remove(key);
             }
-            FieldChange::Changed { old_value, new_value } => {
+            FieldChange::Changed {
+                old_value,
+                new_value,
+            } => {
                 // Stale detection: the entity's current value must match old_value.
                 // For forward changes, old_value is the pre-change value.
                 // For reversed changes (undo), reverse_changes swaps old/new,
@@ -260,18 +269,19 @@ pub fn apply_changes(entity: &mut Entity, changes: &[(String, FieldChange)]) -> 
                 entity.set(key, new_value.clone());
             }
             FieldChange::TextDiff { forward_patch, .. } => {
-                let current = entity
-                    .get_str(key)
-                    .unwrap_or("")
-                    .to_string();
-                let patch = diffy::Patch::from_str(forward_patch)
-                    .map_err(|e| crate::error::EntityError::PatchApply(format!(
-                        "failed to parse patch for field '{}': {}", key, e
-                    )))?;
-                let result = diffy::apply(&current, &patch)
-                    .map_err(|e| crate::error::EntityError::PatchApply(format!(
-                        "failed to apply patch to field '{}': {}", key, e
-                    )))?;
+                let current = entity.get_str(key).unwrap_or("").to_string();
+                let patch = diffy::Patch::from_str(forward_patch).map_err(|e| {
+                    crate::error::EntityError::PatchApply(format!(
+                        "failed to parse patch for field '{}': {}",
+                        key, e
+                    ))
+                })?;
+                let result = diffy::apply(&current, &patch).map_err(|e| {
+                    crate::error::EntityError::PatchApply(format!(
+                        "failed to apply patch to field '{}': {}",
+                        key, e
+                    ))
+                })?;
                 entity.set(key, Value::String(result));
             }
         }
@@ -623,10 +633,10 @@ mod tests {
         let old_text = old_lines.join("\n");
 
         let mut new_lines = old_lines.clone();
-        new_lines[2] = "MODIFIED line 3".into();           // edit near top
+        new_lines[2] = "MODIFIED line 3".into(); // edit near top
         new_lines.insert(10, "INSERTED after line 10".into()); // insert in middle
-        new_lines[40] = "MODIFIED line 40".into();          // edit near bottom
-        new_lines.push("APPENDED line 51".into());          // append at end
+        new_lines[40] = "MODIFIED line 40".into(); // edit near bottom
+        new_lines.push("APPENDED line 51".into()); // append at end
         let new_text = new_lines.join("\n");
 
         let mut old = Entity::new("task", "01ABC");
@@ -795,7 +805,7 @@ mod tests {
         // Delete lines near the top (lines 3-4)
         new_lines.remove(3); // "line 4"
         new_lines.remove(2); // "line 3"
-        // Delete a line near the bottom (original "line 25", now shifted)
+                             // Delete a line near the bottom (original "line 25", now shifted)
         new_lines.retain(|l| l != "line 25");
         let new_text = new_lines.join("\n");
 
@@ -878,22 +888,56 @@ mod tests {
                 let rev_lines: Vec<&str> = reverse_patch.lines().collect();
 
                 // Headers must start with exactly "--- " and "+++ "
-                assert!(fwd_lines[0].starts_with("--- "), "forward header line 1: {}", fwd_lines[0]);
-                assert!(fwd_lines[1].starts_with("+++ "), "forward header line 2: {}", fwd_lines[1]);
-                assert!(rev_lines[0].starts_with("--- "), "reverse header line 1: {}", rev_lines[0]);
-                assert!(rev_lines[1].starts_with("+++ "), "reverse header line 2: {}", rev_lines[1]);
+                assert!(
+                    fwd_lines[0].starts_with("--- "),
+                    "forward header line 1: {}",
+                    fwd_lines[0]
+                );
+                assert!(
+                    fwd_lines[1].starts_with("+++ "),
+                    "forward header line 2: {}",
+                    fwd_lines[1]
+                );
+                assert!(
+                    rev_lines[0].starts_with("--- "),
+                    "reverse header line 1: {}",
+                    rev_lines[0]
+                );
+                assert!(
+                    rev_lines[1].starts_with("+++ "),
+                    "reverse header line 2: {}",
+                    rev_lines[1]
+                );
 
                 // Headers must NOT have malformed prefixes like "+++--" or "---++"
-                assert!(!fwd_lines[0].starts_with("---+"), "malformed forward header: {}", fwd_lines[0]);
-                assert!(!fwd_lines[1].starts_with("+++-"), "malformed forward header: {}", fwd_lines[1]);
-                assert!(!rev_lines[0].starts_with("---+"), "malformed reverse header: {}", rev_lines[0]);
-                assert!(!rev_lines[1].starts_with("+++-"), "malformed reverse header: {}", rev_lines[1]);
+                assert!(
+                    !fwd_lines[0].starts_with("---+"),
+                    "malformed forward header: {}",
+                    fwd_lines[0]
+                );
+                assert!(
+                    !fwd_lines[1].starts_with("+++-"),
+                    "malformed forward header: {}",
+                    fwd_lines[1]
+                );
+                assert!(
+                    !rev_lines[0].starts_with("---+"),
+                    "malformed reverse header: {}",
+                    rev_lines[0]
+                );
+                assert!(
+                    !rev_lines[1].starts_with("+++-"),
+                    "malformed reverse header: {}",
+                    rev_lines[1]
+                );
 
                 // Both patches must parse and apply cleanly
-                let patch = diffy::Patch::from_str(forward_patch).expect("forward_patch should parse");
+                let patch =
+                    diffy::Patch::from_str(forward_patch).expect("forward_patch should parse");
                 diffy::apply("line1\nmodified\nline3", &patch).expect("forward_patch should apply");
 
-                let patch = diffy::Patch::from_str(reverse_patch).expect("reverse_patch should parse");
+                let patch =
+                    diffy::Patch::from_str(reverse_patch).expect("reverse_patch should parse");
                 diffy::apply("line1\nline2\nline3", &patch).expect("reverse_patch should apply");
             }
             _ => panic!("expected TextDiff"),
@@ -914,12 +958,20 @@ mod tests {
         // Forward: old → new
         let mut forward = old.clone();
         apply_changes(&mut forward, &changes).unwrap();
-        assert_eq!(forward.get_str("body"), Some("xyz\n"), "forward apply should add trailing newline");
+        assert_eq!(
+            forward.get_str("body"),
+            Some("xyz\n"),
+            "forward apply should add trailing newline"
+        );
 
         // Reverse: new → old
         let mut back = new.clone();
         apply_changes(&mut back, &reversed).unwrap();
-        assert_eq!(back.get_str("body"), Some("abc"), "reverse apply should remove trailing newline");
+        assert_eq!(
+            back.get_str("body"),
+            Some("abc"),
+            "reverse apply should remove trailing newline"
+        );
     }
 
     #[test]
@@ -936,12 +988,20 @@ mod tests {
         // Forward: old → new
         let mut forward = old.clone();
         apply_changes(&mut forward, &changes).unwrap();
-        assert_eq!(forward.get_str("body"), Some("xyz"), "forward apply should remove trailing newline");
+        assert_eq!(
+            forward.get_str("body"),
+            Some("xyz"),
+            "forward apply should remove trailing newline"
+        );
 
         // Reverse: new → old
         let mut back = new.clone();
         apply_changes(&mut back, &reversed).unwrap();
-        assert_eq!(back.get_str("body"), Some("abc\n"), "reverse apply should add trailing newline");
+        assert_eq!(
+            back.get_str("body"),
+            Some("abc\n"),
+            "reverse apply should add trailing newline"
+        );
     }
 
     #[test]
@@ -978,10 +1038,16 @@ mod tests {
 
         // Now apply that diff to a DIFFERENT text (stale/modified content)
         let mut stale = Entity::new("task", "01ABC");
-        stale.set("body", Value::String("line1\nTOTALLY_DIFFERENT\nline3".into()));
+        stale.set(
+            "body",
+            Value::String("line1\nTOTALLY_DIFFERENT\nline3".into()),
+        );
 
         let result = apply_changes(&mut stale, &changes);
-        assert!(result.is_err(), "applying a stale diff should return an error, not silently corrupt data");
+        assert!(
+            result.is_err(),
+            "applying a stale diff should return an error, not silently corrupt data"
+        );
     }
 
     #[test]
@@ -1027,7 +1093,11 @@ mod tests {
         let err = result.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("stale"), "error should mention stale: {}", msg);
-        assert!(msg.contains("count"), "error should mention field name: {}", msg);
+        assert!(
+            msg.contains("count"),
+            "error should mention field name: {}",
+            msg
+        );
         // Entity should NOT have been modified
         assert_eq!(entity.get_i64("count"), Some(99));
     }

@@ -57,8 +57,14 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
             let ectx = ctx.entity_context().await?;
 
             // Validate field_name against the entity's schema
-            let entity_def = ectx.entity_def(&self.entity_type).map_err(KanbanError::from_entity_error)?;
-            if !entity_def.fields.contains(&self.field_name) {
+            let entity_def = ectx
+                .entity_def(&self.entity_type)
+                .map_err(KanbanError::from_entity_error)?;
+            if !entity_def
+                .fields
+                .iter()
+                .any(|f| f.as_str() == self.field_name)
+            {
                 return Err(KanbanError::InvalidValue {
                     field: self.field_name.clone(),
                     message: format!(

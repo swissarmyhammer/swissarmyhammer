@@ -16,7 +16,9 @@ use crate::types::{FieldDef, FieldType};
 ///
 /// Receives the entity's field values as a HashMap and returns the derived value.
 pub type DeriveFn = Box<
-    dyn Fn(&HashMap<String, serde_json::Value>) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send>>
+    dyn Fn(
+            &HashMap<String, serde_json::Value>,
+        ) -> Pin<Box<dyn Future<Output = serde_json::Value> + Send>>
         + Send
         + Sync,
 >;
@@ -55,7 +57,7 @@ impl ComputeEngine {
             FieldType::Computed { derive } => {
                 let f = self.derivations.get(derive.as_str()).ok_or_else(|| {
                     FieldsError::ComputeError {
-                        field: field.name.clone(),
+                        field: field.name.to_string(),
                         message: format!("unregistered derivation: {}", derive),
                     }
                 })?;
@@ -86,7 +88,7 @@ impl ComputeEngine {
         for field in field_defs {
             if matches!(&field.type_, FieldType::Computed { .. }) {
                 let value = self.derive(field, entity_fields).await?;
-                entity_fields.insert(field.name.clone(), value);
+                entity_fields.insert(field.name.to_string(), value);
             }
         }
         Ok(())
@@ -112,7 +114,7 @@ mod tests {
     fn make_computed_field(name: &str, derive: &str) -> FieldDef {
         FieldDef {
             id: Ulid::new(),
-            name: name.to_string(),
+            name: name.into(),
             description: None,
             type_: FieldType::Computed {
                 derive: derive.to_string(),
@@ -129,7 +131,7 @@ mod tests {
     fn make_text_field(name: &str) -> FieldDef {
         FieldDef {
             id: Ulid::new(),
-            name: name.to_string(),
+            name: name.into(),
             description: None,
             type_: FieldType::Text { single_line: true },
             default: None,
@@ -147,10 +149,7 @@ mod tests {
         engine.register(
             "double-title",
             Box::new(|fields| {
-                let title = fields
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let title = fields.get("title").and_then(|v| v.as_str()).unwrap_or("");
                 let doubled = format!("{}{}", title, title);
                 Box::pin(async move { serde_json::Value::String(doubled) })
             }),

@@ -167,7 +167,7 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
 
             // Create standalone attachment entity
             let attachment_id = ulid::Ulid::new().to_string().to_lowercase();
-            let mut attachment = Entity::new("attachment", &attachment_id);
+            let mut attachment = Entity::new("attachment", attachment_id.as_str());
             attachment.set("attachment_name", json!(self.name));
             attachment.set("attachment_path", json!(self.path));
             if let Some(mime) = &mime_type {
@@ -273,7 +273,10 @@ mod tests {
             .join(".kanban")
             .join("attachments")
             .join(format!("{}.yaml", attachment_id));
-        assert!(attachment_file.exists(), "Attachment entity file should exist");
+        assert!(
+            attachment_file.exists(),
+            "Attachment entity file should exist"
+        );
 
         // Verify the task's attachments list contains the ID
         let ectx = ctx.entity_context().await.unwrap();

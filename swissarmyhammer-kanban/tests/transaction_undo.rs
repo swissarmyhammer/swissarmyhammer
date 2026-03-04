@@ -53,10 +53,7 @@ async fn test_tag_rename_undo_restores_all_tasks() {
 
     // Rename the tag from "frontend" to "fe"
     let rename_result = processor
-        .process(
-            &UpdateTag::new(tag_id.clone()).with_name("fe"),
-            &ctx,
-        )
+        .process(&UpdateTag::new(tag_id.clone()).with_name("fe"), &ctx)
         .await
         .unwrap();
     let operation_id = rename_result["operation_id"]
@@ -134,16 +131,10 @@ async fn test_tag_rename_undo_then_redo() {
 
     // Rename
     let rename_result = processor
-        .process(
-            &UpdateTag::new(tag_id.clone()).with_name("fe"),
-            &ctx,
-        )
+        .process(&UpdateTag::new(tag_id.clone()).with_name("fe"), &ctx)
         .await
         .unwrap();
-    let operation_id = rename_result["operation_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let operation_id = rename_result["operation_id"].as_str().unwrap().to_string();
 
     let ectx = ctx.entity_context().await.unwrap();
 
@@ -191,17 +182,14 @@ async fn test_delete_tag_undo_restores_tag_and_task_bodies() {
     let (_temp, ctx, processor) = setup().await;
 
     // Create a tag named "bug"
-    let tag_result = processor
-        .process(&AddTag::new("bug"), &ctx)
-        .await
-        .unwrap();
+    let tag_result = processor.process(&AddTag::new("bug"), &ctx).await.unwrap();
     let tag_id = tag_result["id"].as_str().unwrap().to_string();
 
     // Create 2 tasks whose body contains #bug
     let mut task_ids = Vec::new();
     for i in 1..=2 {
-        let add = AddTask::new(format!("Task {}", i))
-            .with_description(format!("Fix #bug number {}", i));
+        let add =
+            AddTask::new(format!("Task {}", i)).with_description(format!("Fix #bug number {}", i));
         let result = processor.process(&add, &ctx).await.unwrap();
         task_ids.push(result["id"].as_str().unwrap().to_string());
     }

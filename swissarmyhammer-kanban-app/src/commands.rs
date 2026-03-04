@@ -325,7 +325,11 @@ pub async fn get_entity_schema(
     entity_type: String,
 ) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
-    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
     let fields_ctx = ectx.fields();
 
     let entity_def = fields_ctx
@@ -335,7 +339,10 @@ pub async fn get_entity_schema(
     let field_defs: Vec<Value> = fields_ctx
         .fields_for_entity(&entity_type)
         .iter()
-        .map(|f| serde_json::to_value(f).map_err(|e| format!("failed to serialize field '{}': {}", f.name, e)))
+        .map(|f| {
+            serde_json::to_value(f)
+                .map_err(|e| format!("failed to serialize field '{}': {}", f.name, e))
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(json!({
@@ -443,7 +450,11 @@ pub async fn delete_attachment(
 #[tauri::command]
 pub async fn undo_operation(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
-    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
     let result_ulid = ectx.undo(&id).await.map_err(|e| e.to_string())?;
     Ok(json!({ "undone": id, "operation_id": result_ulid }))
 }
@@ -455,7 +466,11 @@ pub async fn undo_operation(state: State<'_, AppState>, id: String) -> Result<Va
 #[tauri::command]
 pub async fn redo_operation(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
-    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
     let result_ulid = ectx.redo(&id).await.map_err(|e| e.to_string())?;
     Ok(json!({ "redone": id, "operation_id": result_ulid }))
 }

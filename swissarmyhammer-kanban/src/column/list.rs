@@ -22,11 +22,7 @@ impl Execute<KanbanContext, KanbanError> for ListColumns {
         match async {
             let ectx = ctx.entity_context().await?;
             let mut columns = ectx.list("column").await?;
-            columns.sort_by_key(|c| {
-                c.get("order")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize
-            });
+            columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
 
             let columns_json: Vec<Value> = columns.iter().map(column_entity_to_json).collect();
 

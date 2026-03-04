@@ -132,10 +132,7 @@ impl AppState {
         let board_name = if handle.ctx.is_initialized() {
             match handle.ctx.entity_context().await {
                 Ok(ectx) => match ectx.read("board", "board").await {
-                    Ok(entity) => entity
-                        .get_str("name")
-                        .unwrap_or("")
-                        .to_string(),
+                    Ok(entity) => entity.get_str("name").unwrap_or("").to_string(),
                     Err(_) => canonical.display().to_string(),
                 },
                 Err(_) => canonical.display().to_string(),

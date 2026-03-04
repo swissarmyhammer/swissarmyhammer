@@ -16,6 +16,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 ulid = { workspace = true }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 diffy = { workspace = true }
 tempfile = { workspace = true, optional = true }

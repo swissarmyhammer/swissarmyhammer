@@ -137,9 +137,8 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                     if t_col == self.column.as_str()
                         && t_swim == self.swimlane.as_ref().map(|s| s.as_str())
                     {
-                        let ord = Ordinal::from_string(
-                            t.get_str("position_ordinal").unwrap_or("a0"),
-                        );
+                        let ord =
+                            Ordinal::from_string(t.get_str("position_ordinal").unwrap_or("a0"));
                         last_ordinal = Some(match last_ordinal {
                             None => ord,
                             Some(ref o) if ord > *o => ord,

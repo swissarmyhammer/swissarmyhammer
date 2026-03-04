@@ -94,13 +94,12 @@ pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
 
 // Re-export entity types for dynamic entity access
+pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
 pub use swissarmyhammer_entity::Entity;
 pub use swissarmyhammer_entity::EntityContext;
-pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
 
 // Re-export commonly used types
 pub use types::{
-    default_column_entities, ActorId, ColumnId, LogEntry, Noun,
-    Operation as KanbanOperation, OperationResult, Ordinal, Position, SwimlaneId,
-    TagId, TaskId, Verb,
+    default_column_entities, ActorId, ColumnId, LogEntry, Noun, Operation as KanbanOperation,
+    OperationResult, Ordinal, Position, SwimlaneId, TagId, TaskId, Verb,
 };

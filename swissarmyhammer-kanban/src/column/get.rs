@@ -27,7 +27,10 @@ impl Execute<KanbanContext, KanbanError> for GetColumn {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let ectx = ctx.entity_context().await?;
-            let entity = ectx.read("column", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            let entity = ectx
+                .read("column", self.id.as_str())
+                .await
+                .map_err(KanbanError::from_entity_error)?;
             Ok(column_entity_to_json(&entity))
         }
         .await

@@ -91,7 +91,7 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         match result {
             Ok(mut value) => {
                 if let Some(obj) = value.as_object_mut() {
-                    obj.insert("operation_id".to_string(), Value::String(tx_id));
+                    obj.insert("operation_id".to_string(), Value::String(tx_id.to_string()));
                 }
                 Ok(value)
             }

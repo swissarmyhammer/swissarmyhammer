@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
+use crate::id_types::{EntityTypeName, FieldName};
+
 /// A single option in a select or multi-select field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SelectOption {
@@ -49,7 +51,7 @@ pub enum FieldType {
     },
     /// Stores entity IDs (ULIDs) pointing to another entity type.
     Reference {
-        entity: String,
+        entity: EntityTypeName,
         #[serde(default)]
         multiple: bool,
     },
@@ -101,13 +103,13 @@ pub enum SortKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FieldDef {
     pub id: Ulid,
-    pub name: String,
+    pub name: FieldName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(rename = "type")]
     pub type_: FieldType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
+    pub default: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor: Option<Editor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -180,11 +182,11 @@ impl FieldDef {
 /// An entity definition — a template declaring which fields belong to an entity type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityDef {
-    pub name: String,
+    pub name: EntityTypeName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body_field: Option<String>,
+    pub body_field: Option<FieldName>,
     #[serde(default)]
-    pub fields: Vec<String>,
+    pub fields: Vec<FieldName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
 }
@@ -300,7 +302,7 @@ mod tests {
                     },
                 ],
             },
-            default: Some("Backlog".into()),
+            default: Some(serde_json::json!("Backlog")),
             editor: Some(Editor::Select),
             display: Some(Display::Badge),
             sort: Some(SortKind::OptionOrder),
@@ -493,7 +495,7 @@ sort: option-order
 "#;
         let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "status");
-        assert_eq!(field.default, Some("Backlog".into()));
+        assert_eq!(field.default, Some(serde_json::json!("Backlog")));
         assert_eq!(field.editor, Some(Editor::Select));
         assert_eq!(field.display, Some(Display::Badge));
         assert_eq!(field.sort, Some(SortKind::OptionOrder));
@@ -632,8 +634,8 @@ fields:
         assert_eq!(entity.name, "task");
         assert_eq!(entity.body_field, Some("body".into()));
         assert_eq!(entity.fields.len(), 8);
-        assert!(entity.fields.contains(&"assignees".to_string()));
-        assert!(entity.fields.contains(&"depends_on".to_string()));
+        assert!(entity.fields.contains(&FieldName::from("assignees")));
+        assert!(entity.fields.contains(&FieldName::from("depends_on")));
     }
 
     #[test]

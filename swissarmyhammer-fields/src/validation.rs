@@ -60,14 +60,14 @@ impl ValidationEngine {
         sibling_fields: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
         if let Some(ref validate_fn) = field.validate {
-            self.run_js_validation(validate_fn, &field.name, value, sibling_fields)
+            self.run_js_validation(validate_fn, field.name.as_str(), value, sibling_fields)
                 .await
         } else if let FieldType::Reference {
             ref entity,
             multiple,
         } = field.type_
         {
-            self.default_reference_validation(entity, multiple, value)
+            self.default_reference_validation(entity.as_str(), multiple, value)
                 .await
         } else {
             Ok(value)
@@ -101,8 +101,7 @@ impl ValidationEngine {
         // safely reconstructs the object. No JS syntax injection is possible
         // because the data is always inside a string literal.
         let ctx_json_str = serde_json::to_string(&ctx_obj).unwrap_or_default();
-        let ctx_json_string_literal =
-            serde_json::to_string(&ctx_json_str).unwrap_or_default();
+        let ctx_json_string_literal = serde_json::to_string(&ctx_json_str).unwrap_or_default();
         let js_code = format!(
             r#"(function() {{
     var ctx = JSON.parse({ctx_json_string});
@@ -192,8 +191,7 @@ impl ValidationEngine {
         // Double-encode via JSON.parse to prevent JS injection.
         // See run_js_validation for detailed rationale.
         let ctx_json_str = serde_json::to_string(&ctx_obj).unwrap_or_default();
-        let ctx_json_string_literal =
-            serde_json::to_string(&ctx_json_str).unwrap_or_default();
+        let ctx_json_string_literal = serde_json::to_string(&ctx_json_str).unwrap_or_default();
         let js_code = format!(
             r#"(function() {{
     var ctx = JSON.parse({ctx_json_string});
@@ -269,7 +267,7 @@ mod tests {
     fn make_field(name: &str, type_: FieldType) -> FieldDef {
         FieldDef {
             id: Ulid::new(),
-            name: name.to_string(),
+            name: name.into(),
             description: None,
             type_,
             default: None,
@@ -524,10 +522,7 @@ mod tests {
 
         let result = engine.validate_entity(&entity_def, &mut fields).await;
         assert!(result.is_ok());
-        assert_eq!(
-            fields.get("status").unwrap(),
-            &serde_json::json!("Backlog")
-        );
+        assert_eq!(fields.get("status").unwrap(), &serde_json::json!("Backlog"));
     }
 
     #[tokio::test]
@@ -537,9 +532,7 @@ mod tests {
             name: "task".into(),
             body_field: None,
             fields: vec!["title".into()],
-            validate: Some(
-                r#"throw new Error("entity validation failed");"#.to_string(),
-            ),
+            validate: Some(r#"throw new Error("entity validation failed");"#.to_string()),
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Test"));
@@ -565,7 +558,11 @@ mod tests {
         let result = engine
             .validate(&field, value.clone(), &HashMap::new())
             .await;
-        assert!(result.is_ok(), "validation should succeed, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "validation should succeed, got: {:?}",
+            result
+        );
         assert_eq!(
             result.unwrap(),
             value,
@@ -588,7 +585,11 @@ mod tests {
         let result = engine
             .validate(&field, serde_json::json!("ok"), &siblings)
             .await;
-        assert!(result.is_ok(), "validation should succeed, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "validation should succeed, got: {:?}",
+            result
+        );
         assert_eq!(
             result.unwrap(),
             serde_json::json!(adversarial),
@@ -613,7 +614,11 @@ mod tests {
         fields.insert("title".to_string(), serde_json::json!(adversarial));
 
         let result = engine.validate_entity(&entity_def, &mut fields).await;
-        assert!(result.is_ok(), "entity validation should succeed, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "entity validation should succeed, got: {:?}",
+            result
+        );
         // The adversarial string should remain as-is in the title field
         assert_eq!(
             fields.get("title").unwrap(),

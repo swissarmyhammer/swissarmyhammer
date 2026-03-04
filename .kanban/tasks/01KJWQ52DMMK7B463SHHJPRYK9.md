@@ -1,6 +1,6 @@
 ---
-position_column: todo
-position_ordinal: d9
+position_column: done
+position_ordinal: k3
 title: Change FieldDef.default from Option&lt;String&gt; to Option&lt;Value&gt;
 ---
 **Review finding: Nit (fields crate)**

@@ -3,62 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Macro to define ID newtypes with consistent derives and impls
-macro_rules! define_id {
-    ($name:ident, $doc:literal) => {
-        #[doc = $doc]
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(pub String);
-
-        impl $name {
-            /// Create a new ID with a fresh ULID
-            pub fn new() -> Self {
-                Self(ulid::Ulid::new().to_string())
-            }
-
-            /// Create an ID from an existing string
-            pub fn from_string(s: impl Into<String>) -> Self {
-                Self(s.into())
-            }
-
-            /// Get the inner string value
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl Default for $name {
-            fn default() -> Self {
-                Self::new()
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-
-        impl AsRef<str> for $name {
-            fn as_ref(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl From<&str> for $name {
-            fn from(s: &str) -> Self {
-                Self(s.to_string())
-            }
-        }
-
-        impl From<String> for $name {
-            fn from(s: String) -> Self {
-                Self(s)
-            }
-        }
-    };
-}
+// Import the canonical macro from common.
+use swissarmyhammer_common::define_id;
 
 // Define all ID types
 define_id!(TaskId, "ULID-based identifier for tasks");

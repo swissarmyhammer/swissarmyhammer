@@ -1091,7 +1091,11 @@ async fn partial_transaction_undo_rolls_back_on_failure() {
             rollback_succeeded,
         } => {
             // B was undone first (reverse order), then A failed
-            assert_eq!(completed.len(), 1, "one entry should have been completed before failure");
+            assert_eq!(
+                completed.len(),
+                1,
+                "one entry should have been completed before failure"
+            );
             assert!(
                 original_error.contains("patch"),
                 "original error should be about patch failure, got: {}",
@@ -1102,10 +1106,7 @@ async fn partial_transaction_undo_rolls_back_on_failure() {
                 "rollback should succeed (re-redo the undone B entry)"
             );
         }
-        other => panic!(
-            "expected TransactionPartialFailure, got: {:?}",
-            other
-        ),
+        other => panic!("expected TransactionPartialFailure, got: {:?}", other),
     }
 
     // After successful rollback, both entities should be in their
@@ -1183,7 +1184,11 @@ async fn partial_transaction_redo_rolls_back_on_failure() {
             rollback_succeeded,
         } => {
             // A was redone first (forward order), then B failed
-            assert_eq!(completed.len(), 1, "one entry should have been completed before failure");
+            assert_eq!(
+                completed.len(),
+                1,
+                "one entry should have been completed before failure"
+            );
             assert!(
                 original_error.contains("patch"),
                 "original error should be about patch failure, got: {}",
@@ -1194,10 +1199,7 @@ async fn partial_transaction_redo_rolls_back_on_failure() {
                 "rollback should succeed (re-undo the redone A entry)"
             );
         }
-        other => panic!(
-            "expected TransactionPartialFailure, got: {:?}",
-            other
-        ),
+        other => panic!("expected TransactionPartialFailure, got: {:?}", other),
     }
 
     // After successful rollback, entities should be in their pre-redo state
@@ -1284,7 +1286,10 @@ async fn partial_failure_error_display_is_informative() {
         rollback_succeeded: false,
     };
     let msg_failed = err_failed.to_string();
-    assert!(msg_failed.contains("failed"), "should mention rollback failed");
+    assert!(
+        msg_failed.contains("failed"),
+        "should mention rollback failed"
+    );
 }
 
 // =========================================================================

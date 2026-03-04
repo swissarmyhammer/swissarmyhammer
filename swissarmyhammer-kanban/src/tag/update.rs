@@ -66,7 +66,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
 
         let result: std::result::Result<Value, KanbanError> = async {
             let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("tag", self.id.as_str()).await.map_err(KanbanError::from_entity_error)?;
+            let mut entity = ectx
+                .read("tag", self.id.as_str())
+                .await
+                .map_err(KanbanError::from_entity_error)?;
             let old_name = entity.get_str("tag_name").unwrap_or("").to_string();
 
             if let Some(name) = &self.name {
@@ -83,8 +86,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
                     let all_tasks = ectx.list("task").await?;
                     for mut task in all_tasks {
                         let body = task.get_str("body").unwrap_or("").to_string();
-                        let new_body =
-                            tag_parser::rename_tag(&body, &old_name, &normalized);
+                        let new_body = tag_parser::rename_tag(&body, &old_name, &normalized);
                         if new_body != body {
                             task.set("body", json!(new_body));
                             ectx.write(&task).await?;
@@ -261,11 +263,7 @@ mod tests {
         let ectx = ctx.entity_context().await.unwrap();
         let task = ectx.read("task", &task_id).await.unwrap();
         let body = task.get_str("body").unwrap_or("");
-        assert!(
-            body.contains("#defect"),
-            "Expected #defect in: {}",
-            body
-        );
+        assert!(body.contains("#defect"), "Expected #defect in: {}", body);
         assert!(
             !body.contains("#bug"),
             "Should not contain #bug in: {}",
