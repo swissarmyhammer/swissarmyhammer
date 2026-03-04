@@ -156,13 +156,14 @@ impl Default for PromptResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
+    #[serial]
     fn test_prompt_resolver_loads_user_prompts() {
-        // Skip isolated test environment setup for now
         let home_dir = std::env::var("HOME").unwrap();
         let user_prompts_dir = PathBuf::from(&home_dir).join(".prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
@@ -174,7 +175,12 @@ mod tests {
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();
 
-        resolver.load_all_prompts(&mut library).unwrap();
+        let result = resolver.load_all_prompts(&mut library);
+
+        // Clean up before asserting so the file is removed even on failure
+        let _ = fs::remove_file(&prompt_file);
+
+        result.unwrap();
 
         // Check that our test prompt was loaded
         let prompt = library.get("test_prompt").unwrap();

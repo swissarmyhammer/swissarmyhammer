@@ -96,8 +96,13 @@ impl ShellState {
     /// Create a new ShellState, initializing the .shell/ directory, log file, SQLite DB,
     /// and background embedding worker.
     pub fn new() -> anyhow::Result<Self> {
+        Self::new_in_dir(PathBuf::from(".shell"))
+    }
+
+    /// Create a new ShellState with an explicit base directory for the .shell/ data.
+    /// This avoids relying on the process-wide CWD, which is important for tests.
+    pub fn new_in_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
         let session_id = ulid::Ulid::new().to_string();
-        let shell_dir = PathBuf::from(".shell");
         fs::create_dir_all(&shell_dir)?;
 
         let log_path = shell_dir.join("log");
@@ -647,16 +652,15 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// Helper to create a `ShellState` inside a temporary directory.
     /// Returns the state and the temp dir (which must be kept alive for the duration
     /// of the test so the directory is not deleted).
     fn create_test_state() -> (ShellState, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        let original = std::env::current_dir().expect("get cwd");
-        std::env::set_current_dir(tmp.path()).expect("cd to tmp");
-        let state = ShellState::new().expect("ShellState::new");
-        std::env::set_current_dir(original).expect("restore cwd");
+        let shell_dir = tmp.path().join(".shell");
+        let state = ShellState::new_in_dir(shell_dir).expect("ShellState::new_in_dir");
         (state, tmp)
     }
 
@@ -696,6 +700,7 @@ mod tests {
     // =================================================================
 
     #[tokio::test]
+    #[serial]
     async fn test_start_command_returns_sequential_ids() {
         let (mut state, _tmp) = create_test_state();
         let id1 = state.start_command("echo hello".into());
@@ -705,6 +710,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_start_command_creates_running_record() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("ls -la".into());
@@ -718,6 +724,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_append_lines_increments_line_count() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("echo test".into());
@@ -732,6 +739,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_append_lines_unknown_command_returns_error() {
         let (mut state, _tmp) = create_test_state();
         let result = state.append_lines(999, &["nope".to_string()]);
@@ -744,6 +752,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_complete_command_sets_status_and_exit_code() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("echo done".into());
@@ -756,6 +765,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_timeout_command_sets_status() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("sleep 999".into());
@@ -767,6 +777,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_command_record_duration() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("quick".into());
@@ -787,6 +798,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_register_process() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("sleep 10".into());
@@ -801,6 +813,7 @@ mod tests {
     // =================================================================
 
     #[tokio::test]
+    #[serial]
     async fn test_get_lines_all() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("echo stuff".into());
@@ -814,6 +827,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_lines_with_start_and_end() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("seq".into());
@@ -827,6 +841,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_lines_start_only() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("cmd".into());
@@ -840,6 +855,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_lines_end_only() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("cmd".into());
@@ -853,6 +869,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_lines_no_output() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("true".into());
@@ -862,6 +879,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_lines_isolates_commands() {
         let (mut state, _tmp) = create_test_state();
         let id1 = state.start_command("cmd1".into());
@@ -883,6 +901,7 @@ mod tests {
     // =================================================================
 
     #[tokio::test]
+    #[serial]
     async fn test_grep_finds_matching_lines() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("build".into());
@@ -906,6 +925,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_grep_no_matches_returns_empty() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("ok".into());
@@ -916,6 +936,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_grep_filters_by_command_id() {
         let (mut state, _tmp) = create_test_state();
         let id1 = state.start_command("first".into());
@@ -942,6 +963,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_grep_respects_limit() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("many".into());
@@ -953,6 +975,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_grep_regex_pattern() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("log".into());
@@ -972,6 +995,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_grep_invalid_regex_returns_error() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("x".into());
@@ -982,6 +1006,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_grep_result_has_correct_line_numbers() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("test".into());

@@ -466,6 +466,7 @@ impl Default for ConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_config_builder_new() {
@@ -564,6 +565,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_no_vars() {
         // Test with no environment variables set
         // Clear any variables that might be set
@@ -584,6 +586,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_github_token() {
         // Set GITHUB_TOKEN environment variable
         std::env::set_var("GITHUB_TOKEN", "ghp_test_token_from_env");
@@ -600,6 +603,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_github_token_empty() {
         // Set GITHUB_TOKEN to empty string - should be ignored
         std::env::set_var("GITHUB_TOKEN", "   ");
@@ -614,6 +618,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_timeout() {
         // Set MARKDOWNDOWN_TIMEOUT environment variable
         std::env::set_var("MARKDOWNDOWN_TIMEOUT", "120");
@@ -627,6 +632,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_timeout_invalid() {
         // Set MARKDOWNDOWN_TIMEOUT to invalid value - should use default
         std::env::set_var("MARKDOWNDOWN_TIMEOUT", "not_a_number");
@@ -644,6 +650,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_user_agent() {
         // Set MARKDOWNDOWN_USER_AGENT environment variable
         std::env::set_var("MARKDOWNDOWN_USER_AGENT", "CustomAgent/2.0");
@@ -657,6 +664,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_user_agent_empty() {
         // Set MARKDOWNDOWN_USER_AGENT to empty string - should use default
         std::env::set_var("MARKDOWNDOWN_USER_AGENT", "  ");
@@ -674,6 +682,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_max_retries() {
         // Set MARKDOWNDOWN_MAX_RETRIES environment variable
         std::env::set_var("MARKDOWNDOWN_MAX_RETRIES", "10");
@@ -687,6 +696,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_max_retries_invalid() {
         // Set MARKDOWNDOWN_MAX_RETRIES to invalid value - should use default
         std::env::set_var("MARKDOWNDOWN_MAX_RETRIES", "invalid");
@@ -701,6 +711,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_from_env_all_vars() {
         // Set all environment variables
         std::env::set_var("GITHUB_TOKEN", "ghp_full_test_token");
