@@ -65,9 +65,33 @@ If the user asks to revise or extend the plan, update the kanban cards directly:
 - Remove obsolete cards with `op: "delete task"`
 - Reorder dependencies as needed
 
+## Card Sizing
+
+A card should represent a single, focused unit of work. Use these limits to keep cards right-sized:
+
+| Dimension | Target | Split when |
+|-----------|--------|------------|
+| Lines of code | 200–500 generated or modified | > 500 lines |
+| Files touched | 2–4 files | > 5 files |
+| Subtasks | 3–5 per card | > 5 subtasks |
+| Concerns | 1 per card | Multiple distinct concerns |
+
+### Why these limits matter
+
+- **Subtask cap is the most important lever.** If a card needs more than 5 subtasks, it is bundling multiple concerns. Extract groups of related subtasks into their own cards with dependencies between them.
+- **A subtask is a single code change** — add a function, modify a struct, update a test file. If a subtask itself feels like a project, it should be its own card.
+- **Small cards are fine.** Some cards are legitimately 50–100 lines (add a field, wire a dependency). The floor is not a target — only the ceiling matters.
+- **When in doubt, split.** Two small cards with a dependency are always better than one mega-card with a long checklist.
+
+### How to split an oversized card
+
+1. Look for natural seam lines: different files, different layers (data model vs. API vs. UI), different concerns (validation vs. persistence vs. rendering).
+2. Extract each group into its own card with a clear title and description.
+3. Add `depends_on` links so execution order is preserved.
+4. Each resulting card should independently pass tests when complete.
+
 ## Guidelines
 
-- Tasks should be sized so each one can be completed in a single session
 - Subtasks should be concrete and verifiable — "add error handling to parse_config" not "improve code"
 - Include enough context in task descriptions that someone (or the kanban skill) can execute without re-reading the spec
 - Order tasks so foundational changes come first (data models, types) and dependent work follows
