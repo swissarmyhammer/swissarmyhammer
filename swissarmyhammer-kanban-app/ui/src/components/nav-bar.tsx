@@ -11,6 +11,7 @@ import {
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import type { BoardData, OpenBoard } from "@/types/kanban";
+import { getStr } from "@/types/kanban";
 
 interface NavBarProps {
   board: BoardData | null;
@@ -32,7 +33,7 @@ export function NavBar({
     onBoardChanged();
   };
 
-  const boardName = (board?.board.fields.name as string) ?? "No Board";
+  const boardName = board ? getStr(board.board, "name", "No Board") : "No Board";
 
   return (
     <header className="flex h-12 items-center border-b px-4 gap-3">

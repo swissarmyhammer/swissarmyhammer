@@ -7,6 +7,7 @@ import { useFieldUpdate } from "@/lib/field-update-context";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import type { Entity, FieldDef } from "@/types/kanban";
+import { getStr } from "@/types/kanban";
 
 interface EntityCardProps {
   entity: Entity;
@@ -147,7 +148,7 @@ function CardFieldDispatch({
 
   // Computed: progress — bar
   if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-progress") {
-    const bodyText = bodyFieldName ? (entity.fields[bodyFieldName] as string) : undefined;
+    const bodyText = bodyFieldName ? getStr(entity, bodyFieldName) || undefined : undefined;
     return <SubtaskProgress description={bodyText} className="mt-1.5" />;
   }
 

@@ -23,6 +23,7 @@ import { reorderColumns } from "@/lib/column-reorder";
 import { defaultTaskTitle } from "@/lib/task-defaults";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import type { BoardData, Entity } from "@/types/kanban";
+import { getStr, getStrList, getNum } from "@/types/kanban";
 
 interface BoardViewProps {
   board: BoardData;
@@ -44,7 +45,7 @@ type DragType = "task" | "column";
 export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMoved }: BoardViewProps) {
   const columns = useMemo(
     () => [...board.columns].sort((a, b) =>
-      ((a.fields.order as number) ?? 0) - ((b.fields.order as number) ?? 0)
+      getNum(a, "order") - getNum(b, "order")
     ),
     [board.columns]
   );
@@ -69,7 +70,7 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
     const map: ColumnLayout = new Map();
     for (const col of columns) map.set(col.id, []);
     for (const task of tasks) {
-      const col = task.fields.position_column as string;
+      const col = getStr(task, "position_column");
       const list = map.get(col);
       if (list) list.push(task.id);
     }
@@ -78,8 +79,8 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
       ids.sort((a, b) => {
         const ta = taskMap.get(a)!;
         const tb = taskMap.get(b)!;
-        return ((ta.fields.position_ordinal as string) ?? "a0").localeCompare(
-          (tb.fields.position_ordinal as string) ?? "a0"
+        return getStr(ta, "position_ordinal", "a0").localeCompare(
+          getStr(tb, "position_ordinal", "a0")
         );
       });
       map.set(colId, ids);
@@ -102,12 +103,12 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
   const blockedIds = useMemo(() => {
     const set = new Set<string>();
     for (const task of tasks) {
-      const dependsOn = (task.fields.depends_on as string[]) ?? [];
+      const dependsOn = getStrList(task, "depends_on");
       if (dependsOn.length > 0) {
         const terminalCol = columns[columns.length - 1]?.id;
         const hasIncomplete = dependsOn.some((depId) => {
           const dep = taskMap.get(depId);
-          return dep && (dep.fields.position_column as string) !== terminalCol;
+          return dep && getStr(dep, "position_column") !== terminalCol;
         });
         if (hasIncomplete) set.add(task.id);
       }
@@ -158,7 +159,7 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
         const clone: ColumnLayout = new Map();
         for (const [k, v] of baseLayout) clone.set(k, [...v]);
         setVirtualLayout(clone);
-        activeColumnRef.current = (task?.fields.position_column as string) ?? null;
+        activeColumnRef.current = task ? getStr(task, "position_column") || null : null;
       }
     },
     [taskMap, baseLayout, columnMap, columnIdList]
@@ -313,7 +314,7 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
       if (!targetList) return;
 
       // If dropped on itself with no column change
-      const draggedColumn = draggedTask.fields.position_column as string;
+      const draggedColumn = getStr(draggedTask, "position_column");
       if (activeId === overId && targetColumn === draggedColumn) return;
 
       // Handle same-column reorder via arrayMove for correct index
@@ -355,7 +356,7 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
   const handleAddTask = useCallback(
     async (columnId: string) => {
       const col = columnMap.get(columnId);
-      const title = defaultTaskTitle((col?.fields.name as string) ?? "");
+      const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
         await invoke("add_task", { title, column: columnId });
         onTaskMoved?.();
@@ -377,7 +378,7 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
         id: taskId,
         column,
         ordinal,
-        swimlane: (entity.fields.position_swimlane as string) ?? null,
+        swimlane: getStr(entity, "position_swimlane") || null,
       });
       onTaskMoved?.();
     } catch (e) {
@@ -426,7 +427,7 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
         {activeTask ? <EntityCard entity={activeTask} /> : null}
         {activeColumn ? (
           <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
-            {activeColumn.fields.name as string}
+            {getStr(activeColumn, "name")}
           </div>
         ) : null}
       </DragOverlay>
@@ -445,8 +446,8 @@ function computeOrdinal(
 ): string {
   const prevEntity = index > 0 ? taskMap.get(ids[index - 1]) : undefined;
   const nextEntity = index < ids.length - 1 ? taskMap.get(ids[index + 1]) : undefined;
-  const prev = (prevEntity?.fields.position_ordinal as string) ?? undefined;
-  const next = (nextEntity?.fields.position_ordinal as string) ?? undefined;
+  const prev = prevEntity ? getStr(prevEntity, "position_ordinal") || undefined : undefined;
+  const next = nextEntity ? getStr(nextEntity, "position_ordinal") || undefined : undefined;
 
   if (!prev && !next) return "a0";
   if (!prev && next) {

@@ -68,6 +68,34 @@ export interface Entity {
 }
 
 // ---------------------------------------------------------------------------
+// Safe field accessors — mirror Rust's entity.get_str() / get_string_list()
+// ---------------------------------------------------------------------------
+
+/** Read a string field, returning fallback if missing/null/wrong type. */
+export function getStr(entity: Entity, field: string, fallback = ""): string {
+  const v = entity.fields[field];
+  return typeof v === "string" ? v : fallback;
+}
+
+/** Read a string array field, returning [] if missing/null/wrong type. */
+export function getStrList(entity: Entity, field: string): string[] {
+  const v = entity.fields[field];
+  return Array.isArray(v) ? (v as string[]) : [];
+}
+
+/** Read a numeric field, returning fallback if missing/null/wrong type. */
+export function getNum(entity: Entity, field: string, fallback = 0): number {
+  const v = entity.fields[field];
+  return typeof v === "number" ? v : fallback;
+}
+
+/** Read a boolean field, returning fallback if missing/null/wrong type. */
+export function getBool(entity: Entity, field: string, fallback = false): boolean {
+  const v = entity.fields[field];
+  return typeof v === "boolean" ? v : fallback;
+}
+
+// ---------------------------------------------------------------------------
 // Entity bag conversion
 //
 // Entity::to_json() on the Rust side produces a flat JSON object with
@@ -128,7 +156,7 @@ export interface BoardData {
 }
 
 /** Convert a BoardDataResponse into the entity-based BoardData. */
-export function boardDataToBoardData(data: BoardDataResponse): BoardData {
+export function parseBoardData(data: BoardDataResponse): BoardData {
   return {
     board: entityFromBag(data.board),
     columns: data.columns.map(entityFromBag),

@@ -3,7 +3,6 @@ import {
   normalizeKeyEvent,
   BINDING_TABLES,
   createKeyHandler,
-  type KeymapMode,
 } from "./keybindings";
 
 /* ---------- helpers ---------- */
@@ -161,10 +160,10 @@ describe("BINDING_TABLES", () => {
 /* ---------- createKeyHandler ---------- */
 
 describe("createKeyHandler", () => {
-  let executeCommand: ReturnType<typeof vi.fn>;
+  let executeCommand: (id: string) => Promise<boolean>;
 
   beforeEach(() => {
-    executeCommand = vi.fn().mockResolvedValue(true);
+    executeCommand = vi.fn(async () => true) as (id: string) => Promise<boolean>;
     vi.useFakeTimers();
   });
 

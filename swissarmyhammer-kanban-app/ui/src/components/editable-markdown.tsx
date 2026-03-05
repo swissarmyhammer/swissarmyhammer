@@ -15,6 +15,7 @@ import { tagTooltips, type TagMeta } from "@/lib/cm-tag-tooltip";
 import { remarkTags } from "@/lib/remark-tags";
 import { TagPill } from "@/components/tag-pill";
 import type { Entity } from "@/types/kanban";
+import { getStr } from "@/types/kanban";
 
 interface EditableMarkdownProps {
   value: string;
@@ -177,7 +178,7 @@ export function EditableMarkdown({
 
   // Known tag slugs for the remark plugin
   const knownSlugs = useMemo(
-    () => (tags ? tags.map((t) => (t.fields.tag_name as string) ?? "") : []),
+    () => (tags ? tags.map((t) => getStr(t, "tag_name")) : []),
     [tags],
   );
 
@@ -186,8 +187,8 @@ export function EditableMarkdown({
     const map = new Map<string, string>();
     if (tags) {
       for (const t of tags) {
-        const name = (t.fields.tag_name as string) ?? "";
-        const color = (t.fields.color as string) ?? "888888";
+        const name = getStr(t, "tag_name");
+        const color = getStr(t, "color", "888888");
         map.set(name, color);
       }
     }
@@ -199,9 +200,9 @@ export function EditableMarkdown({
     const map = new Map<string, TagMeta>();
     if (tags) {
       for (const t of tags) {
-        const name = (t.fields.tag_name as string) ?? "";
-        const color = (t.fields.color as string) ?? "888888";
-        const description = (t.fields.description as string) || undefined;
+        const name = getStr(t, "tag_name");
+        const color = getStr(t, "color", "888888");
+        const description = getStr(t, "description") || undefined;
         map.set(name, { color, description });
       }
     }

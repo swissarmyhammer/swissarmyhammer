@@ -9,6 +9,7 @@ import {
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import type { Entity } from "@/types/kanban";
+import { getStr } from "@/types/kanban";
 
 /** 16-color palette matching Rust auto_color */
 const PALETTE = [
@@ -48,9 +49,9 @@ export function TagInspector({
   style,
 }: TagInspectorProps) {
   const { updateField: contextUpdateField } = useFieldUpdate();
-  const tagName = entity.fields.tag_name as string;
-  const tagColor = (entity.fields.color as string) ?? "888888";
-  const tagDescription = (entity.fields.description as string) ?? "";
+  const tagName = getStr(entity, "tag_name");
+  const tagColor = getStr(entity, "color", "888888");
+  const tagDescription = getStr(entity, "description");
 
   const [selectedColor, setSelectedColor] = useState(tagColor);
   const [pickerOpen, setPickerOpen] = useState(false);

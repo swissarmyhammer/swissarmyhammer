@@ -9,6 +9,7 @@ import { EditableMarkdown } from "@/components/editable-markdown";
 import { SortableEntityCard } from "@/components/sortable-task-card";
 import { Badge } from "@/components/ui/badge";
 import type { Entity } from "@/types/kanban";
+import { getStr } from "@/types/kanban";
 
 interface ColumnViewProps {
   column: Entity;
@@ -27,8 +28,8 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, 
       presorted
         ? tasks
         : [...tasks].sort((a, b) =>
-            ((a.fields.position_ordinal as string) ?? "a0").localeCompare(
-              (b.fields.position_ordinal as string) ?? "a0"
+            getStr(a, "position_ordinal", "a0").localeCompare(
+              getStr(b, "position_ordinal", "a0")
             )
           ),
     [tasks, presorted]
@@ -41,7 +42,7 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, 
     <div className="flex flex-col min-h-0 flex-1">
       <div className="px-3 py-2 flex items-center gap-2">
         <EditableMarkdown
-          value={(column.fields.name as string) ?? ""}
+          value={getStr(column, "name")}
           onCommit={(name) => onRenameColumn?.(column.id, name)}
           className="text-sm font-semibold text-foreground cursor-text"
           inputClassName="text-sm font-semibold text-foreground bg-transparent border-b border-ring w-full"
@@ -62,7 +63,7 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, 
           type="button"
           className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
           onClick={() => onAddTask?.(column.id)}
-          title={`Add task to ${(column.fields.name as string) ?? ""}`}
+          title={`Add task to ${getStr(column, "name")}`}
         >
           <Plus className="h-4 w-4" />
         </button>

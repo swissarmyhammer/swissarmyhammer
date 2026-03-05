@@ -8,6 +8,7 @@
  */
 
 import type { KeymapMode } from "./keymap-context";
+export type { KeymapMode };
 
 /* ---------- types ---------- */
 

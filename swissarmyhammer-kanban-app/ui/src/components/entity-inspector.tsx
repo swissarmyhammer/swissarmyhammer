@@ -7,6 +7,7 @@ import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import type { FieldDef, Entity } from "@/types/kanban";
+import { getStr } from "@/types/kanban";
 
 interface EntityInspectorProps {
   entity: Entity;
@@ -218,7 +219,7 @@ function FieldDispatch({
 
   // Computed: progress — render as SubtaskProgress bar using the body field
   if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-progress") {
-    const bodyText = bodyFieldName ? (entity.fields[bodyFieldName] as string) : undefined;
+    const bodyText = bodyFieldName ? getStr(entity, bodyFieldName) || undefined : undefined;
     return <SubtaskProgress description={bodyText} />;
   }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { UndoStack, type UndoableCommand } from "./undo-stack";
 
 /** Helper: creates a mock UndoableCommand that records calls. */

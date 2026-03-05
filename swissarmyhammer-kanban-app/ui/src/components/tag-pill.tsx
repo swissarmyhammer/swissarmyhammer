@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
+import { getStr } from "@/types/kanban";
 
 interface TagPillProps {
   slug: string;
@@ -25,9 +26,9 @@ interface TagPillProps {
  * Hover shows a markdown tooltip with the tag description.
  */
 export function TagPill({ slug, tags, taskId, className }: TagPillProps) {
-  const tag = tags.find((t) => (t.fields.tag_name as string) === slug);
-  const color = (tag?.fields.color as string) ?? "888888";
-  const description = (tag?.fields.description as string) || undefined;
+  const tag = tags.find((t) => getStr(t, "tag_name") === slug);
+  const color = tag ? getStr(tag, "color", "888888") : "888888";
+  const description = tag ? getStr(tag, "description") || undefined : undefined;
 
   const pill = (
     <span

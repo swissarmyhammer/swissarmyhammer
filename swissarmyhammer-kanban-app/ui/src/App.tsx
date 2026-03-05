@@ -18,7 +18,7 @@ import type {
   BoardData, OpenBoard, Entity,
   BoardDataResponse, EntityListResponse,
 } from "@/types/kanban";
-import { entityFromBag, boardDataToBoardData } from "@/types/kanban";
+import { entityFromBag, parseBoardData, getStr } from "@/types/kanban";
 
 const PANEL_WIDTH = 420;
 
@@ -69,7 +69,7 @@ function App() {
         invoke<OpenBoard[]>("list_open_boards"),
         invoke<EntityListResponse>("list_entities", { entityType: "task" }),
       ]);
-      setBoard(boardDataToBoardData(boardData));
+      setBoard(parseBoardData(boardData));
       setOpenBoards(openData);
       setTaskEntities(taskData.entities.map(entityFromBag));
       setTagEntities(boardData.tags.map(entityFromBag));
@@ -97,7 +97,7 @@ function App() {
       const { action, tag_id, task_id } = event.payload;
       if (action === "tag_edit") {
         // tag_id from context menu is the slug — resolve to ULID via tagEntities
-        const tag = tagEntities.find((t) => (t.fields.tag_name as string) === tag_id);
+        const tag = tagEntities.find((t) => getStr(t, "tag_name") === tag_id);
         if (tag) inspectEntity("tag", tag.id);
       } else if (action === "tag_delete" && task_id) {
         try {
