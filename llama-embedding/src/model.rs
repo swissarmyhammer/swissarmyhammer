@@ -185,6 +185,14 @@ impl EmbeddingModel {
             .await
             .map_err(EmbeddingError::ModelLoader)?;
 
+        // Verify the resolved file is a .gguf model (llama-cpp-2 only supports GGUF)
+        if resolved.path.extension().and_then(|e| e.to_str()) != Some("gguf") {
+            return Err(EmbeddingError::model(format!(
+                "llama-cpp-2 only supports .gguf models, got: {}",
+                resolved.path.display()
+            )));
+        }
+
         // Load model into llama-cpp-2
         let model_params = Self::default_model_params();
         let model = LlamaModel::load_from_file(&self.backend, &resolved.path, &model_params)

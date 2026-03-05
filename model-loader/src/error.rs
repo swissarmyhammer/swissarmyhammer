@@ -6,31 +6,31 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ModelError {
     /// Model resolution/loading failed
-    #[error("Model loading failed: {0}\n🔧 Check available memory and verify model file integrity")]
+    #[error("model loading failed: {0}")]
     LoadingFailed(String),
 
     /// Model not found at the specified location
-    #[error("Model not found: {0}\n📁 Verify file path is correct, file exists and is readable. For HuggingFace: check repo name and filename")]
+    #[error("model not found: {0}")]
     NotFound(String),
 
     /// Invalid model configuration
-    #[error("Invalid model config: {0}\n⚙️ Ensure batch_size > 0, valid model source path, and appropriate settings")]
+    #[error("invalid model config: {0}")]
     InvalidConfig(String),
 
     /// Model inference operation failed
-    #[error("Model inference failed: {0}\n🦾 Check input format, model compatibility, and available system resources")]
+    #[error("model inference failed: {0}")]
     InferenceFailed(String),
 
     /// Network error during model download
-    #[error("Network error: {0}\n🌐 Check internet connection and HuggingFace availability")]
+    #[error("network error: {0}")]
     Network(String),
 
     /// I/O error during file operations
-    #[error("I/O error: {0}\n💾 Check disk space, file permissions, and storage availability")]
+    #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
 
     /// Cache operation error
-    #[error("Cache error: {0}\n💽 Check cache directory permissions and disk space")]
+    #[error("cache error: {0}")]
     Cache(String),
 }
 
@@ -75,8 +75,29 @@ impl LlamaError for ModelError {
     }
 
     fn user_friendly_message(&self) -> String {
-        // The display implementation already includes user-friendly formatting with emojis
-        format!("{}", self)
+        match self {
+            ModelError::LoadingFailed(msg) => {
+                format!("Model loading failed: {msg}\n🔧 Check available memory and verify model file integrity")
+            }
+            ModelError::NotFound(msg) => {
+                format!("Model not found: {msg}\n📁 Verify file path is correct, file exists and is readable")
+            }
+            ModelError::InvalidConfig(msg) => {
+                format!("Invalid model config: {msg}\n⚙️ Ensure valid model source path and appropriate settings")
+            }
+            ModelError::InferenceFailed(msg) => {
+                format!("Model inference failed: {msg}\n🦾 Check input format, model compatibility, and available system resources")
+            }
+            ModelError::Network(msg) => {
+                format!("Network error: {msg}\n🌐 Check internet connection and HuggingFace availability")
+            }
+            ModelError::Io(e) => {
+                format!("I/O error: {e}\n💾 Check disk space, file permissions, and storage availability")
+            }
+            ModelError::Cache(msg) => {
+                format!("Cache error: {msg}\n💽 Check cache directory permissions and disk space")
+            }
+        }
     }
 
     fn custom_retry_delay(&self, attempt: u32) -> Option<Duration> {
@@ -152,6 +173,11 @@ mod tests {
         let err = ModelError::LoadingFailed("test error".to_string());
         let display_str = format!("{}", err);
         assert!(display_str.contains("test error"));
-        assert!(display_str.contains("🔧")); // Contains helpful emoji
+        assert!(!display_str.contains("🔧"), "Display should not contain emojis");
+
+        // user_friendly_message has the emojis
+        let friendly = err.user_friendly_message();
+        assert!(friendly.contains("🔧"));
+        assert!(friendly.contains("test error"));
     }
 }

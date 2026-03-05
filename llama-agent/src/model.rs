@@ -175,6 +175,14 @@ impl ModelManager {
                 .await?
         };
 
+        // Verify the resolved file is a .gguf model (llama-cpp-2 only supports GGUF)
+        if resolved.path.extension().and_then(|e| e.to_str()) != Some("gguf") {
+            return Err(ModelError::LoadingFailed(format!(
+                "llama-cpp-2 only supports .gguf models, got: {}",
+                resolved.path.display()
+            )));
+        }
+
         // Load the model into llama-cpp-2 from the resolved path.
         // Scope model_params so it is dropped before any .await (LlamaModelParams
         // contains raw pointers and is not Send).
