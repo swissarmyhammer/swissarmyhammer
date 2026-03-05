@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
+swissarmyhammer-views = { path = "../swissarmyhammer-views" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 clap = { workspace = true }

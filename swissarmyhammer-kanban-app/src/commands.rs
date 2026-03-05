@@ -416,6 +416,25 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// List all view definitions, returning a JSON array.
+#[tauri::command]
+pub async fn list_views(state: State<'_, AppState>) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let views_lock = handle
+        .ctx
+        .views()
+        .ok_or("Views not initialized")?;
+    let views = views_lock.read().await;
+
+    let views_json: Vec<Value> = views
+        .all_views()
+        .iter()
+        .map(|v| serde_json::to_value(v).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(json!(views_json))
+}
+
 /// Rebuild the native menu bar from a frontend-generated manifest.
 ///
 /// The frontend collects all commands with `menuPlacement` metadata, builds
@@ -671,6 +690,104 @@ pub async fn execute_command(
                 .map_err(|e| e.to_string())?;
             let result_ulid = ectx.redo(&id).await.map_err(|e| e.to_string())?;
             Ok(json!({ "redone": id, "operation_id": result_ulid }))
+        }
+
+        "view.create" => {
+            let view_json = args
+                .get("view")
+                .ok_or_else(|| format!("{}: missing required arg 'view'", cmd))?;
+            let view_def: swissarmyhammer_views::ViewDef = serde_json::from_value(view_json.clone())
+                .map_err(|e| format!("{}: invalid 'view' arg: {}", cmd, e))?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
+            let changelog_id = changelog
+                .log_create(&view_def)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
+            let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
+            let mut views = views_lock.write().await;
+            views
+                .write_view(&view_def)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
+            Ok(json!({ "operation_id": changelog_id }))
+        }
+
+        "view.update" => {
+            let view_json = args
+                .get("view")
+                .ok_or_else(|| format!("{}: missing required arg 'view'", cmd))?;
+            let view_def: swissarmyhammer_views::ViewDef = serde_json::from_value(view_json.clone())
+                .map_err(|e| format!("{}: invalid 'view' arg: {}", cmd, e))?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
+            let previous = {
+                let views = views_lock.read().await;
+                views
+                    .get_by_id(&view_def.id)
+                    .ok_or_else(|| format!("{}: view not found: {}", cmd, view_def.id))?
+                    .clone()
+            };
+            let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
+            let changelog_id = changelog
+                .log_update(&previous, &view_def)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
+            let mut views = views_lock.write().await;
+            views
+                .write_view(&view_def)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
+            Ok(json!({ "operation_id": changelog_id }))
+        }
+
+        "view.delete" => {
+            let id = required_str(&args, "id", &cmd)?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
+            let previous = {
+                let views = views_lock.read().await;
+                views
+                    .get_by_id(&id)
+                    .ok_or_else(|| format!("{}: view not found: {}", cmd, id))?
+                    .clone()
+            };
+            let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
+            let changelog_id = changelog
+                .log_delete(&previous)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
+            let mut views = views_lock.write().await;
+            views
+                .delete_view(&id)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
+            Ok(json!({ "operation_id": changelog_id }))
+        }
+
+        "view.undo" => {
+            let entry_id = required_str(&args, "id", &cmd)?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let changelog_path = handle
+                .ctx
+                .views_changelog()
+                .ok_or("Views not initialized")?
+                .path()
+                .to_path_buf();
+            let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
+            let mut views = views_lock.write().await;
+            let undo_id = swissarmyhammer_views::changelog::undo_entry(
+                &changelog_path,
+                &entry_id,
+                &mut views,
+            )
+            .await
+            .map_err(|e| format!("{}: {}", cmd, e))?;
+            Ok(json!({ "undone": entry_id, "operation_id": undo_id }))
         }
 
         "attachment.delete" => {

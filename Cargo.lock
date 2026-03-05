@@ -8103,6 +8103,7 @@ dependencies = [
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
  "swissarmyhammer-operations",
+ "swissarmyhammer-views",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -8121,6 +8122,7 @@ dependencies = [
  "serde",
  "serde_json",
  "swissarmyhammer-kanban",
+ "swissarmyhammer-views",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -8426,6 +8428,22 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "tree-sitter-zig",
+]
+
+[[package]]
+name = "swissarmyhammer-views"
+version = "0.8.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

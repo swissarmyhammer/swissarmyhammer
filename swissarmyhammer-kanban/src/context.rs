@@ -4,7 +4,8 @@
 //! just data access primitives. Commands do all the work.
 
 use crate::defaults::{
-    builtin_entity_definitions, builtin_field_definitions, kanban_compute_engine, KanbanLookup,
+    builtin_entity_definitions, builtin_field_definitions, builtin_view_definitions,
+    kanban_compute_engine, KanbanLookup,
 };
 use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, ColumnId, LogEntry, SwimlaneId, TagId, TaskId};
@@ -14,9 +15,10 @@ use std::sync::Arc;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityContext};
 use swissarmyhammer_fields::{load_yaml_dir, FieldsContext, ValidationEngine};
+use swissarmyhammer_views::{ViewsChangelog, ViewsContext};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, RwLock};
 
 /// Context passed to every command - provides access, not logic
 pub struct KanbanContext {
@@ -26,6 +28,10 @@ pub struct KanbanContext {
     fields: Option<Arc<FieldsContext>>,
     /// Entity I/O coordinator — lazy-initialized on first access
     entities: OnceCell<EntityContext>,
+    /// View registry (populated via `open()`, None when created via `new()`)
+    views: Option<RwLock<ViewsContext>>,
+    /// View changelog (populated via `open()`, None when created via `new()`)
+    views_changelog: Option<ViewsChangelog>,
 }
 
 impl KanbanContext {
@@ -38,6 +44,8 @@ impl KanbanContext {
             root: root.into(),
             fields: None,
             entities: OnceCell::new(),
+            views: None,
+            views_changelog: None,
         }
     }
 
@@ -57,10 +65,19 @@ impl KanbanContext {
         let cell = OnceCell::new();
         cell.set(entities).ok();
 
+        // Build views context: seed builtins to disk (if not present), then load all
+        let views_root = root.join("views");
+        fs::create_dir_all(&views_root).await?;
+        Self::seed_builtin_views(&views_root).await?;
+        let views = Self::build_views_context(&views_root)?;
+        let views_changelog = ViewsChangelog::new(root.join("views.jsonl"));
+
         Ok(Self {
             root,
             fields: Some(fields),
             entities: cell,
+            views: Some(RwLock::new(views)),
+            views_changelog: Some(views_changelog),
         })
     }
 
@@ -85,6 +102,16 @@ impl KanbanContext {
     /// Access the field registry, if initialized.
     pub fn fields(&self) -> Option<&FieldsContext> {
         self.fields.as_deref()
+    }
+
+    /// Access the view registry lock, if initialized.
+    pub fn views(&self) -> Option<&RwLock<ViewsContext>> {
+        self.views.as_ref()
+    }
+
+    /// Access the view changelog, if initialized.
+    pub fn views_changelog(&self) -> Option<&ViewsChangelog> {
+        self.views_changelog.as_ref()
     }
 
     // =========================================================================
@@ -387,6 +414,41 @@ impl KanbanContext {
             .with_compute(compute)
             .with_validation(validation);
         Ok((fields, entities))
+    }
+
+    /// Seed builtin view definitions to disk (write only if not already present).
+    async fn seed_builtin_views(views_root: &Path) -> Result<()> {
+        for (name, yaml) in builtin_view_definitions() {
+            // Parse to get the ID for the filename
+            let def: swissarmyhammer_views::ViewDef = match serde_yaml::from_str(yaml) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(name = %name, %e, "skipping invalid builtin view");
+                    continue;
+                }
+            };
+            let path = views_root.join(format!("{}.yaml", def.id));
+            if !path.exists() {
+                fs::write(&path, yaml).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Build a ViewsContext from builtin + local view definitions.
+    fn build_views_context(views_root: &Path) -> Result<ViewsContext> {
+        let builtin_views = builtin_view_definitions();
+        let local_views = swissarmyhammer_views::load_yaml_dir(views_root);
+
+        let mut all_views: Vec<(&str, &str)> = builtin_views;
+        let local_refs: Vec<(&str, &str)> = local_views
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        all_views.extend(local_refs);
+
+        ViewsContext::from_yaml_sources(views_root, &all_views)
+            .map_err(|e| KanbanError::ViewsError(e.to_string()))
     }
 
     /// Read a single entity by type and ID.
@@ -853,5 +915,108 @@ type:
     async fn test_entity_error_for_unknown_type() {
         let (_temp, ctx) = setup_with_fields().await;
         assert!(ctx.read_entity_generic("unicorn", "xyz").await.is_err());
+    }
+
+    // =========================================================================
+    // Views integration tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_open_creates_views_directory() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        assert!(kanban_dir.join("views").exists());
+        assert!(ctx.views().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_open_seeds_builtin_views() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        let views = ctx.views().unwrap().read().await;
+
+        // Should have at least the board view
+        assert!(!views.all_views().is_empty());
+        assert!(views.get_by_name("Board").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_views_accessor() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        let views = ctx.views().unwrap().read().await;
+
+        let board = views.get_by_name("Board").unwrap();
+        assert_eq!(board.kind, swissarmyhammer_views::ViewKind::Board);
+        assert!(board.entity_type.as_deref() == Some("task"));
+    }
+
+    #[tokio::test]
+    async fn test_new_has_no_views() {
+        let (_, ctx) = setup().await;
+        assert!(ctx.views().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_views_changelog_initialized() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        assert!(ctx.views_changelog().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_builtin_views_seeded_to_disk() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let _ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+
+        // Check that the board view YAML file was written to disk
+        let views_dir = kanban_dir.join("views");
+        let board_file = views_dir.join("01JMVIEW0000000000BOARD0.yaml");
+        assert!(board_file.exists(), "board view should be seeded to disk");
+    }
+
+    #[tokio::test]
+    async fn test_builtin_views_not_overwritten() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let views_dir = kanban_dir.join("views");
+        std::fs::create_dir_all(&views_dir).unwrap();
+
+        // Write a customized board view
+        let custom_yaml = r#"id: 01JMVIEW0000000000BOARD0
+name: My Custom Board
+icon: star
+kind: board
+entity_type: task
+card_fields:
+  - title
+"#;
+        std::fs::write(
+            views_dir.join("01JMVIEW0000000000BOARD0.yaml"),
+            custom_yaml,
+        )
+        .unwrap();
+
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        let views = ctx.views().unwrap().read().await;
+
+        // The custom name should be preserved (local override wins)
+        let board = views.get_by_id("01JMVIEW0000000000BOARD0").unwrap();
+        assert_eq!(board.name, "My Custom Board");
     }
 }

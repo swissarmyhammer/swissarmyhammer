@@ -24,6 +24,9 @@ static BUILTIN_DEFINITIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fiel
 /// Builtin entity definition YAML files, embedded at compile time.
 static BUILTIN_ENTITIES: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/entities");
 
+/// Builtin view definition YAML files, embedded at compile time.
+static BUILTIN_VIEWS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/views");
+
 /// Load builtin field definitions as `(name, yaml_content)` pairs.
 pub fn builtin_field_definitions() -> Vec<(&'static str, &'static str)> {
     BUILTIN_DEFINITIONS
@@ -39,6 +42,18 @@ pub fn builtin_field_definitions() -> Vec<(&'static str, &'static str)> {
 /// Load builtin entity definitions as `(name, yaml_content)` pairs.
 pub fn builtin_entity_definitions() -> Vec<(&'static str, &'static str)> {
     BUILTIN_ENTITIES
+        .files()
+        .filter_map(|file| {
+            let name = file.path().file_stem()?.to_str()?;
+            let content = file.contents_utf8()?;
+            Some((name, content))
+        })
+        .collect()
+}
+
+/// Load builtin view definitions as `(name, yaml_content)` pairs.
+pub fn builtin_view_definitions() -> Vec<(&'static str, &'static str)> {
+    BUILTIN_VIEWS
         .files()
         .filter_map(|file| {
             let name = file.path().file_stem()?.to_str()?;
@@ -155,6 +170,37 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use swissarmyhammer_fields::{EntityDef, FieldDef, FieldName};
+
+    #[test]
+    fn builtin_view_definitions_load() {
+        let defs = builtin_view_definitions();
+        assert!(!defs.is_empty(), "expected at least 1 builtin view definition");
+    }
+
+    #[test]
+    fn builtin_views_parse_as_view_def() {
+        for (name, yaml) in builtin_view_definitions() {
+            let result: Result<swissarmyhammer_views::ViewDef, _> = serde_yaml::from_str(yaml);
+            assert!(
+                result.is_ok(),
+                "Failed to parse view '{}': {}",
+                name,
+                result.unwrap_err()
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_board_view_exists() {
+        let defs = builtin_view_definitions();
+        let (_, yaml) = defs.iter().find(|(n, _)| *n == "board").unwrap();
+        let view: swissarmyhammer_views::ViewDef = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(view.name, "Board");
+        assert_eq!(view.kind, swissarmyhammer_views::ViewKind::Board);
+        assert!(view.entity_type.as_deref() == Some("task"));
+        assert!(!view.card_fields.is_empty());
+        assert!(!view.commands.is_empty());
+    }
 
     #[test]
     fn builtin_field_definitions_load() {

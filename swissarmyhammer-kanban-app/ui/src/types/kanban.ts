@@ -1,3 +1,34 @@
+// ---------------------------------------------------------------------------
+// View definitions
+// ---------------------------------------------------------------------------
+
+export interface ViewCommandKeys {
+  vim?: string;
+  cua?: string;
+  emacs?: string;
+}
+
+export interface ViewCommand {
+  id: string;
+  name: string;
+  description?: string;
+  keys?: ViewCommandKeys;
+}
+
+export interface ViewDef {
+  id: string;
+  name: string;
+  icon?: string;
+  kind: string;
+  entity_type?: string;
+  card_fields?: string[];
+  commands?: ViewCommand[];
+}
+
+// ---------------------------------------------------------------------------
+// Board types
+// ---------------------------------------------------------------------------
+
 export interface OpenBoard {
   path: string;
   is_active: boolean;

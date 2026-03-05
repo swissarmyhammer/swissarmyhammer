@@ -1,0 +1,20 @@
+id: 01JMVIEW0000000000BOARD0
+name: Board
+icon: kanban
+kind: board
+entity_type: task
+card_fields:
+  - title
+  - tags
+  - assignees
+  - progress
+commands:
+  - id: board.newCard
+    name: New Card
+    keys:
+      vim: ":card new"
+      cua: Mod+N
+  - id: board.collapseAll
+    name: Collapse Lanes
+  - id: board.expandAll
+    name: Expand Lanes

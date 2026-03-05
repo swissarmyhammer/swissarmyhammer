@@ -46,6 +46,7 @@ members = [
     "swissarmyhammer-kanban-app",
     "swissarmyhammer-fields",
     "swissarmyhammer-entity",
+    "swissarmyhammer-views",
 ]
 resolver = "2"
 

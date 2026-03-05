@@ -12,10 +12,13 @@ import { InspectProvider } from "@/lib/inspect-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppShell } from "@/components/app-shell";
 import { NavBar } from "@/components/nav-bar";
+import { LeftNav } from "@/components/left-nav";
 import { ModeIndicator } from "@/components/mode-indicator";
 import { BoardView } from "@/components/board-view";
 import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
+import { ViewsProvider, useViews } from "@/lib/views-context";
+import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import type {
   BoardData, OpenBoard, Entity, EntityBag,
   BoardDataResponse, EntityListResponse,
@@ -105,6 +108,8 @@ function App() {
     <UndoStackProvider>
     <InspectProvider onInspect={inspectEntity}>
     <AppShell>
+    <ViewsProvider>
+    <ViewCommandScope>
     <div className="h-screen bg-background text-foreground flex flex-col">
       <NavBar
         board={board}
@@ -114,11 +119,14 @@ function App() {
       />
       {board ? (
         <>
-          <BoardView
-            board={board}
-            tasks={taskEntities}
-            onTaskMoved={refresh}
-          />
+          <div className="flex-1 flex min-h-0">
+            <LeftNav />
+            <ActiveViewRenderer
+              board={board}
+              tasks={taskEntities}
+              onTaskMoved={refresh}
+            />
+          </div>
 
           {/* Backdrop — visible when any panel is open */}
           <div
@@ -152,6 +160,8 @@ function App() {
       )}
       <ModeIndicator />
     </div>
+    </ViewCommandScope>
+    </ViewsProvider>
     </AppShell>
     </InspectProvider>
     </UndoStackProvider>
@@ -162,6 +172,63 @@ function App() {
     </EntityStoreProvider>
     </SchemaProvider>
     </TooltipProvider>
+  );
+}
+
+/**
+ * Provides nav.view commands generated from the views registry.
+ * Each view gets a `nav.view.<id>` command that switches to it,
+ * plus a generic `nav.view` command that takes args.
+ */
+function ViewCommandScope({ children }: { children: React.ReactNode }) {
+  const { views, setActiveViewId } = useViews();
+
+  const viewCommands: CommandDef[] = useMemo(() => {
+    return views.map((view) => ({
+      id: `nav.view.${view.id}`,
+      name: `View: ${view.name}`,
+      execute: () => setActiveViewId(view.id),
+    }));
+  }, [views, setActiveViewId]);
+
+  return (
+    <CommandScopeProvider commands={viewCommands}>
+      {children}
+    </CommandScopeProvider>
+  );
+}
+
+/**
+ * Renders the currently active view based on its kind.
+ * For "board" kind, renders the BoardView. Other kinds show a placeholder.
+ */
+function ActiveViewRenderer({
+  board,
+  tasks,
+  onTaskMoved,
+}: {
+  board: BoardData;
+  tasks: Entity[];
+  onTaskMoved?: () => void;
+}) {
+  const { activeView } = useViews();
+
+  if (!activeView || activeView.kind === "board") {
+    return (
+      <BoardView
+        board={board}
+        tasks={tasks}
+        onTaskMoved={onTaskMoved}
+      />
+    );
+  }
+
+  return (
+    <main className="flex-1 flex items-center justify-center">
+      <p className="text-muted-foreground">
+        {activeView.name} view ({activeView.kind}) is not yet implemented.
+      </p>
+    </main>
   );
 }
 

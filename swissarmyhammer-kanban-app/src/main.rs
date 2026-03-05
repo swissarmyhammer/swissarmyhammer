@@ -56,6 +56,7 @@ fn main() {
             commands::new_board_dialog,
             commands::open_board_dialog,
             commands::rebuild_menu_from_manifest,
+            commands::list_views,
         ])
         .setup(|app| {
             // Build initial menu with OS chrome only — the frontend will
