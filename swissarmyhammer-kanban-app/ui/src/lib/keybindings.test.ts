@@ -215,9 +215,28 @@ describe("createKeyHandler", () => {
     expect(e.preventDefault).not.toHaveBeenCalled();
   });
 
-  /* ---------- CM6 skip ---------- */
+  /* ---------- editable context skip ---------- */
 
-  it("skips events when target is inside .cm-editor", () => {
+  it("skips non-modifier keys when target is inside .cm-editor", () => {
+    const cmEditor = document.createElement("div");
+    cmEditor.className = "cm-editor";
+    const inner = document.createElement("div");
+    cmEditor.appendChild(inner);
+    document.body.appendChild(cmEditor);
+
+    try {
+      const handler = createKeyHandler("vim", executeCommand);
+      // Single-char key `:` should be skipped inside cm-editor
+      handler(fakeKeyEvent(":", { target: inner }));
+      expect(executeCommand).not.toHaveBeenCalled();
+    } finally {
+      document.body.removeChild(cmEditor);
+    }
+  });
+
+  it("allows modifier combos inside .cm-editor", () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
     const cmEditor = document.createElement("div");
     cmEditor.className = "cm-editor";
     const inner = document.createElement("div");
@@ -226,11 +245,56 @@ describe("createKeyHandler", () => {
 
     try {
       const handler = createKeyHandler("cua", executeCommand);
-      const e = fakeKeyEvent("Escape", { target: inner });
-      handler(e);
-      expect(executeCommand).not.toHaveBeenCalled();
+      // Mod+Z should still work inside cm-editor
+      handler(fakeKeyEvent("z", { metaKey: true, target: inner }));
+      expect(executeCommand).toHaveBeenCalledWith("app.undo");
     } finally {
       document.body.removeChild(cmEditor);
+      if (original) {
+        Object.defineProperty(navigator, "platform", original);
+      }
+    }
+  });
+
+  it("skips non-modifier keys when target is an input", () => {
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+
+    try {
+      const handler = createKeyHandler("vim", executeCommand);
+      handler(fakeKeyEvent(":", { target: input }));
+      expect(executeCommand).not.toHaveBeenCalled();
+    } finally {
+      document.body.removeChild(input);
+    }
+  });
+
+  it("skips non-modifier keys when target is a textarea", () => {
+    const textarea = document.createElement("textarea");
+    document.body.appendChild(textarea);
+
+    try {
+      const handler = createKeyHandler("vim", executeCommand);
+      handler(fakeKeyEvent("u", { target: textarea }));
+      expect(executeCommand).not.toHaveBeenCalled();
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  });
+
+  it("skips non-modifier keys when target is inside contenteditable", () => {
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    const inner = document.createElement("span");
+    editable.appendChild(inner);
+    document.body.appendChild(editable);
+
+    try {
+      const handler = createKeyHandler("vim", executeCommand);
+      handler(fakeKeyEvent(":", { target: inner }));
+      expect(executeCommand).not.toHaveBeenCalled();
+    } finally {
+      document.body.removeChild(editable);
     }
   });
 

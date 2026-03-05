@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor};
@@ -92,8 +92,10 @@ pub struct AppState {
     pub boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
     pub active_board: RwLock<Option<PathBuf>>,
     pub config: RwLock<AppConfig>,
-    /// Tag context menu state: (tag_id, optional task_id) set before popup, read in menu event
-    pub context_tag: RwLock<Option<(String, Option<String>)>>,
+    /// IDs of items in the most recently shown generic context menu.
+    /// Used by `handle_menu_event` to distinguish context menu selections
+    /// from regular menu commands.
+    pub context_menu_ids: RwLock<HashSet<String>>,
 }
 
 impl AppState {
@@ -103,7 +105,7 @@ impl AppState {
             boards: RwLock::new(HashMap::new()),
             active_board: RwLock::new(None),
             config: RwLock::new(AppConfig::load()),
-            context_tag: RwLock::new(None),
+            context_menu_ids: RwLock::new(HashSet::new()),
         }
     }
 

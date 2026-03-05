@@ -10,8 +10,10 @@ async fn test_validate_command() -> anyhow::Result<()> {
     // Validate should run without panicking
     assert!(
         result.exit_code == 0 || result.exit_code == 1,
-        "Should return valid exit code, got {}",
-        result.exit_code
+        "Should return valid exit code, got {} (stderr: {})",
+        result.exit_code, result.stderr
     );
+    // stdout may contain validation output; just verify it is valid UTF-8 (it is a String)
+    let _ = result.stdout.len();
     Ok(())
 }

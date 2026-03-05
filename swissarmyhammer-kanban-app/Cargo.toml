@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tauri-plugin-log = "2.8.0"
+tauri-plugin-window-state = "2.4.1"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

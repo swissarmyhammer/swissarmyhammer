@@ -19,17 +19,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { EntityCard } from "@/components/entity-card";
+import { FocusScope } from "@/components/focus-scope";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 import { reorderColumns } from "@/lib/column-reorder";
 import { defaultTaskTitle } from "@/lib/task-defaults";
 import { useFieldUpdate } from "@/lib/field-update-context";
+import { moniker } from "@/lib/moniker";
+import { useInspect } from "@/lib/inspect-context";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getStrList, getNum } from "@/types/kanban";
 
 interface BoardViewProps {
   board: BoardData;
   tasks: Entity[];
-  onTaskInspect?: (taskId: string) => void;
-  onColumnInspect?: (columnId: string) => void;
   onTaskMoved?: () => void;
 }
 
@@ -42,7 +44,20 @@ type ColumnLayout = Map<string, string[]>;
 
 type DragType = "task" | "column";
 
-export function BoardView({ board, tasks, onTaskInspect, onColumnInspect, onTaskMoved }: BoardViewProps) {
+export function BoardView({ board, tasks, onTaskMoved }: BoardViewProps) {
+  const { setFocus } = useEntityFocus();
+  const inspectEntity = useInspect();
+  const boardMoniker = moniker("board", "board");
+  const boardCommands = useMemo(() => [
+    {
+      id: "entity.inspect",
+      name: "Inspect board",
+      target: boardMoniker,
+      contextMenu: true,
+      execute: () => inspectEntity(boardMoniker),
+    },
+  ], [boardMoniker, inspectEntity]);
+
   const columns = useMemo(
     () => [...board.columns].sort((a, b) =>
       getNum(a, "order") - getNum(b, "order")
@@ -279,7 +294,7 @@ export function BoardView({ board, tasks, onTaskInspect, onColumnInspect, onTask
         }
 
         try {
-          await invoke("reorder_columns", { columns: updates });
+          await invoke("execute_command", { cmd: "column.reorder", args: { columns: updates } });
           onTaskMoved?.();
         } catch (e) {
           console.error("Failed to reorder columns:", e);
@@ -358,7 +373,7 @@ export function BoardView({ board, tasks, onTaskInspect, onColumnInspect, onTask
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        await invoke("add_task", { title, column: columnId });
+        await invoke("execute_command", { cmd: "task.add", args: { title, column: columnId } });
         onTaskMoved?.();
       } catch (e) {
         console.error("Failed to add task:", e);
@@ -374,11 +389,9 @@ export function BoardView({ board, tasks, onTaskInspect, onColumnInspect, onTask
     entity: Entity
   ) {
     try {
-      await invoke("move_task", {
-        id: taskId,
-        column,
-        ordinal,
-        swimlane: getStr(entity, "position_swimlane") || null,
+      await invoke("execute_command", {
+        cmd: "task.move",
+        args: { id: taskId, column, ordinal, swimlane: getStr(entity, "position_swimlane") || null },
       });
       onTaskMoved?.();
     } catch (e) {
@@ -387,51 +400,51 @@ export function BoardView({ board, tasks, onTaskInspect, onColumnInspect, onTask
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCorners}
-      onDragStart={handleDragStart}
-      onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
-    >
-      <div className="flex flex-1 min-h-0 overflow-x-auto">
-        <SortableContext
-          items={currentColumnOrder}
-          strategy={horizontalListSortingStrategy}
-        >
-          {currentColumnOrder.map((colId, i) => {
-            const col = columnMap.get(colId);
-            if (!col) return null;
-            const taskIds = currentLayout.get(col.id) ?? [];
-            const colTasks = taskIds
-              .map((id) => taskMap.get(id))
-              .filter((t): t is Entity => t !== undefined);
-            return (
-              <SortableColumn key={col.id} id={col.id} showSeparator={i > 0}>
-                <ColumnView
-                  column={col}
-                  tasks={colTasks}
-                  blockedIds={blockedIds}
-                  onTaskInspect={onTaskInspect}
-                  onAddTask={handleAddTask}
-                  onRenameColumn={handleRenameColumn}
-                  onColumnInspect={onColumnInspect}
-                  presorted
-                />
-              </SortableColumn>
-            );
-          })}
-        </SortableContext>
-      </div>
-      <DragOverlay dropAnimation={null}>
-        {activeTask ? <EntityCard entity={activeTask} /> : null}
-        {activeColumn ? (
-          <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
-            {getStr(activeColumn, "name")}
-          </div>
-        ) : null}
-      </DragOverlay>
-    </DndContext>
+    <FocusScope moniker={boardMoniker} commands={boardCommands} className="flex flex-col flex-1 min-h-0">
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex flex-1 min-h-0 overflow-x-auto" onClick={() => setFocus(null)}>
+          <SortableContext
+            items={currentColumnOrder}
+            strategy={horizontalListSortingStrategy}
+          >
+            {currentColumnOrder.map((colId, i) => {
+              const col = columnMap.get(colId);
+              if (!col) return null;
+              const taskIds = currentLayout.get(col.id) ?? [];
+              const colTasks = taskIds
+                .map((id) => taskMap.get(id))
+                .filter((t): t is Entity => t !== undefined);
+              return (
+                <SortableColumn key={col.id} id={col.id} showSeparator={i > 0}>
+                  <ColumnView
+                    column={col}
+                    tasks={colTasks}
+                    blockedIds={blockedIds}
+                    onAddTask={handleAddTask}
+                    onRenameColumn={handleRenameColumn}
+                    presorted
+                  />
+                </SortableColumn>
+              );
+            })}
+          </SortableContext>
+        </div>
+        <DragOverlay dropAnimation={null}>
+          {activeTask ? <EntityCard entity={activeTask} /> : null}
+          {activeColumn ? (
+            <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
+              {getStr(activeColumn, "name")}
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+    </FocusScope>
   );
 }
 

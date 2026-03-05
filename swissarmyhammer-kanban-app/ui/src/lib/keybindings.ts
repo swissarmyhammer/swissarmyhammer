@@ -155,12 +155,26 @@ export function createKeyHandler(
   }
 
   return (e: KeyboardEvent) => {
-    // Skip events inside CodeMirror editors
     const target = e.target as HTMLElement | null;
-    if (target?.closest?.(".cm-editor")) return;
-
     const normalized = normalizeKeyEvent(e);
     if (normalized === null) return;
+
+    // Skip non-modifier single-character keys when focus is in any editable
+    // context (CodeMirror editors, inputs, textareas, contenteditable).
+    // Modifier combos (Mod+Shift+P, Mod+Z, etc.) pass through because they
+    // don't interfere with text editing and are also handled by the native
+    // menu bar as a fallback.
+    const hasModifier = normalized.includes("Mod") || normalized.includes("Alt");
+    if (!hasModifier && target) {
+      const tag = target.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        target.closest?.(".cm-editor") ||
+        target.closest?.("[contenteditable]")
+      ) return;
+    }
 
     // --- Multi-key sequence handling ---
 

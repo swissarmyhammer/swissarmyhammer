@@ -124,6 +124,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         }
     }
@@ -139,6 +140,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         }
     }

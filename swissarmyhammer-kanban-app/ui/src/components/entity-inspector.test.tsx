@@ -39,6 +39,8 @@ import { EntityInspector } from "./entity-inspector";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { InspectProvider } from "@/lib/inspect-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
@@ -52,11 +54,15 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
     <TooltipProvider>
       <SchemaProvider>
         <EntityStoreProvider entities={{ tag: tagEntities }}>
-          <FieldUpdateProvider onRefresh={() => {}}>
-            <KeymapProvider>
-              <EntityInspector entity={entity} />
-            </KeymapProvider>
-          </FieldUpdateProvider>
+          <EntityFocusProvider>
+            <InspectProvider onInspect={() => {}}>
+              <FieldUpdateProvider onRefresh={() => {}}>
+                <KeymapProvider>
+                  <EntityInspector entity={entity} />
+                </KeymapProvider>
+              </FieldUpdateProvider>
+            </InspectProvider>
+          </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
     </TooltipProvider>
@@ -110,10 +116,10 @@ describe("EntityInspector", () => {
     await act(async () => { fireEvent.blur(cmContent); });
 
     const call = mockInvoke.mock.calls.find(
-      (c) => c[0] === "update_entity_field" && (c[1] as Record<string, unknown>)?.fieldName === "title",
+      (c) => c[0] === "execute_command" && (c[1] as Record<string, unknown>)?.cmd === "entity.update_field",
     );
     expect(call).toBeTruthy();
-    expect(call![1]).toEqual({ entityType: "task", id: "test-id", fieldName: "title", value: "New" });
+    expect(call![1]).toEqual({ cmd: "entity.update_field", args: { entity_type: "task", id: "test-id", field_name: "title", value: "New" } });
   });
 
   it("does not allow editing computed fields", async () => {

@@ -1,7 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { FocusScope } from "@/components/focus-scope";
+import { useContextMenu } from "@/lib/context-menu";
+import { useEntityFocus } from "@/lib/entity-focus-context";
+import { moniker } from "@/lib/moniker";
+import { useInspect } from "@/lib/inspect-context";
+import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -22,13 +28,92 @@ interface TagPillProps {
  * color, and description. Resolves the display tag by matching slug against
  * the tag_name field.
  *
- * Right-click opens a native context menu via Tauri.
+ * Right-click opens a native context menu via FocusScope + CommandScope.
  * Hover shows a markdown tooltip with the tag description.
  */
 export function TagPill({ slug, tags, taskId, className }: TagPillProps) {
   const tag = tags.find((t) => getStr(t, "tag_name") === slug);
   const color = tag ? getStr(tag, "color", "888888") : "888888";
   const description = tag ? getStr(tag, "description") || undefined : undefined;
+
+  const inspectEntity = useInspect();
+  const tagMoniker = tag ? moniker("tag", tag.id) : null;
+  const scopeMoniker = tagMoniker ?? moniker("tag", slug);
+
+  // Keep a ref to the latest resolved moniker so execute always uses current value
+  const monikerRef = useRef(scopeMoniker);
+  monikerRef.current = scopeMoniker;
+
+  const commands = useMemo<CommandDef[]>(() => {
+    const cmds: CommandDef[] = [];
+
+    // Inspect command — always available. Uses ref so it picks up the
+    // latest resolved moniker even if the tag entity loads after mount.
+    cmds.push({
+      id: "entity.inspect",
+      name: "Inspect Tag",
+      target: scopeMoniker,
+      contextMenu: true,
+      execute: () => inspectEntity(monikerRef.current),
+    });
+
+    // Remove command — only if this tag is on a task (taskId is set)
+    if (taskId) {
+      cmds.push({
+        id: "entity.remove",
+        name: "Remove Tag",
+        contextMenu: true,
+        rustCommand: { cmd: "task.untag", args: { id: taskId, tag: slug } },
+      });
+    }
+
+    return cmds;
+  }, [scopeMoniker, taskId, slug, inspectEntity]);
+
+  return (
+    <FocusScope moniker={scopeMoniker} commands={commands} className="inline">
+      <TagPillInner
+        slug={slug}
+        color={color}
+        description={description}
+        scopeMoniker={scopeMoniker}
+        className={className}
+      />
+    </FocusScope>
+  );
+}
+
+/**
+ * Inner component rendered inside FocusScope so it can access
+ * useContextMenu() from the correct CommandScope context.
+ * The onContextMenu handler is placed DIRECTLY on the pill span
+ * to guarantee event delivery.
+ */
+function TagPillInner({
+  slug,
+  color,
+  description,
+  scopeMoniker,
+  className,
+}: {
+  slug: string;
+  color: string;
+  description?: string;
+  scopeMoniker: string;
+  className?: string;
+}) {
+  const contextMenuHandler = useContextMenu();
+  const { setFocus } = useEntityFocus();
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocus(scopeMoniker);
+      contextMenuHandler(e);
+    },
+    [scopeMoniker, setFocus, contextMenuHandler],
+  );
 
   const pill = (
     <span
@@ -38,11 +123,7 @@ export function TagPill({ slug, tags, taskId, className }: TagPillProps) {
         color: `#${color}`,
         border: `1px solid color-mix(in srgb, #${color} 30%, transparent)`,
       }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        invoke("show_tag_context_menu", { tagId: slug, taskId: taskId ?? null }).catch(console.error);
-      }}
+      onContextMenu={handleContextMenu}
     >
       #{slug}
     </span>

@@ -1,11 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { ReactNode } from "react";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
+
 import {
   CommandScopeProvider,
   resolveCommand,
   useAvailableCommands,
+  collectAvailableCommands,
   useExecuteCommand,
+  dispatchCommand,
   type CommandDef,
   type CommandScope,
 } from "./command-scope";
@@ -240,6 +247,67 @@ describe("useExecuteCommand", () => {
   });
 });
 
+/* ---------- target-aware accumulation ---------- */
+
+describe("useAvailableCommands with target", () => {
+  it("same id + different target → both visible", () => {
+    const { result } = renderHook(() => useAvailableCommands(), {
+      wrapper: wrapper([
+        [cmd("entity.inspect", { name: "Inspect task", target: "task:abc" })],
+        [cmd("entity.inspect", { name: "Inspect tag", target: "tag:xyz" })],
+      ]),
+    });
+    expect(result.current).toHaveLength(2);
+    const names = result.current.map((c) => c.command.name);
+    expect(names).toContain("Inspect task");
+    expect(names).toContain("Inspect tag");
+  });
+
+  it("same id + same target → inner shadows outer", () => {
+    const { result } = renderHook(() => useAvailableCommands(), {
+      wrapper: wrapper([
+        [cmd("entity.inspect", { name: "Outer", target: "task:abc" })],
+        [cmd("entity.inspect", { name: "Inner", target: "task:abc" })],
+      ]),
+    });
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].command.name).toBe("Inner");
+  });
+
+  it("no target → shadows by id alone (existing behavior)", () => {
+    const { result } = renderHook(() => useAvailableCommands(), {
+      wrapper: wrapper([
+        [cmd("save", { name: "Parent Save" })],
+        [cmd("save", { name: "Child Save" })],
+      ]),
+    });
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].command.name).toBe("Child Save");
+  });
+
+  it("available:false blocks same (id, target) key from parent", () => {
+    const { result } = renderHook(() => useAvailableCommands(), {
+      wrapper: wrapper([
+        [cmd("entity.inspect", { name: "Parent", target: "tag:xyz" })],
+        [cmd("entity.inspect", { available: false, target: "tag:xyz" })],
+      ]),
+    });
+    const names = result.current.map((c) => c.command.name);
+    expect(names).not.toContain("Parent");
+  });
+
+  it("available:false with different target does NOT block parent", () => {
+    const { result } = renderHook(() => useAvailableCommands(), {
+      wrapper: wrapper([
+        [cmd("entity.inspect", { name: "Inspect task", target: "task:abc" })],
+        [cmd("entity.inspect", { available: false, target: "tag:xyz" })],
+      ]),
+    });
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].command.name).toBe("Inspect task");
+  });
+});
+
 /* ---------- Multiple scopes: only the focused branch participates ---------- */
 
 describe("multiple scope branches", () => {
@@ -277,5 +345,94 @@ describe("multiple scope branches", () => {
     expect(bIds).toContain("global");
     expect(bIds).toContain("action-b");
     expect(bIds).not.toContain("action-a");
+  });
+});
+
+/* ---------- CommandScope with moniker ---------- */
+
+describe("CommandScope moniker", () => {
+  it("scope can carry an optional moniker field", () => {
+    const scope = makeScope([cmd("save")]);
+    expect(scope.moniker).toBeUndefined();
+
+    const namedScope: CommandScope = { commands: new Map(), parent: null, moniker: "task:abc" };
+    expect(namedScope.moniker).toBe("task:abc");
+  });
+
+  it("resolveCommand works with moniker-bearing scopes", () => {
+    const parent: CommandScope = { commands: new Map([["global", cmd("global")]]), parent: null, moniker: "board:main" };
+    const child: CommandScope = { commands: new Map([["local", cmd("local")]]), parent, moniker: "task:abc" };
+    expect(resolveCommand(child, "global")).toBeTruthy();
+    expect(resolveCommand(child, "local")).toBeTruthy();
+  });
+});
+
+/* ---------- collectAvailableCommands ---------- */
+
+describe("collectAvailableCommands", () => {
+  it("returns commands from an explicit scope", () => {
+    const scope = makeScope([cmd("save"), cmd("open")]);
+    const result = collectAvailableCommands(scope);
+    expect(result).toHaveLength(2);
+    const ids = result.map((c) => c.command.id);
+    expect(ids).toContain("save");
+    expect(ids).toContain("open");
+  });
+
+  it("returns empty array for null scope", () => {
+    expect(collectAvailableCommands(null)).toEqual([]);
+  });
+
+  it("walks parent chain like useAvailableCommands", () => {
+    const parent = makeScope([cmd("global")]);
+    const child = makeScope([cmd("local")], parent);
+    const result = collectAvailableCommands(child);
+    expect(result).toHaveLength(2);
+    const local = result.find((c) => c.command.id === "local")!;
+    const global = result.find((c) => c.command.id === "global")!;
+    expect(local.depth).toBe(0);
+    expect(global.depth).toBe(1);
+  });
+});
+
+/* ---------- dispatchCommand ---------- */
+
+describe("dispatchCommand", () => {
+  it("calls execute when set", async () => {
+    const execute = vi.fn();
+    await dispatchCommand({ id: "test", name: "Test", execute });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("calls invoke for rustCommand", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    await dispatchCommand({
+      id: "test",
+      name: "Test",
+      rustCommand: { cmd: "entity.delete", args: { moniker: "task:abc" } },
+    });
+    expect(invoke).toHaveBeenCalledWith("execute_command", {
+      cmd: "entity.delete",
+      args: { moniker: "task:abc" },
+    });
+  });
+
+  it("prefers execute over rustCommand", async () => {
+    const execute = vi.fn();
+    await dispatchCommand({
+      id: "test",
+      name: "Test",
+      execute,
+      rustCommand: { cmd: "entity.delete", args: {} },
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    // invoke should NOT have been called
+  });
+
+  it("throws when neither execute nor rustCommand", async () => {
+    await expect(dispatchCommand({ id: "test", name: "Test" })).rejects.toThrow(
+      "neither execute nor rustCommand",
+    );
   });
 });

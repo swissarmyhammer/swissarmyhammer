@@ -10,9 +10,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { AppShell } from "./app-shell";
+import { FocusScope } from "./focus-scope";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
+import { EntityFocusProvider, useEntityFocus } from "@/lib/entity-focus-context";
 import { useAvailableCommands } from "@/lib/command-scope";
 
 /**
@@ -35,15 +37,17 @@ function CommandInspector() {
 /** Render AppShell with all required parent providers. */
 function renderShell(children?: React.ReactNode) {
   return render(
-    <KeymapProvider>
-      <AppModeProvider>
-        <UndoStackProvider>
-          <AppShell>
-            {children ?? <CommandInspector />}
-          </AppShell>
-        </UndoStackProvider>
-      </AppModeProvider>
-    </KeymapProvider>,
+    <EntityFocusProvider>
+      <KeymapProvider>
+        <AppModeProvider>
+          <UndoStackProvider>
+            <AppShell>
+              {children ?? <CommandInspector />}
+            </AppShell>
+          </UndoStackProvider>
+        </AppModeProvider>
+      </KeymapProvider>
+    </EntityFocusProvider>,
   );
 }
 
@@ -116,18 +120,65 @@ describe("AppShell", () => {
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
+  it("keybinding handler resolves commands from focused scope", async () => {
+    const focusedFn = vi.fn();
+
+    /**
+     * A component that sets up a focused scope with a custom app.dismiss
+     * command. When focused, pressing Escape should resolve to this override
+     * instead of the global app.dismiss.
+     */
+    function FocusedChild() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <FocusScope
+          moniker="task:test"
+          commands={[
+            {
+              id: "app.dismiss",
+              name: "Focused Dismiss",
+              execute: focusedFn,
+            },
+          ]}
+        >
+          <button onClick={() => setFocus("task:test")}>Focus Me</button>
+        </FocusScope>
+      );
+    }
+
+    renderShell(<FocusedChild />);
+
+    // Focus the scope by clicking the button
+    await act(async () => {
+      fireEvent.click(screen.getByText("Focus Me"));
+    });
+
+    // Press Escape (which maps to app.dismiss in CUA binding table).
+    // Should resolve from the focused scope's app.dismiss, not the root one.
+    await act(async () => {
+      fireEvent.keyDown(document, {
+        key: "Escape",
+        code: "Escape",
+      });
+    });
+
+    expect(focusedFn).toHaveBeenCalled();
+  });
+
   it("shows mode indicator as COMMAND when palette opens", async () => {
     render(
-      <KeymapProvider>
-        <AppModeProvider>
-          <UndoStackProvider>
-            <AppShell>
-              <CommandInspector />
-              {/* Import ModeIndicator inline to check mode label */}
-            </AppShell>
-          </UndoStackProvider>
-        </AppModeProvider>
-      </KeymapProvider>,
+      <EntityFocusProvider>
+        <KeymapProvider>
+          <AppModeProvider>
+            <UndoStackProvider>
+              <AppShell>
+                <CommandInspector />
+                {/* Import ModeIndicator inline to check mode label */}
+              </AppShell>
+            </UndoStackProvider>
+          </AppModeProvider>
+        </KeymapProvider>
+      </EntityFocusProvider>,
     );
 
     // The mode label can be checked via the commands being available.

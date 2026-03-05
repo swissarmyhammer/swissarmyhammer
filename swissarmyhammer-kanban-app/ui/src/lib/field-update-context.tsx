@@ -6,7 +6,7 @@ import { error as logError } from "@/lib/log";
  * Signature for the centralized field update function.
  *
  * All entity field mutations go through this single path:
- * invoke("update_entity_field") → refresh board state.
+ * invoke("execute_command", { cmd: "entity.update_field", args }) → refresh board state.
  */
 type UpdateFieldFn = (
   entityType: string,
@@ -39,11 +39,9 @@ export function FieldUpdateProvider({ onRefresh, children }: FieldUpdateProvider
   const updateField: UpdateFieldFn = useCallback(
     async (entityType, entityId, fieldName, value) => {
       try {
-        await invoke("update_entity_field", {
-          entityType,
-          id: entityId,
-          fieldName,
-          value,
+        await invoke("execute_command", {
+          cmd: "entity.update_field",
+          args: { entity_type: entityType, id: entityId, field_name: fieldName, value },
         });
         await onRefresh();
       } catch (e: unknown) {

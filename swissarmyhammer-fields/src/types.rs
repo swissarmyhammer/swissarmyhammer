@@ -309,6 +309,7 @@ mod tests {
             display: Some(Display::Badge),
             sort: Some(SortKind::OptionOrder),
             width: Some(120),
+            section: None,
             validate: None,
         };
         let yaml = serde_yaml::to_string(&field).unwrap();
@@ -328,6 +329,7 @@ mod tests {
             display: Some(Display::Markdown),
             sort: Some(SortKind::Alphanumeric),
             width: None,
+            section: None,
             validate: None,
         };
         let yaml = serde_yaml::to_string(&field).unwrap();
@@ -383,6 +385,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_editor(), Editor::Date);
@@ -401,6 +404,7 @@ mod tests {
             display: Some(Display::Badge),
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_editor(), Editor::None);
@@ -421,6 +425,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_editor(), Editor::None);
@@ -442,6 +447,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(single.effective_editor(), Editor::Select);
@@ -460,6 +466,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(multi.effective_editor(), Editor::MultiSelect);
@@ -661,6 +668,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
@@ -678,6 +686,7 @@ fields:
             display: None,
             sort: Some(SortKind::Datetime),
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Datetime);
@@ -695,6 +704,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Datetime);
@@ -715,6 +725,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Numeric);
@@ -740,6 +751,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::OptionOrder);
@@ -763,6 +775,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(multi.effective_sort(), SortKind::OptionOrder);
@@ -780,6 +793,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
@@ -798,6 +812,7 @@ fields:
             display: None,
             sort: Some(SortKind::Lexical),
             width: None,
+            section: None,
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);

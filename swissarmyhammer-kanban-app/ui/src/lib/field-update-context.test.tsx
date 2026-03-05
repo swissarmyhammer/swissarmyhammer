@@ -38,7 +38,7 @@ describe("FieldUpdateProvider", () => {
     vi.clearAllMocks();
   });
 
-  it("calls invoke with camelCase params (entityType, fieldName)", async () => {
+  it("calls execute_command with entity.update_field", async () => {
     const { result } = renderHook(() => useFieldUpdate(), { wrapper });
 
     await act(async () => {
@@ -46,26 +46,25 @@ describe("FieldUpdateProvider", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
-    expect(mockInvoke).toHaveBeenCalledWith("update_entity_field", {
-      entityType: "task",
-      id: "t1",
-      fieldName: "title",
-      value: "New Title",
+    expect(mockInvoke).toHaveBeenCalledWith("execute_command", {
+      cmd: "entity.update_field",
+      args: { entity_type: "task", id: "t1", field_name: "title", value: "New Title" },
     });
   });
 
-  it("does NOT use snake_case params", async () => {
+  it("uses snake_case keys in args", async () => {
     const { result } = renderHook(() => useFieldUpdate(), { wrapper });
 
     await act(async () => {
       await result.current.updateField("task", "t1", "title", "X");
     });
 
-    const args = mockInvoke.mock.calls[0][1] as Record<string, unknown>;
-    expect(args).not.toHaveProperty("entity_type");
-    expect(args).not.toHaveProperty("field_name");
-    expect(args).toHaveProperty("entityType");
-    expect(args).toHaveProperty("fieldName");
+    const payload = mockInvoke.mock.calls[0][1] as Record<string, unknown>;
+    const args = payload.args as Record<string, unknown>;
+    expect(args).toHaveProperty("entity_type");
+    expect(args).toHaveProperty("field_name");
+    expect(args).not.toHaveProperty("entityType");
+    expect(args).not.toHaveProperty("fieldName");
   });
 
   it("calls onRefresh after successful update", async () => {
@@ -98,11 +97,9 @@ describe("FieldUpdateProvider", () => {
       await result.current.updateField("tag", "tag-1", "color", "ff0000");
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("update_entity_field", {
-      entityType: "tag",
-      id: "tag-1",
-      fieldName: "color",
-      value: "ff0000",
+    expect(mockInvoke).toHaveBeenCalledWith("execute_command", {
+      cmd: "entity.update_field",
+      args: { entity_type: "tag", id: "tag-1", field_name: "color", value: "ff0000" },
     });
   });
 
@@ -113,11 +110,9 @@ describe("FieldUpdateProvider", () => {
       await result.current.updateField("column", "col-1", "name", "In Progress");
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("update_entity_field", {
-      entityType: "column",
-      id: "col-1",
-      fieldName: "name",
-      value: "In Progress",
+    expect(mockInvoke).toHaveBeenCalledWith("execute_command", {
+      cmd: "entity.update_field",
+      args: { entity_type: "column", id: "col-1", field_name: "name", value: "In Progress" },
     });
   });
 });

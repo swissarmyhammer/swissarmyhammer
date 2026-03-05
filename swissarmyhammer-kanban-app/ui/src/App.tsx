@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { InspectProvider } from "@/lib/inspect-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppShell } from "@/components/app-shell";
 import { NavBar } from "@/components/nav-bar";
@@ -15,7 +17,7 @@ import { BoardView } from "@/components/board-view";
 import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import type {
-  BoardData, OpenBoard, Entity,
+  BoardData, OpenBoard, Entity, EntityBag,
   BoardDataResponse, EntityListResponse,
 } from "@/types/kanban";
 import { entityFromBag, parseBoardData, getStr } from "@/types/kanban";
@@ -26,12 +28,6 @@ const PANEL_WIDTH = 420;
 interface PanelEntry {
   entityType: string;
   entityId: string;
-}
-
-interface TagContextMenuPayload {
-  action: string;
-  tag_id: string;
-  task_id: string | null;
 }
 
 function App() {
@@ -91,26 +87,6 @@ function App() {
     };
   }, [refresh]);
 
-  // Tag context menu listener
-  useEffect(() => {
-    const unlisten = listen<TagContextMenuPayload>("tag-context-menu", async (event) => {
-      const { action, tag_id, task_id } = event.payload;
-      if (action === "tag_edit") {
-        // tag_id from context menu is the slug — resolve to ULID via tagEntities
-        const tag = tagEntities.find((t) => getStr(t, "tag_name") === tag_id);
-        if (tag) inspectEntity("tag", tag.id);
-      } else if (action === "tag_delete" && task_id) {
-        try {
-          await invoke("untag_task", { id: task_id, tag: tag_id });
-          refresh();
-        } catch (e) {
-          console.error("Failed to remove tag:", e);
-        }
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [tagEntities, inspectEntity, refresh]);
-
   const entityStore = useMemo(() => ({
     task: taskEntities,
     tag: tagEntities,
@@ -122,10 +98,12 @@ function App() {
     <TooltipProvider delayDuration={400}>
     <SchemaProvider>
     <EntityStoreProvider entities={entityStore}>
+    <EntityFocusProvider>
     <FieldUpdateProvider onRefresh={refresh}>
     <KeymapProvider>
     <AppModeProvider>
     <UndoStackProvider>
+    <InspectProvider onInspect={inspectEntity}>
     <AppShell>
     <div className="h-screen bg-background text-foreground flex flex-col">
       <NavBar
@@ -139,8 +117,6 @@ function App() {
           <BoardView
             board={board}
             tasks={taskEntities}
-            onTaskInspect={(taskId) => inspectEntity("task", taskId)}
-            onColumnInspect={(colId) => inspectEntity("column", colId)}
             onTaskMoved={refresh}
           />
 
@@ -155,22 +131,15 @@ function App() {
           {/* Render inspector panels from the stack */}
           {panelStack.map((entry, index) => {
             const rightOffset = (panelStack.length - 1 - index) * PANEL_WIDTH;
-            const entities = (entityStore as Record<string, Entity[]>)[entry.entityType];
-            const entity = entities?.find((e) => e.id === entry.entityId);
-            // Board entity is special — it's in board.board, not a list
-            const resolved = entity ?? (
-              entry.entityType === "board" ? board?.board : undefined
-            );
-            if (!resolved) return null;
             return (
-              <SlidePanel
+              <InspectorPanel
                 key={`${entry.entityType}-${entry.entityId}`}
-                open={true}
+                entry={entry}
+                entityStore={entityStore}
+                board={board}
                 onClose={closeTopPanel}
                 style={{ right: rightOffset }}
-              >
-                <EntityInspector entity={resolved} />
-              </SlidePanel>
+              />
             );
           })}
         </>
@@ -184,13 +153,84 @@ function App() {
       <ModeIndicator />
     </div>
     </AppShell>
+    </InspectProvider>
     </UndoStackProvider>
     </AppModeProvider>
     </KeymapProvider>
     </FieldUpdateProvider>
+    </EntityFocusProvider>
     </EntityStoreProvider>
     </SchemaProvider>
     </TooltipProvider>
+  );
+}
+
+/**
+ * Resolves an entity for the inspector panel. Tries the local entity store
+ * first, then falls back to fetching from the backend via get_entity.
+ */
+function InspectorPanel({
+  entry,
+  entityStore,
+  board,
+  onClose,
+  style,
+}: {
+  entry: PanelEntry;
+  entityStore: Record<string, Entity[]>;
+  board: BoardData | null;
+  onClose: () => void;
+  style?: React.CSSProperties;
+}) {
+  const [fetchedEntity, setFetchedEntity] = useState<Entity | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const fetchedRef = useRef<string | null>(null);
+
+  // Try local store first
+  const entities = entityStore[entry.entityType];
+  let localEntity = entities?.find((e) => e.id === entry.entityId);
+  if (!localEntity && entry.entityType === "tag") {
+    localEntity = entities?.find((e) => getStr(e, "tag_name") === entry.entityId);
+  }
+  // Board entity is special
+  const resolved = localEntity ?? (
+    entry.entityType === "board" ? board?.board : undefined
+  ) ?? fetchedEntity;
+
+  // Fetch from backend if not found locally
+  const fetchKey = `${entry.entityType}:${entry.entityId}`;
+  useEffect(() => {
+    if (resolved || fetchedRef.current === fetchKey) return;
+    fetchedRef.current = fetchKey;
+    setFetchError(null);
+    invoke<Record<string, unknown>>("get_entity", {
+      entityType: entry.entityType,
+      id: entry.entityId,
+    })
+      .then((bag) => {
+        setFetchedEntity(entityFromBag(bag as EntityBag));
+      })
+      .catch((err) => {
+        const msg = String(err);
+        console.error(`[InspectorPanel] Failed to fetch entity: ${fetchKey}`, err);
+        setFetchError(msg);
+      });
+  }, [resolved, fetchKey, entry.entityType, entry.entityId]);
+
+  if (!resolved) {
+    return (
+      <SlidePanel open={true} onClose={onClose} style={style}>
+        <p className="text-sm text-muted-foreground">
+          {fetchError ? `Entity not found` : "Loading…"}
+        </p>
+      </SlidePanel>
+    );
+  }
+
+  return (
+    <SlidePanel open={true} onClose={onClose} style={style}>
+      <EntityInspector entity={resolved} />
+    </SlidePanel>
   );
 }
 

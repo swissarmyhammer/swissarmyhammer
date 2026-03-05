@@ -1,4 +1,5 @@
 import { createContext, useContext, useMemo, useCallback, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 /** Describes where a command should appear in the native OS menu bar. */
 export interface MenuPlacement {
@@ -25,7 +26,7 @@ export interface CommandDef {
   /** Optional key bindings per keymap mode. */
   keys?: { vim?: string; cua?: string; emacs?: string };
   /** The action to run when the command is executed. */
-  execute: () => void | Promise<void>;
+  execute?: () => void | Promise<void>;
   /**
    * Whether the command is currently available. Defaults to true.
    * When false, the command blocks resolution — parent scopes will NOT
@@ -34,20 +35,37 @@ export interface CommandDef {
   available?: boolean;
   /** Optional placement in the native menu bar. */
   menuPlacement?: MenuPlacement;
+  /** Whether this command appears in context menus. */
+  contextMenu?: boolean;
+  /**
+   * Optional target moniker (e.g. "tag:xyz", "task:abc").
+   *
+   * The shadow key becomes `(id, target)`:
+   * - Same id + same target → shadow (inner wins)
+   * - Same id + different target → accumulate (both visible)
+   * - No target → shadow by id alone (existing behavior for app.quit etc.)
+   */
+  target?: string;
+  /** If set, dispatches to Rust via invoke("execute_command", { cmd, args }). */
+  rustCommand?: { cmd: string; args: Record<string, unknown> };
 }
 
 /** A node in the scope chain linking a set of commands to an optional parent. */
 export interface CommandScope {
   commands: Map<string, CommandDef>;
   parent: CommandScope | null;
+  /** Optional moniker identifying which FocusScope created this scope. */
+  moniker?: string;
 }
 
-const CommandScopeContext = createContext<CommandScope | null>(null);
+export const CommandScopeContext = createContext<CommandScope | null>(null);
 
 interface CommandScopeProviderProps {
   /** Commands to register in this scope. */
   commands: CommandDef[];
   children: ReactNode;
+  /** Optional moniker identifying which FocusScope created this scope. */
+  moniker?: string;
 }
 
 /**
@@ -55,7 +73,7 @@ interface CommandScopeProviderProps {
  * React context.  Children see this scope as their nearest scope and can
  * resolve commands upward through the chain.
  */
-export function CommandScopeProvider({ commands, children }: CommandScopeProviderProps) {
+export function CommandScopeProvider({ commands, children, moniker }: CommandScopeProviderProps) {
   const parent = useContext(CommandScopeContext);
 
   const scope = useMemo<CommandScope>(() => {
@@ -63,8 +81,8 @@ export function CommandScopeProvider({ commands, children }: CommandScopeProvide
     for (const cmd of commands) {
       map.set(cmd.id, cmd);
     }
-    return { commands: map, parent };
-  }, [commands, parent]);
+    return { commands: map, parent, moniker };
+  }, [commands, parent, moniker]);
 
   return (
     <CommandScopeContext.Provider value={scope}>
@@ -102,39 +120,67 @@ export interface CommandAtDepth {
 }
 
 /**
- * Collect all commands visible from the current scope, grouped by depth.
+ * Collect all commands visible from a given scope, grouped by depth.
  *
  * Commands at deeper (nearer) scopes shadow same-id commands at shallower
  * (farther) scopes.  Commands with `available === false` are excluded and
  * also block same-id commands from parent scopes.
  *
+ * @param scope - The starting scope to walk from.
+ * @returns An array of `{ command, depth }` sorted by depth ascending (nearest first).
+ */
+export function collectAvailableCommands(scope: CommandScope | null): CommandAtDepth[] {
+  /**
+   * Shadow key: `id + ":" + (target ?? "")`.
+   * Same id + same target → shadow (inner wins).
+   * Same id + different target → accumulate (both visible).
+   * No target → shadow by id alone (existing behaviour for app.quit etc.)
+   */
+  const seen = new Set<string>();
+  const result: CommandAtDepth[] = [];
+  let current = scope;
+  let depth = 0;
+
+  while (current !== null) {
+    for (const [, cmd] of current.commands) {
+      const key = cmd.id + ":" + (cmd.target ?? "");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (cmd.available !== false) {
+        result.push({ command: cmd, depth });
+      }
+      // Whether available or not, the key is now "seen" — blocks parents.
+    }
+    current = current.parent;
+    depth++;
+  }
+
+  return result;
+}
+
+/**
+ * Hook version: collect all commands visible from the nearest scope context.
+ *
  * @returns An array of `{ command, depth }` sorted by depth ascending (nearest first).
  */
 export function useAvailableCommands(): CommandAtDepth[] {
   const scope = useContext(CommandScopeContext);
+  return useMemo(() => collectAvailableCommands(scope), [scope]);
+}
 
-  return useMemo(() => {
-    /** Ids we have already seen — either included or blocked. */
-    const seen = new Set<string>();
-    const result: CommandAtDepth[] = [];
-    let current = scope;
-    let depth = 0;
-
-    while (current !== null) {
-      for (const [id, cmd] of current.commands) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        if (cmd.available !== false) {
-          result.push({ command: cmd, depth });
-        }
-        // Whether available or not, the id is now "seen" — blocks parents.
-      }
-      current = current.parent;
-      depth++;
-    }
-
-    return result;
-  }, [scope]);
+/**
+ * Execute a command. If `execute` is set, calls it directly.
+ * If `rustCommand` is set, invokes the Rust execute_command dispatcher.
+ * `execute` takes priority over `rustCommand` if both are set.
+ */
+export async function dispatchCommand(cmd: CommandDef): Promise<void> {
+  if (cmd.execute) {
+    await cmd.execute();
+  } else if (cmd.rustCommand) {
+    await invoke("execute_command", { cmd: cmd.rustCommand.cmd, args: cmd.rustCommand.args });
+  } else {
+    throw new Error(`Command '${cmd.id}' has neither execute nor rustCommand`);
+  }
 }
 
 /**
@@ -152,7 +198,7 @@ export function useExecuteCommand(): (id: string) => Promise<boolean> {
     async (id: string): Promise<boolean> => {
       const cmd = resolveCommand(scope, id);
       if (cmd === null) return false;
-      await cmd.execute();
+      await dispatchCommand(cmd);
       return true;
     },
     [scope],

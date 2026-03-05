@@ -1,22 +1,49 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { CommandScopeProvider, useExecuteCommand, type CommandDef } from "@/lib/command-scope";
+import { CommandScopeProvider, useExecuteCommand, resolveCommand, dispatchCommand, type CommandDef } from "@/lib/command-scope";
+import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap, type KeymapMode } from "@/lib/keymap-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import { useUndoStack } from "@/lib/undo-context";
 import { createKeyHandler } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
 import { syncMenuToNative } from "@/lib/menu-sync";
+import { dispatchContextMenuCommand } from "@/lib/context-menu";
 
 /**
  * Internal component that attaches a global keydown listener.
  *
  * Must be rendered inside a CommandScopeProvider so that useExecuteCommand
  * resolves commands from the scope AppShell just created.
+ *
+ * When a FocusScope is focused, commands resolve from the focused scope
+ * first, falling back to the root scope (current context) if not found.
  */
 function KeybindingHandler({ mode }: { mode: KeymapMode }) {
-  const executeCommand = useExecuteCommand();
+  const rootExecuteCommand = useExecuteCommand();
+  const focusedScope = useFocusedScope();
+
+  // Store focused scope in a ref so the key handler callback always sees
+  // the latest value without re-creating the handler on every focus change.
+  const focusedScopeRef = useRef(focusedScope);
+  focusedScopeRef.current = focusedScope;
+  const rootExecuteRef = useRef(rootExecuteCommand);
+  rootExecuteRef.current = rootExecuteCommand;
+
+  /** Execute a command, preferring the focused scope when available. */
+  const executeCommand = useCallback(async (id: string): Promise<boolean> => {
+    const scope = focusedScopeRef.current;
+    if (scope) {
+      const cmd = resolveCommand(scope, id);
+      if (cmd) {
+        await dispatchCommand(cmd);
+        return true;
+      }
+    }
+    // Fall back to root scope
+    return rootExecuteRef.current(id);
+  }, []);
 
   useEffect(() => {
     const handler = createKeyHandler(mode, executeCommand);
@@ -39,6 +66,21 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
       unlisten.then((fn) => fn());
     };
   }, [executeCommand]);
+
+  // Listen for context-menu-command events from the native context menu
+  // and dispatch from the pending handlers map (populated by useContextMenu).
+  useEffect(() => {
+    const unlisten = listen<string>("context-menu-command", async (event) => {
+      const commandId = event.payload;
+      const dispatched = await dispatchContextMenuCommand(commandId);
+      if (!dispatched) {
+        console.warn(`Context menu command not found: ${commandId}`);
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   return null;
 }

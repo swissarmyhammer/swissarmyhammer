@@ -9,6 +9,9 @@ mod state;
 use clap::Parser;
 use cli::Cli;
 use state::AppState;
+use tauri::Manager;
+use tauri_plugin_window_state::{StateFlags, WindowExt};
+
 
 fn main() {
     let cli = Cli::parse();
@@ -37,12 +40,8 @@ fn main() {
         .plugin(tauri_plugin_log::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
-            commands::move_task,
-            commands::add_task,
-            commands::reorder_columns,
-            commands::update_tag,
-            commands::show_tag_context_menu,
-            commands::untag_task,
+            commands::execute_command,
+            commands::show_context_menu,
             commands::open_board,
             commands::list_open_boards,
             commands::set_active_board,
@@ -50,15 +49,6 @@ fn main() {
             commands::get_keymap_mode,
             commands::set_keymap_mode,
             commands::get_entity_schema,
-            commands::update_entity_field,
-            commands::delete_task,
-            commands::delete_tag,
-            commands::delete_column,
-            commands::delete_actor,
-            commands::delete_swimlane,
-            commands::delete_attachment,
-            commands::undo_operation,
-            commands::redo_operation,
             commands::list_entities,
             commands::get_entity,
             commands::get_board_data,
@@ -72,8 +62,17 @@ fn main() {
             // send the full manifest via rebuild_menu_from_manifest once loaded.
             let config = crate::state::AppConfig::load();
             let _ = menu::build_menu_from_manifest(app.handle(), &[], &config.recent_boards);
+            app.handle().plugin(
+                tauri_plugin_window_state::Builder::default().build()
+            )?;
+
             #[cfg(all(debug_assertions, target_os = "macos"))]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            {
+                let win = app.get_webview_window("main").unwrap();
+                win.restore_state(StateFlags::all())?;
+                let _ = win.show();
+            }
+
             Ok(())
         })
         .on_menu_event(menu::handle_menu_event)

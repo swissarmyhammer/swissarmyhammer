@@ -15,17 +15,20 @@ use tauri_plugin_dialog::DialogExt;
 /// Groups entries by menu name (app, file, settings), builds each submenu
 /// with separators between groups, and injects OS chrome items (About, Quit,
 /// Hide, Close Window, Open Recent, Edit menu). The manifest entries are
-/// expected to arrive pre-sorted by menu/group/order from the frontend.
+/// Sorts entries by (group, order) within each menu submenu.
 pub fn build_menu_from_manifest(
     app: &AppHandle,
     manifest: &[MenuItemEntry],
     recent: &[RecentBoard],
 ) -> tauri::Result<()> {
-    // Group entries by menu name
+    // Group entries by menu name, then sort by (group, order) within each menu
     let mut menus: std::collections::HashMap<String, Vec<&MenuItemEntry>> =
         std::collections::HashMap::new();
     for entry in manifest {
         menus.entry(entry.menu.clone()).or_default().push(entry);
+    }
+    for items in menus.values_mut() {
+        items.sort_by_key(|e| (e.group, e.order));
     }
 
     // --- App menu ---
@@ -150,10 +153,10 @@ fn build_menu_item(
 
 /// Dispatch native menu events.
 ///
-/// Open Recent items and tag context menu actions are handled directly
-/// because they carry context (a path or tag ID) that isn't part of the
-/// command system. Everything else is emitted as a generic `menu-command`
-/// event so the frontend can route it through `executeCommand(id)`.
+/// Open Recent items are handled directly because they carry a file path.
+/// Generic context menu items are emitted as `context-menu-command` events.
+/// Everything else is emitted as a `menu-command` event so the frontend
+/// can route it through `executeCommand(id)`.
 pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref().to_string();
 
@@ -163,35 +166,20 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
 
-    // Tag context menu — handled directly (carry context tag state)
-    if id == "tag_edit" || id == "tag_delete" {
-        handle_tag_menu(app, &id);
-        return;
+    // Generic context menu items — emit as context-menu-command so the
+    // frontend can distinguish them from menu bar commands.
+    {
+        let state = app.state::<AppState>();
+        let ids = state.context_menu_ids.blocking_read();
+        if ids.contains(&id) {
+            let _ = app.emit("context-menu-command", &id);
+            return;
+        }
     }
 
     // Everything else: emit as a generic menu-command event.
     // The frontend listens for this and routes through executeCommand(id).
     let _ = app.emit("menu-command", &id);
-}
-
-/// Tag context menu actions: read the stored context tag and emit to frontend.
-fn handle_tag_menu(app: &AppHandle, action: &str) {
-    let handle = app.clone();
-    let action = action.to_string();
-    tauri::async_runtime::spawn(async move {
-        let state = handle.state::<AppState>();
-        let context = state.context_tag.read().await.clone();
-        if let Some((tag_id, task_id)) = context {
-            let _ = handle.emit(
-                "tag-context-menu",
-                serde_json::json!({
-                    "action": action,
-                    "tag_id": tag_id,
-                    "task_id": task_id,
-                }),
-            );
-        }
-    });
 }
 
 /// Public entry point for creating a new board -- used by both native menu and command palette.

@@ -1072,20 +1072,32 @@ mod tests {
     /// Timeout for retry test (2 seconds)
     const TEST_DB_READY_TIMEOUT_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
     /// Maximum time to wait for background indexing before failing the test.
-    const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    /// Set high enough to avoid flaky failures when many tests run in parallel.
+    const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
     /// A completion handle that signals when background indexing finishes.
+    ///
+    /// Uses an `AtomicBool` flag alongside `Notify` so that a completion signal
+    /// that fires before `wait()` is called is never lost.
     ///
     /// Use `index_complete_notifier()` to create one, wire the callback into
     /// `Workspace::new().with_progress(callback)`, then `await handle.wait()`.
     struct IndexCompleteHandle {
+        completed: Arc<std::sync::atomic::AtomicBool>,
         notify: Arc<tokio::sync::Notify>,
     }
 
     impl IndexCompleteHandle {
         /// Wait for indexing to complete, with a timeout.
         async fn wait(&self) {
-            tokio::time::timeout(TEST_INDEX_TIMEOUT, self.notify.notified())
+            let fut = async {
+                // Check the flag first in case the signal already fired before
+                // we started listening.
+                while !self.completed.load(std::sync::atomic::Ordering::Acquire) {
+                    self.notify.notified().await;
+                }
+            };
+            tokio::time::timeout(TEST_INDEX_TIMEOUT, fut)
                 .await
                 .expect("background indexing did not complete within timeout");
         }
@@ -1098,14 +1110,20 @@ mod tests {
         impl Fn(IndexStatus) + Send + Sync + 'static,
         IndexCompleteHandle,
     ) {
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let notify = Arc::new(tokio::sync::Notify::new());
+        let completed_clone = completed.clone();
         let notify_clone = notify.clone();
         let callback = move |status: IndexStatus| {
             if status.is_complete() {
-                notify_clone.notify_one();
+                completed_clone.store(true, std::sync::atomic::Ordering::Release);
+                notify_clone.notify_waiters();
             }
         };
-        (callback, IndexCompleteHandle { notify })
+        (
+            callback,
+            IndexCompleteHandle { completed, notify },
+        )
     }
 
     /// Open a workspace and wait for background indexing to complete.
@@ -1815,6 +1833,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_builder_with_progress_callback() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();

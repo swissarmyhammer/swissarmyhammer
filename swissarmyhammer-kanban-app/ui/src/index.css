@@ -106,3 +106,8 @@
       Roboto, "Helvetica Neue", Arial, sans-serif;
   }
 }
+
+/* Entity focus — subtle darkening */
+[data-focused] {
+  filter: brightness(0.97);
+}

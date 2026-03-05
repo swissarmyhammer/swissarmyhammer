@@ -428,6 +428,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            section: None,
             validate: None,
         }
     }
@@ -747,6 +748,7 @@ type:
                 display: None,
                 sort: None,
                 width: None,
+                section: None,
                 validate: None,
             })
             .collect();

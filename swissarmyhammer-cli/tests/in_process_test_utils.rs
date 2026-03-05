@@ -92,21 +92,6 @@ fn format_prompt_output(
     }
 }
 
-/// Debug captured output with consistent formatting for test diagnostics
-fn debug_captured_output(name: &str, result: &Result<CapturedOutput>) {
-    println!("{} result analysis:", name);
-    match result {
-        Ok(cmd_result) => {
-            println!("  Exit code: {}", cmd_result.exit_code);
-            println!("  Stdout: '{}'", cmd_result.stdout);
-            println!("  Stderr: '{}'", cmd_result.stderr);
-        }
-        Err(e) => {
-            println!("  Error running {}: {}", name, e);
-        }
-    }
-}
-
 /// Helper function to get the sah binary path
 fn get_sah_binary_path() -> String {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {

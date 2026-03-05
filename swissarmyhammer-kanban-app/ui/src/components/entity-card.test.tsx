@@ -40,7 +40,9 @@ import { EntityCard } from "./entity-card";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { InspectProvider } from "@/lib/inspect-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
@@ -62,14 +64,20 @@ function makeEntity(fieldOverrides: Record<string, unknown> = {}): Entity {
   };
 }
 
+const mockOnInspect = vi.fn();
+
 function renderCard(ui: React.ReactElement) {
   return render(
     <TooltipProvider>
       <SchemaProvider>
         <EntityStoreProvider entities={{ tag: [] }}>
-          <FieldUpdateProvider onRefresh={() => {}}>
-            <KeymapProvider>{ui}</KeymapProvider>
-          </FieldUpdateProvider>
+          <EntityFocusProvider>
+            <InspectProvider onInspect={mockOnInspect}>
+              <FieldUpdateProvider onRefresh={() => {}}>
+                <KeymapProvider>{ui}</KeymapProvider>
+              </FieldUpdateProvider>
+            </InspectProvider>
+          </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
     </TooltipProvider>
@@ -86,6 +94,7 @@ async function renderWithProvider(ui: React.ReactElement) {
 describe("EntityCard", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
+    mockOnInspect.mockClear();
   });
 
   it("renders title as markdown (bold text)", async () => {
@@ -94,21 +103,20 @@ describe("EntityCard", () => {
     expect(strong.tagName).toBe("STRONG");
   });
 
-  it("(i) button calls onInspect with entity id", async () => {
-    const onInspect = vi.fn();
-    const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} onInspect={onInspect} />
-    );
-    const inspectBtn = container.querySelector("button[title='Inspect']")!;
-    fireEvent.click(inspectBtn);
-    expect(onInspect).toHaveBeenCalledWith("task-1");
-  });
-
-  it("(i) button is hidden when onInspect is not provided", async () => {
+  it("(i) button calls inspectEntity with correct moniker", async () => {
     const { container } = await renderWithProvider(
       <EntityCard entity={makeEntity()} />
     );
-    expect(container.querySelector("button[title='Inspect']")).toBeNull();
+    const inspectBtn = container.querySelector("button[title='Inspect']")!;
+    fireEvent.click(inspectBtn);
+    expect(mockOnInspect).toHaveBeenCalledWith("task", "task-1");
+  });
+
+  it("(i) button always renders", async () => {
+    const { container } = await renderWithProvider(
+      <EntityCard entity={makeEntity()} />
+    );
+    expect(container.querySelector("button[title='Inspect']")).not.toBeNull();
   });
 
   it("enters edit mode when title is clicked", async () => {
@@ -150,27 +158,40 @@ describe("EntityCard", () => {
       fireEvent.blur(cmContent);
     });
 
-    // Verify invoke was called with camelCase params for the title save
+    // Verify invoke was called via execute_command for the title save
     const updateCall = mockInvoke.mock.calls.find(
-      (call) => call[0] === "update_entity_field"
+      (call) => call[0] === "execute_command" && (call[1] as Record<string, unknown>)?.cmd === "entity.update_field"
     );
     expect(updateCall).toBeTruthy();
     expect(updateCall![1]).toEqual({
-      entityType: "task",
-      id: "task-1",
-      fieldName: "title",
-      value: "defect",
+      cmd: "entity.update_field",
+      args: { entity_type: "task", id: "task-1", field_name: "title", value: "defect" },
     });
   });
 
-  it("clicking card body does not trigger inspect", async () => {
-    const onInspect = vi.fn();
+  it("entity.inspect command includes target moniker in context menu", async () => {
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} onInspect={onInspect} />
+      <EntityCard entity={makeEntity()} />
+    );
+    const card = container.querySelector("[data-moniker='task:task-1']")!;
+    fireEvent.contextMenu(card);
+    // Context menu item id should include the target: "entity.inspect:task:task-1"
+    const ctxCall = mockInvoke.mock.calls.find(
+      (c) => c[0] === "show_context_menu"
+    );
+    expect(ctxCall).toBeTruthy();
+    const items = ctxCall![1].items as { id: string; name: string }[];
+    expect(items.find((i) => i.id === "entity.inspect:task:task-1")).toBeTruthy();
+  });
+
+  it("clicking card body does not trigger inspect", async () => {
+    const { container } = await renderWithProvider(
+      <EntityCard entity={makeEntity()} />
     );
     const card = container.querySelector(".rounded-md")!;
     fireEvent.click(card);
-    expect(onInspect).not.toHaveBeenCalled();
+    // Click on card body should not call inspect — only the (i) button does
+    expect(mockOnInspect).not.toHaveBeenCalled();
   });
 
   describe("progress bar", async () => {

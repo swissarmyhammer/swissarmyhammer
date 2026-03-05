@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { CommandPalette } from "./command-palette";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { KeymapProvider } from "@/lib/keymap-context";
 
 const TEST_COMMANDS: CommandDef[] = [
@@ -36,11 +37,13 @@ const TEST_COMMANDS: CommandDef[] = [
 
 function renderPalette(open: boolean, onClose = vi.fn()) {
   return render(
-    <KeymapProvider>
-      <CommandScopeProvider commands={TEST_COMMANDS}>
-        <CommandPalette open={open} onClose={onClose} />
-      </CommandScopeProvider>
-    </KeymapProvider>
+    <EntityFocusProvider>
+      <KeymapProvider>
+        <CommandScopeProvider commands={TEST_COMMANDS}>
+          <CommandPalette open={open} onClose={onClose} />
+        </CommandScopeProvider>
+      </KeymapProvider>
+    </EntityFocusProvider>
   );
 }
 

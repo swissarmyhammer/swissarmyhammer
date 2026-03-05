@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
-import { useAvailableCommands, type CommandAtDepth } from "@/lib/command-scope";
+import { useAvailableCommands, collectAvailableCommands, type CommandAtDepth } from "@/lib/command-scope";
+import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap } from "@/lib/keymap-context";
 import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
@@ -34,7 +35,14 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const escapeCountRef = useRef(0);
   const { mode } = useKeymap();
-  const allCommands = useAvailableCommands();
+  const focusedScope = useFocusedScope();
+  const rootCommands = useAvailableCommands();
+  // When a scope is focused, collect commands from it (which includes its ancestor chain).
+  // Otherwise fall back to commands from the root scope context.
+  const allCommands = useMemo(
+    () => focusedScope ? collectAvailableCommands(focusedScope) : rootCommands,
+    [focusedScope, rootCommands],
+  );
 
   // Reset state when palette opens
   useEffect(() => {
@@ -71,7 +79,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     const entry = filtered[selectedIndex];
     if (entry) {
       onClose();
-      entry.command.execute();
+      entry.command.execute?.();
     }
   }, [filtered, selectedIndex, onClose]);
 
@@ -244,7 +252,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               const hint = keyHint(entry);
               return (
                 <div
-                  key={entry.command.id}
+                  key={entry.command.id + ":" + (entry.command.target ?? "")}
                   role="option"
                   aria-selected={index === selectedIndex}
                   data-testid={`command-item-${entry.command.id}`}
@@ -252,7 +260,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
                   onClick={() => {
                     onClose();
-                    entry.command.execute();
+                    entry.command.execute?.();
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >

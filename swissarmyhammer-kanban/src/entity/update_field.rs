@@ -1,9 +1,13 @@
 //! UpdateEntityField command
 
+use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::tag::tag_name_exists_entity;
+use crate::tag_parser;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
@@ -86,6 +90,29 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
             }
 
             ectx.write(&entity).await?;
+
+            // Auto-create tag entities when a task body field is updated
+            if self.entity_type == "task" {
+                let fields_ctx = ectx.fields();
+                let entity_def = fields_ctx.get_entity("task");
+                let is_body_field = entity_def
+                    .map(|def| def.body_field.as_deref() == Some(&self.field_name))
+                    .unwrap_or(false);
+                if is_body_field {
+                    let body_text = self.value.as_str().unwrap_or("");
+                    let tags = tag_parser::parse_tags(body_text);
+                    for tag_name in &tags {
+                        if !tag_name_exists_entity(ectx, tag_name).await {
+                            let color = auto_color::auto_color(tag_name).to_string();
+                            let tag_id = ulid::Ulid::new().to_string();
+                            let mut tag_entity = Entity::new("tag", tag_id.as_str());
+                            tag_entity.set("tag_name", json!(tag_name));
+                            tag_entity.set("color", json!(color));
+                            ectx.write(&tag_entity).await?;
+                        }
+                    }
+                }
+            }
 
             Ok(entity.to_json())
         }
@@ -205,6 +232,61 @@ mod tests {
         let result = cmd.execute(&ctx).await.into_result();
 
         assert!(result.is_err(), "Should fail for undefined field");
+    }
+
+    #[tokio::test]
+    async fn test_update_body_auto_creates_tag_entities() {
+        let (_temp, ctx) = setup().await;
+
+        let task_result = AddTask::new("Tag test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        // Update the body to include a #hashtag
+        let cmd = UpdateEntityField::new(
+            "task",
+            &task_id,
+            "body",
+            serde_json::json!("Fix the #autotest issue"),
+        );
+        cmd.execute(&ctx).await.into_result().unwrap();
+
+        // The tag entity should now exist
+        let ectx = ctx.entity_context().await.unwrap();
+        let tags = ectx.list("tag").await.unwrap();
+        let found = tags.iter().any(|t| t.get_str("tag_name") == Some("autotest"));
+        assert!(found, "Tag entity 'autotest' should have been auto-created");
+    }
+
+    #[tokio::test]
+    async fn test_update_body_does_not_duplicate_existing_tags() {
+        let (_temp, ctx) = setup().await;
+
+        let task_result = AddTask::new("Tag test")
+            .with_description("Already has #existing")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        // Tag 'existing' was auto-created by AddTask. Update body with same tag.
+        let cmd = UpdateEntityField::new(
+            "task",
+            &task_id,
+            "body",
+            serde_json::json!("Still has #existing tag"),
+        );
+        cmd.execute(&ctx).await.into_result().unwrap();
+
+        // Should still be exactly one tag entity named 'existing'
+        let ectx = ctx.entity_context().await.unwrap();
+        let tags = ectx.list("tag").await.unwrap();
+        let count = tags.iter().filter(|t| t.get_str("tag_name") == Some("existing")).count();
+        assert_eq!(count, 1, "Should not duplicate existing tag");
     }
 
     #[tokio::test]

@@ -18,7 +18,7 @@ use swissarmyhammer_kanban::{
     types::{Ordinal, Position},
     OperationProcessor,
 };
-use tauri::menu::{ContextMenu, MenuBuilder, PredefinedMenuItem};
+use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::{AppHandle, State, Window};
 
 /// A single menu item entry received from the frontend manifest.
@@ -101,160 +101,6 @@ pub async fn set_active_board(state: State<'_, AppState>, path: String) -> Resul
     }))
 }
 
-/// Move a task to a new position (column and/or ordinal).
-#[tauri::command]
-pub async fn move_task(
-    state: State<'_, AppState>,
-    id: String,
-    column: String,
-    ordinal: String,
-    swimlane: Option<String>,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-
-    let mut cmd = MoveTask::to_column(id.clone(), column);
-    cmd.swimlane = swimlane.map(|s| s.into());
-    if !ordinal.is_empty() {
-        cmd.ordinal = Some(ordinal);
-    }
-    let result = handle
-        .processor
-        .process(&cmd, &handle.ctx)
-        .await
-        .map_err(|e| format!("move_task({}): {}", id, e))?;
-
-    Ok(result)
-}
-
-/// Add a new task to the active board.
-#[tauri::command]
-pub async fn add_task(
-    state: State<'_, AppState>,
-    title: String,
-    column: String,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-
-    let position = Position::new(column.clone().into(), None, Ordinal::first());
-    let cmd = AddTask::new(title).with_position(position);
-    let result = handle
-        .processor
-        .process(&cmd, &handle.ctx)
-        .await
-        .map_err(|e| format!("add_task(column={}): {}", column, e))?;
-
-    Ok(result)
-}
-
-/// Update a tag's name, color, or description.
-/// When name changes, bulk find-replaces `#old-name` → `#new-name` across all tasks.
-#[tauri::command]
-pub async fn update_tag(
-    state: State<'_, AppState>,
-    id: String,
-    name: Option<String>,
-    color: Option<String>,
-    description: Option<String>,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-
-    let mut cmd = UpdateTag::new(id);
-    if let Some(n) = name {
-        cmd = cmd.with_name(n);
-    }
-    if let Some(c) = color {
-        cmd = cmd.with_color(c);
-    }
-    if let Some(d) = description {
-        cmd = cmd.with_description(d);
-    }
-    let result = handle
-        .processor
-        .process(&cmd, &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(result)
-}
-
-/// Show a native context menu for a tag pill.
-#[tauri::command]
-pub async fn show_tag_context_menu(
-    app: AppHandle,
-    window: Window,
-    state: State<'_, AppState>,
-    tag_id: String,
-    task_id: Option<String>,
-) -> Result<(), String> {
-    // Store context for the menu event handler
-    *state.context_tag.write().await = Some((tag_id, task_id));
-
-    let menu = MenuBuilder::new(&app)
-        .text("tag_edit", "Edit Tag\u{2026}")
-        .item(&PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?)
-        .text("tag_delete", "Remove Tag")
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    menu.popup(window)
-        .map_err(|e: tauri::Error| e.to_string())?;
-
-    Ok(())
-}
-
-/// Remove a tag from a task's markdown (does NOT delete the tag file).
-#[tauri::command]
-pub async fn untag_task(
-    state: State<'_, AppState>,
-    id: String,
-    tag: String,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-
-    let cmd = UntagTask::new(id, tag);
-    let result = handle
-        .processor
-        .process(&cmd, &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(result)
-}
-
-/// Reorder columns by updating their order fields.
-///
-/// Takes a list of {id, order} pairs and applies them. Each column update
-/// goes through the processor and gets its own transaction. Returns the
-/// list of `operation_id` values (one per column updated).
-#[tauri::command]
-pub async fn reorder_columns(
-    state: State<'_, AppState>,
-    columns: Vec<ColumnOrder>,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-
-    let mut operation_ids: Vec<String> = Vec::new();
-    for col in &columns {
-        let cmd = UpdateColumn::new(col.id.clone()).with_order(col.order);
-        let result = handle
-            .processor
-            .process(&cmd, &handle.ctx)
-            .await
-            .map_err(|e| e.to_string())?;
-        if let Some(op_id) = result.get("operation_id").and_then(|v| v.as_str()) {
-            operation_ids.push(op_id.to_string());
-        }
-    }
-
-    Ok(json!({ "updated": columns.len(), "operation_ids": operation_ids }))
-}
-
-#[derive(serde::Deserialize)]
-pub struct ColumnOrder {
-    pub id: String,
-    pub order: usize,
-}
-
 /// Get the MRU list of recently opened boards.
 #[tauri::command]
 pub async fn get_recent_boards(state: State<'_, AppState>) -> Result<Value, String> {
@@ -319,139 +165,6 @@ pub async fn get_entity_schema(
         "entity": serde_json::to_value(entity_def).map_err(|e| e.to_string())?,
         "fields": field_defs,
     }))
-}
-
-/// Update a single field on an entity.
-///
-/// Generic command that works with any entity type. Routes through the
-/// KanbanOperationProcessor for automatic transaction management, activity
-/// logging, and auto-init.
-#[tauri::command]
-pub async fn update_entity_field(
-    state: State<'_, AppState>,
-    entity_type: String,
-    id: String,
-    field_name: String,
-    value: Value,
-) -> Result<Value, String> {
-    tracing::info!(
-        entity_type = %entity_type,
-        id = %id,
-        field_name = %field_name,
-        "update_entity_field called"
-    );
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    let op = UpdateEntityField::new(entity_type.clone(), id.clone(), field_name.clone(), value);
-    handle
-        .processor
-        .process(&op, &handle.ctx)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "update_entity_field failed");
-            format!("update_entity_field({}/{}, {}): {}", entity_type, id, field_name, e)
-        })
-}
-
-/// Delete a task from the active board.
-#[tauri::command]
-pub async fn delete_task(state: State<'_, AppState>, id: String) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    handle
-        .processor
-        .process(&DeleteTask::new(id.clone()), &handle.ctx)
-        .await
-        .map_err(|e| format!("delete_task({}): {}", id, e))
-}
-
-/// Delete a tag from the active board.
-#[tauri::command]
-pub async fn delete_tag(state: State<'_, AppState>, id: String) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    handle
-        .processor
-        .process(&DeleteTag::new(id), &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Delete a column from the active board.
-#[tauri::command]
-pub async fn delete_column(state: State<'_, AppState>, id: String) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    handle
-        .processor
-        .process(&DeleteColumn::new(id), &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Delete an actor from the active board.
-#[tauri::command]
-pub async fn delete_actor(state: State<'_, AppState>, id: String) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    handle
-        .processor
-        .process(&DeleteActor::new(id), &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Delete a swimlane from the active board.
-#[tauri::command]
-pub async fn delete_swimlane(state: State<'_, AppState>, id: String) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    handle
-        .processor
-        .process(&DeleteSwimlane::new(id), &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Delete an attachment from a task on the active board.
-#[tauri::command]
-pub async fn delete_attachment(
-    state: State<'_, AppState>,
-    task_id: String,
-    id: String,
-) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    handle
-        .processor
-        .process(&DeleteAttachment::new(task_id, id), &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Undo a previously executed operation by its ULID.
-///
-/// Accepts either a single changelog ULID or a transaction ULID (which
-/// undoes all constituent entries in reverse order).
-#[tauri::command]
-pub async fn undo_operation(state: State<'_, AppState>, id: String) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    let ectx = handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| e.to_string())?;
-    let result_ulid = ectx.undo(&id).await.map_err(|e| e.to_string())?;
-    Ok(json!({ "undone": id, "operation_id": result_ulid }))
-}
-
-/// Redo a previously undone operation by its ULID.
-///
-/// Accepts either a single changelog ULID or a transaction ULID (which
-/// redoes all constituent entries in forward order).
-#[tauri::command]
-pub async fn redo_operation(state: State<'_, AppState>, id: String) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
-    let ectx = handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| e.to_string())?;
-    let result_ulid = ectx.redo(&id).await.map_err(|e| e.to_string())?;
-    Ok(json!({ "redone": id, "operation_id": result_ulid }))
 }
 
 /// List all entities of a given type, returning raw entity bags.
@@ -719,5 +432,368 @@ pub async fn rebuild_menu_from_manifest(
     menu::build_menu_from_manifest(&app, &manifest, &config.recent_boards)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for execute_command dispatcher
+// ---------------------------------------------------------------------------
+
+/// Column id + order pair used by the `column.reorder` dispatcher arm.
+#[derive(serde::Deserialize)]
+struct ColumnOrder {
+    id: String,
+    order: usize,
+}
+
+/// Parse a "type:id" moniker string into (entity_type, id).
+///
+/// The id portion may itself contain colons (e.g. "task:01JAB:extra" parses
+/// as ("task", "01JAB:extra")).
+fn parse_moniker(s: &str) -> Result<(&str, &str), String> {
+    let (entity_type, id) = s
+        .split_once(':')
+        .ok_or_else(|| format!("Invalid moniker (no colon): {}", s))?;
+    if entity_type.is_empty() {
+        return Err(format!("Invalid moniker (empty type): {}", s));
+    }
+    if id.is_empty() {
+        return Err(format!("Invalid moniker (empty id): {}", s));
+    }
+    Ok((entity_type, id))
+}
+
+/// Extract a required string arg from a JSON value.
+fn required_str(args: &Value, key: &str, cmd: &str) -> Result<String, String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("{}: missing required arg '{}'", cmd, key))
+}
+
+/// Extract an optional string arg from a JSON value.
+fn optional_str(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// execute_command — unified command dispatcher
+// ---------------------------------------------------------------------------
+
+/// Unified command dispatcher that routes a `cmd` string and `args` JSON
+/// object to the appropriate kanban mutation operation.
+///
+/// All mutations (entity updates, deletes, task moves, undo/redo, etc.)
+/// flow through this single entry point.
+#[tauri::command]
+pub async fn execute_command(
+    _app: AppHandle,
+    _window: Window,
+    state: State<'_, AppState>,
+    cmd: String,
+    args: Value,
+) -> Result<Value, String> {
+    tracing::info!(cmd = %cmd, "execute_command");
+
+    match cmd.as_str() {
+        "entity.update_field" => {
+            let entity_type = required_str(&args, "entity_type", &cmd)?;
+            let id = required_str(&args, "id", &cmd)?;
+            let field_name = required_str(&args, "field_name", &cmd)?;
+            let value = args
+                .get("value")
+                .cloned()
+                .ok_or_else(|| format!("{}: missing required arg 'value'", cmd))?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let op =
+                UpdateEntityField::new(entity_type.clone(), id.clone(), field_name.clone(), value);
+            handle
+                .processor
+                .process(&op, &handle.ctx)
+                .await
+                .map_err(|e| format!("execute_command({}): {}", cmd, e))
+        }
+
+        "entity.delete" => {
+            let moniker = required_str(&args, "moniker", &cmd)?;
+            let (entity_type, id) = parse_moniker(&moniker)?;
+            let handle = state.active_handle().await.ok_or("No active board")?;
+
+            match entity_type {
+                "task" => handle
+                    .processor
+                    .process(&DeleteTask::new(id), &handle.ctx)
+                    .await
+                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
+                "tag" => handle
+                    .processor
+                    .process(&DeleteTag::new(id), &handle.ctx)
+                    .await
+                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
+                "column" => handle
+                    .processor
+                    .process(&DeleteColumn::new(id), &handle.ctx)
+                    .await
+                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
+                "actor" => handle
+                    .processor
+                    .process(&DeleteActor::new(id), &handle.ctx)
+                    .await
+                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
+                "swimlane" => handle
+                    .processor
+                    .process(&DeleteSwimlane::new(id), &handle.ctx)
+                    .await
+                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
+                _ => Err(format!(
+                    "entity.delete: unknown entity type '{}'",
+                    entity_type
+                )),
+            }
+        }
+
+        "task.move" => {
+            let id = required_str(&args, "id", &cmd)?;
+            let column = required_str(&args, "column", &cmd)?;
+            let ordinal = optional_str(&args, "ordinal").unwrap_or_default();
+            let swimlane = optional_str(&args, "swimlane");
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let mut op = MoveTask::to_column(id.clone(), column);
+            op.swimlane = swimlane.map(|s| s.into());
+            if !ordinal.is_empty() {
+                op.ordinal = Some(ordinal);
+            }
+            handle
+                .processor
+                .process(&op, &handle.ctx)
+                .await
+                .map_err(|e| format!("execute_command({}): {}", cmd, e))
+        }
+
+        "task.add" => {
+            let title = required_str(&args, "title", &cmd)?;
+            let column = required_str(&args, "column", &cmd)?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let position = Position::new(column.into(), None, Ordinal::first());
+            let op = AddTask::new(title).with_position(position);
+            handle
+                .processor
+                .process(&op, &handle.ctx)
+                .await
+                .map_err(|e| format!("execute_command({}): {}", cmd, e))
+        }
+
+        "task.untag" => {
+            let id = required_str(&args, "id", &cmd)?;
+            let tag = required_str(&args, "tag", &cmd)?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let op = UntagTask::new(id, tag);
+            handle
+                .processor
+                .process(&op, &handle.ctx)
+                .await
+                .map_err(|e| format!("execute_command({}): {}", cmd, e))
+        }
+
+        "tag.update" => {
+            let id = required_str(&args, "id", &cmd)?;
+            let name = optional_str(&args, "name");
+            let color = optional_str(&args, "color");
+            let description = optional_str(&args, "description");
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let mut op = UpdateTag::new(id);
+            if let Some(n) = name {
+                op = op.with_name(n);
+            }
+            if let Some(c) = color {
+                op = op.with_color(c);
+            }
+            if let Some(d) = description {
+                op = op.with_description(d);
+            }
+            handle
+                .processor
+                .process(&op, &handle.ctx)
+                .await
+                .map_err(|e| format!("execute_command({}): {}", cmd, e))
+        }
+
+        "column.reorder" => {
+            let columns_val = args
+                .get("columns")
+                .ok_or_else(|| format!("{}: missing required arg 'columns'", cmd))?;
+            let columns: Vec<ColumnOrder> = serde_json::from_value(columns_val.clone())
+                .map_err(|e| format!("{}: invalid 'columns' arg: {}", cmd, e))?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let mut operation_ids: Vec<String> = Vec::new();
+            for col in &columns {
+                let op = UpdateColumn::new(col.id.clone()).with_order(col.order);
+                let result = handle
+                    .processor
+                    .process(&op, &handle.ctx)
+                    .await
+                    .map_err(|e| format!("execute_command({}): {}", cmd, e))?;
+                if let Some(op_id) = result.get("operation_id").and_then(|v| v.as_str()) {
+                    operation_ids.push(op_id.to_string());
+                }
+            }
+            Ok(json!({ "updated": columns.len(), "operation_ids": operation_ids }))
+        }
+
+        "op.undo" => {
+            let id = required_str(&args, "id", &cmd)?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let ectx = handle
+                .ctx
+                .entity_context()
+                .await
+                .map_err(|e| e.to_string())?;
+            let result_ulid = ectx.undo(&id).await.map_err(|e| e.to_string())?;
+            Ok(json!({ "undone": id, "operation_id": result_ulid }))
+        }
+
+        "op.redo" => {
+            let id = required_str(&args, "id", &cmd)?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            let ectx = handle
+                .ctx
+                .entity_context()
+                .await
+                .map_err(|e| e.to_string())?;
+            let result_ulid = ectx.redo(&id).await.map_err(|e| e.to_string())?;
+            Ok(json!({ "redone": id, "operation_id": result_ulid }))
+        }
+
+        "attachment.delete" => {
+            let task_id = required_str(&args, "task_id", &cmd)?;
+            let id = required_str(&args, "id", &cmd)?;
+
+            let handle = state.active_handle().await.ok_or("No active board")?;
+            handle
+                .processor
+                .process(&DeleteAttachment::new(task_id, id), &handle.ctx)
+                .await
+                .map_err(|e| format!("execute_command({}): {}", cmd, e))
+        }
+
+        _ => Err(format!("Unknown command: {}", cmd)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// show_context_menu — generic native context menu
+// ---------------------------------------------------------------------------
+
+/// A single item in a generic context menu.
+#[derive(serde::Deserialize)]
+pub struct ContextMenuItem {
+    pub id: String,
+    pub name: String,
+}
+
+/// Show a native context menu with the given items.
+///
+/// Menu selections are emitted as `context-menu-command` events to the
+/// frontend. The item IDs are stored in AppState so `handle_menu_event`
+/// can distinguish them from regular menu bar commands.
+#[tauri::command]
+pub async fn show_context_menu(
+    app: AppHandle,
+    window: Window,
+    state: State<'_, AppState>,
+    items: Vec<ContextMenuItem>,
+) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    // Store IDs so handle_menu_event can route selections correctly
+    {
+        let mut ids = state.context_menu_ids.write().await;
+        ids.clear();
+        for item in &items {
+            ids.insert(item.id.clone());
+        }
+    }
+
+    let mut builder = MenuBuilder::new(&app);
+    for item in &items {
+        builder = builder.text(&item.id, &item.name);
+    }
+    let menu = builder.build().map_err(|e| e.to_string())?;
+    menu.popup(window)
+        .map_err(|e: tauri::Error| e.to_string())?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_moniker_valid() {
+        let (t, id) = parse_moniker("task:01JAB").unwrap();
+        assert_eq!(t, "task");
+        assert_eq!(id, "01JAB");
+    }
+
+    #[test]
+    fn test_parse_moniker_colon_in_id() {
+        let (t, id) = parse_moniker("task:01JAB:extra").unwrap();
+        assert_eq!(t, "task");
+        assert_eq!(id, "01JAB:extra");
+    }
+
+    #[test]
+    fn test_parse_moniker_no_colon() {
+        assert!(parse_moniker("badstring").is_err());
+    }
+
+    #[test]
+    fn test_parse_moniker_empty_parts() {
+        assert!(parse_moniker(":id").is_err());
+        assert!(parse_moniker("type:").is_err());
+    }
+
+    #[test]
+    fn test_required_str_present() {
+        let args = serde_json::json!({"name": "hello"});
+        assert_eq!(required_str(&args, "name", "test").unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_required_str_missing() {
+        let args = serde_json::json!({});
+        let err = required_str(&args, "name", "test.cmd").unwrap_err();
+        assert!(err.contains("test.cmd"));
+        assert!(err.contains("name"));
+    }
+
+    #[test]
+    fn test_required_str_not_string() {
+        let args = serde_json::json!({"name": 42});
+        assert!(required_str(&args, "name", "test").is_err());
+    }
+
+    #[test]
+    fn test_optional_str() {
+        let args = serde_json::json!({"name": "hello"});
+        assert_eq!(optional_str(&args, "name"), Some("hello".to_string()));
+        assert_eq!(optional_str(&args, "missing"), None);
+    }
 }
 
