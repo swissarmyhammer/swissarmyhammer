@@ -27,11 +27,6 @@ async fn test_model_config_creation() {
             folder: temp_dir.path().to_path_buf(),
             filename: Some("test.gguf".to_string()),
         },
-        batch_size: 512,
-        n_seq_max: 1,
-        n_threads: 4,
-        n_threads_batch: 4,
-        use_hf_params: true,
         retry_config: retry_config.clone(),
         debug: false,
     };
@@ -50,32 +45,10 @@ async fn test_model_config_validation() {
             filename: Some("model.gguf".to_string()),
             folder: None,
         },
-        batch_size: 512,
-        n_seq_max: 1,
-        n_threads: 4,
-        n_threads_batch: 4,
-        use_hf_params: true,
         retry_config: RetryConfig::default(),
         debug: false,
     };
     assert!(valid_config.validate().is_ok());
-
-    // Invalid batch size
-    let invalid_config = ModelConfig {
-        source: ModelSource::HuggingFace {
-            repo: "microsoft/DialoGPT-medium".to_string(),
-            filename: Some("model.gguf".to_string()),
-            folder: None,
-        },
-        batch_size: 0, // Invalid
-        n_seq_max: 1,
-        n_threads: 4,
-        n_threads_batch: 4,
-        use_hf_params: true,
-        retry_config: RetryConfig::default(),
-        debug: false,
-    };
-    assert!(invalid_config.validate().is_err());
 
     // Invalid HuggingFace repo format
     let invalid_hf_config = ModelConfig {
@@ -84,11 +57,6 @@ async fn test_model_config_validation() {
             filename: Some("model.gguf".to_string()),
             folder: None,
         },
-        batch_size: 512,
-        n_seq_max: 1,
-        n_threads: 4,
-        n_threads_batch: 4,
-        use_hf_params: true,
         retry_config: RetryConfig::default(),
         debug: false,
     };

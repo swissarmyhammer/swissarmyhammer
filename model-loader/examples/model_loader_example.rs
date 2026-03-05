@@ -17,11 +17,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             filename: Some("model.gguf".to_string()),
             folder: None,
         },
-        batch_size: 512,
-        n_seq_max: 1,
-        n_threads: 4,
-        n_threads_batch: 4,
-        use_hf_params: true,
         retry_config: RetryConfig::default(),
         debug: false,
     };
@@ -31,11 +26,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             folder: PathBuf::from("./models"),
             filename: Some("local-model.gguf".to_string()),
         },
-        batch_size: 512,
-        n_seq_max: 1,
-        n_threads: 4,
-        n_threads_batch: 4,
-        use_hf_params: false,
         retry_config: RetryConfig::default(),
         debug: false,
     };

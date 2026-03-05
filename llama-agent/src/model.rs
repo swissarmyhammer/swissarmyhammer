@@ -164,13 +164,14 @@ impl ModelManager {
         let memory_before = Self::get_process_memory_mb().unwrap_or(0);
         debug!("Memory usage before model loading: {} MB", memory_before);
 
-        // Resolve model source to a local file path
+        // Resolve model source to a local file path using the slim resolver config
         let resolved = {
+            let resolver_config = self.config.resolver_config();
             let resolver_guard = self.resolver.read().await;
             resolver_guard
                 .as_ref()
                 .unwrap()
-                .resolve(&self.config)
+                .resolve(&resolver_config)
                 .await?
         };
 

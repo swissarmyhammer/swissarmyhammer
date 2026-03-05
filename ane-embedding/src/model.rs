@@ -104,7 +104,6 @@ impl AneEmbeddingModel {
             source: self.config.model_source.clone(),
             retry_config: RetryConfig::default(),
             debug: self.config.debug,
-            ..ModelConfig::default()
         };
 
         info!("Resolving ONNX model...");

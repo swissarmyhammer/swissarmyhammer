@@ -34,11 +34,6 @@ fn create_test_config() -> ModelConfig {
             filename: Some(TINY_MODEL_FILENAME.to_string()),
             folder: None,
         },
-        batch_size: 512,
-        n_seq_max: 1,
-        n_threads: 4,
-        n_threads_batch: 4,
-        use_hf_params: true,
         retry_config: create_test_retry_config(),
         debug: false,
     }

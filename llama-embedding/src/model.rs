@@ -18,8 +18,6 @@ use tracing::{debug, info};
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
-const LLAMA_CPP_DEFAULT_N_BATCH: u32 = 512;
-
 /// Global backend singleton for llama-cpp.
 ///
 /// llama-cpp only allows one backend initialization per process.
@@ -176,11 +174,6 @@ impl EmbeddingModel {
 
         let model_config = ModelConfig {
             source: self.config.model_source.clone(),
-            batch_size: LLAMA_CPP_DEFAULT_N_BATCH,
-            n_seq_max: 1,
-            n_threads: 1,
-            n_threads_batch: 1,
-            use_hf_params: true,
             retry_config: RetryConfig::default(),
             debug: self.config.debug,
         };

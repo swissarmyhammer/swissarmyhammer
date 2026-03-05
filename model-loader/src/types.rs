@@ -123,20 +123,14 @@ pub enum ModelSource {
 }
 
 /// Configuration for model resolution
+///
+/// Contains only the fields needed by the resolver: source location,
+/// retry behavior, and debug logging. Consumer-specific fields (batch size,
+/// thread counts, etc.) belong in the consumer's own config type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     /// The source from which to load the model
     pub source: ModelSource,
-    /// Batch size for model operations (used by consumers, not the resolver)
-    pub batch_size: u32,
-    /// Maximum number of sequences for concurrent processing (used by consumers)
-    pub n_seq_max: u32,
-    /// Number of threads for processing (used by consumers)
-    pub n_threads: i32,
-    /// Number of threads for batch processing (used by consumers)
-    pub n_threads_batch: i32,
-    /// Whether to use HuggingFace parameters (used by consumers)
-    pub use_hf_params: bool,
     /// Configuration for retry logic
     pub retry_config: RetryConfig,
     /// Enable debug output
@@ -151,11 +145,6 @@ impl Default for ModelConfig {
                 filename: None,
                 folder: None,
             },
-            batch_size: 512,
-            n_seq_max: 8,
-            n_threads: 1,
-            n_threads_batch: 1,
-            use_hf_params: true,
             retry_config: RetryConfig::default(),
             debug: false,
         }
@@ -166,19 +155,6 @@ impl ModelConfig {
     /// Validate the model configuration
     pub fn validate(&self) -> Result<(), crate::error::ModelError> {
         self.source.validate()?;
-
-        if self.batch_size == 0 {
-            return Err(crate::error::ModelError::InvalidConfig(
-                "Batch size must be greater than 0".to_string(),
-            ));
-        }
-
-        if self.batch_size > 8192 {
-            return Err(crate::error::ModelError::InvalidConfig(
-                "Batch size should not exceed 8192 for most models".to_string(),
-            ));
-        }
-
         Ok(())
     }
 
