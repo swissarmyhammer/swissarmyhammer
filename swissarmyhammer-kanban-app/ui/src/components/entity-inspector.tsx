@@ -74,7 +74,7 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
   }
 
-  const renderField = (field: FieldDef) => (
+  const renderField = (field: FieldDef, showLabel = true) => (
     <FieldRow
       key={field.name}
       field={field}
@@ -85,6 +85,7 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
       isBodyField={field.name === bodyFieldName}
       tags={tags}
       bodyFieldName={bodyFieldName}
+      showLabel={showLabel}
       onEdit={() => handleEdit(field.name)}
       onCommit={(value) => handleCommit(field.name, value)}
       onCancel={handleCancel}
@@ -95,7 +96,7 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     <div data-testid="entity-inspector">
       {sections.header.length > 0 && (
         <div className="space-y-2" data-testid="inspector-header">
-          {sections.header.map(renderField)}
+          {sections.header.map((f) => renderField(f, false))}
         </div>
       )}
       {sections.header.length > 0 && sections.body.length > 0 && (
@@ -103,14 +104,14 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
       )}
       {sections.body.length > 0 && (
         <div className="space-y-3" data-testid="inspector-body">
-          {sections.body.map(renderField)}
+          {sections.body.map((f) => renderField(f))}
         </div>
       )}
       {sections.footer.length > 0 && (
         <>
           <div className="my-3 h-px bg-border" />
           <div className="space-y-3" data-testid="inspector-footer">
-            {sections.footer.map(renderField)}
+            {sections.footer.map((f) => renderField(f))}
           </div>
         </>
       )}
@@ -127,6 +128,7 @@ interface FieldRowProps {
   isBodyField?: boolean;
   tags: Entity[];
   bodyFieldName?: string;
+  showLabel?: boolean;
   onEdit: () => void;
   onCommit: (value: unknown) => void;
   onCancel: () => void;
@@ -141,15 +143,18 @@ function FieldRow({
   isBodyField,
   tags,
   bodyFieldName,
+  showLabel = true,
   onEdit,
   onCommit,
   onCancel,
 }: FieldRowProps) {
   return (
     <section data-testid={`field-row-${field.name}`}>
-      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
-        {fieldLabel(field)}
-      </h3>
+      {showLabel && (
+        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
+          {fieldLabel(field)}
+        </h3>
+      )}
       <FieldDispatch
         field={field}
         value={value}
