@@ -19,7 +19,19 @@ pub struct BoardHandle {
 }
 
 impl BoardHandle {
-    pub fn new(kanban_path: PathBuf) -> Self {
+    /// Create a handle with a fully-initialized context (views, fields, etc.).
+    pub async fn open(kanban_path: PathBuf) -> Result<Self, String> {
+        let ctx = KanbanContext::open(&kanban_path)
+            .await
+            .map_err(|e| format!("Failed to open board context: {e}"))?;
+        Ok(Self {
+            ctx,
+            processor: KanbanOperationProcessor::new(),
+        })
+    }
+
+    /// Create a handle with an uninitialized context (for paths that may not exist yet).
+    pub fn new_uninit(kanban_path: PathBuf) -> Self {
         Self {
             ctx: KanbanContext::new(kanban_path),
             processor: KanbanOperationProcessor::new(),
@@ -129,7 +141,7 @@ impl AppState {
             }
         }
 
-        let handle = Arc::new(BoardHandle::new(kanban_path));
+        let handle = Arc::new(BoardHandle::open(kanban_path).await?);
 
         // Read board name for MRU
         let board_name = if handle.ctx.is_initialized() {
