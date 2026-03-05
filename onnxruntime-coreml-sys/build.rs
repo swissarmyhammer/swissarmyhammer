@@ -205,8 +205,15 @@ fn collect_build_output(build_dir: &Path, ort_src: &Path, install_dir: &Path) {
         if name.ends_with(".a") {
             let dest = lib_dir.join(&name);
             if !dest.exists() {
-                std::fs::copy(&entry, &dest).ok();
-                count += 1;
+                if let Err(e) = std::fs::copy(&entry, &dest) {
+                    println!(
+                        "cargo:warning=Failed to copy {}: {}",
+                        entry.display(),
+                        e
+                    );
+                } else {
+                    count += 1;
+                }
             }
         }
     }
@@ -221,7 +228,13 @@ fn collect_build_output(build_dir: &Path, ort_src: &Path, install_dir: &Path) {
         let src = ort_src.join(header);
         if src.exists() {
             let filename = src.file_name().unwrap();
-            std::fs::copy(&src, include_dir.join(filename)).ok();
+            if let Err(e) = std::fs::copy(&src, include_dir.join(filename)) {
+                println!(
+                    "cargo:warning=Failed to copy header {}: {}",
+                    src.display(),
+                    e
+                );
+            }
         }
     }
 }
