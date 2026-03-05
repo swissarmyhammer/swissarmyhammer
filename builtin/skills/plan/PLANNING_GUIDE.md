@@ -69,10 +69,22 @@ Use `kanban` with `op: "init board"`, `name: "<workspace name>"` — name it gen
 
 For each work item, create a card immediately: use `kanban` with `op: "add task"`, `title: "<imperative verb phrase>"`, `description: "<detailed context>"`.
 
-Each card's description should include:
-- What specifically to do, with enough context for autonomous execution
-- Full paths of files to create or modify
-- How to verify the task is done (test command, expected behavior)
+Each card's description MUST include these sections:
+
+```
+## What
+<what to implement — full paths of files to create or modify, approach, context>
+
+## Acceptance Criteria
+- [ ] <observable outcome that proves the work is done>
+- [ ] <another criterion>
+
+## Tests
+- [ ] <specific test to write or update, with file path>
+- [ ] <test command to run and expected result>
+```
+
+A card without acceptance criteria and tests is not a valid card. These sections ensure the definition of "done" is unambiguous and verifiable when the card is picked up for implementation.
 
 Then add subtasks for individual steps: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`.
 
@@ -124,9 +136,9 @@ Small cards (50–100 lines) are fine. Two small cards with a dependency beat on
 - **Specific file paths** for every change, not vague descriptions.
 - **Code references** — mention specific functions, types, and patterns by name.
 - **Right-sized cards** — each card targets 200–500 lines, 2–4 files, and 3–5 subtasks.
-- **Independent verification** — each task has its own success criterion.
+- **Acceptance criteria on every card** — observable outcomes that prove the work is done, not vague descriptions of intent.
+- **Tests on every card** — specific test files to create or update, plus the test command and expected result. A card without tests is incomplete.
 - **Sufficient context** — someone reading only the task description (not the spec) should understand what to do.
-- **Test-inclusive** — every task ends with running tests.
 
 ## Anti-Patterns to Avoid
 
@@ -136,3 +148,4 @@ Small cards (50–100 lines) are fine. Two small cards with a dependency beat on
 - **Mega-cards** — if a card has more than 5 subtasks or touches more than 5 files, split it along natural seam lines.
 - **Missing dependencies** — tasks that assume prior work was done but don't declare it.
 - **No verification** — tasks without a way to confirm "done" are tasks that never finish.
+- **Missing tests and acceptance criteria** — every card must have explicit `## Acceptance Criteria` and `## Tests` sections. Without these, the card is not actionable.
