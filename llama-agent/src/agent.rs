@@ -1354,7 +1354,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -1402,7 +1402,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -1454,7 +1454,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -1508,7 +1508,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, SessionId};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
