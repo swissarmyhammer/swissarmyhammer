@@ -94,9 +94,9 @@ impl From<llama_common::retry::RetryConfig> for RetryConfig {
     fn from(new_config: llama_common::retry::RetryConfig) -> Self {
         Self {
             max_retries: new_config.max_retries,
-            initial_delay_ms: new_config.initial_delay.as_millis() as u64,
+            initial_delay_ms: new_config.initial_delay.as_millis().min(u64::MAX as u128) as u64,
             backoff_multiplier: new_config.backoff_multiplier,
-            max_delay_ms: new_config.max_delay.as_millis() as u64,
+            max_delay_ms: new_config.max_delay.as_millis().min(u64::MAX as u128) as u64,
         }
     }
 }
