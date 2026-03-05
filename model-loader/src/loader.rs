@@ -27,7 +27,6 @@ impl ModelResolver {
     pub async fn resolve(&self, config: &ModelConfig) -> Result<ResolvedModel, ModelError> {
         config.validate()?;
 
-        let _start_time = Instant::now();
         info!("Resolving model from config: {}", Pretty(&config.source));
 
         match &config.source {
