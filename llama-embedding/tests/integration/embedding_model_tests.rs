@@ -1,4 +1,4 @@
-use llama_embedding::{BatchProcessor, EmbeddingConfig, EmbeddingModel};
+use llama_embedding::{BatchProcessor, EmbeddingConfig, EmbeddingModel, TextEmbedder};
 use llama_loader::ModelSource;
 use serial_test::serial;
 use std::io::Write;
@@ -9,7 +9,7 @@ const TEST_INITIAL_BATCH_SIZE: usize = 32;
 /// Modified batch size for testing set_batch_size
 const TEST_MODIFIED_BATCH_SIZE: usize = 64;
 
-/// Test basic embedding model creation and configuration
+/// Test basic embedding model creation and configuration via trait
 #[tokio::test]
 #[serial]
 async fn test_embedding_model_creation() {
@@ -24,17 +24,13 @@ async fn test_embedding_model_creation() {
         debug: false,
     };
 
-    // Test model creation (should work even if model loading fails)
-    let result = EmbeddingModel::new(config).await;
-
-    match result {
+    match EmbeddingModel::new(config).await {
         Ok(model) => {
+            // Check via trait methods
             assert!(!model.is_loaded());
-            assert!(model.get_embedding_dimension().is_none());
+            assert!(model.embedding_dimension().is_none());
         }
         Err(e) => {
-            // In CI/test environments without proper model setup,
-            // model creation might fail at backend initialization
             println!(
                 "Model creation failed (expected in test environment): {}",
                 e
@@ -99,13 +95,11 @@ fn test_embedding_result() {
 #[tokio::test]
 #[serial]
 async fn test_batch_processor_creation() {
-    // This is a structural test since we can't create a real model in tests
     let config = EmbeddingConfig::default();
 
-    // Try to create model - might fail in test environment
     match EmbeddingModel::new(config).await {
-        Ok(mut model) => {
-            let mut processor = BatchProcessor::new(&mut model, TEST_INITIAL_BATCH_SIZE);
+        Ok(model) => {
+            let mut processor = BatchProcessor::new(&model, TEST_INITIAL_BATCH_SIZE);
             assert_eq!(processor.batch_size(), TEST_INITIAL_BATCH_SIZE);
 
             // Test batch size modification
@@ -114,10 +108,9 @@ async fn test_batch_processor_creation() {
 
             // Test invalid batch size (should be ignored)
             processor.set_batch_size(0);
-            assert_eq!(processor.batch_size(), TEST_MODIFIED_BATCH_SIZE); // Should remain unchanged
+            assert_eq!(processor.batch_size(), TEST_MODIFIED_BATCH_SIZE);
         }
         Err(_) => {
-            // Expected in test environment without proper setup
             println!("Batch processor test skipped - model creation failed");
         }
     }
@@ -129,25 +122,18 @@ async fn test_batch_processor_creation() {
 async fn test_file_processing_structure() {
     use std::path::Path;
 
-    // Create a temporary file with test data
     let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
     writeln!(temp_file, "First test sentence").expect("Failed to write");
     writeln!(temp_file, "Second test sentence").expect("Failed to write");
-    writeln!(temp_file).expect("Failed to write"); // Empty line should be skipped
-    writeln!(temp_file, "  ").expect("Failed to write"); // Whitespace-only line should be skipped
+    writeln!(temp_file).expect("Failed to write");
+    writeln!(temp_file, "  ").expect("Failed to write");
     writeln!(temp_file, "Third test sentence").expect("Failed to write");
 
-    // Test file existence check
     let file_path = temp_file.path();
     assert!(file_path.exists());
 
-    // Test non-existent file handling
     let non_existent = Path::new("/tmp/non_existent_file.txt");
     assert!(!non_existent.exists());
-
-    // The actual file processing would require a loaded model
-    // which we can't test in this environment, but the structure is validated
-    println!("File processing structure test completed");
 }
 
 /// Test error handling and propagation
@@ -155,7 +141,6 @@ async fn test_file_processing_structure() {
 fn test_error_types() {
     use llama_embedding::EmbeddingError;
 
-    // Test error creation methods
     let model_error = EmbeddingError::model("test model error");
     assert!(matches!(model_error, EmbeddingError::Model(_)));
 
@@ -165,7 +150,6 @@ fn test_error_types() {
     let config_error = EmbeddingError::configuration("test config error");
     assert!(matches!(config_error, EmbeddingError::Configuration(_)));
 
-    // Test error display
     assert!(model_error.to_string().contains("Model error"));
     assert!(text_error.to_string().contains("Text processing error"));
     assert!(config_error.to_string().contains("Configuration error"));
@@ -176,8 +160,7 @@ fn test_error_types() {
 fn test_embedding_dimensions() {
     use llama_embedding::EmbeddingResult;
 
-    // Test different embedding dimensions
-    let dimensions = vec![384, 768, 1024, 1536]; // Common embedding dimensions
+    let dimensions = vec![384, 768, 1024, 1536];
 
     for dim in dimensions {
         let embedding: Vec<f32> = (0..dim).map(|i| i as f32 / dim as f32).collect();
@@ -188,13 +171,10 @@ fn test_embedding_dimensions() {
     }
 }
 
-/// Integration test structure for actual model loading
-/// This would be used when testing with real models
+/// Integration test for actual model loading via trait
 #[tokio::test]
 #[serial]
 async fn test_real_model_integration() {
-    // This test would be enabled when running with actual models
-    // Check if test-models folder exists, if not skip test
     let test_models_path = std::path::PathBuf::from("./test-models");
     if !test_models_path.exists() {
         println!("Skipping real model integration test - ./test-models folder not found");
@@ -211,10 +191,10 @@ async fn test_real_model_integration() {
         debug: true,
     };
 
-    // Would test actual model loading and embedding generation
     match EmbeddingModel::new(config).await {
-        Ok(mut model) => {
-            model.load_model().await.expect("Should load test model");
+        Ok(model) => {
+            // Load and embed via trait
+            model.load().await.expect("Should load test model");
 
             let result = model
                 .embed_text("Hello, world!")

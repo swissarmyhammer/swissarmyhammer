@@ -19,7 +19,7 @@ use rusqlite::Connection;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
-use llama_embedding::{EmbeddingConfig, EmbeddingModel};
+use llama_embedding::{EmbeddingConfig, EmbeddingModel, TextEmbedder};
 
 const CHUNK_SIZE: usize = 15; // lines per embedding chunk
 const BYTES_PER_F32: usize = 4;
@@ -95,8 +95,12 @@ pub struct ShellState {
 impl ShellState {
     /// Create a new ShellState, initializing the .shell/ directory, log file, SQLite DB,
     /// and background embedding worker.
+    ///
+    /// Resolves `.shell/` to an absolute path at creation time so all stored
+    /// paths remain valid even if the process CWD changes later.
     pub fn new() -> anyhow::Result<Self> {
-        Self::new_in_dir(PathBuf::from(".shell"))
+        let cwd = std::env::current_dir()?;
+        Self::new_in_dir(cwd.join(".shell"))
     }
 
     /// Create a new ShellState with an explicit base directory for the .shell/ data.
@@ -464,11 +468,11 @@ pub async fn search(
 
     // Create a temporary embedding model for the query
     let config = EmbeddingConfig::default();
-    let mut model = EmbeddingModel::new(config)
+    let model = EmbeddingModel::new(config)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create embedding model: {}", e))?;
     model
-        .load_model()
+        .load()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load embedding model: {}", e))?;
 
@@ -559,8 +563,8 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
         if model.is_none() {
             let config = EmbeddingConfig::default();
             match EmbeddingModel::new(config).await {
-                Ok(mut m) => {
-                    if let Err(e) = m.load_model().await {
+                Ok(m) => {
+                    if let Err(e) = m.load().await {
                         tracing::warn!(
                             "Failed to load embedding model: {}. Embeddings disabled.",
                             e

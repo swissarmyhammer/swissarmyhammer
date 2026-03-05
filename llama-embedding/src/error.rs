@@ -33,7 +33,7 @@ pub enum EmbeddingError {
     Io(#[from] std::io::Error),
 
     /// Error when model is not loaded
-    #[error("Model not loaded - call load_model() first")]
+    #[error("Model not loaded - call load() first")]
     ModelNotLoaded,
 
     /// Error when embedding dimensions don't match expectations
@@ -121,7 +121,7 @@ impl LlamaError for EmbeddingError {
                 format!("💾 I/O Error: {}\n💡 Check file permissions, disk space, and ensure all required files are accessible.", io_error)
             }
             EmbeddingError::ModelNotLoaded => {
-                "🚫 Model Not Loaded\n💡 Call load_model() first before performing embedding operations.".to_string()
+                "🚫 Model Not Loaded\n💡 Call load() first before performing embedding operations.".to_string()
             }
             EmbeddingError::DimensionMismatch { expected, actual } => {
                 format!("📏 Embedding Dimension Mismatch: expected {}, got {}\n💡 Ensure all embeddings have consistent dimensions or adjust your model configuration.", expected, actual)
@@ -130,8 +130,11 @@ impl LlamaError for EmbeddingError {
     }
 }
 
-/// Result type alias for embedding operations
-pub type EmbeddingResult<T> = Result<T, EmbeddingError>;
+/// Result type alias for embedding operations.
+///
+/// Named `EmbedResult` to avoid collision with the `EmbeddingResult` struct
+/// from `model_embedding::types`.
+pub type EmbedResult<T> = Result<T, EmbeddingError>;
 
 #[cfg(test)]
 mod tests {
@@ -152,7 +155,7 @@ mod tests {
         assert!(matches!(error, EmbeddingError::ModelNotLoaded));
         assert_eq!(
             error.to_string(),
-            "Model not loaded - call load_model() first"
+            "Model not loaded - call load() first"
         );
     }
 
@@ -286,7 +289,7 @@ mod tests {
         let message = not_loaded_error.user_friendly_message();
         assert!(message.contains("Model Not Loaded"));
         assert!(message.contains("🚫"));
-        assert!(message.contains("load_model()"));
+        assert!(message.contains("load()"));
 
         let dimension_error = EmbeddingError::DimensionMismatch {
             expected: 384,

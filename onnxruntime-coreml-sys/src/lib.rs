@@ -5,8 +5,20 @@
 //!
 //! Instead of replicating the massive OrtApi vtable in Rust, we use a thin
 //! C wrapper (`wrapper.c`) that provides stable function signatures.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use onnxruntime_coreml_sys::*;
+//!
+//! init().expect("ORT init");
+//! let env = Env::new(LoggingLevel::Warning, "example").unwrap();
+//! let opts = SessionOptions::new().unwrap();
+//! let session = Session::new(&env, "model.onnx", &opts).unwrap();
+//! ```
 
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::fmt;
 use std::ptr;
 
 // --- CoreML flags ---
@@ -177,14 +189,15 @@ extern "C" {
 
 // --- Public safe API ---
 
-#[derive(Debug)]
+/// Error from ONNX Runtime operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrtError {
     pub code: u32,
     pub message: String,
 }
 
-impl std::fmt::Display for OrtError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for OrtError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ORT error ({}): {}", self.code, self.message)
     }
 }
@@ -227,6 +240,12 @@ pub struct Env {
     raw: OrtWrapperEnv,
 }
 
+impl fmt::Debug for Env {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Env").finish_non_exhaustive()
+    }
+}
+
 impl Env {
     pub fn new(level: LoggingLevel, name: &str) -> Result<Self> {
         let c_name = CString::new(name).map_err(|_| OrtError {
@@ -252,6 +271,12 @@ impl Drop for Env {
 /// Session options builder.
 pub struct SessionOptions {
     raw: OrtWrapperSessionOptions,
+}
+
+impl fmt::Debug for SessionOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionOptions").finish_non_exhaustive()
+    }
 }
 
 impl SessionOptions {
@@ -294,11 +319,25 @@ impl Drop for SessionOptions {
     }
 }
 
+/// Helper to release a raw session on error paths.
+unsafe fn release_session_raw(raw: OrtWrapperSession) {
+    ort_wrapper_release_session(raw);
+}
+
 /// An ONNX Runtime inference session.
 pub struct Session {
     raw: OrtWrapperSession,
     input_names: Vec<String>,
     output_names: Vec<String>,
+}
+
+impl fmt::Debug for Session {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Session")
+            .field("inputs", &self.input_names)
+            .field("outputs", &self.output_names)
+            .finish()
+    }
 }
 
 impl Session {
@@ -317,40 +356,68 @@ impl Session {
             return Err(err.to_error());
         }
 
-        // Get input names
+        // Get input names — check every return code (B2 fix)
         let mut input_count: usize = 0;
-        unsafe {
-            ort_wrapper_session_get_input_count(raw, &mut input_count, &mut err);
+        let ret = unsafe {
+            ort_wrapper_session_get_input_count(raw, &mut input_count, &mut err)
+        };
+        if ret != 0 {
+            unsafe { release_session_raw(raw) };
+            return Err(err.to_error());
         }
+
         let mut input_names = Vec::with_capacity(input_count);
         for i in 0..input_count {
             let mut name_ptr: *mut c_char = ptr::null_mut();
-            unsafe {
-                ort_wrapper_session_get_input_name(raw, i, &mut name_ptr, &mut err);
-                if !name_ptr.is_null() {
-                    let name = CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
-                    ort_wrapper_free_string(name_ptr);
-                    input_names.push(name);
-                }
+            let ret = unsafe {
+                ort_wrapper_session_get_input_name(raw, i, &mut name_ptr, &mut err)
+            };
+            if ret != 0 {
+                unsafe { release_session_raw(raw) };
+                return Err(err.to_error());
             }
+            if name_ptr.is_null() {
+                unsafe { release_session_raw(raw) };
+                return Err(OrtError {
+                    code: 1,
+                    message: format!("Input name {} returned null", i),
+                });
+            }
+            let name = unsafe { CStr::from_ptr(name_ptr).to_string_lossy().into_owned() };
+            unsafe { ort_wrapper_free_string(name_ptr) };
+            input_names.push(name);
         }
 
         // Get output names
         let mut output_count: usize = 0;
-        unsafe {
-            ort_wrapper_session_get_output_count(raw, &mut output_count, &mut err);
+        let ret = unsafe {
+            ort_wrapper_session_get_output_count(raw, &mut output_count, &mut err)
+        };
+        if ret != 0 {
+            unsafe { release_session_raw(raw) };
+            return Err(err.to_error());
         }
+
         let mut output_names = Vec::with_capacity(output_count);
         for i in 0..output_count {
             let mut name_ptr: *mut c_char = ptr::null_mut();
-            unsafe {
-                ort_wrapper_session_get_output_name(raw, i, &mut name_ptr, &mut err);
-                if !name_ptr.is_null() {
-                    let name = CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
-                    ort_wrapper_free_string(name_ptr);
-                    output_names.push(name);
-                }
+            let ret = unsafe {
+                ort_wrapper_session_get_output_name(raw, i, &mut name_ptr, &mut err)
+            };
+            if ret != 0 {
+                unsafe { release_session_raw(raw) };
+                return Err(err.to_error());
             }
+            if name_ptr.is_null() {
+                unsafe { release_session_raw(raw) };
+                return Err(OrtError {
+                    code: 1,
+                    message: format!("Output name {} returned null", i),
+                });
+            }
+            let name = unsafe { CStr::from_ptr(name_ptr).to_string_lossy().into_owned() };
+            unsafe { ort_wrapper_free_string(name_ptr) };
+            output_names.push(name);
         }
 
         Ok(Self {
@@ -373,19 +440,28 @@ impl Session {
     /// Run inference with the given input tensors.
     /// Returns output tensors in the order of `output_names()`.
     pub fn run(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+        // Nit 1 fix: use map_err instead of unwrap on CString::new
         let input_name_cstrings: Vec<CString> = self
             .input_names
             .iter()
-            .map(|n| CString::new(n.as_str()).unwrap())
-            .collect();
+            .map(|n| CString::new(n.as_str()))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| OrtError {
+                code: 2,
+                message: "Input name contains null byte".to_string(),
+            })?;
         let input_name_ptrs: Vec<*const c_char> =
             input_name_cstrings.iter().map(|cs| cs.as_ptr()).collect();
 
         let output_name_cstrings: Vec<CString> = self
             .output_names
             .iter()
-            .map(|n| CString::new(n.as_str()).unwrap())
-            .collect();
+            .map(|n| CString::new(n.as_str()))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| OrtError {
+                code: 2,
+                message: "Output name contains null byte".to_string(),
+            })?;
         let output_name_ptrs: Vec<*const c_char> =
             output_name_cstrings.iter().map(|cs| cs.as_ptr()).collect();
 
@@ -412,7 +488,11 @@ impl Session {
 
         let tensors = output_values
             .into_iter()
-            .map(|raw| Tensor { raw, owned: true })
+            .map(|raw| Tensor {
+                raw,
+                owned: true,
+                _data: TensorData::Unowned,
+            })
             .collect();
         Ok(tensors)
     }
@@ -424,22 +504,50 @@ impl Drop for Session {
     }
 }
 
+/// Owned data backing a tensor, ensuring the buffer outlives the ORT value.
+///
+/// Variants hold owned data to keep it alive for the duration of the ORT tensor.
+/// The data is never read back — it exists solely for lifetime management.
+#[allow(dead_code)]
+enum TensorData {
+    Float(Vec<f32>),
+    Int64(Vec<i64>),
+    /// Output tensors — data is owned by ORT, freed when the OrtValue is released.
+    Unowned,
+}
+
 /// A tensor value (input or output).
+///
+/// Input tensors own their data buffer (stored in `_data`) to ensure the
+/// pointer passed to `CreateTensorWithDataAsOrtValue` remains valid for
+/// the lifetime of the tensor. ORT does NOT copy the data.
 pub struct Tensor {
     raw: OrtWrapperValue,
     owned: bool,
+    _data: TensorData,
+}
+
+impl fmt::Debug for Tensor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tensor")
+            .field("owned", &self.owned)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Tensor {
     /// Create a float tensor from data and shape.
-    /// The data must outlive the tensor (the tensor references it, doesn't copy).
+    ///
+    /// The data is copied into an owned buffer held by this Tensor,
+    /// ensuring the pointer passed to ORT remains valid.
     pub fn from_f32(data: &[f32], shape: &[i64]) -> Result<Self> {
+        let owned_data = data.to_vec();
         let mut raw: OrtWrapperValue = ptr::null_mut();
         let mut err = OrtWrapperError::new();
         let ret = unsafe {
             ort_wrapper_create_tensor_float(
-                data.as_ptr(),
-                data.len(),
+                owned_data.as_ptr(),
+                owned_data.len(),
                 shape.as_ptr(),
                 shape.len(),
                 &mut raw,
@@ -449,17 +557,25 @@ impl Tensor {
         if ret != 0 {
             return Err(err.to_error());
         }
-        Ok(Self { raw, owned: true })
+        Ok(Self {
+            raw,
+            owned: true,
+            _data: TensorData::Float(owned_data),
+        })
     }
 
     /// Create an i64 tensor from data and shape.
+    ///
+    /// The data is copied into an owned buffer held by this Tensor,
+    /// ensuring the pointer passed to ORT remains valid.
     pub fn from_i64(data: &[i64], shape: &[i64]) -> Result<Self> {
+        let owned_data = data.to_vec();
         let mut raw: OrtWrapperValue = ptr::null_mut();
         let mut err = OrtWrapperError::new();
         let ret = unsafe {
             ort_wrapper_create_tensor_int64(
-                data.as_ptr(),
-                data.len(),
+                owned_data.as_ptr(),
+                owned_data.len(),
                 shape.as_ptr(),
                 shape.len(),
                 &mut raw,
@@ -469,7 +585,11 @@ impl Tensor {
         if ret != 0 {
             return Err(err.to_error());
         }
-        Ok(Self { raw, owned: true })
+        Ok(Self {
+            raw,
+            owned: true,
+            _data: TensorData::Int64(owned_data),
+        })
     }
 
     /// Get float data from the tensor.
@@ -509,11 +629,15 @@ impl Drop for Tensor {
     }
 }
 
-// SAFETY: ORT values are thread-safe per documentation
+// SAFETY: ORT values are thread-safe per ORT documentation.
+// Sessions support concurrent Run() calls; tensors are immutable after creation.
 unsafe impl Send for Env {}
 unsafe impl Sync for Env {}
 unsafe impl Send for Session {}
+unsafe impl Sync for Session {}
 unsafe impl Send for Tensor {}
+unsafe impl Sync for Tensor {}
+unsafe impl Send for SessionOptions {}
 
 #[cfg(test)]
 mod tests {
@@ -534,7 +658,6 @@ mod tests {
 
     #[test]
     fn test_coreml_available() {
-        // On macOS this should be true (compiled with CoreML)
         let available = coreml_available();
         if cfg!(target_os = "macos") {
             assert!(available);
@@ -557,7 +680,6 @@ mod tests {
     fn test_session_options_with_coreml() {
         init().unwrap();
         let opts = SessionOptions::new().unwrap();
-        // This should succeed on macOS where we built with CoreML
         let result = opts.with_coreml(
             COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES,
         );
@@ -581,6 +703,21 @@ mod tests {
     }
 
     #[test]
+    fn test_tensor_owns_data() {
+        // B1 regression test: tensor must remain valid after input data is dropped
+        init().unwrap();
+        let tensor = {
+            let data = vec![42.0f32, 43.0, 44.0];
+            let shape = vec![1i64, 3];
+            Tensor::from_f32(&data, &shape).unwrap()
+            // data dropped here
+        };
+        // Tensor should still be readable because it owns a copy
+        let retrieved = tensor.as_f32_slice().unwrap();
+        assert_eq!(retrieved, &[42.0, 43.0, 44.0]);
+    }
+
+    #[test]
     fn test_create_tensor_i64() {
         init().unwrap();
         let data = vec![1i64, 2, 3];
@@ -596,5 +733,23 @@ mod tests {
             COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES,
             0x018
         );
+    }
+
+    #[test]
+    fn test_ort_error_traits() {
+        let err = OrtError { code: 1, message: "test".to_string() };
+        let err2 = err.clone();
+        assert_eq!(err, err2);
+        assert_eq!(format!("{:?}", err), "OrtError { code: 1, message: \"test\" }");
+    }
+
+    #[test]
+    fn test_debug_impls() {
+        init().unwrap();
+        let env = Env::new(LoggingLevel::Warning, "debug-test").unwrap();
+        assert!(format!("{:?}", env).contains("Env"));
+
+        let opts = SessionOptions::new().unwrap();
+        assert!(format!("{:?}", opts).contains("SessionOptions"));
     }
 }

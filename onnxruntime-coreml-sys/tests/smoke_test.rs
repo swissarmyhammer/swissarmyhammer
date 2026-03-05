@@ -123,12 +123,6 @@ fn test_run_inference() {
 
     // Verify we got reasonable output
     assert!(!output_data.is_empty(), "Output should have data");
-    // all-MiniLM-L6-v2 has 384-dim embeddings
-    // Output shape should be [1, seq_len, 384] for last_hidden_state
-    assert!(
-        output_data.len() > 0,
-        "Output should contain embedding values"
-    );
 
     // Verify values are not all zeros (model actually computed something)
     let sum: f32 = output_data.iter().map(|x| x.abs()).sum();

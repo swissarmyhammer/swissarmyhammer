@@ -1748,8 +1748,14 @@ impl ModelManager {
                 ModelError::IoError(e)
             })?;
 
-            Ok(serde_yaml::from_str(&content)
-                .unwrap_or(serde_yaml::Value::Mapping(Default::default())))
+            let value: serde_yaml::Value = serde_yaml::from_str(&content)
+                .unwrap_or(serde_yaml::Value::Mapping(Default::default()));
+            // Empty YAML files parse as Null, not Mapping — normalize to empty mapping
+            if value.is_null() {
+                Ok(serde_yaml::Value::Mapping(Default::default()))
+            } else {
+                Ok(value)
+            }
         } else {
             tracing::debug!(
                 "Config file does not exist, creating new: {}",

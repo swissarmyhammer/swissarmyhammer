@@ -27,13 +27,33 @@ use tokio::sync::Mutex;
 /// Global shell state — initialized lazily on first use.
 static SHELL_STATE: Lazy<Arc<Mutex<Option<ShellState>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
 
+/// Stable directory for shell state, resolved once to an absolute path.
+///
+/// In test mode this uses a fixed temp directory so that concurrent tests
+/// which change the process CWD cannot corrupt the shell state path.
+/// In production mode it uses `CWD/.shell` (resolved to absolute at first call).
+static SHELL_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    #[cfg(test)]
+    {
+        let dir = std::env::temp_dir().join(format!("sah-shell-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("Failed to create test shell dir");
+        dir
+    }
+    #[cfg(not(test))]
+    {
+        std::env::current_dir()
+            .expect("CWD must be accessible")
+            .join(".shell")
+    }
+});
+
 /// Get or initialize the global shell state.
 async fn get_shell_state() -> Result<Arc<Mutex<Option<ShellState>>>, McpError> {
     let state = Arc::clone(&SHELL_STATE);
     {
         let mut guard = state.lock().await;
         if guard.is_none() {
-            let s = ShellState::new().map_err(|e| {
+            let s = ShellState::new_in_dir(SHELL_DIR.clone()).map_err(|e| {
                 McpError::internal_error(format!("Failed to initialize shell state: {}", e), None)
             })?;
             *guard = Some(s);
@@ -2135,6 +2155,7 @@ impl McpTool for ShellExecuteTool {
 mod tests {
     use super::*;
     use crate::test_utils::create_test_context;
+    use serial_test::serial;
     use serde_json::json;
 
     /// Generic helper function to assert that items are blocked by security validation
@@ -4305,6 +4326,7 @@ mod tests {
     // =====================================================================
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_list_processes_shows_completed_commands() {
         // Run a command first so there's something to list
         run_command("echo list_test_marker").await;
@@ -4339,6 +4361,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_list_processes_table_format() {
         run_command("echo format_check").await;
 
@@ -4419,6 +4442,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_grep_history_finds_matching_output() {
         // Run a command that produces known output
         run_command("echo UNIQUE_GREP_MARKER_12345").await;
@@ -4439,6 +4463,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_grep_history_no_matches() {
         let result = execute_op(
             "grep history",
@@ -4456,6 +4481,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_grep_history_with_command_id_filter() {
         let cmd_id = run_command("echo GREP_FILTER_TARGET").await;
 
@@ -4478,6 +4504,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_grep_history_with_limit() {
         // Run a command with multiple matching lines
         run_command("printf 'LIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\n'")
@@ -4501,6 +4528,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_grep_history_regex_pattern() {
         run_command("echo 'error: something failed at line 42'").await;
 
@@ -4539,6 +4567,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_get_lines_retrieves_output() {
         let cmd_id = run_command("echo 'GET_LINES_OUTPUT'").await;
 
@@ -4558,6 +4587,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_get_lines_with_range() {
         // Run a command that produces multiple lines
         let cmd_id = run_command("printf 'line1\\nline2\\nline3\\nline4\\nline5\\n'").await;
@@ -4586,6 +4616,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_get_lines_nonexistent_command() {
         let result = execute_op("get lines", vec![("command_id", json!(99999))]).await;
         assert!(
@@ -4602,6 +4633,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_get_lines_shows_line_numbers() {
         let cmd_id = run_command("printf 'alpha\\nbeta\\ngamma\\n'").await;
 

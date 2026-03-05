@@ -1,7 +1,7 @@
 //! Comprehensive integration tests for llama-embedding library
 //!
-//! These tests validate the complete functionality with real embedding models,
-//! specifically focusing on the Qwen/Qwen3-Embedding-0.6B-GGUF model as specified.
+//! All tests exercise the `TextEmbedder` trait interface, validating that
+//! `EmbeddingModel` works correctly as a `dyn TextEmbedder` implementation.
 //!
 //! Tests cover:
 //! - Single text embedding with dimension validation
@@ -12,7 +12,7 @@
 //! - Error handling scenarios
 //! - Cache integration
 
-use llama_embedding::{BatchProcessor, EmbeddingConfig, EmbeddingModel};
+use llama_embedding::{BatchProcessor, EmbeddingConfig, EmbeddingModel, TextEmbedder};
 use llama_loader::ModelSource;
 use rstest::rstest;
 use serial_test::serial;
@@ -76,26 +76,30 @@ async fn create_test_file(num_texts: usize) -> Result<NamedTempFile, Box<dyn std
     Ok(temp_file)
 }
 
-/// Test 1: Single Text Embedding with Dimension Validation
+/// Helper: create model and load via trait
+async fn create_and_load() -> EmbeddingModel {
+    let config = create_qwen_config();
+    let model = EmbeddingModel::new(config)
+        .await
+        .expect("Failed to create embedding model");
+    model.load().await.expect("Failed to load model");
+    model
+}
+
+/// Test 1: Single Text Embedding with Dimension Validation (via trait)
 #[tokio::test]
 #[serial]
 async fn test_single_text_embedding() {
-    let config = create_qwen_config();
-    let mut model = EmbeddingModel::new(config)
-        .await
-        .expect("Failed to create embedding model");
+    let model = create_and_load().await;
 
-    model.load_model().await.expect("Failed to load Qwen model");
-
-    // Test embedding dimension is 1024 for Qwen3-Embedding-0.6B
-    let embedding_dim = model.get_embedding_dimension();
+    // Test embedding dimension via trait
     assert_eq!(
-        embedding_dim,
+        model.embedding_dimension(),
         Some(1024),
         "Qwen3-Embedding-0.6B should have 1024 dimensions"
     );
 
-    // Test single text embedding
+    // Test single text embedding via trait
     let result = model
         .embed_text("Hello world")
         .await
@@ -108,54 +112,42 @@ async fn test_single_text_embedding() {
     assert!(result.sequence_length > 0);
 }
 
-/// Test 2: Model Loading (HuggingFace and caching)
+/// Test 2: Model Loading (HuggingFace and caching) via trait
 #[tokio::test]
 #[serial]
 async fn test_model_loading_and_caching() {
-    // Test HuggingFace model loading
     let config = create_qwen_config();
-    let mut model1 = EmbeddingModel::new(config.clone())
+    let model1 = EmbeddingModel::new(config.clone())
         .await
         .expect("Failed to create first model instance");
 
-    model1
-        .load_model()
-        .await
-        .expect("Failed to load model first time");
+    // Load via trait
+    model1.load().await.expect("Failed to load model first time");
 
-    // Test that model is loaded
+    // Check via trait
     assert!(model1.is_loaded());
-    assert_eq!(model1.get_embedding_dimension(), Some(1024));
+    assert_eq!(model1.embedding_dimension(), Some(1024));
 
-    // Test metadata availability
+    // Metadata is llama-specific (not on trait), still valid to check
     let metadata = model1.get_metadata();
     assert!(metadata.is_some());
 
-    // Test second instance loads (should hit HF cache)
-    let mut model2 = EmbeddingModel::new(config)
+    // Second instance loads via trait (should hit HF cache)
+    let model2 = EmbeddingModel::new(config)
         .await
         .expect("Failed to create second model instance");
 
-    model2
-        .load_model()
-        .await
-        .expect("Failed to load model second time");
+    model2.load().await.expect("Failed to load model second time");
 
-    // Both should have same embedding dimension
-    assert_eq!(model1.get_embedding_dimension(), Some(1024));
-    assert_eq!(model2.get_embedding_dimension(), Some(1024));
+    assert_eq!(model1.embedding_dimension(), Some(1024));
+    assert_eq!(model2.embedding_dimension(), Some(1024));
 }
 
 /// Test 3: Batch Processing Tests with Various Sizes
 #[tokio::test]
 #[serial]
 async fn test_batch_processing_various_sizes() {
-    let config = create_qwen_config();
-    let mut model = EmbeddingModel::new(config)
-        .await
-        .expect("Failed to create embedding model");
-
-    model.load_model().await.expect("Failed to load model");
+    let model = create_and_load().await;
 
     let batch_sizes = vec![1, 8, 32, 64];
     let test_texts: Vec<String> = TEST_TEXTS
@@ -165,7 +157,7 @@ async fn test_batch_processing_various_sizes() {
         .collect();
 
     for batch_size in batch_sizes {
-        let mut processor = BatchProcessor::new(&mut model, batch_size);
+        let mut processor = BatchProcessor::new(&model, batch_size);
         assert_eq!(processor.batch_size(), batch_size);
 
         let results = processor
@@ -183,27 +175,22 @@ async fn test_batch_processing_various_sizes() {
     }
 }
 
-/// Test 4: Batch Consistency (same results as individual processing)
+/// Test 4: Batch Consistency (same results as individual processing) via trait
 #[tokio::test]
 #[serial]
 async fn test_batch_consistency() {
-    let config = create_qwen_config();
-    let mut model = EmbeddingModel::new(config)
-        .await
-        .expect("Failed to create embedding model");
-
-    model.load_model().await.expect("Failed to load model");
+    let model = create_and_load().await;
 
     let test_text = "This is a consistency test sentence.";
 
-    // Generate individual embedding
+    // Generate individual embedding via trait
     let individual_result = model
         .embed_text(test_text)
         .await
         .expect("Failed to generate individual embedding");
 
-    // Generate batch embedding using the same model
-    let mut processor = BatchProcessor::new(&mut model, 1);
+    // Generate batch embedding
+    let mut processor = BatchProcessor::new(&model, 1);
     let batch_results = processor
         .process_batch(&[test_text.to_string()])
         .await
@@ -237,19 +224,14 @@ async fn test_batch_consistency() {
 #[tokio::test]
 #[serial]
 async fn test_file_processing_different_sizes(#[case] file_size: usize) {
-    let config = create_qwen_config();
-    let mut model = EmbeddingModel::new(config)
-        .await
-        .expect("Failed to create embedding model");
-
-    model.load_model().await.expect("Failed to load model");
+    let model = create_and_load().await;
 
     // Create test file
     let temp_file = create_test_file(file_size)
         .await
         .expect("Failed to create test file");
 
-    let mut processor = BatchProcessor::new(&mut model, TEST_FILE_BATCH_SIZE);
+    let mut processor = BatchProcessor::new(&model, TEST_FILE_BATCH_SIZE);
 
     let start_time = Instant::now();
     let results = processor
@@ -278,20 +260,15 @@ async fn test_file_processing_different_sizes(#[case] file_size: usize) {
     }
 }
 
-/// Test 7: MD5 Hash Consistency Tests
+/// Test 7: MD5 Hash Consistency Tests via trait
 #[tokio::test]
 #[serial]
 async fn test_md5_hash_consistency() {
-    let config = create_qwen_config();
-    let mut model = EmbeddingModel::new(config)
-        .await
-        .expect("Failed to create embedding model");
-
-    model.load_model().await.expect("Failed to load model");
+    let model = create_and_load().await;
 
     let test_text = "Hash consistency test text";
 
-    // Generate embedding multiple times
+    // Generate embedding multiple times via trait
     let result1 = model
         .embed_text(test_text)
         .await
@@ -328,74 +305,68 @@ async fn test_md5_hash_consistency() {
     assert_eq!(result1.text_hash, expected_hash);
 }
 
-/// Test 8: Error Handling Tests
+/// Test 8: Error Handling Tests via trait
 #[tokio::test]
 #[serial]
 async fn test_error_handling() {
-    // Test model not loaded error
+    // Test model not loaded error via trait
     let config = create_qwen_config();
-    let mut model = EmbeddingModel::new(config.clone())
+    let model = EmbeddingModel::new(config.clone())
         .await
         .expect("Failed to create embedding model");
 
-    // Try to embed without loading model
-    let result = model.embed_text("test").await;
+    // embed_text before load should return Backend error wrapping ModelNotLoaded
+    let result = TextEmbedder::embed_text(&model, "test").await;
     assert!(result.is_err());
-    let error_message = result.unwrap_err().to_string();
-    assert!(error_message.contains("not loaded") || error_message.contains("Model not loaded"));
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, model_embedding::EmbeddingError::Backend(_)),
+        "Expected Backend variant, got: {:?}",
+        err
+    );
 
-    // Test empty text handling
-    let mut model = EmbeddingModel::new(config)
+    // Test empty text handling via trait
+    let model = EmbeddingModel::new(config)
         .await
         .expect("Failed to create embedding model");
 
-    model.load_model().await.expect("Failed to load model");
+    model.load().await.expect("Failed to load model");
 
-    let empty_result = model.embed_text("").await;
+    let empty_result = TextEmbedder::embed_text(&model, "").await;
     assert!(empty_result.is_err());
 
     // Test invalid file processing
-    let mut processor = BatchProcessor::new(&mut model, TEST_FILE_BATCH_SIZE);
+    let mut processor = BatchProcessor::new(&model, TEST_FILE_BATCH_SIZE);
 
     let non_existent_file = Path::new("/tmp/non_existent_file.txt");
     let file_result = processor.process_file(non_existent_file).await;
     assert!(file_result.is_err());
 }
 
-/// Test 9: Integration with llama-loader (cache scenarios)
+/// Test 9: Integration with llama-loader (cache scenarios) via trait
 #[tokio::test]
 #[serial]
 async fn test_llama_loader_integration() {
     let config = create_qwen_config();
 
     // Test multiple model instances share cache
-    let mut model1 = EmbeddingModel::new(config.clone())
+    let model1 = EmbeddingModel::new(config.clone())
         .await
         .expect("Failed to create first model");
 
-    model1
-        .load_model()
-        .await
-        .expect("Failed to load first model");
+    model1.load().await.expect("Failed to load first model");
 
-    // Create second instance
-    let mut model2 = EmbeddingModel::new(config.clone())
+    let model2 = EmbeddingModel::new(config.clone())
         .await
         .expect("Failed to create second model");
 
-    model2
-        .load_model()
-        .await
-        .expect("Failed to load second model");
+    model2.load().await.expect("Failed to load second model");
 
-    // Both should have same embedding dimension
-    assert_eq!(
-        model1.get_embedding_dimension(),
-        model2.get_embedding_dimension()
-    );
-    assert_eq!(model1.get_embedding_dimension(), Some(1024));
+    // Both should have same embedding dimension via trait
+    assert_eq!(model1.embedding_dimension(), model2.embedding_dimension());
+    assert_eq!(model1.embedding_dimension(), Some(1024));
 
-    // Test embeddings are consistent between instances
+    // Test embeddings are consistent between instances via trait
     let text = "Cache integration test";
     let result1 = model1
         .embed_text(text)
@@ -410,18 +381,13 @@ async fn test_llama_loader_integration() {
     assert_eq!(result1.dimension(), result2.dimension());
 }
 
-/// Test 10: Edge Cases and Text Handling
+/// Test 10: Edge Cases and Text Handling via trait
 #[tokio::test]
 #[serial]
 async fn test_edge_cases_and_text_handling() {
-    let config = create_qwen_config();
-    let mut model = EmbeddingModel::new(config)
-        .await
-        .expect("Failed to create embedding model");
+    let model = create_and_load().await;
 
-    model.load_model().await.expect("Failed to load model");
-
-    // Test various edge cases
+    // Test various edge cases via trait
     let edge_cases = [
         "Single word",
         "A", // Very short
@@ -445,19 +411,18 @@ async fn test_edge_cases_and_text_handling() {
     }
 }
 
-/// Test 11: Normalization functionality
+/// Test 11: Normalization functionality via trait
 #[tokio::test]
 #[serial]
 async fn test_embedding_normalization() {
-    // Test with normalization enabled
     let mut config = create_qwen_config();
     config.normalize_embeddings = true;
 
-    let mut model = EmbeddingModel::new(config)
+    let model = EmbeddingModel::new(config)
         .await
         .expect("Failed to create embedding model");
 
-    model.load_model().await.expect("Failed to load model");
+    model.load().await.expect("Failed to load model");
 
     let result = model
         .embed_text("Normalization test")
@@ -471,6 +436,48 @@ async fn test_embedding_normalization() {
         "Normalized embedding should have magnitude ~1.0, got: {}",
         magnitude
     );
+}
+
+/// Test: trait object usage — proves EmbeddingModel works as dyn TextEmbedder
+#[tokio::test]
+#[serial]
+async fn test_trait_object_usage() {
+    let model = create_and_load().await;
+
+    // Use as a trait object — this is the whole point of the refactor
+    let embedder: &dyn TextEmbedder = &model;
+
+    assert!(embedder.is_loaded());
+    assert_eq!(embedder.embedding_dimension(), Some(1024));
+
+    let result = embedder
+        .embed_text("Trait object test")
+        .await
+        .expect("Failed to embed via trait object");
+
+    assert_eq!(result.embedding.len(), 1024);
+    assert_eq!(result.text, "Trait object test");
+}
+
+/// Test: generic function accepts any TextEmbedder
+#[tokio::test]
+#[serial]
+async fn test_generic_embedder_function() {
+    let model = create_and_load().await;
+
+    async fn embed_via_trait(
+        embedder: &dyn TextEmbedder,
+        text: &str,
+    ) -> model_embedding::EmbeddingResult {
+        embedder
+            .embed_text(text)
+            .await
+            .expect("embed via trait failed")
+    }
+
+    let result = embed_via_trait(&model, "Generic function test").await;
+    assert_eq!(result.embedding.len(), 1024);
+    assert_eq!(result.text, "Generic function test");
 }
 
 /// Helper function to calculate cosine similarity between two vectors

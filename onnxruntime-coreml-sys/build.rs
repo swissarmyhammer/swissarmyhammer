@@ -87,6 +87,7 @@ fn compile_wrapper(manifest_dir: &Path, install_dir: &Path) {
 
 fn run_ort_build(ort_src: &Path, build_dir: &Path, args: &[&str]) {
     let status = Command::new(ort_src.join("build.sh"))
+        .current_dir(ort_src)
         .args(args)
         .status()
         .expect("Failed to execute build.sh");

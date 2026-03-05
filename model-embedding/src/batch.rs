@@ -162,7 +162,13 @@ impl Default for BatchConfig {
     }
 }
 
-/// Generic batch processor for any TextEmbedder backend.
+/// Generic batch processor for any [`TextEmbedder`] backend.
+///
+/// `BatchProcessor` borrows the embedder as `&T` (not `&mut T`) because backends
+/// like `llama-embedding` use interior mutability (`Mutex<Inner>`) to manage state.
+/// This means a `BatchProcessor` can coexist with other shared references to the
+/// same embedder, but concurrent embedding calls will serialize on the backend's
+/// internal lock.
 pub struct BatchProcessor<'a, T: TextEmbedder> {
     model: &'a T,
     config: BatchConfig,
@@ -397,6 +403,63 @@ impl<'a, T: TextEmbedder> BatchProcessor<'a, T> {
 
     pub fn reset_stats(&mut self) {
         self.stats = BatchStats::new();
+    }
+
+    /// Get the configured batch size.
+    pub fn batch_size(&self) -> usize {
+        self.config.batch_size
+    }
+
+    /// Set a new batch size. Values of zero are ignored.
+    pub fn set_batch_size(&mut self, new_batch_size: usize) {
+        if new_batch_size > 0 {
+            self.config.batch_size = new_batch_size;
+        }
+    }
+
+    /// Set whether to continue processing on errors.
+    pub fn set_continue_on_error(&mut self, continue_on_error: bool) {
+        self.config.continue_on_error = continue_on_error;
+    }
+
+    /// Clear the progress callback.
+    pub fn clear_progress_callback(&mut self) {
+        self.progress_callback = None;
+    }
+
+    /// Get model info: `(embedding_dimension, is_loaded)`.
+    pub fn get_model_info(&self) -> Option<(usize, bool)> {
+        self.model
+            .embedding_dimension()
+            .map(|dim| (dim, self.model.is_loaded()))
+    }
+
+    /// Get a detailed performance report.
+    pub fn get_performance_report(&self) -> String {
+        format!(
+            "Performance Report:\n\
+            - Total texts processed: {}\n\
+            - Success rate: {:.1}%\n\
+            - Processing time: {:.2}s\n\
+            - Throughput: {:.1} texts/s, {:.1} tokens/s\n\
+            - Average time per text: {:.1}ms\n\
+            - Average tokens per text: {:.1}\n\
+            - Batches processed: {}\n\
+            - Average batch time: {:.1}ms\n\
+            - Peak memory usage: {:.2}MB\n\
+            - Total characters: {}",
+            self.stats.total_texts,
+            self.stats.success_rate() * 100.0,
+            self.stats.total_processing_time_ms as f64 / 1000.0,
+            self.stats.throughput_texts_per_second(),
+            self.stats.throughput_tokens_per_second(),
+            self.stats.average_time_per_text_ms,
+            self.stats.average_tokens_per_text,
+            self.stats.batches_processed,
+            self.stats.average_batch_time_ms,
+            self.stats.peak_memory_usage_bytes as f64 / (1024.0 * 1024.0),
+            self.stats.total_characters_processed
+        )
     }
 
     fn report_progress(

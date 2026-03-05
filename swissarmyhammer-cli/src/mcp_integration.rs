@@ -286,6 +286,7 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_cli_tool_context_creation() {
         let result = CliToolContext::new().await;
         assert!(
@@ -365,6 +366,7 @@ mod tests {
     /// to ensure the test validates the real tool registration, not a separate copy.
     /// If this test fails, it means a tool was added without proper schema validation.
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_all_registered_tools_pass_cli_validation() {
         use crate::dynamic_cli::CliBuilder;
 

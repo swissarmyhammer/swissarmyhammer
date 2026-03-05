@@ -30,7 +30,7 @@ use crate::error::{Result, TreeSitterError};
 use crate::language::LanguageRegistry;
 use crate::parsed_file::ParsedFile;
 use ignore::WalkBuilder;
-use llama_embedding::{EmbeddingConfig, EmbeddingModel};
+use llama_embedding::{EmbeddingConfig, EmbeddingModel, TextEmbedder};
 use llama_loader::ModelSource;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -695,11 +695,11 @@ impl IndexContext {
             debug: false,
         };
 
-        let mut model = EmbeddingModel::new(embed_config).await.map_err(|e| {
+        let model = EmbeddingModel::new(embed_config).await.map_err(|e| {
             TreeSitterError::embedding_error(format!("Failed to create embedding model: {}", e))
         })?;
 
-        model.load_model().await.map_err(|e| {
+        model.load().await.map_err(|e| {
             TreeSitterError::embedding_error(format!("Failed to load embedding model: {}", e))
         })?;
 

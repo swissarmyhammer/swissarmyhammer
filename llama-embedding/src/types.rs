@@ -1,6 +1,9 @@
 use llama_loader::ModelSource;
 use serde::{Deserialize, Serialize};
 
+// Re-export EmbeddingResult from the shared crate
+pub use model_embedding::EmbeddingResult;
+
 /// Configuration for embedding operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -30,56 +33,6 @@ impl Default for EmbeddingConfig {
     }
 }
 
-/// Result of a single text embedding operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddingResult {
-    /// Original text that was embedded
-    pub text: String,
-    /// MD5 hash of the text for deduplication
-    pub text_hash: String,
-    /// Embedding vector
-    pub embedding: Vec<f32>,
-    /// Length of the tokenized sequence
-    pub sequence_length: usize,
-    /// Processing time in milliseconds
-    pub processing_time_ms: u64,
-}
-
-impl EmbeddingResult {
-    /// Create a new embedding result
-    pub fn new(
-        text: String,
-        embedding: Vec<f32>,
-        sequence_length: usize,
-        processing_time_ms: u64,
-    ) -> Self {
-        let text_hash = format!("{:x}", md5::compute(&text));
-
-        Self {
-            text,
-            text_hash,
-            embedding,
-            sequence_length,
-            processing_time_ms,
-        }
-    }
-
-    /// Normalize the embedding vector to unit length (L2 norm)
-    pub fn normalize(&mut self) {
-        let magnitude: f32 = self.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if magnitude > 0.0 {
-            for value in &mut self.embedding {
-                *value /= magnitude;
-            }
-        }
-    }
-
-    /// Get the embedding dimension
-    pub fn dimension(&self) -> usize {
-        self.embedding.len()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,7 +47,6 @@ mod tests {
         assert_eq!(result.sequence_length, 5);
         assert_eq!(result.processing_time_ms, 100);
         assert_eq!(result.dimension(), 3);
-        // MD5 of "test text" should be consistent
         assert_eq!(result.text_hash, "1e2db57dd6527ad4f8f281ab028d2c70");
     }
 
@@ -102,14 +54,13 @@ mod tests {
     fn test_embedding_normalization() {
         let mut result = EmbeddingResult::new(
             "test".to_string(),
-            vec![3.0, 4.0], // magnitude = 5.0
+            vec![3.0, 4.0],
             2,
             50,
         );
 
         result.normalize();
 
-        // Check that the vector is normalized
         let magnitude: f32 = result.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!(
             (magnitude - 1.0).abs() < 1e-6,

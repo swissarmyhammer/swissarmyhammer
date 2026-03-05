@@ -113,6 +113,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_client_call_tool() {
         // Use agent_mode=true since this test calls files (an agent tool)
         let mut server = start_mcp_server_with_options(

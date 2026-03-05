@@ -2,6 +2,7 @@
 
 use super::server::McpServer;
 use rmcp::ServerHandler;
+use serial_test::serial;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use swissarmyhammer_common::Pretty;
@@ -17,6 +18,7 @@ impl Drop for DirGuard {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_creation() {
     let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
@@ -38,6 +40,7 @@ async fn test_mcp_server_creation() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_exposes_shell_tools() {
     // Create a test library and server
     let library = PromptLibrary::new();
@@ -58,6 +61,7 @@ async fn test_mcp_server_exposes_shell_tools() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_list_prompts() {
     let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
@@ -79,6 +83,7 @@ async fn test_mcp_server_list_prompts() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
     let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
@@ -147,6 +152,7 @@ async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_get_prompt() {
     let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
@@ -173,6 +179,7 @@ async fn test_mcp_server_get_prompt() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_exposes_prompt_capabilities() {
     let library = PromptLibrary::new();
     let server = McpServer::new(library).await.unwrap();
@@ -190,6 +197,7 @@ async fn test_mcp_server_exposes_prompt_capabilities() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_uses_same_prompt_paths_as_cli() {
     // This test verifies the fix for issue 000054.md
     // MCP server now uses the same PromptResolver as CLI
@@ -219,6 +227,7 @@ async fn test_mcp_server_uses_same_prompt_paths_as_cli() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_file_watching_integration() {
     // Create a test library and server
     let library = PromptLibrary::new();
@@ -241,6 +250,7 @@ async fn test_mcp_server_file_watching_integration() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_uses_same_directory_discovery() {
     let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
@@ -274,6 +284,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_graceful_error_for_missing_prompt() {
     // Create a test library and server with one prompt
     let mut library = PromptLibrary::new();
@@ -303,6 +314,7 @@ async fn test_mcp_server_graceful_error_for_missing_prompt() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_exposes_prompts_tools_capability() {
     // Create a test library and server
     let library = PromptLibrary::new();
@@ -326,6 +338,7 @@ async fn test_mcp_server_exposes_prompts_tools_capability() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_mcp_server_does_not_expose_partial_templates() {
     let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
@@ -384,6 +397,7 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_reload_prompts_detects_no_changes() {
     use std::fs;
     use std::io::Write;
@@ -439,6 +453,7 @@ async fn test_reload_prompts_detects_no_changes() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_reload_prompts_detects_content_changes() {
     use std::fs;
     use std::io::Write;
@@ -490,6 +505,7 @@ async fn test_reload_prompts_detects_content_changes() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_reload_prompts_detects_new_prompts() {
     use std::fs;
     use std::io::Write;
@@ -542,6 +558,7 @@ async fn test_reload_prompts_detects_new_prompts() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_reload_prompts_detects_deleted_prompts() {
     use std::fs;
     use std::io::Write;
@@ -596,6 +613,7 @@ async fn test_reload_prompts_detects_deleted_prompts() {
 }
 
 #[tokio::test]
+#[serial(cwd)]
 async fn test_builtin_partials_not_exposed_in_mcp() {
     // Test that actual builtin partials with partial: true metadata are filtered correctly
     let test_dir = tempfile::tempdir().unwrap();

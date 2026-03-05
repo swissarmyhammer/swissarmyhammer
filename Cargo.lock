@@ -4460,10 +4460,12 @@ dependencies = [
 name = "llama-embedding"
 version = "0.8.0"
 dependencies = [
+ "async-trait",
  "llama-common",
  "llama-cpp-2",
  "llama-loader",
  "md5",
+ "model-embedding",
  "rstest",
  "serde",
  "serial_test",
