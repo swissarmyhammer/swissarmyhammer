@@ -29,14 +29,6 @@ impl BoardHandle {
             processor: KanbanOperationProcessor::new(),
         })
     }
-
-    /// Create a handle with an uninitialized context (for paths that may not exist yet).
-    pub fn new_uninit(kanban_path: PathBuf) -> Self {
-        Self {
-            ctx: KanbanContext::new(kanban_path),
-            processor: KanbanOperationProcessor::new(),
-        }
-    }
 }
 
 /// A recently opened board entry for MRU persistence.

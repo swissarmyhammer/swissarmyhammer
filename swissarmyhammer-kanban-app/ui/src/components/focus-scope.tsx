@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
 import { CommandScopeContext, type CommandDef, type CommandScope } from "@/lib/command-scope";
-import { useEntityFocus, useIsFocused } from "@/lib/entity-focus-context";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 
 interface FocusScopeProps {
@@ -26,7 +26,6 @@ interface FocusScopeProps {
  */
 export function FocusScope({ moniker, commands, children, className, style }: FocusScopeProps) {
   const { focusedMoniker, setFocus, registerScope, unregisterScope } = useEntityFocus();
-  const isFocused = useIsFocused(moniker);
   const isDirectFocus = focusedMoniker === moniker;
 
   // Build the scope ourselves so we can register it
@@ -66,7 +65,6 @@ export function FocusScope({ moniker, commands, children, className, style }: Fo
     <CommandScopeContext.Provider value={scope}>
       <FocusScopeInner
         moniker={moniker}
-        isFocused={isFocused}
         isDirectFocus={isDirectFocus}
         onClick={handleClick}
         className={className}
@@ -81,7 +79,6 @@ export function FocusScope({ moniker, commands, children, className, style }: Fo
 /** Inner component rendered inside CommandScopeContext so useContextMenu sees the scope. */
 function FocusScopeInner({
   moniker,
-  isFocused,
   isDirectFocus,
   onClick,
   children,
@@ -89,7 +86,6 @@ function FocusScopeInner({
   style,
 }: {
   moniker: string;
-  isFocused: boolean;
   isDirectFocus: boolean;
   onClick: (e: React.MouseEvent) => void;
   children: ReactNode;
