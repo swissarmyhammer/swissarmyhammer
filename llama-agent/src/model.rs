@@ -435,7 +435,7 @@ impl ModelManager {
     }
 
     /// Get model metadata
-    pub async fn get_metadata(&self) -> Option<ModelMetadata> {
+    pub async fn metadata(&self) -> Option<ModelMetadata> {
         self.metadata.read().await.clone()
     }
 

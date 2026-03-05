@@ -748,7 +748,7 @@ impl AgentServer {
 
     /// Get metadata about the currently loaded model
     pub async fn get_model_metadata(&self) -> Option<model_loader::ModelMetadata> {
-        self.model_manager.get_metadata().await
+        self.model_manager.metadata().await
     }
 
     /// Get the context size from the loaded model.

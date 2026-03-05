@@ -257,7 +257,7 @@ impl EmbeddingModel {
     }
 
     /// Get model metadata
-    pub fn get_metadata(&self) -> Option<ModelMetadata> {
+    pub fn metadata(&self) -> Option<ModelMetadata> {
         self.inner
             .try_lock()
             .ok()
@@ -423,7 +423,7 @@ mod tests {
         let model = EmbeddingModel::new(config).await.unwrap();
         assert!(!model.is_loaded());
         assert!(model.embedding_dimension().is_none());
-        assert!(model.get_metadata().is_none());
+        assert!(model.metadata().is_none());
     }
 
     #[tokio::test]

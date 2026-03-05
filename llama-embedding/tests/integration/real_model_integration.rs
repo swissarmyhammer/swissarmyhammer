@@ -129,7 +129,7 @@ async fn test_model_loading_and_caching() {
     assert_eq!(model1.embedding_dimension(), Some(1024));
 
     // Metadata is llama-specific (not on trait), still valid to check
-    let metadata = model1.get_metadata();
+    let metadata = model1.metadata();
     assert!(metadata.is_some());
 
     // Second instance loads via trait (should hit HF cache)
