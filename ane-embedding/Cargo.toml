@@ -1,0 +1,26 @@
+[package]
+name = "ane-embedding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Text embedding using ONNX Runtime with CoreML execution provider for Apple Neural Engine"
+
+[dependencies]
+async-trait = { workspace = true }
+llama-common = { path = "../llama-common" }
+md5 = "0.7"
+model-embedding = { path = "../model-embedding" }
+model-loader = { path = "../model-loader" }
+onnxruntime-coreml-sys = { path = "../onnxruntime-coreml-sys" }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+tokio = { workspace = true, features = ["sync", "fs"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+serial_test = "3"
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full"] }

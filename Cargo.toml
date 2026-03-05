@@ -26,6 +26,7 @@ members = [
     "llama-embedding",
     "model-loader",
     "model-embedding",
+    "ane-embedding",
     "onnxruntime-coreml-sys",
 
     "acp-conformance",
