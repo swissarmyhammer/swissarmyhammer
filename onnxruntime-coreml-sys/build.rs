@@ -58,19 +58,26 @@ fn has_ort_libs(lib_dir: &Path) -> bool {
     lib_dir.join("libonnxruntime_session.a").exists() && lib_dir.join("libre2.a").exists()
 }
 
+/// Patch Eigen archive hash in ORT's cmake/deps.txt.
+///
+/// GitLab regenerated the Eigen archive, changing its SHA1.
+/// This patch applies to ONNX Runtime v1.21.x (pinned submodule).
+/// If the ORT submodule is updated and neither hash is found,
+/// a cargo warning is emitted so the stale patch is noticed.
 fn patch_eigen_hash(ort_src: &Path) {
     let deps_file = ort_src.join("cmake/deps.txt");
     if !deps_file.exists() {
         return;
     }
     let content = std::fs::read_to_string(&deps_file).unwrap();
-    // GitLab regenerated the Eigen archive, changing its SHA1.
     let old_hash = "5ea4d05e62d7f954a46b3213f9b2535bdd866803";
     let new_hash = "51982be81bbe52572b54180454df11a3ece9a934";
     if content.contains(old_hash) {
         let patched = content.replace(old_hash, new_hash);
         std::fs::write(&deps_file, patched).unwrap();
         println!("cargo:warning=Patched Eigen hash in deps.txt");
+    } else if !content.contains(new_hash) {
+        println!("cargo:warning=Eigen hash patch may be stale: neither old nor new hash found in cmake/deps.txt");
     }
 }
 

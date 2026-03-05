@@ -606,16 +606,35 @@ impl Tensor {
         Ok(unsafe { std::slice::from_raw_parts(data_ptr, count) })
     }
 
+    /// Maximum number of tensor dimensions supported by `shape()`.
+    const MAX_DIMS: usize = 8;
+
     /// Get the tensor shape.
     pub fn shape(&self) -> Result<Vec<i64>> {
-        let mut dims = [0i64; 8];
+        let mut dims = [0i64; Self::MAX_DIMS];
         let mut num_dims: usize = 0;
         let mut err = OrtWrapperError::new();
         let ret = unsafe {
-            ort_wrapper_get_tensor_shape(self.raw, dims.as_mut_ptr(), 8, &mut num_dims, &mut err)
+            ort_wrapper_get_tensor_shape(
+                self.raw,
+                dims.as_mut_ptr(),
+                Self::MAX_DIMS,
+                &mut num_dims,
+                &mut err,
+            )
         };
         if ret != 0 {
             return Err(err.to_error());
+        }
+        if num_dims > Self::MAX_DIMS {
+            return Err(OrtError {
+                code: 1,
+                message: format!(
+                    "tensor has {} dimensions, max supported is {}",
+                    num_dims,
+                    Self::MAX_DIMS
+                ),
+            });
         }
         Ok(dims[..num_dims].to_vec())
     }
@@ -637,6 +656,9 @@ unsafe impl Send for Session {}
 unsafe impl Sync for Session {}
 unsafe impl Send for Tensor {}
 unsafe impl Sync for Tensor {}
+// SAFETY: SessionOptions can be moved across threads (Send) but is not Sync
+// because ORT's C API mutates option state through non-atomic setters.
+// Concurrent modification from multiple threads would be a data race.
 unsafe impl Send for SessionOptions {}
 
 #[cfg(test)]
