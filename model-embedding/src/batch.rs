@@ -69,8 +69,8 @@ impl BatchStats {
         failures: usize,
     ) {
         let batch_size = batch_results.len() + failures;
-        let token_count: usize = batch_results.iter().map(|r| r.sequence_length).sum();
-        let char_count: usize = batch_results.iter().map(|r| r.text.len()).sum();
+        let token_count: usize = batch_results.iter().map(|r| r.sequence_length()).sum();
+        let char_count: usize = batch_results.iter().map(|r| r.text().len()).sum();
 
         self.total_texts += batch_size;
         self.successful_embeddings += batch_results.len();

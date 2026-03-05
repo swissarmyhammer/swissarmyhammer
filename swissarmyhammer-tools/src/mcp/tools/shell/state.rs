@@ -480,7 +480,7 @@ pub async fn search(
         .embed_text(query)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to embed query: {}", e))?;
-    let query_embedding = &query_result.embedding;
+    let query_embedding = query_result.embedding();
 
     // Load stored chunks with embeddings
     let conn = db.lock().await;
@@ -591,7 +591,7 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
             match m.embed_text(&job.text).await {
                 Ok(mut result) => {
                     result.normalize();
-                    let embedding_bytes = encode_embedding(&result.embedding);
+                    let embedding_bytes = encode_embedding(result.embedding());
                     let conn = db.lock().await;
                     if let Err(e) = conn.execute(
                         "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",

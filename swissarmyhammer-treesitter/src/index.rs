@@ -586,7 +586,7 @@ impl IndexContext {
             let model = self.embedding_model.as_mut().unwrap();
             match model.embed_text(content).await {
                 Ok(result) => {
-                    embedded.push((chunk, result.embedding, symbol.clone()));
+                    embedded.push((chunk, result.embedding().to_vec(), symbol.clone()));
                     self.last_status.chunks_embedded += 1;
                     self.notify(IndexAction::ChunkComplete {
                         path: path.to_path_buf(),
@@ -1037,7 +1037,7 @@ impl IndexContext {
             TreeSitterError::embedding_error(format!("Failed to embed text: {}", e))
         })?;
 
-        Ok(result.embedding)
+        Ok(result.embedding().to_vec())
     }
 }
 

@@ -105,11 +105,11 @@ async fn test_single_text_embedding() {
         .await
         .expect("Failed to generate embedding");
 
-    assert_eq!(result.embedding.len(), 1024);
-    assert!(!result.text_hash.is_empty());
-    assert_eq!(result.text, "Hello world");
-    assert!(result.processing_time_ms > 0);
-    assert!(result.sequence_length > 0);
+    assert_eq!(result.embedding().len(), 1024);
+    assert!(!result.text_hash().is_empty());
+    assert_eq!(result.text(), "Hello world");
+    assert!(result.processing_time_ms() > 0);
+    assert!(result.sequence_length() > 0);
 }
 
 /// Test 2: Model Loading (HuggingFace and caching) via trait
@@ -169,8 +169,8 @@ async fn test_batch_processing_various_sizes() {
 
         for result in &results {
             assert_eq!(result.dimension(), 1024);
-            assert!(result.processing_time_ms > 0);
-            assert!(!result.text_hash.is_empty());
+            assert!(result.processing_time_ms() > 0);
+            assert!(!result.text_hash().is_empty());
         }
     }
 }
@@ -200,15 +200,15 @@ async fn test_batch_consistency() {
     let batch_result = &batch_results[0];
 
     // Results should be identical
-    assert_eq!(individual_result.text_hash, batch_result.text_hash);
+    assert_eq!(individual_result.text_hash(), batch_result.text_hash());
     assert_eq!(individual_result.dimension(), batch_result.dimension());
     assert_eq!(
-        individual_result.sequence_length,
-        batch_result.sequence_length
+        individual_result.sequence_length(),
+        batch_result.sequence_length()
     );
 
     // Embeddings should be very similar (allowing for minor floating point differences)
-    let similarity = cosine_similarity(&individual_result.embedding, &batch_result.embedding);
+    let similarity = cosine_similarity(individual_result.embedding(), batch_result.embedding());
     assert!(
         similarity > 0.999,
         "Embeddings should be nearly identical, similarity: {}",
@@ -244,9 +244,9 @@ async fn test_file_processing_different_sizes(#[case] file_size: usize) {
 
     for result in &results {
         assert_eq!(result.dimension(), 1024);
-        assert!(result.processing_time_ms > 0);
-        assert!(!result.text_hash.is_empty());
-        assert!(!result.text.trim().is_empty());
+        assert!(result.processing_time_ms() > 0);
+        assert!(!result.text_hash().is_empty());
+        assert!(!result.text().trim().is_empty());
     }
 
     // Processing time should scale roughly linearly
@@ -285,12 +285,12 @@ async fn test_md5_hash_consistency() {
         .expect("Failed to generate third embedding");
 
     // Hash should be identical across runs
-    assert_eq!(result1.text_hash, result2.text_hash);
-    assert_eq!(result2.text_hash, result3.text_hash);
+    assert_eq!(result1.text_hash(), result2.text_hash());
+    assert_eq!(result2.text_hash(), result3.text_hash());
 
     // Text should be identical
-    assert_eq!(result1.text, result2.text);
-    assert_eq!(result2.text, result3.text);
+    assert_eq!(result1.text(), result2.text());
+    assert_eq!(result2.text(), result3.text());
 
     // Test different texts produce different hashes
     let different_result = model
@@ -298,11 +298,11 @@ async fn test_md5_hash_consistency() {
         .await
         .expect("Failed to generate different text embedding");
 
-    assert_ne!(result1.text_hash, different_result.text_hash);
+    assert_ne!(result1.text_hash(), different_result.text_hash());
 
     // Verify MD5 hash is correct
     let expected_hash = format!("{:x}", md5::compute(test_text));
-    assert_eq!(result1.text_hash, expected_hash);
+    assert_eq!(result1.text_hash(), expected_hash);
 }
 
 /// Test 8: Error Handling Tests via trait
@@ -377,7 +377,7 @@ async fn test_model_loader_integration() {
         .await
         .expect("Failed to generate embedding with model2");
 
-    assert_eq!(result1.text_hash, result2.text_hash);
+    assert_eq!(result1.text_hash(), result2.text_hash());
     assert_eq!(result1.dimension(), result2.dimension());
 }
 
@@ -405,9 +405,9 @@ async fn test_edge_cases_and_text_handling() {
             .unwrap_or_else(|_| panic!("Failed to process edge case {}: '{}'", i, test_case));
 
         assert_eq!(result.dimension(), 1024);
-        assert_eq!(result.text.trim(), test_case.trim());
-        assert!(result.processing_time_ms > 0);
-        assert!(!result.text_hash.is_empty());
+        assert_eq!(result.text().trim(), test_case.trim());
+        assert!(result.processing_time_ms() > 0);
+        assert!(!result.text_hash().is_empty());
     }
 }
 
@@ -430,7 +430,7 @@ async fn test_embedding_normalization() {
         .expect("Failed to generate normalized embedding");
 
     // Check that embedding is normalized (L2 norm should be ~1.0)
-    let magnitude: f32 = result.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let magnitude: f32 = result.embedding().iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!(
         (magnitude - 1.0).abs() < 1e-5,
         "Normalized embedding should have magnitude ~1.0, got: {}",
@@ -455,8 +455,8 @@ async fn test_trait_object_usage() {
         .await
         .expect("Failed to embed via trait object");
 
-    assert_eq!(result.embedding.len(), 1024);
-    assert_eq!(result.text, "Trait object test");
+    assert_eq!(result.embedding().len(), 1024);
+    assert_eq!(result.text(), "Trait object test");
 }
 
 /// Test: generic function accepts any TextEmbedder
@@ -476,8 +476,8 @@ async fn test_generic_embedder_function() {
     }
 
     let result = embed_via_trait(&model, "Generic function test").await;
-    assert_eq!(result.embedding.len(), 1024);
-    assert_eq!(result.text, "Generic function test");
+    assert_eq!(result.embedding().len(), 1024);
+    assert_eq!(result.text(), "Generic function test");
 }
 
 /// Helper function to calculate cosine similarity between two vectors

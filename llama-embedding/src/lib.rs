@@ -37,7 +37,7 @@
 //!
 //!     let result = model.embed_text("Hello, world!").await?;
 //!     println!("Embedding dimension: {}", result.dimension());
-//!     println!("Processing time: {}ms", result.processing_time_ms);
+//!     println!("Processing time: {}ms", result.processing_time_ms());
 //!
 //!     Ok(())
 //! }

@@ -73,18 +73,18 @@ fn test_embedding_result() {
         100,
     );
 
-    assert_eq!(result.text, "test input text");
+    assert_eq!(result.text(), "test input text");
     assert_eq!(result.dimension(), 2);
-    assert_eq!(result.sequence_length, 8);
-    assert_eq!(result.processing_time_ms, 100);
+    assert_eq!(result.sequence_length(), 8);
+    assert_eq!(result.processing_time_ms(), 100);
 
     // Test MD5 hash consistency
     let expected_hash = format!("{:x}", md5::compute("test input text"));
-    assert_eq!(result.text_hash, expected_hash);
+    assert_eq!(result.text_hash(), expected_hash);
 
     // Test normalization
     result.normalize();
-    let magnitude: f32 = result.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let magnitude: f32 = result.embedding().iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!(
         (magnitude - 1.0).abs() < 1e-6,
         "Vector should be normalized to unit length"
@@ -167,7 +167,7 @@ fn test_embedding_dimensions() {
         let result = EmbeddingResult::new("test".to_string(), embedding, 10, 50);
 
         assert_eq!(result.dimension(), dim);
-        assert_eq!(result.embedding.len(), dim);
+        assert_eq!(result.embedding().len(), dim);
     }
 }
 
@@ -202,8 +202,8 @@ async fn test_real_model_integration() {
                 .expect("Should generate embedding");
 
             assert!(result.dimension() > 0);
-            assert!(result.processing_time_ms > 0);
-            assert!(!result.embedding.is_empty());
+            assert!(result.processing_time_ms() > 0);
+            assert!(!result.embedding().is_empty());
         }
         Err(e) => {
             println!("Real model test skipped: {}", e);

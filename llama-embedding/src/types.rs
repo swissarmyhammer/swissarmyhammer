@@ -42,12 +42,12 @@ mod tests {
         let embedding_vec = vec![1.0, 2.0, 3.0];
         let result = EmbeddingResult::new("test text".to_string(), embedding_vec.clone(), 5, 100);
 
-        assert_eq!(result.text, "test text");
-        assert_eq!(result.embedding, embedding_vec);
-        assert_eq!(result.sequence_length, 5);
-        assert_eq!(result.processing_time_ms, 100);
+        assert_eq!(result.text(), "test text");
+        assert_eq!(result.embedding(), embedding_vec.as_slice());
+        assert_eq!(result.sequence_length(), 5);
+        assert_eq!(result.processing_time_ms(), 100);
         assert_eq!(result.dimension(), 3);
-        assert_eq!(result.text_hash, "1e2db57dd6527ad4f8f281ab028d2c70");
+        assert_eq!(result.text_hash(), "1e2db57dd6527ad4f8f281ab028d2c70");
     }
 
     #[test]
@@ -61,14 +61,14 @@ mod tests {
 
         result.normalize();
 
-        let magnitude: f32 = result.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let magnitude: f32 = result.embedding().iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!(
             (magnitude - 1.0).abs() < 1e-6,
             "Expected magnitude ~1.0, got {}",
             magnitude
         );
-        assert!((result.embedding[0] - 0.6).abs() < 1e-6);
-        assert!((result.embedding[1] - 0.8).abs() < 1e-6);
+        assert!((result.embedding()[0] - 0.6).abs() < 1e-6);
+        assert!((result.embedding()[1] - 0.8).abs() < 1e-6);
     }
 
     #[test]
