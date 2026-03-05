@@ -64,7 +64,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
         {onInspect && (
           <button
             type="button"
-            className="absolute top-1.5 right-1.5 p-0.5 rounded text-muted-foreground/0 group-hover:text-muted-foreground/50 hover:!text-muted-foreground hover:bg-muted transition-colors"
+            className="absolute top-1.5 right-1.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
             onClick={(e) => { e.stopPropagation(); onInspect(entity.id); }}
             title="Inspect"
           >
