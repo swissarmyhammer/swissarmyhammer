@@ -7,6 +7,7 @@
 //! Tags and progress are populated by `ComputeEngine` during `EntityContext::read()`.
 //! The functions here simply read those pre-computed fields.
 
+use std::collections::HashMap;
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
 
@@ -125,6 +126,71 @@ pub fn enrich_task_entity(entity: &mut Entity, all_tasks: &[Entity], terminal_co
     // blocks list
     let blocks = task_blocks(entity, all_tasks);
     entity.set("blocks", json!(blocks));
+}
+
+/// Enrich all task entities in a single O(N) pass using pre-built indexes.
+///
+/// This is the batch alternative to calling `enrich_task_entity` in a loop,
+/// which would be O(N^2) because each call scans all tasks for dependency
+/// lookups. This function pre-builds `blocks` and `depends_on` indexes so
+/// the per-task enrichment is O(1).
+pub fn enrich_all_task_entities(entities: &mut [Entity], terminal_column_id: &str) {
+    // Build dependency index: dep_id -> list of task_ids that depend on it (i.e. "blocks")
+    let mut blocks_index: HashMap<String, Vec<String>> = HashMap::new();
+    let mut depends_on_index: HashMap<String, Vec<String>> = HashMap::new();
+
+    for entity in entities.iter() {
+        let deps = entity.get_string_list("depends_on");
+        for dep_id in &deps {
+            blocks_index
+                .entry(dep_id.clone())
+                .or_default()
+                .push(entity.id.to_string());
+        }
+        depends_on_index.insert(entity.id.to_string(), deps);
+    }
+
+    // Build position map for ready/blocked computation
+    let positions: HashMap<String, String> = entities
+        .iter()
+        .map(|e| {
+            (
+                e.id.to_string(),
+                e.get_str("position_column").unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+
+    for entity in entities.iter_mut() {
+        let progress = task_progress(entity);
+        entity.set("progress_fraction", json!(progress));
+
+        // Ready: all deps in terminal column
+        let deps = depends_on_index
+            .get(&entity.id.to_string())
+            .cloned()
+            .unwrap_or_default();
+        let blocked_by: Vec<String> = deps
+            .iter()
+            .filter(|dep_id| {
+                positions
+                    .get(*dep_id)
+                    .map(|col| col != terminal_column_id)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        let ready = blocked_by.is_empty();
+        entity.set("ready", json!(ready));
+        entity.set("blocked_by", json!(blocked_by));
+
+        // Blocks: tasks that depend on this one
+        let blocks = blocks_index
+            .get(&entity.id.to_string())
+            .cloned()
+            .unwrap_or_default();
+        entity.set("blocks", json!(blocks));
+    }
 }
 
 /// Convert a task Entity to the JSON format expected by the API/frontend.
@@ -403,5 +469,41 @@ mod tests {
 
         assert_eq!(e.get("ready").unwrap(), &json!(true));
         assert!(e.get_string_list("blocked_by").is_empty());
+    }
+
+    #[test]
+    fn test_enrich_all_task_entities_batch() {
+        let dep = make_task("dep1", "Dep", "", "todo");
+        let mut blocker = make_task_computed("t1", "Test", "- [ ] a\n- [x] b", "todo", vec![], 2, 1);
+        blocker.set("depends_on", json!(["dep1"]));
+
+        let mut entities = vec![dep, blocker];
+        enrich_all_task_entities(&mut entities, "done");
+
+        // dep1 should block t1
+        let dep_enriched = &entities[0];
+        assert_eq!(dep_enriched.get("blocks").unwrap(), &json!(["t1"]));
+        assert_eq!(dep_enriched.get("ready").unwrap(), &json!(true));
+
+        // t1 should be blocked by dep1
+        let t1_enriched = &entities[1];
+        assert_eq!(t1_enriched.get("progress_fraction").unwrap(), &json!(0.5));
+        assert_eq!(t1_enriched.get("ready").unwrap(), &json!(false));
+        assert_eq!(t1_enriched.get("blocked_by").unwrap(), &json!(["dep1"]));
+        assert_eq!(t1_enriched.get("blocks").unwrap(), &json!([]));
+    }
+
+    #[test]
+    fn test_enrich_all_task_entities_ready_when_deps_done() {
+        let dep = make_task("dep1", "Dep", "", "done");
+        let mut task = make_task("t1", "Test", "", "todo");
+        task.set("depends_on", json!(["dep1"]));
+
+        let mut entities = vec![dep, task];
+        enrich_all_task_entities(&mut entities, "done");
+
+        let t1_enriched = &entities[1];
+        assert_eq!(t1_enriched.get("ready").unwrap(), &json!(true));
+        assert!(t1_enriched.get_string_list("blocked_by").is_empty());
     }
 }

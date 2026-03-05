@@ -14,7 +14,7 @@ use swissarmyhammer_kanban::{
     swimlane::DeleteSwimlane,
     tag::{DeleteTag, UpdateTag},
     task::{AddTask, DeleteTask, MoveTask, UntagTask},
-    task_helpers::enrich_task_entity,
+    task_helpers::{enrich_all_task_entities, enrich_task_entity},
     types::{Ordinal, Position},
     OperationProcessor,
 };
@@ -112,7 +112,7 @@ pub async fn move_task(
 ) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
 
-    let mut cmd = MoveTask::to_column(id, column);
+    let mut cmd = MoveTask::to_column(id.clone(), column);
     cmd.swimlane = swimlane.map(|s| s.into());
     if !ordinal.is_empty() {
         cmd.ordinal = Some(ordinal);
@@ -121,7 +121,7 @@ pub async fn move_task(
         .processor
         .process(&cmd, &handle.ctx)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("move_task({}): {}", id, e))?;
 
     Ok(result)
 }
@@ -135,13 +135,13 @@ pub async fn add_task(
 ) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
 
-    let position = Position::new(column.into(), None, Ordinal::first());
+    let position = Position::new(column.clone().into(), None, Ordinal::first());
     let cmd = AddTask::new(title).with_position(position);
     let result = handle
         .processor
         .process(&cmd, &handle.ctx)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("add_task(column={}): {}", column, e))?;
 
     Ok(result)
 }
@@ -341,14 +341,14 @@ pub async fn update_entity_field(
         "update_entity_field called"
     );
     let handle = state.active_handle().await.ok_or("No active board")?;
-    let op = UpdateEntityField::new(entity_type, id, field_name, value);
+    let op = UpdateEntityField::new(entity_type.clone(), id.clone(), field_name.clone(), value);
     handle
         .processor
         .process(&op, &handle.ctx)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "update_entity_field failed");
-            e.to_string()
+            format!("update_entity_field({}/{}, {}): {}", entity_type, id, field_name, e)
         })
 }
 
@@ -358,9 +358,9 @@ pub async fn delete_task(state: State<'_, AppState>, id: String) -> Result<Value
     let handle = state.active_handle().await.ok_or("No active board")?;
     handle
         .processor
-        .process(&DeleteTask::new(id), &handle.ctx)
+        .process(&DeleteTask::new(id.clone()), &handle.ctx)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("delete_task({}): {}", id, e))
 }
 
 /// Delete a tag from the active board.
@@ -470,23 +470,26 @@ pub async fn list_entities(
         .ctx
         .entity_context()
         .await
-        .map_err(|e| e.to_string())?;
-    let mut entities = ectx.list(&entity_type).await.map_err(|e| e.to_string())?;
+        .map_err(|e| format!("list_entities({}): {}", entity_type, e))?;
+    let mut entities = ectx
+        .list(&entity_type)
+        .await
+        .map_err(|e| format!("list_entities({}): {}", entity_type, e))?;
 
     if entity_type == "task" {
         // Need terminal column for readiness computation
-        let mut columns = ectx.list("column").await.map_err(|e| e.to_string())?;
+        let mut columns = ectx
+            .list("column")
+            .await
+            .map_err(|e| format!("list_entities({}): {}", entity_type, e))?;
         columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
         let terminal_id = columns
             .last()
             .map(|c| c.id.to_string())
             .unwrap_or_else(|| "done".to_string());
 
-        // Clone entities for the all_tasks reference (needed for DAG analysis)
-        let all_tasks = entities.clone();
-        for entity in &mut entities {
-            enrich_task_entity(entity, &all_tasks, &terminal_id);
-        }
+        // Batch-enrich in O(N) using pre-built dependency indexes
+        enrich_all_task_entities(&mut entities, &terminal_id);
     }
 
     let json_entities: Vec<Value> = entities.iter().map(|e| e.to_json()).collect();
@@ -511,15 +514,21 @@ pub async fn get_entity(
         .ctx
         .entity_context()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
     let mut entity = ectx
         .read(&entity_type, &id)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
 
     if entity_type == "task" {
-        let all_tasks = ectx.list("task").await.map_err(|e| e.to_string())?;
-        let mut columns = ectx.list("column").await.map_err(|e| e.to_string())?;
+        let all_tasks = ectx
+            .list("task")
+            .await
+            .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
+        let mut columns = ectx
+            .list("column")
+            .await
+            .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
         columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
         let terminal_id = columns
             .last()
@@ -543,24 +552,39 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
         .ctx
         .entity_context()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("get_board_data: {}", e))?;
 
     // Read board entity
-    let board = ectx.read("board", "board").await.map_err(|e| e.to_string())?;
+    let board = ectx
+        .read("board", "board")
+        .await
+        .map_err(|e| format!("get_board_data: {}", e))?;
 
     // Read and sort columns by order
-    let mut columns = ectx.list("column").await.map_err(|e| e.to_string())?;
+    let mut columns = ectx
+        .list("column")
+        .await
+        .map_err(|e| format!("get_board_data: {}", e))?;
     columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
 
     // Read and sort swimlanes by order
-    let mut swimlanes = ectx.list("swimlane").await.map_err(|e| e.to_string())?;
+    let mut swimlanes = ectx
+        .list("swimlane")
+        .await
+        .map_err(|e| format!("get_board_data: {}", e))?;
     swimlanes.sort_by_key(|s| s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
 
     // Read tags
-    let tags = ectx.list("tag").await.map_err(|e| e.to_string())?;
+    let tags = ectx
+        .list("tag")
+        .await
+        .map_err(|e| format!("get_board_data: {}", e))?;
 
     // Read all tasks for counting
-    let all_tasks = ectx.list("task").await.map_err(|e| e.to_string())?;
+    let all_tasks = ectx
+        .list("task")
+        .await
+        .map_err(|e| format!("get_board_data: {}", e))?;
     let terminal_id = columns
         .last()
         .map(|c| c.id.as_str())
@@ -636,11 +660,13 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
 
     // Compute summary counts
     let total_tasks = all_tasks.len();
-    let ready_tasks = all_tasks
-        .iter()
-        .filter(|t| swissarmyhammer_kanban::task_helpers::task_is_ready(t, &all_tasks, terminal_id))
-        .count();
-    let total_actors = ectx.list("actor").await.map_err(|e| e.to_string())?.len();
+    // Sum pre-computed column ready counts instead of re-scanning all tasks
+    let ready_tasks: usize = column_ready_counts.values().sum();
+    let total_actors = ectx
+        .list("actor")
+        .await
+        .map_err(|e| format!("get_board_data: {}", e))?
+        .len();
 
     Ok(json!({
         "board": board.to_json(),
