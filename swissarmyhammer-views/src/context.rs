@@ -18,6 +18,7 @@ use crate::error::{Result, ViewsError};
 use crate::types::{ViewDef, ViewId};
 
 /// Builder for `ViewsContext`. Created by `ViewsContext::open()`.
+#[derive(Debug)]
 pub struct ViewsContextBuilder {
     root: PathBuf,
 }
@@ -51,6 +52,7 @@ impl ViewsContextBuilder {
 ///   list.yaml
 ///   ...
 /// ```
+#[derive(Debug)]
 pub struct ViewsContext {
     root: PathBuf,
     views: Vec<ViewDef>,

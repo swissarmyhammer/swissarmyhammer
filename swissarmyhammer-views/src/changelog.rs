@@ -112,10 +112,11 @@ pub async fn undo_entry(
 
     match entry.op {
         ViewChangeOp::Create => {
-            // Undo create = delete
+            // Undo create = delete (capture snapshot first so redo can restore)
+            let snapshot = ctx.get_by_id(&entry.view_id).cloned();
             ctx.delete_view(&entry.view_id).await?;
             let undo_entry =
-                ViewChangeEntry::new(ViewChangeOp::Delete, entry.view_id, None, None)?;
+                ViewChangeEntry::new(ViewChangeOp::Delete, entry.view_id, snapshot.as_ref(), None)?;
             let id = undo_entry.id.clone();
             append_changelog(changelog_path, &undo_entry).await?;
             Ok(id)
@@ -161,6 +162,7 @@ pub async fn undo_entry(
 }
 
 /// Changelog manager that pairs with a ViewsContext.
+#[derive(Debug)]
 pub struct ViewsChangelog {
     path: PathBuf,
 }
@@ -326,6 +328,23 @@ mod tests {
         changelog.undo(&create_id, &mut ctx).await.unwrap();
 
         assert_eq!(ctx.all_views().len(), 0);
+
+        // The compensating Delete entry should have `previous` set so redo works
+        let entries = changelog.read_all().await.unwrap();
+        let compensating = entries.last().unwrap();
+        assert_eq!(compensating.op, ViewChangeOp::Delete);
+        assert!(
+            compensating.previous.is_some(),
+            "compensating Delete must capture previous for redo"
+        );
+
+        // Undo the compensating Delete (i.e. redo the original create)
+        changelog
+            .undo(&compensating.id, &mut ctx)
+            .await
+            .unwrap();
+        assert_eq!(ctx.all_views().len(), 1);
+        assert_eq!(ctx.get_by_id("01A").unwrap().name, "Board");
     }
 
     #[tokio::test]

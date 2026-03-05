@@ -72,8 +72,8 @@ function App() {
       setOpenBoards(openData);
       setTaskEntities(taskData.entities.map(entityFromBag));
       setTagEntities(boardData.tags.map(entityFromBag));
-    } catch (e) {
-      console.error("Failed to load board data:", e);
+    } catch (error) {
+      console.error("Failed to load board data:", error);
     }
   }, []);
 

@@ -1,5 +1,6 @@
 import { Kanban, List, Calendar, Clock, LayoutGrid } from "lucide-react";
 import { useViews } from "@/lib/views-context";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ViewDef } from "@/types/kanban";
 
@@ -34,11 +35,12 @@ export function LeftNav() {
             <TooltipTrigger asChild>
               <button
                 onClick={() => setActiveViewId(view.id)}
-                className={`flex items-center justify-center rounded-md p-1.5 transition-colors
-                  ${isActive
+                className={cn(
+                  "flex items-center justify-center rounded-md p-1.5 transition-colors",
+                  isActive
                     ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  }`}
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                )}
               >
                 {viewIcon(view)}
               </button>

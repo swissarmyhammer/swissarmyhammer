@@ -700,15 +700,15 @@ pub async fn execute_command(
                 .map_err(|e| format!("{}: invalid 'view' arg: {}", cmd, e))?;
 
             let handle = state.active_handle().await.ok_or("No active board")?;
-            let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
-            let changelog_id = changelog
-                .log_create(&view_def)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
             let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
             let mut views = views_lock.write().await;
             views
                 .write_view(&view_def)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
+            let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
+            let changelog_id = changelog
+                .log_create(&view_def)
                 .await
                 .map_err(|e| format!("{}: {}", cmd, e))?;
             Ok(json!({ "operation_id": changelog_id }))
@@ -723,21 +723,18 @@ pub async fn execute_command(
 
             let handle = state.active_handle().await.ok_or("No active board")?;
             let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
-            let previous = {
-                let views = views_lock.read().await;
-                views
-                    .get_by_id(&view_def.id)
-                    .ok_or_else(|| format!("{}: view not found: {}", cmd, view_def.id))?
-                    .clone()
-            };
+            let mut views = views_lock.write().await;
+            let previous = views
+                .get_by_id(&view_def.id)
+                .ok_or_else(|| format!("{}: view not found: {}", cmd, view_def.id))?
+                .clone();
+            views
+                .write_view(&view_def)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
             let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
             let changelog_id = changelog
                 .log_update(&previous, &view_def)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
-            let mut views = views_lock.write().await;
-            views
-                .write_view(&view_def)
                 .await
                 .map_err(|e| format!("{}: {}", cmd, e))?;
             Ok(json!({ "operation_id": changelog_id }))
@@ -748,21 +745,18 @@ pub async fn execute_command(
 
             let handle = state.active_handle().await.ok_or("No active board")?;
             let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
-            let previous = {
-                let views = views_lock.read().await;
-                views
-                    .get_by_id(&id)
-                    .ok_or_else(|| format!("{}: view not found: {}", cmd, id))?
-                    .clone()
-            };
+            let mut views = views_lock.write().await;
+            let previous = views
+                .get_by_id(&id)
+                .ok_or_else(|| format!("{}: view not found: {}", cmd, id))?
+                .clone();
+            views
+                .delete_view(&id)
+                .await
+                .map_err(|e| format!("{}: {}", cmd, e))?;
             let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
             let changelog_id = changelog
                 .log_delete(&previous)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
-            let mut views = views_lock.write().await;
-            views
-                .delete_view(&id)
                 .await
                 .map_err(|e| format!("{}: {}", cmd, e))?;
             Ok(json!({ "operation_id": changelog_id }))

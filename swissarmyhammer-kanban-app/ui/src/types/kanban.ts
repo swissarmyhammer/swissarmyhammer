@@ -3,26 +3,26 @@
 // ---------------------------------------------------------------------------
 
 export interface ViewCommandKeys {
-  vim?: string;
-  cua?: string;
-  emacs?: string;
+  readonly vim?: string;
+  readonly cua?: string;
+  readonly emacs?: string;
 }
 
 export interface ViewCommand {
-  id: string;
-  name: string;
-  description?: string;
-  keys?: ViewCommandKeys;
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly keys?: ViewCommandKeys;
 }
 
 export interface ViewDef {
-  id: string;
-  name: string;
-  icon?: string;
-  kind: string;
-  entity_type?: string;
-  card_fields?: string[];
-  commands?: ViewCommand[];
+  readonly id: string;
+  readonly name: string;
+  readonly icon?: string;
+  readonly kind: string;
+  readonly entity_type?: string;
+  readonly card_fields?: readonly string[];
+  readonly commands?: readonly ViewCommand[];
 }
 
 // ---------------------------------------------------------------------------

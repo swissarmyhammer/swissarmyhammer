@@ -26,8 +26,8 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
           return result[0].id;
         });
       }
-    } catch (e) {
-      console.error("Failed to load views:", e);
+    } catch (error) {
+      console.error("Failed to load views:", error);
     }
   }, []);
 
