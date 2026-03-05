@@ -24,7 +24,7 @@ pub struct ResolvedModel {
 }
 
 /// Metadata about a resolved model
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelMetadata {
     /// The source from which the model was resolved
     pub source: ModelSource,
@@ -33,24 +33,23 @@ pub struct ModelMetadata {
     /// Size of the model file in bytes
     pub size_bytes: u64,
     /// Time taken to resolve (download/locate) the model
+    #[serde(with = "duration_secs")]
     pub resolve_time: Duration,
     /// Whether this model was found in cache
     pub cache_hit: bool,
 }
 
-impl serde::Serialize for ModelMetadata {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ModelMetadata", 5)?;
-        state.serialize_field("source", &self.source)?;
-        state.serialize_field("filename", &self.filename)?;
-        state.serialize_field("size_bytes", &self.size_bytes)?;
-        state.serialize_field("resolve_time_secs", &self.resolve_time.as_secs_f64())?;
-        state.serialize_field("cache_hit", &self.cache_hit)?;
-        state.end()
+mod duration_secs {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_f64(d.as_secs_f64())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+        let secs = f64::deserialize(d)?;
+        Ok(Duration::from_secs_f64(secs))
     }
 }
 
