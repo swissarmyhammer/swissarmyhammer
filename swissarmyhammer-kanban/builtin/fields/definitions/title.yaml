@@ -8,3 +8,4 @@ editor: markdown
 display: markdown
 sort: alphanumeric
 width: 300
+section: header

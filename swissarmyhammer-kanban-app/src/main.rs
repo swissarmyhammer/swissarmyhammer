@@ -11,32 +11,32 @@ use cli::Cli;
 use state::AppState;
 
 fn main() {
-    // Initialize tracing subscriber so log output is visible.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
     let cli = Cli::parse();
 
-    // If a CLI subcommand was given (and it's not `gui`), handle it and exit
+    // If a CLI subcommand was given (and it's not `gui`), handle it and exit.
+    // CLI mode gets its own tracing subscriber since tauri-plugin-log isn't active.
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    if rt.block_on(cli::run_cli(&cli)) {
-        return;
+    if cli.command.is_some() {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .init();
+        if rt.block_on(cli::run_cli(&cli)) {
+            return;
+        }
     }
 
-    // Otherwise, launch the Tauri GUI
+    // Otherwise, launch the Tauri GUI — tauri-plugin-log owns the logger.
     tracing::info!("Launching Tauri GUI");
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_log::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
-            commands::get_board,
-            commands::list_tasks,
             commands::move_task,
             commands::add_task,
             commands::reorder_columns,
@@ -59,9 +59,19 @@ fn main() {
             commands::delete_attachment,
             commands::undo_operation,
             commands::redo_operation,
+            commands::list_entities,
+            commands::get_entity,
+            commands::get_board_data,
+            commands::quit_app,
+            commands::new_board_dialog,
+            commands::open_board_dialog,
+            commands::rebuild_menu_from_manifest,
         ])
         .setup(|app| {
-            menu::rebuild_menu(app.handle());
+            // Build initial menu with OS chrome only — the frontend will
+            // send the full manifest via rebuild_menu_from_manifest once loaded.
+            let config = crate::state::AppConfig::load();
+            let _ = menu::build_menu_from_manifest(app.handle(), &[], &config.recent_boards);
             Ok(())
         })
         .on_menu_event(menu::handle_menu_event)

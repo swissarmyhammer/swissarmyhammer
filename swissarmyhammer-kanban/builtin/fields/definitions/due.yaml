@@ -7,3 +7,4 @@ editor: date
 display: date
 sort: datetime
 width: 120
+section: body

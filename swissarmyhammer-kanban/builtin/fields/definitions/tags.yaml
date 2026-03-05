@@ -7,3 +7,4 @@ type:
 editor: none
 display: badge-list
 width: 200
+section: header

@@ -7,3 +7,4 @@ type:
 editor: none
 display: number
 width: 100
+section: header

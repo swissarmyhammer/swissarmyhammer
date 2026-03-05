@@ -8,3 +8,4 @@ type:
 editor: select
 display: badge
 width: 120
+section: hidden

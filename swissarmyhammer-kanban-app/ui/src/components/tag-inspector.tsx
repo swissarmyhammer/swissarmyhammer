@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { HexColorPicker } from "react-colorful";
 import { X } from "lucide-react";
 import {
@@ -8,7 +7,8 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import { EditableMarkdown } from "@/components/editable-markdown";
-import type { Tag } from "@/types/kanban";
+import { useFieldUpdate } from "@/lib/field-update-context";
+import type { Entity } from "@/types/kanban";
 
 /** 16-color palette matching Rust auto_color */
 const PALETTE = [
@@ -31,57 +31,64 @@ const PALETTE = [
 ];
 
 interface TagInspectorProps {
-  tag: Tag;
+  entity: Entity;
   onClose: () => void;
-  onRefresh: () => void;
   style?: React.CSSProperties;
 }
 
+/**
+ * Inspector panel for editing a tag entity.
+ *
+ * Accepts a raw Entity (entity_type: "tag") and updates individual fields
+ * via the update_entity_field IPC command.
+ */
 export function TagInspector({
-  tag,
+  entity,
   onClose,
-  onRefresh,
   style,
 }: TagInspectorProps) {
-  const [selectedColor, setSelectedColor] = useState(tag.color);
+  const { updateField: contextUpdateField } = useFieldUpdate();
+  const tagName = entity.fields.tag_name as string;
+  const tagColor = (entity.fields.color as string) ?? "888888";
+  const tagDescription = (entity.fields.description as string) ?? "";
+
+  const [selectedColor, setSelectedColor] = useState(tagColor);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const colorTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  /** Send a partial tag update — only the fields you pass get changed. */
-  const updateTag = useCallback(
-    async (fields: { name?: string; color?: string; description?: string }) => {
+  const updateField = useCallback(
+    async (fieldName: string, value: string) => {
       try {
-        await invoke("update_tag", { id: tag.id, ...fields });
-        onRefresh();
-      } catch (e) {
-        console.error("Failed to update tag:", e);
+        await contextUpdateField("tag", entity.id, fieldName, value);
+      } catch {
+        // contextUpdateField already logs errors
       }
     },
-    [tag.id, onRefresh],
+    [entity.id, contextUpdateField],
   );
 
-  // Debounced save for the color picker (fires rapidly while dragging)
+  /** Debounced save for the color picker (fires rapidly while dragging). */
   const saveColorDebounced = useCallback(
     (color: string) => {
       clearTimeout(colorTimerRef.current);
-      colorTimerRef.current = setTimeout(() => updateTag({ color }), 150);
+      colorTimerRef.current = setTimeout(() => updateField("color", color), 150);
     },
-    [updateTag],
+    [updateField],
   );
 
   const saveName = useCallback(
     async (name: string) => {
-      await updateTag({ name });
+      await updateField("tag_name", name);
     },
-    [tag.name, updateTag],
+    [updateField],
   );
 
   const saveDescription = useCallback(
     async (desc: string) => {
-      await updateTag({ description: desc });
+      await updateField("description", desc);
     },
-    [tag.description, updateTag],
+    [updateField],
   );
 
   return (
@@ -110,7 +117,7 @@ export function TagInspector({
             Tag Name
           </label>
           <EditableMarkdown
-            value={tag.name}
+            value={tagName}
             onCommit={saveName}
             className="text-sm leading-snug cursor-text block"
             inputClassName="text-sm leading-snug bg-transparent border-b border-ring w-full"
@@ -136,7 +143,7 @@ export function TagInspector({
                   style={{ backgroundColor: `#${color}` }}
                   onClick={() => {
                     setSelectedColor(color);
-                    updateTag({ color });
+                    updateField("color", color);
                   }}
                 />
               ))}
@@ -185,7 +192,7 @@ export function TagInspector({
             Description
           </label>
           <EditableMarkdown
-            value={tag.description ?? ""}
+            value={tagDescription}
             onCommit={saveDescription}
             className="text-sm leading-relaxed cursor-text flex-1"
             inputClassName="text-sm leading-relaxed bg-transparent w-full flex-1"

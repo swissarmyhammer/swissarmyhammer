@@ -4,25 +4,29 @@ import { listen } from "@tauri-apps/api/event";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
+import { SchemaProvider } from "@/lib/schema-context";
+import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppShell } from "@/components/app-shell";
 import { NavBar } from "@/components/nav-bar";
 import { ModeIndicator } from "@/components/mode-indicator";
 import { BoardView } from "@/components/board-view";
-import { TaskDetailPanel } from "@/components/task-detail-panel";
-import { TagInspector } from "@/components/tag-inspector";
-import type { Board, Tag, Task, OpenBoard } from "@/types/kanban";
+import { EntityInspector } from "@/components/entity-inspector";
+import { SlidePanel } from "@/components/slide-panel";
+import type {
+  BoardData, OpenBoard, Entity,
+  BoardDataResponse, EntityListResponse,
+} from "@/types/kanban";
+import { entityFromBag, boardDataToBoardData } from "@/types/kanban";
 
 const PANEL_WIDTH = 420;
 
-interface TaskListResponse {
-  tasks: Task[];
-  count: number;
+/** A panel entry is just an entity reference — entity type + id. */
+interface PanelEntry {
+  entityType: string;
+  entityId: string;
 }
-
-type PanelEntry =
-  | { type: "task"; taskId: string }
-  | { type: "tag"; tagId: string };
 
 interface TagContextMenuPayload {
   action: string;
@@ -31,47 +35,29 @@ interface TagContextMenuPayload {
 }
 
 function App() {
-  const [board, setBoard] = useState<Board | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [board, setBoard] = useState<BoardData | null>(null);
+  const [taskEntities, setTaskEntities] = useState<Entity[]>([]);
+  const [tagEntities, setTagEntities] = useState<Entity[]>([]);
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
 
-  // Derive selected task from the stack
-  const selectedTask = useMemo(() => {
-    const taskEntry = panelStack.find((e): e is PanelEntry & { type: "task" } => e.type === "task");
-    if (!taskEntry) return null;
-    return tasks.find((t) => t.id === taskEntry.taskId) ?? null;
-  }, [panelStack, tasks]);
-
-  // Derive inspected tag from the stack
-  const inspectedTag = useMemo((): Tag | null => {
-    const tagEntry = panelStack.find((e): e is PanelEntry & { type: "tag" } => e.type === "tag");
-    if (!tagEntry || !board) return null;
-    return board.tags.find((t) => t.id === tagEntry.tagId) ?? null;
-  }, [panelStack, board]);
-
-  // Helper: open a task panel (replaces entire stack)
-  const openTaskPanel = useCallback((taskId: string) => {
-    setPanelStack([{ type: "task", taskId }]);
-  }, []);
-
-  // Helper: push/replace a tag panel onto the stack
-  const openTagPanel = useCallback((tagId: string) => {
+  /** Open an inspector for any entity. Replaces the stack for primary entities, pushes for secondary. */
+  const inspectEntity = useCallback((entityType: string, entityId: string) => {
     setPanelStack((prev) => {
-      // Remove any existing tag entry, then push new one
-      const filtered = prev.filter((e) => e.type !== "tag");
-      return [...filtered, { type: "tag", tagId }];
+      // Primary entity (task, column, board) replaces the stack
+      if (entityType === "task" || entityType === "column" || entityType === "board") {
+        return [{ entityType, entityId }];
+      }
+      // Secondary entities (tag) push onto the stack, replacing any existing entry of same type
+      const filtered = prev.filter((e) => e.entityType !== entityType);
+      return [...filtered, { entityType, entityId }];
     });
   }, []);
 
-  // Helper: pop the topmost panel
   const closeTopPanel = useCallback(() => {
     setPanelStack((prev) => prev.slice(0, -1));
   }, []);
 
-  // No renameTagInStack needed — tag IDs are stable ULIDs
-
-  // Helper: close all panels
   const closeAll = useCallback(() => {
     setPanelStack([]);
   }, []);
@@ -79,13 +65,14 @@ function App() {
   const refresh = useCallback(async () => {
     try {
       const [boardData, openData, taskData] = await Promise.all([
-        invoke<Board>("get_board", { path: null }),
+        invoke<BoardDataResponse>("get_board_data"),
         invoke<OpenBoard[]>("list_open_boards"),
-        invoke<TaskListResponse>("list_tasks", { path: null }),
+        invoke<EntityListResponse>("list_entities", { entityType: "task" }),
       ]);
-      setBoard(boardData);
+      setBoard(boardDataToBoardData(boardData));
       setOpenBoards(openData);
-      setTasks(taskData.tasks);
+      setTaskEntities(taskData.entities.map(entityFromBag));
+      setTagEntities(boardData.tags.map(entityFromBag));
     } catch (e) {
       console.error("Failed to load board data:", e);
     }
@@ -109,9 +96,9 @@ function App() {
     const unlisten = listen<TagContextMenuPayload>("tag-context-menu", async (event) => {
       const { action, tag_id, task_id } = event.payload;
       if (action === "tag_edit") {
-        // tag_id from context menu is the slug — resolve to ULID
-        const tag = board?.tags.find((t) => t.name === tag_id);
-        if (tag) openTagPanel(tag.id);
+        // tag_id from context menu is the slug — resolve to ULID via tagEntities
+        const tag = tagEntities.find((t) => (t.fields.tag_name as string) === tag_id);
+        if (tag) inspectEntity("tag", tag.id);
       } else if (action === "tag_delete" && task_id) {
         try {
           await invoke("untag_task", { id: task_id, tag: tag_id });
@@ -122,28 +109,20 @@ function App() {
       }
     });
     return () => { unlisten.then((fn) => fn()); };
-  }, [board, openTagPanel, refresh]);
+  }, [tagEntities, inspectEntity, refresh]);
 
-  const handleUpdateTitle = useCallback(async (taskId: string, title: string) => {
-    try {
-      await invoke("update_entity_field", { entity_type: "task", id: taskId, field_name: "title", value: title });
-      refresh();
-    } catch (e) {
-      console.error("Failed to update task title:", e);
-    }
-  }, [refresh]);
-
-  const handleUpdateDescription = useCallback(async (taskId: string, description: string) => {
-    try {
-      await invoke("update_entity_field", { entity_type: "task", id: taskId, field_name: "body", value: description });
-      refresh();
-    } catch (e) {
-      console.error("Failed to update task description:", e);
-    }
-  }, [refresh]);
+  const entityStore = useMemo(() => ({
+    task: taskEntities,
+    tag: tagEntities,
+    column: board?.columns ?? [],
+    swimlane: board?.swimlanes ?? [],
+  }), [taskEntities, tagEntities, board]);
 
   return (
     <TooltipProvider delayDuration={400}>
+    <SchemaProvider>
+    <EntityStoreProvider entities={entityStore}>
+    <FieldUpdateProvider onRefresh={refresh}>
     <KeymapProvider>
     <AppModeProvider>
     <UndoStackProvider>
@@ -153,14 +132,15 @@ function App() {
         board={board}
         openBoards={openBoards}
         onBoardChanged={refresh}
+        onBoardInspect={() => inspectEntity("board", "board")}
       />
       {board ? (
         <>
           <BoardView
             board={board}
-            tasks={tasks}
-            onTaskClick={(t) => openTaskPanel(t.id)}
-            onUpdateTitle={handleUpdateTitle}
+            tasks={taskEntities}
+            onTaskClick={(taskId) => inspectEntity("task", taskId)}
+            onColumnInspect={(colId) => inspectEntity("column", colId)}
             onTaskMoved={refresh}
           />
 
@@ -172,34 +152,26 @@ function App() {
             onClick={closeAll}
           />
 
-          {/* Render panels from the stack */}
+          {/* Render inspector panels from the stack */}
           {panelStack.map((entry, index) => {
             const rightOffset = (panelStack.length - 1 - index) * PANEL_WIDTH;
-            if (entry.type === "task") {
-              return (
-                <TaskDetailPanel
-                  key={`task-${entry.taskId}`}
-                  task={selectedTask}
-                  tags={board.tags}
-                  onClose={closeTopPanel}
-                  onUpdateTitle={handleUpdateTitle}
-                  onUpdateDescription={handleUpdateDescription}
-                  style={{ right: rightOffset }}
-                />
-              );
-            }
-            if (entry.type === "tag" && inspectedTag) {
-              return (
-                <TagInspector
-                  key={`tag-${entry.tagId}`}
-                  tag={inspectedTag}
-                  onClose={closeTopPanel}
-                  onRefresh={refresh}
-                  style={{ right: rightOffset }}
-                />
-              );
-            }
-            return null;
+            const entities = (entityStore as Record<string, Entity[]>)[entry.entityType];
+            const entity = entities?.find((e) => e.id === entry.entityId);
+            // Board entity is special — it's in board.board, not a list
+            const resolved = entity ?? (
+              entry.entityType === "board" ? board?.board : undefined
+            );
+            if (!resolved) return null;
+            return (
+              <SlidePanel
+                key={`${entry.entityType}-${entry.entityId}`}
+                open={true}
+                onClose={closeTopPanel}
+                style={{ right: rightOffset }}
+              >
+                <EntityInspector entity={resolved} />
+              </SlidePanel>
+            );
           })}
         </>
       ) : (
@@ -215,6 +187,9 @@ function App() {
     </UndoStackProvider>
     </AppModeProvider>
     </KeymapProvider>
+    </FieldUpdateProvider>
+    </EntityStoreProvider>
+    </SchemaProvider>
     </TooltipProvider>
   );
 }

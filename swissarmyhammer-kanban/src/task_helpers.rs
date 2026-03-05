@@ -98,6 +98,35 @@ pub fn task_blocks(entity: &Entity, all_tasks: &[Entity]) -> Vec<String> {
         .collect()
 }
 
+/// Inject computed fields into a task entity's fields map.
+///
+/// Enriches the raw entity with computed dependency-graph and progress data:
+/// - `progress_fraction`: scalar 0.0–1.0 derived from checklist progress
+/// - `ready`: true when all dependencies are in the terminal column
+/// - `blocked_by`: list of incomplete dependency task IDs
+/// - `blocks`: list of task IDs that depend on this task
+///
+/// Tags and raw progress are already populated by `ComputeEngine` during read;
+/// this function adds the higher-level computed fields that require the full
+/// task list for DAG analysis.
+pub fn enrich_task_entity(entity: &mut Entity, all_tasks: &[Entity], terminal_column_id: &str) {
+    // progress as a scalar fraction (the progress field from ComputeEngine is {total, completed, percent})
+    let progress = task_progress(entity);
+    entity.set("progress_fraction", json!(progress));
+
+    // ready flag
+    let ready = task_is_ready(entity, all_tasks, terminal_column_id);
+    entity.set("ready", json!(ready));
+
+    // blocked_by list
+    let blocked_by = task_blocked_by(entity, all_tasks, terminal_column_id);
+    entity.set("blocked_by", json!(blocked_by));
+
+    // blocks list
+    let blocks = task_blocks(entity, all_tasks);
+    entity.set("blocks", json!(blocks));
+}
+
 /// Convert a task Entity to the JSON format expected by the API/frontend.
 ///
 /// Transforms flat entity fields into the nested format:
@@ -346,5 +375,33 @@ mod tests {
         let result = task_entity_to_rich_json(&e, &[dep, e.clone()], "done");
         assert_eq!(result["ready"], false);
         assert_eq!(result["blocked_by"], json!(["dep1"]));
+    }
+
+    #[test]
+    fn test_enrich_task_entity_injects_computed_fields() {
+        let dep = make_task("dep1", "Dep", "", "todo");
+        let mut e = make_task_computed("t1", "Test", "- [ ] a\n- [x] b", "todo", vec![], 2, 1);
+        e.set("depends_on", json!(["dep1"]));
+
+        let all = vec![dep, e.clone()];
+        enrich_task_entity(&mut e, &all, "done");
+
+        assert_eq!(e.get("progress_fraction").unwrap(), &json!(0.5));
+        assert_eq!(e.get("ready").unwrap(), &json!(false));
+        assert_eq!(e.get("blocked_by").unwrap(), &json!(["dep1"]));
+        assert_eq!(e.get("blocks").unwrap(), &json!([]));
+    }
+
+    #[test]
+    fn test_enrich_task_entity_ready_when_deps_done() {
+        let dep = make_task("dep1", "Dep", "", "done");
+        let mut e = make_task("t1", "Test", "", "todo");
+        e.set("depends_on", json!(["dep1"]));
+
+        let all = vec![dep, e.clone()];
+        enrich_task_entity(&mut e, &all, "done");
+
+        assert_eq!(e.get("ready").unwrap(), &json!(true));
+        assert!(e.get_string_list("blocked_by").is_empty());
     }
 }

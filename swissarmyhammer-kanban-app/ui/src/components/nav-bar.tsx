@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -8,30 +8,45 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Board, OpenBoard } from "@/types/kanban";
+import { EditableMarkdown } from "@/components/editable-markdown";
+import { useFieldUpdate } from "@/lib/field-update-context";
+import type { BoardData, OpenBoard } from "@/types/kanban";
 
 interface NavBarProps {
-  board: Board | null;
+  board: BoardData | null;
   openBoards: OpenBoard[];
   onBoardChanged: () => void;
+  onBoardInspect?: () => void;
 }
 
 export function NavBar({
   board,
   openBoards,
   onBoardChanged,
+  onBoardInspect,
 }: NavBarProps) {
+  const { updateField } = useFieldUpdate();
+
   const handleSwitchBoard = async (path: string) => {
     await invoke("set_active_board", { path });
     onBoardChanged();
   };
 
+  const boardName = (board?.board.fields.name as string) ?? "No Board";
+
   return (
     <header className="flex h-12 items-center border-b px-4 gap-3">
+      <EditableMarkdown
+        value={boardName}
+        onCommit={(name) => {
+          if (board) updateField("board", board.board.id, "name", name).catch(() => {});
+        }}
+        className="text-sm font-semibold cursor-text"
+        inputClassName="text-sm font-semibold bg-transparent border-b border-ring"
+      />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="gap-1 font-semibold">
-            {board?.name ?? "No Board"}
+          <Button variant="ghost" size="sm" className="px-1">
             <ChevronDown className="h-4 w-4 opacity-50" />
           </Button>
         </DropdownMenuTrigger>
@@ -60,7 +75,16 @@ export function NavBar({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-
+      {board && onBoardInspect && (
+        <button
+          type="button"
+          className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+          onClick={onBoardInspect}
+          title="Inspect board"
+        >
+          <Info className="h-4 w-4" />
+        </button>
+      )}
     </header>
   );
 }

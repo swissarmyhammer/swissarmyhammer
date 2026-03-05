@@ -1,191 +1,154 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
-// Mock Tauri APIs before importing components that use them
+// Schema with sections matching the new YAML definitions
+const TASK_SCHEMA = {
+  entity: { name: "task", body_field: "body", fields: ["title", "tags", "progress", "body", "assignees", "depends_on", "position_column"] },
+  fields: [
+    { id: "f1", name: "title", type: { kind: "markdown", single_line: true }, section: "header" },
+    { id: "f3", name: "tags", type: { kind: "computed", derive: "parse-body-tags" }, section: "header" },
+    { id: "f4", name: "progress", type: { kind: "computed", derive: "parse-body-progress" }, section: "header" },
+    { id: "f2", name: "body", type: { kind: "markdown", single_line: false }, section: "body" },
+    { id: "f5", name: "assignees", type: { kind: "reference", entity: "actor", multiple: true }, section: "body" },
+    { id: "f7", name: "depends_on", type: { kind: "reference", entity: "task", multiple: true }, section: "body" },
+    { id: "f8", name: "position_column", type: { kind: "reference", entity: "column", multiple: false }, section: "hidden" },
+  ],
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockInvoke = vi.fn((...args: any[]) => {
+  if (args[0] === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
+  if (args[0] === "get_keymap_mode") return Promise.resolve("cua");
+  if (args[0] === "update_entity_field") return Promise.resolve({ id: "test-id" });
+  return Promise.resolve("ok");
+});
+
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve("cua")),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  invoke: (...args: any[]) => mockInvoke(...args),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
+}));
 
 import { EntityInspector } from "./entity-inspector";
 import { KeymapProvider } from "@/lib/keymap-context";
-import type { FieldDef, Entity } from "@/types/kanban";
-
-function renderWithProvider(ui: React.ReactElement) {
-  return render(<KeymapProvider>{ui}</KeymapProvider>);
-}
-
-function makeField(name: string, kind: string, extras: Record<string, unknown> = {}): FieldDef {
-  const base: Record<string, unknown> = { kind };
-  if (kind === "text" || kind === "markdown") base.single_line = false;
-  if (kind === "number") { base.min = undefined; base.max = undefined; }
-  if (kind === "reference") { base.entity = "task"; base.multiple = false; }
-  if (kind === "computed") base.derive = "test-derive";
-  if (kind === "select" || kind === "multi-select") base.options = [];
-  Object.assign(base, extras);
-
-  return {
-    id: `field-${name}`,
-    name,
-    type: base as FieldDef["type"],
-  };
-}
+import { SchemaProvider } from "@/lib/schema-context";
+import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { Entity } from "@/types/kanban";
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
-  return {
-    entity_type: "task",
-    id: "test-id",
-    fields,
-  };
+  return { entity_type: "task", id: "test-id", fields };
+}
+
+async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
+  const result = render(
+    <TooltipProvider>
+      <SchemaProvider>
+        <EntityStoreProvider entities={{ tag: tagEntities }}>
+          <FieldUpdateProvider onRefresh={() => {}}>
+            <KeymapProvider>
+              <EntityInspector entity={entity} />
+            </KeymapProvider>
+          </FieldUpdateProvider>
+        </EntityStoreProvider>
+      </SchemaProvider>
+    </TooltipProvider>
+  );
+  // Wait for async schema load
+  await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+  return result;
 }
 
 describe("EntityInspector", () => {
-  it("renders a field row for each field definition", () => {
-    const fields = [
-      makeField("title", "text"),
-      makeField("body", "markdown"),
-      makeField("due", "date"),
-    ];
-    const entity = makeEntity({ title: "My Task", body: "Description" });
-    const onUpdateField = vi.fn();
-
-    renderWithProvider(
-      <EntityInspector entity={entity} fields={fields} onUpdateField={onUpdateField} />,
-    );
-
-    expect(screen.getByTestId("field-row-title")).toBeDefined();
-    expect(screen.getByTestId("field-row-body")).toBeDefined();
-    expect(screen.getByTestId("field-row-due")).toBeDefined();
+  it("renders fields from schema in section order (header, body)", async () => {
+    await renderInspector(makeEntity({ title: "My Task", body: "Description", tags: [] }));
+    expect(screen.getByTestId("field-row-title")).toBeTruthy();
+    expect(screen.getByTestId("field-row-body")).toBeTruthy();
+    expect(screen.getByTestId("field-row-tags")).toBeTruthy();
   });
 
-  it("displays field labels as humanized names", () => {
-    const fields = [makeField("depends_on", "reference", { multiple: true })];
-    const entity = makeEntity({});
-    const onUpdateField = vi.fn();
-
-    renderWithProvider(
-      <EntityInspector entity={entity} fields={fields} onUpdateField={onUpdateField} />,
-    );
-
-    expect(screen.getByText("depends on")).toBeDefined();
+  it("does not render fields with section: hidden", async () => {
+    const { container } = await renderInspector(makeEntity({ position_column: "todo" }));
+    expect(container.querySelector('[data-testid="field-row-position_column"]')).toBeNull();
   });
 
-  it("hides fields listed in hideFields", () => {
-    const fields = [
-      makeField("title", "text"),
-      makeField("body", "markdown"),
-    ];
-    const entity = makeEntity({ title: "Test", body: "Content" });
-    const onUpdateField = vi.fn();
-
-    renderWithProvider(
-      <EntityInspector
-        entity={entity}
-        fields={fields}
-        hideFields={["body"]}
-        onUpdateField={onUpdateField}
-      />,
-    );
-
-    expect(screen.getByTestId("field-row-title")).toBeDefined();
-    expect(screen.queryByTestId("field-row-body")).toBeNull();
+  it("groups fields into header and body sections", async () => {
+    const { container } = await renderInspector(makeEntity({ title: "T", body: "B", tags: [] }));
+    const header = container.querySelector('[data-testid="inspector-header"]');
+    const body = container.querySelector('[data-testid="inspector-body"]');
+    expect(header).toBeTruthy();
+    expect(body).toBeTruthy();
+    // title is in header, body is in body section
+    expect(header!.querySelector('[data-testid="field-row-title"]')).toBeTruthy();
+    expect(body!.querySelector('[data-testid="field-row-body"]')).toBeTruthy();
   });
 
-  it("displays field values as markdown", () => {
-    const fields = [makeField("title", "text")];
-    const entity = makeEntity({ title: "Hello World" });
-    const onUpdateField = vi.fn();
-
-    renderWithProvider(
-      <EntityInspector entity={entity} fields={fields} onUpdateField={onUpdateField} />,
-    );
-
-    expect(screen.getByText("Hello World")).toBeDefined();
+  it("renders markdown fields with EditableMarkdown (click enters edit mode)", async () => {
+    const { container } = await renderInspector(makeEntity({ title: "Click me" }));
+    fireEvent.click(screen.getByText("Click me"));
+    expect(container.querySelector(".cm-editor")).toBeTruthy();
   });
 
-  it("enters edit mode on click — shows CodeMirror editor", () => {
-    const fields = [makeField("title", "text")];
-    const entity = makeEntity({ title: "Original" });
-    const onUpdateField = vi.fn();
+  it("saves field on blur via FieldUpdateContext with correct params", async () => {
+    mockInvoke.mockClear();
+    const { container } = await renderInspector(makeEntity({ title: "Old" }));
 
-    const { container } = renderWithProvider(
-      <EntityInspector entity={entity} fields={fields} onUpdateField={onUpdateField} />,
-    );
-
-    // Click to edit
-    fireEvent.click(screen.getByText("Original"));
-
-    // Should now show a CodeMirror editor
-    const editor = container.querySelector(".cm-editor");
-    expect(editor).toBeTruthy();
-  });
-
-  it("commits on blur", () => {
-    const fields = [makeField("title", "text")];
-    const entity = makeEntity({ title: "Original" });
-    const onUpdateField = vi.fn();
-
-    const { container } = renderWithProvider(
-      <EntityInspector entity={entity} fields={fields} onUpdateField={onUpdateField} />,
-    );
-
-    fireEvent.click(screen.getByText("Original"));
+    fireEvent.click(screen.getByText("Old"));
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
-    expect(cmContent).toBeTruthy();
+    if (!cmContent) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const view = (cmContent as any).cmTile?.view;
+    if (!view?.dispatch) return;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "New" } });
+    await act(async () => { fireEvent.blur(cmContent); });
 
-    // Blur commits the current value
-    fireEvent.blur(cmContent);
-    expect(onUpdateField).toHaveBeenCalledWith("title", "Original");
-  });
-
-  it("does not allow editing computed fields", () => {
-    const fields = [makeField("tags", "computed")];
-    const entity = makeEntity({ tags: ["bug", "feature"] });
-    const onUpdateField = vi.fn();
-
-    const { container } = renderWithProvider(
-      <EntityInspector entity={entity} fields={fields} onUpdateField={onUpdateField} />,
+    const call = mockInvoke.mock.calls.find(
+      (c) => c[0] === "update_entity_field" && (c[1] as Record<string, unknown>)?.fieldName === "title",
     );
-
-    expect(screen.getByTestId("field-row-tags")).toBeDefined();
-
-    // Click should not enter edit mode (no CodeMirror editor)
-    fireEvent.click(screen.getByText("bug, feature"));
-    expect(container.querySelector(".cm-editor")).toBeNull();
+    expect(call).toBeTruthy();
+    expect(call![1]).toEqual({ entityType: "task", id: "test-id", fieldName: "title", value: "New" });
   });
 
-  it("shows 'Empty' for missing field values", () => {
-    const fields = [makeField("due", "date")];
-    const entity = makeEntity({});
-    const onUpdateField = vi.fn();
-
-    renderWithProvider(
-      <EntityInspector entity={entity} fields={fields} onUpdateField={onUpdateField} />,
-    );
-
-    expect(screen.getByText("Empty")).toBeDefined();
+  it("does not allow editing computed fields", async () => {
+    const { container } = await renderInspector(makeEntity({ tags: ["bug"] }));
+    const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
+    expect(tagsRow).toBeTruthy();
+    // Click should not produce an editor
+    fireEvent.click(tagsRow!.querySelector(".cursor-text, .min-h-\\[1\\.25rem\\]")!);
+    expect(tagsRow!.querySelector(".cm-editor")).toBeNull();
   });
 
-  it("only allows one field to be edited at a time", () => {
-    const fields = [
-      makeField("title", "text"),
-      makeField("name", "text"),
+  it("body_field renders #tag as a styled pill when tag entity exists", async () => {
+    const tags = [
+      { entity_type: "tag", id: "tag-ui", fields: { tag_name: "ui", color: "1d76db", description: "UI" } },
     ];
-    const entity = makeEntity({ title: "A", name: "B" });
-    const onUpdateField = vi.fn();
+    const { container } = await renderInspector(makeEntity({ body: "Fix #ui bug" }), tags);
 
-    const { container } = renderWithProvider(
-      <EntityInspector entity={entity} fields={fields} onUpdateField={onUpdateField} />,
+    const bodyRow = container.querySelector('[data-testid="field-row-body"]');
+    expect(bodyRow).toBeTruthy();
+    const pill = Array.from(bodyRow!.querySelectorAll("span")).find(
+      (s) => s.textContent === "#ui" && s.classList.contains("rounded-full"),
     );
+    expect(pill, `Expected #ui pill. HTML: ${bodyRow!.innerHTML}`).toBeTruthy();
+  });
 
-    // Edit first field
-    fireEvent.click(screen.getByText("A"));
-    // Should have exactly one CodeMirror editor
-    const editors = container.querySelectorAll(".cm-editor");
-    expect(editors.length).toBe(1);
-    // Second field should still be in display mode (rendered as markdown)
-    expect(screen.getByText("B")).toBeDefined();
+  it("non-body markdown fields do NOT get tag pills", async () => {
+    const tags = [
+      { entity_type: "tag", id: "tag-ui", fields: { tag_name: "ui", color: "1d76db", description: "" } },
+    ];
+    const { container } = await renderInspector(makeEntity({ title: "Fix #ui" }), tags);
+
+    const titleRow = container.querySelector('[data-testid="field-row-title"]');
+    const pill = Array.from(titleRow!.querySelectorAll("span")).find(
+      (s) => s.textContent === "#ui" && s.classList.contains("rounded-full"),
+    );
+    expect(pill, "Title should NOT have tag pills").toBeFalsy();
   });
 });

@@ -1,61 +1,3 @@
-export interface Column {
-  id: string;
-  name: string;
-  order: number;
-  task_count?: number;
-  ready_count?: number;
-}
-
-export interface Swimlane {
-  id: string;
-  name: string;
-  order: number;
-  task_count?: number;
-}
-
-export interface Tag {
-  id: string;
-  name: string;
-  description?: string;
-  color: string;
-  task_count?: number;
-}
-
-export interface BoardSummary {
-  total_tasks: number;
-  total_actors: number;
-  ready_tasks: number;
-  blocked_tasks: number;
-}
-
-export interface Board {
-  name: string;
-  description?: string;
-  columns: Column[];
-  swimlanes: Swimlane[];
-  tags: Tag[];
-  summary?: BoardSummary;
-}
-
-export interface Position {
-  column: string;
-  swimlane?: string;
-  ordinal: string;
-}
-
-export interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  position: Position;
-  tags: string[];
-  assignees: string[];
-  depends_on: string[];
-  progress?: number;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface OpenBoard {
   path: string;
   is_active: boolean;
@@ -98,6 +40,8 @@ export interface FieldDef {
   default?: string;
   editor?: string;
   display?: string;
+  /** Where to render in the inspector layout: "header" | "body" | "footer" | "hidden". Default: "body". */
+  section?: string;
   sort?: string;
   filter?: string;
   group?: string;
@@ -121,4 +65,75 @@ export interface Entity {
   entity_type: string;
   id: string;
   fields: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Entity bag conversion
+//
+// Entity::to_json() on the Rust side produces a flat JSON object with
+// entity_type, id, and all field values at the top level. These helpers
+// convert between that flat format and the Entity interface.
+// ---------------------------------------------------------------------------
+
+/** Raw entity bag from Entity::to_json() — flat JSON with entity_type + id + fields. */
+export type EntityBag = Record<string, unknown> & { entity_type: string; id: string };
+
+/** Convert a flat entity bag from the backend into an Entity. */
+export function entityFromBag(bag: EntityBag): Entity {
+  const { entity_type, id, ...fields } = bag;
+  return { entity_type, id, fields };
+}
+
+// ---------------------------------------------------------------------------
+// Board summary — aggregate counts returned by get_board_data
+// ---------------------------------------------------------------------------
+
+export interface BoardSummary {
+  total_tasks: number;
+  total_actors: number;
+  ready_tasks: number;
+  blocked_tasks: number;
+}
+
+// ---------------------------------------------------------------------------
+// Response shapes
+// ---------------------------------------------------------------------------
+
+/** Response shape from get_board_data command. */
+export interface BoardDataResponse {
+  board: EntityBag;
+  columns: EntityBag[];
+  swimlanes: EntityBag[];
+  tags: EntityBag[];
+  summary: BoardSummary;
+}
+
+/** Response shape from list_entities command. */
+export interface EntityListResponse {
+  entities: EntityBag[];
+  count: number;
+}
+
+// ---------------------------------------------------------------------------
+// BoardData — entity-based board state used by UI components
+// ---------------------------------------------------------------------------
+
+/** Entity-based board data. All sub-collections are Entity arrays. */
+export interface BoardData {
+  board: Entity;
+  columns: Entity[];
+  swimlanes: Entity[];
+  tags: Entity[];
+  summary: BoardSummary;
+}
+
+/** Convert a BoardDataResponse into the entity-based BoardData. */
+export function boardDataToBoardData(data: BoardDataResponse): BoardData {
+  return {
+    board: entityFromBag(data.board),
+    columns: data.columns.map(entityFromBag),
+    swimlanes: data.swimlanes.map(entityFromBag),
+    tags: data.tags.map(entityFromBag),
+    summary: data.summary,
+  };
 }

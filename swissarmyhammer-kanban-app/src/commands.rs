@@ -3,6 +3,7 @@
 use crate::menu;
 use crate::state::AppState;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use swissarmyhammer_kanban::{
     actor::DeleteActor,
@@ -12,69 +13,29 @@ use swissarmyhammer_kanban::{
     entity::UpdateEntityField,
     swimlane::DeleteSwimlane,
     tag::{DeleteTag, UpdateTag},
-    task::{AddTask, DeleteTask, ListTasks, MoveTask, UntagTask},
+    task::{AddTask, DeleteTask, MoveTask, UntagTask},
+    task_helpers::enrich_task_entity,
     types::{Ordinal, Position},
     OperationProcessor,
 };
 use tauri::menu::{ContextMenu, MenuBuilder, PredefinedMenuItem};
 use tauri::{AppHandle, State, Window};
 
-/// Get the board metadata for the active (or specified) board.
-#[tauri::command]
-pub async fn get_board(state: State<'_, AppState>, path: Option<String>) -> Result<Value, String> {
-    tracing::debug!(path = ?path, "get_board called");
-    let handle = if let Some(p) = path {
-        let canonical = PathBuf::from(&p)
-            .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(&p));
-        let boards = state.boards.read().await;
-        boards
-            .get(&canonical)
-            .cloned()
-            .ok_or_else(|| format!("Board not open: {}", p))?
-    } else {
-        let active = state.active_board.read().await;
-        tracing::debug!(active_board = ?*active, "get_board: checking active board");
-        drop(active);
-        state.active_handle().await.ok_or("No active board")?
-    };
-
-    let result = handle
-        .processor
-        .process(&GetBoard::default(), &handle.ctx)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "get_board: processor failed");
-            e.to_string()
-        })?;
-
-    tracing::debug!(result_keys = ?result.as_object().map(|o| o.keys().collect::<Vec<_>>()), "get_board: returning result");
-    Ok(result)
-}
-
-/// List tasks for the active (or specified) board.
-#[tauri::command]
-pub async fn list_tasks(state: State<'_, AppState>, path: Option<String>) -> Result<Value, String> {
-    let handle = if let Some(p) = path {
-        let canonical = PathBuf::from(&p)
-            .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(&p));
-        let boards = state.boards.read().await;
-        boards
-            .get(&canonical)
-            .cloned()
-            .ok_or_else(|| format!("Board not open: {}", p))?
-    } else {
-        state.active_handle().await.ok_or("No active board")?
-    };
-
-    let result = handle
-        .processor
-        .process(&ListTasks::new(), &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(result)
+/// A single menu item entry received from the frontend manifest.
+///
+/// The frontend collects commands with `menuPlacement` metadata and sends
+/// them as a JSON array of these entries. Rust uses them to build the
+/// native menu bar.
+#[derive(serde::Deserialize, Debug)]
+pub struct MenuItemEntry {
+    pub id: String,
+    pub name: String,
+    pub menu: String,
+    pub group: usize,
+    pub order: usize,
+    pub accelerator: Option<String>,
+    pub radio_group: Option<String>,
+    pub checked: Option<bool>,
 }
 
 /// Open a board at the given path, resolving to its .kanban directory.
@@ -308,10 +269,12 @@ pub async fn get_keymap_mode(state: State<'_, AppState>) -> Result<String, Strin
     Ok(config.keymap_mode.clone())
 }
 
-/// Set the editor keymap mode, persist to config, and rebuild the menu.
+/// Set the editor keymap mode and persist to config.
+///
+/// The frontend handles menu sync via `syncMenuToNative` after keymap
+/// changes, so we no longer rebuild the native menu here.
 #[tauri::command]
 pub async fn set_keymap_mode(
-    app: AppHandle,
     state: State<'_, AppState>,
     mode: String,
 ) -> Result<Value, String> {
@@ -320,7 +283,6 @@ pub async fn set_keymap_mode(
         config.keymap_mode = mode.clone();
         config.save().map_err(|e| e.to_string())?;
     }
-    menu::rebuild_menu(&app);
     Ok(json!({ "keymap_mode": mode }))
 }
 
@@ -372,13 +334,22 @@ pub async fn update_entity_field(
     field_name: String,
     value: Value,
 ) -> Result<Value, String> {
+    tracing::info!(
+        entity_type = %entity_type,
+        id = %id,
+        field_name = %field_name,
+        "update_entity_field called"
+    );
     let handle = state.active_handle().await.ok_or("No active board")?;
     let op = UpdateEntityField::new(entity_type, id, field_name, value);
     handle
         .processor
         .process(&op, &handle.ctx)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            tracing::error!(error = %e, "update_entity_field failed");
+            e.to_string()
+        })
 }
 
 /// Delete a task from the active board.
@@ -482,3 +453,245 @@ pub async fn redo_operation(state: State<'_, AppState>, id: String) -> Result<Va
     let result_ulid = ectx.redo(&id).await.map_err(|e| e.to_string())?;
     Ok(json!({ "redone": id, "operation_id": result_ulid }))
 }
+
+/// List all entities of a given type, returning raw entity bags.
+///
+/// For tasks, enriches each entity with computed fields: `ready`, `blocked_by`,
+/// `blocks`, and `progress_fraction`. Other entity types are returned as-is.
+///
+/// Returns `{ entities: [...], count: N }`.
+#[tauri::command]
+pub async fn list_entities(
+    state: State<'_, AppState>,
+    entity_type: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut entities = ectx.list(&entity_type).await.map_err(|e| e.to_string())?;
+
+    if entity_type == "task" {
+        // Need terminal column for readiness computation
+        let mut columns = ectx.list("column").await.map_err(|e| e.to_string())?;
+        columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+        let terminal_id = columns
+            .last()
+            .map(|c| c.id.to_string())
+            .unwrap_or_else(|| "done".to_string());
+
+        // Clone entities for the all_tasks reference (needed for DAG analysis)
+        let all_tasks = entities.clone();
+        for entity in &mut entities {
+            enrich_task_entity(entity, &all_tasks, &terminal_id);
+        }
+    }
+
+    let json_entities: Vec<Value> = entities.iter().map(|e| e.to_json()).collect();
+    Ok(json!({
+        "entities": json_entities,
+        "count": json_entities.len(),
+    }))
+}
+
+/// Get a single entity by type and id, returning a raw entity bag.
+///
+/// For tasks, enriches with computed fields: `ready`, `blocked_by`, `blocks`,
+/// and `progress_fraction`. Other entity types are returned as-is.
+#[tauri::command]
+pub async fn get_entity(
+    state: State<'_, AppState>,
+    entity_type: String,
+    id: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut entity = ectx
+        .read(&entity_type, &id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if entity_type == "task" {
+        let all_tasks = ectx.list("task").await.map_err(|e| e.to_string())?;
+        let mut columns = ectx.list("column").await.map_err(|e| e.to_string())?;
+        columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+        let terminal_id = columns
+            .last()
+            .map(|c| c.id.to_string())
+            .unwrap_or_else(|| "done".to_string());
+        enrich_task_entity(&mut entity, &all_tasks, &terminal_id);
+    }
+
+    Ok(entity.to_json())
+}
+
+/// Get the board data with all entities as raw entity bags.
+///
+/// Columns, swimlanes, and tags are returned as `Entity::to_json()` with
+/// computed count fields injected. Tasks are NOT included (use `list_entities`
+/// for that). A summary object provides aggregate counts.
+#[tauri::command]
+pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Read board entity
+    let board = ectx.read("board", "board").await.map_err(|e| e.to_string())?;
+
+    // Read and sort columns by order
+    let mut columns = ectx.list("column").await.map_err(|e| e.to_string())?;
+    columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+
+    // Read and sort swimlanes by order
+    let mut swimlanes = ectx.list("swimlane").await.map_err(|e| e.to_string())?;
+    swimlanes.sort_by_key(|s| s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+
+    // Read tags
+    let tags = ectx.list("tag").await.map_err(|e| e.to_string())?;
+
+    // Read all tasks for counting
+    let all_tasks = ectx.list("task").await.map_err(|e| e.to_string())?;
+    let terminal_id = columns
+        .last()
+        .map(|c| c.id.as_str())
+        .unwrap_or("done");
+
+    // Count tasks per column, and ready tasks per column
+    let mut column_counts: HashMap<String, usize> = HashMap::new();
+    let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
+    for task in &all_tasks {
+        let col = task
+            .get_str("position_column")
+            .unwrap_or("todo")
+            .to_string();
+        *column_counts.entry(col.clone()).or_insert(0) += 1;
+        if swissarmyhammer_kanban::task_helpers::task_is_ready(task, &all_tasks, terminal_id) {
+            *column_ready_counts.entry(col).or_insert(0) += 1;
+        }
+    }
+
+    // Count tasks per swimlane
+    let mut swimlane_counts: HashMap<String, usize> = HashMap::new();
+    for task in &all_tasks {
+        if let Some(sl) = task.get_str("position_swimlane") {
+            if !sl.is_empty() {
+                *swimlane_counts.entry(sl.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Count tasks per tag name
+    let mut tag_counts: HashMap<String, usize> = HashMap::new();
+    for task in &all_tasks {
+        for tag_name in swissarmyhammer_kanban::task_helpers::task_tags(task) {
+            *tag_counts.entry(tag_name).or_insert(0) += 1;
+        }
+    }
+
+    // Serialize columns with injected task_count and ready_count
+    let columns_json: Vec<Value> = columns
+        .iter()
+        .map(|col| {
+            let mut e = col.clone();
+            let count = column_counts.get(col.id.as_str()).copied().unwrap_or(0);
+            let ready = column_ready_counts.get(col.id.as_str()).copied().unwrap_or(0);
+            e.set("task_count", json!(count));
+            e.set("ready_count", json!(ready));
+            e.to_json()
+        })
+        .collect();
+
+    // Serialize swimlanes with injected task_count
+    let swimlanes_json: Vec<Value> = swimlanes
+        .iter()
+        .map(|sl| {
+            let mut e = sl.clone();
+            let count = swimlane_counts.get(sl.id.as_str()).copied().unwrap_or(0);
+            e.set("task_count", json!(count));
+            e.to_json()
+        })
+        .collect();
+
+    // Serialize tags with injected task_count
+    let tags_json: Vec<Value> = tags
+        .iter()
+        .map(|tag| {
+            let mut e = tag.clone();
+            let tag_name = tag.get_str("tag_name").unwrap_or("");
+            let count = tag_counts.get(tag_name).copied().unwrap_or(0);
+            e.set("task_count", json!(count));
+            e.to_json()
+        })
+        .collect();
+
+    // Compute summary counts
+    let total_tasks = all_tasks.len();
+    let ready_tasks = all_tasks
+        .iter()
+        .filter(|t| swissarmyhammer_kanban::task_helpers::task_is_ready(t, &all_tasks, terminal_id))
+        .count();
+    let total_actors = ectx.list("actor").await.map_err(|e| e.to_string())?.len();
+
+    Ok(json!({
+        "board": board.to_json(),
+        "columns": columns_json,
+        "swimlanes": swimlanes_json,
+        "tags": tags_json,
+        "summary": {
+            "total_tasks": total_tasks,
+            "total_actors": total_actors,
+            "ready_tasks": ready_tasks,
+            "blocked_tasks": total_tasks - ready_tasks,
+        }
+    }))
+}
+
+/// Quit the application.
+#[tauri::command]
+pub async fn quit_app(app: AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
+}
+
+/// Open a folder picker to create a new board.
+#[tauri::command]
+pub async fn new_board_dialog(app: AppHandle) -> Result<(), String> {
+    menu::trigger_new_board(&app);
+    Ok(())
+}
+
+/// Open a folder picker to open an existing board.
+#[tauri::command]
+pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
+    menu::trigger_open_board(&app);
+    Ok(())
+}
+
+/// Rebuild the native menu bar from a frontend-generated manifest.
+///
+/// The frontend collects all commands with `menuPlacement` metadata, builds
+/// a sorted manifest, and sends it here. Rust constructs the native menu
+/// from the manifest entries, injecting OS chrome (About, Quit, Hide, etc.)
+/// and the Open Recent submenu.
+#[tauri::command]
+pub async fn rebuild_menu_from_manifest(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    manifest: Vec<MenuItemEntry>,
+) -> Result<(), String> {
+    let config = state.config.read().await;
+    menu::build_menu_from_manifest(&app, &manifest, &config.recent_boards)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+

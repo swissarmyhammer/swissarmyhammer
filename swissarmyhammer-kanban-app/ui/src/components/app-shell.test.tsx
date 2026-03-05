@@ -63,9 +63,13 @@ describe("AppShell", () => {
     // Check that well-known global commands are available
     expect(screen.getByTestId("cmd-app.command")).toBeTruthy();
     expect(screen.getByTestId("cmd-app.dismiss")).toBeTruthy();
-    expect(screen.getByTestId("cmd-app.save")).toBeTruthy();
     expect(screen.getByTestId("cmd-app.search")).toBeTruthy();
     expect(screen.getByTestId("cmd-app.help")).toBeTruthy();
+    // Commands added by Card 10
+    expect(screen.getByTestId("cmd-app.quit")).toBeTruthy();
+    expect(screen.getByTestId("cmd-settings.keymap.vim")).toBeTruthy();
+    expect(screen.getByTestId("cmd-file.newBoard")).toBeTruthy();
+    expect(screen.getByTestId("cmd-file.openBoard")).toBeTruthy();
   });
 
   it("does not render command palette by default", () => {

@@ -8,3 +8,4 @@ type:
 editor: multi-select
 display: badge-list
 width: 200
+section: footer

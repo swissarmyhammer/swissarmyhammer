@@ -14,7 +14,7 @@ import { tagAutocomplete } from "@/lib/cm-tag-autocomplete";
 import { tagTooltips, type TagMeta } from "@/lib/cm-tag-tooltip";
 import { remarkTags } from "@/lib/remark-tags";
 import { TagPill } from "@/components/tag-pill";
-import type { Tag } from "@/types/kanban";
+import type { Entity } from "@/types/kanban";
 
 interface EditableMarkdownProps {
   value: string;
@@ -23,8 +23,8 @@ interface EditableMarkdownProps {
   inputClassName?: string;
   multiline?: boolean;
   placeholder?: string;
-  /** Tags for colored pill decorations in the editor */
-  tags?: Tag[];
+  /** Tag entities for colored pill decorations in the editor */
+  tags?: Entity[];
 }
 
 /** Regex matching a GFM task list checkbox in markdown source */
@@ -177,7 +177,7 @@ export function EditableMarkdown({
 
   // Known tag slugs for the remark plugin
   const knownSlugs = useMemo(
-    () => (tags ? tags.map((t) => t.name) : []),
+    () => (tags ? tags.map((t) => (t.fields.tag_name as string) ?? "") : []),
     [tags],
   );
 
@@ -185,7 +185,11 @@ export function EditableMarkdown({
   const tagColorMap = useMemo(() => {
     const map = new Map<string, string>();
     if (tags) {
-      for (const tag of tags) map.set(tag.name, tag.color);
+      for (const t of tags) {
+        const name = (t.fields.tag_name as string) ?? "";
+        const color = (t.fields.color as string) ?? "888888";
+        map.set(name, color);
+      }
     }
     return map;
   }, [tags]);
@@ -194,8 +198,11 @@ export function EditableMarkdown({
   const tagMetaMap = useMemo(() => {
     const map = new Map<string, TagMeta>();
     if (tags) {
-      for (const tag of tags) {
-        map.set(tag.name, { color: tag.color, description: tag.description });
+      for (const t of tags) {
+        const name = (t.fields.tag_name as string) ?? "";
+        const color = (t.fields.color as string) ?? "888888";
+        const description = (t.fields.description as string) || undefined;
+        map.set(name, { color, description });
       }
     }
     return map;

@@ -8,3 +8,4 @@ editor: none
 display: text
 sort: alphanumeric
 width: 100
+section: hidden

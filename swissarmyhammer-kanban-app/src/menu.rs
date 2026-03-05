@@ -1,66 +1,101 @@
 //! Native menu bar construction and event handling.
 
-use crate::state::{resolve_kanban_path, AppConfig, AppState, RecentBoard};
+use crate::commands::MenuItemEntry;
+use crate::state::{resolve_kanban_path, AppState, RecentBoard};
 use std::path::{Path, PathBuf};
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
-use tauri::menu::{
-    CheckMenuItem, IconMenuItem, Menu, MenuItem, NativeIcon, PredefinedMenuItem, Submenu,
-};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
-/// Build the native menu bar with app, File, Edit, and Settings submenus.
+/// Build and set the native menu from a frontend-generated manifest.
 ///
-/// On macOS the first submenu is always the application menu, so we
-/// prepend a proper app menu to keep File in the right position.
-pub fn build_menu(
+/// Groups entries by menu name (app, file, settings), builds each submenu
+/// with separators between groups, and injects OS chrome items (About, Quit,
+/// Hide, Close Window, Open Recent, Edit menu). The manifest entries are
+/// expected to arrive pre-sorted by menu/group/order from the frontend.
+pub fn build_menu_from_manifest(
     app: &AppHandle,
+    manifest: &[MenuItemEntry],
     recent: &[RecentBoard],
-    keymap_mode: &str,
-) -> tauri::Result<Menu<tauri::Wry>> {
-    // File menu items — standard macOS labels with native icons
-    let new_board = IconMenuItem::with_id_and_native_icon(
-        app,
-        "new_board",
-        "New",
-        true,
-        Some(NativeIcon::Add),
-        Some("CmdOrCtrl+N"),
-    )?;
-    let open_board = IconMenuItem::with_id_and_native_icon(
-        app,
-        "open_board",
-        "Open...",
-        true,
-        Some(NativeIcon::Folder),
-        Some("CmdOrCtrl+O"),
-    )?;
+) -> tauri::Result<()> {
+    // Group entries by menu name
+    let mut menus: std::collections::HashMap<String, Vec<&MenuItemEntry>> =
+        std::collections::HashMap::new();
+    for entry in manifest {
+        menus.entry(entry.menu.clone()).or_default().push(entry);
+    }
 
-    // Open Recent submenu (disabled when empty)
+    // --- App menu ---
+    let app_menu = Submenu::new(app, app.package_info().name.clone(), true)?;
+    app_menu.append(&PredefinedMenuItem::about(app, None, None)?)?;
+
+    if let Some(items) = menus.get("app") {
+        let mut last_group: Option<usize> = None;
+        for entry in items {
+            if last_group.is_some() && last_group != Some(entry.group) {
+                app_menu.append(&PredefinedMenuItem::separator(app)?)?;
+            }
+            // Skip "app.about" — already added as PredefinedMenuItem above
+            if entry.id == "app.about" {
+                last_group = Some(entry.group);
+                continue;
+            }
+            app_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            last_group = Some(entry.group);
+        }
+    }
+
+    // Settings submenu inside the app menu (matches original structure)
+    if let Some(items) = menus.get("settings") {
+        app_menu.append(&PredefinedMenuItem::separator(app)?)?;
+        let settings_sub = Submenu::new(app, "Settings", true)?;
+        let mut last_group: Option<usize> = None;
+        for entry in items {
+            if last_group.is_some() && last_group != Some(entry.group) {
+                settings_sub.append(&PredefinedMenuItem::separator(app)?)?;
+            }
+            settings_sub.append(build_menu_item(app, entry)?.as_ref())?;
+            last_group = Some(entry.group);
+        }
+        app_menu.append(&settings_sub)?;
+    }
+
+    // OS chrome at the end of app menu
+    app_menu.append(&PredefinedMenuItem::separator(app)?)?;
+    app_menu.append(&PredefinedMenuItem::hide(app, None)?)?;
+    app_menu.append(&PredefinedMenuItem::hide_others(app, None)?)?;
+    app_menu.append(&PredefinedMenuItem::show_all(app, None)?)?;
+    app_menu.append(&PredefinedMenuItem::separator(app)?)?;
+    app_menu.append(&PredefinedMenuItem::quit(app, None)?)?;
+
+    // --- File menu ---
+    let file_menu = Submenu::new(app, "File", true)?;
+    if let Some(items) = menus.get("file") {
+        let mut last_group: Option<usize> = None;
+        for entry in items {
+            if last_group.is_some() && last_group != Some(entry.group) {
+                file_menu.append(&PredefinedMenuItem::separator(app)?)?;
+            }
+            file_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            last_group = Some(entry.group);
+        }
+    }
+    // Open Recent submenu
     let recent_submenu = Submenu::new(app, "Open Recent", !recent.is_empty())?;
     for rb in recent {
         let id = format!("open_recent:{}", rb.path.display());
         let item = MenuItem::with_id(app, id, &rb.name, true, None::<&str>)?;
         recent_submenu.append(&item)?;
     }
+    file_menu.append(&recent_submenu)?;
+    file_menu.append(&PredefinedMenuItem::separator(app)?)?;
+    file_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
 
-    let file_submenu = Submenu::with_items(
-        app,
-        "File",
-        true,
-        &[
-            &new_board,
-            &open_board,
-            &recent_submenu,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::close_window(app, None)?,
-        ],
-    )?;
-
-    // Edit submenu with standard items
-    let edit_submenu = Submenu::with_items(
+    // --- Edit menu (OS chrome only) ---
+    let edit_menu = Submenu::with_items(
         app,
         "Edit",
         true,
@@ -75,95 +110,68 @@ pub fn build_menu(
         ],
     )?;
 
-    // Settings menu with Editor Keymap radio items
-    let keymap_cua = CheckMenuItem::with_id(
-        app,
-        "keymap_cua",
-        "CUA (Standard)",
-        true,
-        keymap_mode == "cua",
-        None::<&str>,
-    )?;
-    let keymap_vim = CheckMenuItem::with_id(
-        app,
-        "keymap_vim",
-        "Vim",
-        true,
-        keymap_mode == "vim",
-        None::<&str>,
-    )?;
-    let keymap_emacs = CheckMenuItem::with_id(
-        app,
-        "keymap_emacs",
-        "Emacs",
-        true,
-        keymap_mode == "emacs",
-        None::<&str>,
-    )?;
+    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])?;
+    app.set_menu(menu).map_err(|e| {
+        tracing::error!("Failed to set menu: {}", e);
+        e
+    })?;
 
-    let settings_submenu = Submenu::with_items(
-        app,
-        "Settings",
-        true,
-        &[
-            &keymap_cua,
-            &keymap_vim,
-            &keymap_emacs,
-            &PredefinedMenuItem::separator(app)?,
-        ],
-    )?;
-
-    // macOS app menu — insert Settings before the separator/quit group
-    let app_menu = Submenu::with_items(
-        app,
-        app.package_info().name.clone(),
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &settings_submenu,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::show_all(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
-    )?;
-
-    Menu::with_items(app, &[&app_menu, &file_submenu, &edit_submenu])
+    Ok(())
 }
 
-/// Rebuild the menu from current config and set it on the app.
-pub fn rebuild_menu(handle: &AppHandle) {
-    let config = AppConfig::load();
-    match build_menu(handle, &config.recent_boards, &config.keymap_mode) {
-        Ok(menu) => {
-            if let Err(e) = handle.set_menu(menu) {
-                tracing::error!("Failed to set menu: {}", e);
-            }
-        }
-        Err(e) => {
-            tracing::error!("Failed to build menu: {}", e);
-        }
+/// Build a single native menu item from a manifest entry.
+///
+/// If the entry has a `radio_group`, a CheckMenuItem is created (for radio-style
+/// toggle items). Otherwise a regular MenuItem is created. Both support
+/// optional keyboard accelerators.
+fn build_menu_item(
+    app: &AppHandle,
+    entry: &MenuItemEntry,
+) -> tauri::Result<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> {
+    if entry.radio_group.is_some() {
+        Ok(Box::new(CheckMenuItem::with_id(
+            app,
+            &entry.id,
+            &entry.name,
+            true,
+            entry.checked.unwrap_or(false),
+            entry.accelerator.as_deref(),
+        )?))
+    } else {
+        Ok(Box::new(MenuItem::with_id(
+            app,
+            &entry.id,
+            &entry.name,
+            true,
+            entry.accelerator.as_deref(),
+        )?))
     }
 }
 
 /// Dispatch native menu events.
+///
+/// Open Recent items and tag context menu actions are handled directly
+/// because they carry context (a path or tag ID) that isn't part of the
+/// command system. Everything else is emitted as a generic `menu-command`
+/// event so the frontend can route it through `executeCommand(id)`.
 pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref().to_string();
 
-    if id == "new_board" {
-        handle_new_board(app);
-    } else if id == "open_board" {
-        handle_open_board(app);
-    } else if let Some(path_str) = id.strip_prefix("open_recent:") {
+    // Open Recent items — handled directly (carry a file path)
+    if let Some(path_str) = id.strip_prefix("open_recent:") {
         handle_open_recent(app, PathBuf::from(path_str));
-    } else if let Some(mode) = id.strip_prefix("keymap_") {
-        handle_keymap_change(app, mode);
-    } else if id == "tag_edit" || id == "tag_delete" {
-        handle_tag_menu(app, &id);
+        return;
     }
+
+    // Tag context menu — handled directly (carry context tag state)
+    if id == "tag_edit" || id == "tag_delete" {
+        handle_tag_menu(app, &id);
+        return;
+    }
+
+    // Everything else: emit as a generic menu-command event.
+    // The frontend listens for this and routes through executeCommand(id).
+    let _ = app.emit("menu-command", &id);
 }
 
 /// Tag context menu actions: read the stored context tag and emit to frontend.
@@ -186,20 +194,14 @@ fn handle_tag_menu(app: &AppHandle, action: &str) {
     });
 }
 
-/// Settings > Editor Keymap > [mode]: update config, rebuild menu, notify frontend.
-fn handle_keymap_change(app: &AppHandle, mode: &str) {
-    let handle = app.clone();
-    let mode = mode.to_string();
-    tauri::async_runtime::spawn(async move {
-        let state = handle.state::<AppState>();
-        {
-            let mut config = state.config.write().await;
-            config.keymap_mode = mode.clone();
-            let _ = config.save();
-        }
-        rebuild_menu(&handle);
-        let _ = handle.emit("keymap-changed", &mode);
-    });
+/// Public entry point for creating a new board -- used by both native menu and command palette.
+pub fn trigger_new_board(app: &AppHandle) {
+    handle_new_board(app);
+}
+
+/// Public entry point for opening a board -- used by both native menu and command palette.
+pub fn trigger_open_board(app: &AppHandle) {
+    handle_open_board(app);
 }
 
 /// File > New Board: pick a folder, init the board, then open it.
@@ -260,12 +262,14 @@ fn handle_open_recent(app: &AppHandle, path: PathBuf) {
     });
 }
 
-/// Open a board, rebuild the menu, and emit a frontend event.
+/// Open a board and emit a frontend event.
+///
+/// The frontend listens for `board-changed` and will rebuild the native
+/// menu via `syncMenuToNative` (which calls `rebuild_menu_from_manifest`).
 async fn open_and_notify(handle: &AppHandle, path: &Path) {
     let state = handle.state::<AppState>();
     match state.open_board(path).await {
         Ok(_) => {
-            rebuild_menu(handle);
             let _ = handle.emit("board-changed", ());
         }
         Err(e) => {

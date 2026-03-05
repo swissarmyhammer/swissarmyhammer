@@ -87,7 +87,6 @@ liquid-core = "0.26"
 walkdir = "2"
 dashmap = "6"
 regex = "1"
-tantivy = "0.24"
 fuzzy-matcher = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 notify = "6"
@@ -158,18 +157,14 @@ rmcp = { version = "0.15.0", features = [
 ] }
 agent-client-protocol = "0.9.4"
 dirs = "6.0"
-rust-embed = "8"
 comfy-table = "7"
 crossterm = "0.29"
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 arboard = "3.4"
 atty = "0.2"
-tar = "0.4"
-flate2 = "1.0"
 zip = "0.6"
 reqwest = { version = "0.12", features = ["json", "stream", "gzip", "cookies", "rustls-tls", "multipart"] }
 git2 = { version = "0.18", default-features = false, features = ["vendored-libgit2"] }
-fs_extra = "1.3"
 url = "2.5"
 indicatif = "0.17"
 sha2 = "0.10"
@@ -177,13 +172,10 @@ futures-util = "0.3"
 tempfile = "3.0"
 pathdiff = "0.2"
 serial_test = "3.0"
-textwrap = "0.16"
-csv = "1.3"
 rand = "0.8"
 syntect = "5.2"
 once_cell = "1.20"
 rusqlite = { version = "0.33", features = ["bundled"] }
-ouroboros = "0.18"
 html2text = "0.16"
 bytes = "1.0"
 futures = "0.3"
@@ -213,7 +205,6 @@ swissarmyhammer-operations-macros = { path = "swissarmyhammer-operations-macros"
 num_cpus = "1.0"
 process-wrap = "8.0"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "rustls-tls"] }
-polars = { version = "0.41.0", features = ["lazy", "parquet", "dtype-struct", "streaming"] }
 jsonschema = "0.18"
 
 # Ripgrep library
@@ -236,11 +227,7 @@ nix = { version = "0.29", features = ["signal", "process"] }
 include_dir = "0.7"
 lru = "0.12"
 rquickjs = { version = "0.11", features = ["futures", "loader"] }
-swissarmyhammer-js = { path = "swissarmyhammer-js" }
-swissarmyhammer-fields = { path = "swissarmyhammer-fields" }
-swissarmyhammer-entity = { path = "swissarmyhammer-entity" }
 diffy = "0.4.2"
-chumsky = "0.10.1"
 zstd = "0.13"
 memmap2 = "0.9"
 rayon = "1.8"
@@ -249,7 +236,6 @@ criterion = "0.5"
 http = "1.1"
 piper = "0.2"
 tokio-test = "0.4"
-ctor = "0.2"
 derive_builder = "0.20"
 scopeguard = "1.2"
 wiremock = "0.5"
@@ -263,7 +249,6 @@ predicates = "3.0"
 proptest = "1.0"
 sysinfo = "0.30"
 rstest = "0.26.1"
-cargo-release = "0.25"
 
 
 [workspace.lints.rust]

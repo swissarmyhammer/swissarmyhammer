@@ -1,17 +1,15 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { TaskCard } from "@/components/task-card";
-import type { Tag, Task } from "@/types/kanban";
+import { EntityCard } from "@/components/entity-card";
+import type { Entity } from "@/types/kanban";
 
-interface SortableTaskCardProps {
-  task: Task;
-  tags?: Tag[];
+interface SortableEntityCardProps {
+  entity: Entity;
   isBlocked?: boolean;
-  onClick?: (task: Task) => void;
-  onUpdateTitle?: (taskId: string, title: string) => void;
+  onClick?: (entityId: string) => void;
 }
 
-export function SortableTaskCard({ task, tags, isBlocked, onClick, onUpdateTitle }: SortableTaskCardProps) {
+export function SortableEntityCard({ entity, isBlocked, onClick }: SortableEntityCardProps) {
   const {
     attributes,
     listeners,
@@ -19,7 +17,7 @@ export function SortableTaskCard({ task, tags, isBlocked, onClick, onUpdateTitle
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id, data: { type: "task" } });
+  } = useSortable({ id: entity.id, data: { type: "task" } });
 
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
@@ -28,14 +26,13 @@ export function SortableTaskCard({ task, tags, isBlocked, onClick, onUpdateTitle
   };
 
   return (
-    <TaskCard
+    <EntityCard
       ref={setNodeRef}
       style={style}
-      task={task}
-      tags={tags}
+      entity={entity}
       isBlocked={isBlocked}
       onClick={onClick}
-      onUpdateTitle={onUpdateTitle}
+      onInspect={onClick}
       dragHandleProps={{ ...listeners, ...attributes }}
     />
   );

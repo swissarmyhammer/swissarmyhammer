@@ -117,6 +117,9 @@ pub struct FieldDef {
     pub sort: Option<SortKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
+    /// Inspector layout section: "header", "body", "footer", or "hidden".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
 }

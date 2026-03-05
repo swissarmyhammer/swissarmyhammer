@@ -18,16 +18,17 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
-import { TaskCard } from "@/components/task-card";
+import { EntityCard } from "@/components/entity-card";
 import { reorderColumns } from "@/lib/column-reorder";
 import { defaultTaskTitle } from "@/lib/task-defaults";
-import type { Board, Column, Task } from "@/types/kanban";
+import { useFieldUpdate } from "@/lib/field-update-context";
+import type { BoardData, Entity } from "@/types/kanban";
 
 interface BoardViewProps {
-  board: Board;
-  tasks: Task[];
-  onTaskClick?: (task: Task) => void;
-  onUpdateTitle?: (taskId: string, title: string) => void;
+  board: BoardData;
+  tasks: Entity[];
+  onTaskClick?: (taskId: string) => void;
+  onColumnInspect?: (columnId: string) => void;
   onTaskMoved?: () => void;
 }
 
@@ -40,9 +41,11 @@ type ColumnLayout = Map<string, string[]>;
 
 type DragType = "task" | "column";
 
-export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMoved }: BoardViewProps) {
+export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMoved }: BoardViewProps) {
   const columns = useMemo(
-    () => [...board.columns].sort((a, b) => a.order - b.order),
+    () => [...board.columns].sort((a, b) =>
+      ((a.fields.order as number) ?? 0) - ((b.fields.order as number) ?? 0)
+    ),
     [board.columns]
   );
 
@@ -50,13 +53,13 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
   const columnIdList = useMemo(() => columns.map((c) => c.id), [columns]);
 
   const taskMap = useMemo(() => {
-    const map = new Map<string, Task>();
+    const map = new Map<string, Entity>();
     for (const task of tasks) map.set(task.id, task);
     return map;
   }, [tasks]);
 
   const columnMap = useMemo(() => {
-    const map = new Map<string, Column>();
+    const map = new Map<string, Entity>();
     for (const col of columns) map.set(col.id, col);
     return map;
   }, [columns]);
@@ -66,7 +69,8 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
     const map: ColumnLayout = new Map();
     for (const col of columns) map.set(col.id, []);
     for (const task of tasks) {
-      const list = map.get(task.position.column);
+      const col = task.fields.position_column as string;
+      const list = map.get(col);
       if (list) list.push(task.id);
     }
     // Sort each column by ordinal
@@ -74,7 +78,9 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
       ids.sort((a, b) => {
         const ta = taskMap.get(a)!;
         const tb = taskMap.get(b)!;
-        return ta.position.ordinal.localeCompare(tb.position.ordinal);
+        return ((ta.fields.position_ordinal as string) ?? "a0").localeCompare(
+          (tb.fields.position_ordinal as string) ?? "a0"
+        );
       });
       map.set(colId, ids);
     }
@@ -83,8 +89,8 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
 
   // Virtual layout tracks live arrangement during drag
   const [virtualLayout, setVirtualLayout] = useState<ColumnLayout | null>(null);
-  const [activeTask, setActiveTask] = useState<Task | null>(null);
-  const [activeColumn, setActiveColumn] = useState<Column | null>(null);
+  const [activeTask, setActiveTask] = useState<Entity | null>(null);
+  const [activeColumn, setActiveColumn] = useState<Entity | null>(null);
   const [virtualColumnOrder, setVirtualColumnOrder] = useState<string[] | null>(null);
   const activeColumnRef = useRef<string | null>(null);
   const dragTypeRef = useRef<DragType | null>(null);
@@ -96,11 +102,12 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
   const blockedIds = useMemo(() => {
     const set = new Set<string>();
     for (const task of tasks) {
-      if (task.depends_on.length > 0) {
+      const dependsOn = (task.fields.depends_on as string[]) ?? [];
+      if (dependsOn.length > 0) {
         const terminalCol = columns[columns.length - 1]?.id;
-        const hasIncomplete = task.depends_on.some((depId) => {
+        const hasIncomplete = dependsOn.some((depId) => {
           const dep = taskMap.get(depId);
-          return dep && dep.position.column !== terminalCol;
+          return dep && (dep.fields.position_column as string) !== terminalCol;
         });
         if (hasIncomplete) set.add(task.id);
       }
@@ -151,7 +158,7 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
         const clone: ColumnLayout = new Map();
         for (const [k, v] of baseLayout) clone.set(k, [...v]);
         setVirtualLayout(clone);
-        activeColumnRef.current = task?.position.column ?? null;
+        activeColumnRef.current = (task?.fields.position_column as string) ?? null;
       }
     },
     [taskMap, baseLayout, columnMap, columnIdList]
@@ -306,11 +313,12 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
       if (!targetList) return;
 
       // If dropped on itself with no column change
-      if (activeId === overId && targetColumn === draggedTask.position.column) return;
+      const draggedColumn = draggedTask.fields.position_column as string;
+      if (activeId === overId && targetColumn === draggedColumn) return;
 
       // Handle same-column reorder via arrayMove for correct index
       const isColumnDrop = columnIds.has(overId) || overId.startsWith("drop:");
-      if (targetColumn === draggedTask.position.column && !isColumnDrop) {
+      if (targetColumn === draggedColumn && !isColumnDrop) {
         const oldIndex = targetList.indexOf(activeId);
         const newIndex = targetList.indexOf(overId);
         if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
@@ -331,22 +339,23 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
     [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList]
   );
 
+  const { updateField } = useFieldUpdate();
+
   const handleRenameColumn = useCallback(
     async (columnId: string, name: string) => {
       try {
-        await invoke("update_entity_field", { entity_type: "column", id: columnId, field_name: "name", value: name });
-        onTaskMoved?.();
-      } catch (e) {
-        console.error("Failed to rename column:", e);
+        await updateField("column", columnId, "name", name);
+      } catch {
+        // updateField already logs errors
       }
     },
-    [onTaskMoved]
+    [updateField]
   );
 
   const handleAddTask = useCallback(
     async (columnId: string) => {
       const col = columnMap.get(columnId);
-      const title = defaultTaskTitle(col?.name ?? "");
+      const title = defaultTaskTitle((col?.fields.name as string) ?? "");
       try {
         await invoke("add_task", { title, column: columnId });
         onTaskMoved?.();
@@ -361,14 +370,14 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
     taskId: string,
     column: string,
     ordinal: string,
-    task: Task
+    entity: Entity
   ) {
     try {
       await invoke("move_task", {
         id: taskId,
         column,
         ordinal,
-        swimlane: task.position.swimlane ?? null,
+        swimlane: (entity.fields.position_swimlane as string) ?? null,
       });
       onTaskMoved?.();
     } catch (e) {
@@ -395,18 +404,17 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
             const taskIds = currentLayout.get(col.id) ?? [];
             const colTasks = taskIds
               .map((id) => taskMap.get(id))
-              .filter((t): t is Task => t !== undefined);
+              .filter((t): t is Entity => t !== undefined);
             return (
               <SortableColumn key={col.id} id={col.id} showSeparator={i > 0}>
                 <ColumnView
                   column={col}
                   tasks={colTasks}
-                  tags={board.tags}
                   blockedIds={blockedIds}
                   onTaskClick={onTaskClick}
-                  onUpdateTitle={onUpdateTitle}
                   onAddTask={handleAddTask}
                   onRenameColumn={handleRenameColumn}
+                  onInspect={onColumnInspect}
                   presorted
                 />
               </SortableColumn>
@@ -415,10 +423,10 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
         </SortableContext>
       </div>
       <DragOverlay dropAnimation={null}>
-        {activeTask ? <TaskCard task={activeTask} tags={board.tags} /> : null}
+        {activeTask ? <EntityCard entity={activeTask} /> : null}
         {activeColumn ? (
           <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
-            {activeColumn.name}
+            {activeColumn.fields.name as string}
           </div>
         ) : null}
       </DragOverlay>
@@ -433,12 +441,12 @@ export function BoardView({ board, tasks, onTaskClick, onUpdateTitle, onTaskMove
 function computeOrdinal(
   ids: string[],
   index: number,
-  taskMap: Map<string, Task>
+  taskMap: Map<string, Entity>
 ): string {
-  const prevTask = index > 0 ? taskMap.get(ids[index - 1]) : undefined;
-  const nextTask = index < ids.length - 1 ? taskMap.get(ids[index + 1]) : undefined;
-  const prev = prevTask?.position.ordinal;
-  const next = nextTask?.position.ordinal;
+  const prevEntity = index > 0 ? taskMap.get(ids[index - 1]) : undefined;
+  const nextEntity = index < ids.length - 1 ? taskMap.get(ids[index + 1]) : undefined;
+  const prev = (prevEntity?.fields.position_ordinal as string) ?? undefined;
+  const next = (nextEntity?.fields.position_ordinal as string) ?? undefined;
 
   if (!prev && !next) return "a0";
   if (!prev && next) {
