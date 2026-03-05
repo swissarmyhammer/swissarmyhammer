@@ -36,6 +36,23 @@ As you identify each work item, create a kanban card immediately. Don't wait unt
 
 For each work item: use `kanban` with `op: "add task"`, `title: "<what to implement>"`, `description: "<detailed context, affected files, approach>"`
 
+**Every card description MUST include these sections:**
+
+```
+## What
+<what to implement — affected files, approach, context>
+
+## Acceptance Criteria
+- [ ] <observable outcome that proves the work is done>
+- [ ] <another criterion>
+
+## Tests
+- [ ] <specific test to write or update, with file path>
+- [ ] <test command to run and expected result>
+```
+
+A card without acceptance criteria and tests is not a valid card. These sections ensure that when the card is picked up for implementation, the definition of "done" is unambiguous and verifiable.
+
 Then add subtasks: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`
 
 Set dependencies between cards: use `kanban` with `op: "update task"`, `id: "<task-id>"`, `depends_on: ["<blocker-task-id>"]`
@@ -96,4 +113,5 @@ A card should represent a single, focused unit of work. Use these limits to keep
 - Include enough context in task descriptions that someone (or the kanban skill) can execute without re-reading the spec
 - Order tasks so foundational changes come first (data models, types) and dependent work follows
 - Each task's subtasks should include running tests as the final step
+- Every card MUST have acceptance criteria and tests in its description — a card without these is incomplete
 - It's fine to rearrange, split, or merge cards as the plan evolves — the board is a living document
