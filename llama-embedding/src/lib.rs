@@ -69,7 +69,7 @@ pub mod model;
 pub mod types;
 
 // Re-export main types for convenience
-pub use batch::{BatchConfig, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo};
+pub use batch::{BatchConfig, BatchFailure, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo};
 pub use error::{EmbeddingError, EmbedResult as Result};
 pub use model::EmbeddingModel;
 pub use types::{EmbeddingConfig, EmbeddingResult};

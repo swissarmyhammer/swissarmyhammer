@@ -4,5 +4,5 @@
 //! All batch processing goes through the shared `model-embedding` implementation.
 
 pub use model_embedding::batch::{
-    BatchConfig, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo,
+    BatchConfig, BatchFailure, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo,
 };

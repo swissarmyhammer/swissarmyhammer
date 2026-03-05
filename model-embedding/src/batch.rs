@@ -24,6 +24,17 @@ pub struct ProgressInfo {
 /// Callback type for progress reporting.
 pub type ProgressCallback = Box<dyn FnMut(&ProgressInfo)>;
 
+/// A single batch processing failure with context.
+#[derive(Debug, Clone)]
+pub struct BatchFailure {
+    /// Index of the failed text within the batch.
+    pub index: usize,
+    /// Preview of the text that failed (first 50 chars).
+    pub text_preview: String,
+    /// Error message from the embedding backend.
+    pub error: String,
+}
+
 /// Statistics for batch processing operations.
 #[derive(Debug, Clone, Default)]
 pub struct BatchStats {
@@ -38,6 +49,8 @@ pub struct BatchStats {
     pub average_batch_time_ms: f64,
     pub peak_memory_usage_bytes: usize,
     pub total_characters_processed: usize,
+    /// Details of texts that failed during batch processing.
+    pub failed_items: Vec<BatchFailure>,
 }
 
 impl BatchStats {
@@ -239,7 +252,7 @@ impl<'a, T: TextEmbedder> BatchProcessor<'a, T> {
         let mut results = Vec::new();
         let mut failures = 0;
 
-        for text in texts {
+        for (i, text) in texts.iter().enumerate() {
             match self.model.embed_text(text).await {
                 Ok(result) => results.push(result),
                 Err(e) => {
@@ -249,6 +262,11 @@ impl<'a, T: TextEmbedder> BatchProcessor<'a, T> {
                     if !self.config.continue_on_error {
                         return Err(e);
                     }
+                    self.stats.failed_items.push(BatchFailure {
+                        index: i,
+                        text_preview: preview,
+                        error: e.to_string(),
+                    });
                 }
             }
         }

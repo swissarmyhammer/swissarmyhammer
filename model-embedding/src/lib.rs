@@ -44,7 +44,9 @@ pub mod private {
 }
 pub mod types;
 
-pub use batch::{BatchConfig, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo};
+pub use batch::{
+    BatchConfig, BatchFailure, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo,
+};
 pub use error::EmbeddingError;
 pub use types::EmbeddingResult;
 
