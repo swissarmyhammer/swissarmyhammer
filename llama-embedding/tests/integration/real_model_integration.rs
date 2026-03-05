@@ -13,7 +13,7 @@
 //! - Cache integration
 
 use llama_embedding::{BatchProcessor, EmbeddingConfig, EmbeddingModel, TextEmbedder};
-use llama_loader::ModelSource;
+use model_loader::ModelSource;
 use rstest::rstest;
 use serial_test::serial;
 use std::io::{BufWriter, Write};
@@ -343,10 +343,10 @@ async fn test_error_handling() {
     assert!(file_result.is_err());
 }
 
-/// Test 9: Integration with llama-loader (cache scenarios) via trait
+/// Test 9: Integration with model-loader (cache scenarios) via trait
 #[tokio::test]
 #[serial]
-async fn test_llama_loader_integration() {
+async fn test_model_loader_integration() {
     let config = create_qwen_config();
 
     // Test multiple model instances share cache

@@ -1,5 +1,5 @@
 use llama_embedding::{BatchProcessor, EmbeddingConfig, EmbeddingModel, TextEmbedder};
-use llama_loader::ModelSource;
+use model_loader::ModelSource;
 use serial_test::serial;
 use std::io::Write;
 use tempfile::NamedTempFile;

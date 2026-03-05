@@ -1,5 +1,5 @@
 use llama_embedding::{EmbeddingConfig, EmbeddingError, EmbeddingResult};
-use llama_loader::ModelSource;
+use model_loader::ModelSource;
 
 #[test]
 fn test_embedding_config_default() {

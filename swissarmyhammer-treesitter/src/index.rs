@@ -31,7 +31,7 @@ use crate::language::LanguageRegistry;
 use crate::parsed_file::ParsedFile;
 use ignore::WalkBuilder;
 use llama_embedding::{EmbeddingConfig, EmbeddingModel, TextEmbedder};
-use llama_loader::ModelSource;
+use model_loader::ModelSource;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

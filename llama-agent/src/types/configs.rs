@@ -3,7 +3,7 @@
 //! This module contains the main configuration structures used to set up
 //! and configure agent behavior, request queuing, and session management.
 
-use llama_loader::ModelConfig;
+use model_loader::ModelConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;

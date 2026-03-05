@@ -844,6 +844,7 @@ mod tests {
 
     #[tokio::test]
     #[test_log::test]
+    #[serial_test::serial(cwd)]
     async fn test_http_server_creation_and_info() {
         tracing::info!("test_http_server_creation_and_info");
         let mode = McpServerMode::Http { port: Some(18080) }; // Fixed port to avoid random port issues
@@ -859,6 +860,7 @@ mod tests {
 
     #[tokio::test]
     #[test_log::test]
+    #[serial_test::serial(cwd)]
     async fn test_server_info_structure() {
         let mode = McpServerMode::Http { port: Some(18081) };
         let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
@@ -880,6 +882,7 @@ mod tests {
 
     #[tokio::test]
     #[test_log::test]
+    #[serial_test::serial(cwd)]
     async fn test_server_with_custom_library() {
         // Test that custom library is properly used
         let custom_library = PromptLibrary::default();
@@ -896,6 +899,7 @@ mod tests {
 
     #[tokio::test]
     #[test_log::test]
+    #[serial_test::serial(cwd)]
     async fn test_http_server_port_in_use_error() {
         // First, start a server on a specific port
         let mode1 = McpServerMode::Http { port: Some(18082) };
@@ -926,6 +930,7 @@ mod tests {
 
     #[tokio::test]
     #[test_log::test]
+    #[serial_test::serial(cwd)]
     async fn test_http_server_invalid_port() {
         // Test with invalid port (port 1 requires root privileges)
         let mode = McpServerMode::Http { port: Some(1) };
@@ -948,6 +953,7 @@ mod tests {
 
     #[tokio::test]
     #[test_log::test]
+    #[serial_test::serial(cwd)]
     async fn test_server_shutdown_idempotency() {
         // Test that calling shutdown multiple times doesn't panic
         let mode = McpServerMode::Http { port: None };
@@ -963,6 +969,7 @@ mod tests {
 
     #[tokio::test]
     #[test_log::test]
+    #[serial_test::serial(cwd)]
     async fn test_server_info_consistency() {
         // Test that server info remains consistent
         let mode = McpServerMode::Http { port: Some(18083) };
@@ -994,6 +1001,7 @@ mod tests {
 
     #[tokio::test]
     #[test_log::test]
+    #[serial_test::serial(cwd)]
     async fn test_stdio_server_task_completion() {
         // Test that stdio server task handle is stored and can be awaited
         let mode = McpServerMode::Stdio;

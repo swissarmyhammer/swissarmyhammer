@@ -29,11 +29,7 @@
 //!
 //! ## Examples
 //!
-//! ```rust,no_run
-//! # use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
-//! # use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
-//! # use serde_json::json;
-//! # async fn example(context: &ToolContext) -> Result<(), rmcp::ErrorData> {
+//! ```text
 //! let tool = ReadFileTool::new();
 //!
 //! // Read entire file
@@ -47,8 +43,6 @@
 //! args.insert("offset".to_string(), json!(100));
 //! args.insert("limit".to_string(), json!(50));
 //! let result = tool.execute(args, context).await?;
-//! # Ok(())
-//! # }
 //! ```
 
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};

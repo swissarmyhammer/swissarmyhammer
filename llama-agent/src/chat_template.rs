@@ -1153,7 +1153,7 @@ impl ToolParserFactory {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use llama_agent::chat_template::{ToolParserFactory, ToolParsingStrategy};
     ///
     /// // Create default parser for backward compatibility
@@ -1196,7 +1196,7 @@ impl ToolParserFactory {
     /// * `Default`, `OpenAI`, `Claude` - Standard parsing (schema parameter ignored)
     ///
     /// # Example
-    /// ```rust
+    /// ```text
     /// use llama_agent::types::ToolDefinition;
     /// use serde_json::json;
     ///
@@ -1257,7 +1257,7 @@ impl ToolParserFactory {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use llama_agent::chat_template::{ToolParserFactory, ToolParsingStrategy};
     ///
     /// // Create streaming parser
@@ -2656,7 +2656,8 @@ impl Qwen3CoderToolParser {
     ///
     /// # Example
     /// ```rust
-    /// use llama_agent::types::ToolDefinition;
+    /// use llama_agent::ToolDefinition;
+    /// use llama_agent::chat_template::Qwen3CoderToolParser;
     /// use serde_json::json;
     ///
     /// let tools = vec![ToolDefinition {
@@ -2781,7 +2782,7 @@ impl Qwen3CoderToolParser {
     /// * No schema provided - Returns empty string `Value::String("")`
     ///
     /// # Example
-    /// ```rust
+    /// ```text
     /// // Schema with default value
     /// let schema = json!({"type": "integer", "default": 42});
     /// let result = parser.handle_empty_values("  ", Some(&schema));
@@ -2842,7 +2843,7 @@ impl Qwen3CoderToolParser {
     /// * Unknown types - Falls back to basic type inference
     ///
     /// # Example
-    /// ```rust
+    /// ```text
     /// let schema = json!({"type": "integer", "minimum": 0});
     /// let result = parser.convert_by_schema_type("42", &schema)?;
     /// assert_eq!(result, Value::Number(42.into()));
@@ -2936,7 +2937,7 @@ impl Qwen3CoderToolParser {
     /// * `Err(TemplateError)` - If parameter value conversion fails
     ///
     /// # Example
-    /// ```
+    /// ```text
     /// // With schema for "search" tool defining limit as integer
     /// let content = "<query>rust async</query><limit>10</limit>";
     /// let result = parser.parse_nested_parameters_with_schema(content, "search")?;
@@ -2985,7 +2986,7 @@ impl Qwen3CoderToolParser {
     /// 2. **Basic inference** - Falls back to existing convert_parameter_value logic
     ///
     /// # Example
-    /// ```rust
+    /// ```text
     /// // With schema defining limit as integer type
     /// let result = parser.convert_parameter_with_schema("search", "limit", "42")?;
     /// assert_eq!(result, Value::Number(42.into()));
@@ -3039,7 +3040,7 @@ impl Qwen3CoderToolParser {
     /// * `Err(TemplateError)` - If JSON object/array parsing fails (strings never fail)
     ///
     /// # Examples
-    /// ```
+    /// ```text
     /// parser.convert_parameter_value("42")?;        // -> Number(42)
     /// parser.convert_parameter_value("3.14")?;      // -> Number(3.14)
     /// parser.convert_parameter_value("true")?;      // -> Bool(true)

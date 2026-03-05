@@ -210,6 +210,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_question_tool_unknown_op() {
         let tool = QuestionTool::new();
         let context = crate::test_utils::create_test_context().await;
@@ -229,6 +230,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_question_tool_infer_ask_from_question_key() {
         let tool = QuestionTool::new();
         let context = crate::test_utils::create_test_context().await;
@@ -254,7 +256,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_question_tool_infer_summary_from_empty() {
+        // Use a temp dir so load_all_questions() has a valid CWD
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
         let tool = QuestionTool::new();
         let context = crate::test_utils::create_test_context().await;
 

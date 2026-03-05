@@ -13,7 +13,7 @@
 //!
 //! # Usage
 //!
-//! ```rust
+//! ```text
 //! use llama_agent::test_models::{TEST_MODEL_REPO, TEST_MODEL_FILE};
 //! use llama_agent::types::{ModelConfig, ModelSource};
 //!

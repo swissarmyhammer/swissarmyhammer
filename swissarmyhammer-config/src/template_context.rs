@@ -980,12 +980,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_load_with_env_vars() {
         // Acquire the global environment variable test lock to prevent race conditions
         let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("Environment variable test lock was poisoned, recovering");
             poisoned.into_inner()
         });
+
+        // Use a temp dir with .git boundary to prevent config discovery walking up
+        let temp_dir = TempDir::new().unwrap();
+        fs::create_dir(temp_dir.path().join(".git")).unwrap();
+        env::set_current_dir(temp_dir.path()).unwrap();
 
         env::set_var("SAH_PROJECT_NAME", "TestProject");
         env::set_var("SWISSARMYHAMMER_DEBUG", "true");
@@ -1059,7 +1065,10 @@ version = "1.0.0"
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_with_template_vars() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
         let mut template_vars = HashMap::new();
         template_vars.insert("template_var1".to_string(), json!("template_value1"));
         template_vars.insert("template_var2".to_string(), json!(42));
@@ -1455,6 +1464,7 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_with_template_vars_sets_default_variables() {
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));
@@ -1477,6 +1487,7 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_with_template_vars_user_model_override() {
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));

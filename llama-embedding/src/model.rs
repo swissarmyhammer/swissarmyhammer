@@ -7,7 +7,7 @@ use llama_cpp_2::{
     model::LlamaModel,
     send_logs_to_tracing, LogOptions,
 };
-use llama_loader::{ModelConfig, ModelLoader, ModelMetadata, RetryConfig};
+use model_loader::{ModelConfig, ModelMetadata, ModelResolver, RetryConfig};
 use model_embedding::TextEmbedder;
 use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
@@ -83,6 +83,8 @@ struct Inner {
     model: Option<LlamaModel>,
     context: Option<LlamaContext<'static>>,
     metadata: Option<ModelMetadata>,
+    /// Context size extracted from the loaded model (not from metadata)
+    context_size: usize,
 }
 
 // SAFETY: LlamaModel and LlamaContext contain raw pointers but are only
@@ -120,9 +122,41 @@ impl EmbeddingModel {
                 model: None,
                 context: None,
                 metadata: None,
+                context_size: 0,
             }),
             config,
         })
+    }
+
+    /// Creates default model parameters optimized for GPU offloading
+    fn default_model_params() -> llama_cpp_2::model::params::LlamaModelParams {
+        let gpu_layers: u32 = std::env::var("LLAMA_N_GPU_LAYERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(i32::MAX as u32);
+
+        llama_cpp_2::model::params::LlamaModelParams::default()
+            .with_n_gpu_layers(gpu_layers)
+            .with_use_mlock(true)
+    }
+
+    /// Extract context length from model metadata
+    fn extract_context_size(model: &LlamaModel) -> usize {
+        let meta_count = model.meta_count();
+        for i in 0..meta_count {
+            if let (Ok(key), Ok(value)) =
+                (model.meta_key_by_index(i), model.meta_val_str_by_index(i))
+            {
+                if key.contains("max_position_embeddings") || key.contains("context_length") {
+                    if let Ok(ctx_val) = value.parse::<usize>() {
+                        if ctx_val > 8192 {
+                            return ctx_val;
+                        }
+                    }
+                }
+            }
+        }
+        model.n_ctx_train() as usize
     }
 
     /// Load the model (crate-internal; external callers use `TextEmbedder::load`)
@@ -151,15 +185,28 @@ impl EmbeddingModel {
             debug: self.config.debug,
         };
 
-        let loader = ModelLoader::new(self.backend.clone());
-        let loaded = loader
-            .load_model(&model_config)
+        // Resolve model source to local path
+        let resolver = ModelResolver::new();
+        let resolved = resolver
+            .resolve(&model_config)
             .await
             .map_err(EmbeddingError::ModelLoader)?;
 
-        let ctx_size = loaded.metadata.context_size;
-        inner.metadata = Some(loaded.metadata);
-        inner.model = Some(loaded.model);
+        // Load model into llama-cpp-2
+        let model_params = Self::default_model_params();
+        let model = LlamaModel::load_from_file(&self.backend, &resolved.path, &model_params)
+            .map_err(|e| {
+                EmbeddingError::model(format!(
+                    "Failed to load model from {}: {}",
+                    resolved.path.display(),
+                    e
+                ))
+            })?;
+
+        let ctx_size = Self::extract_context_size(&model);
+        inner.context_size = ctx_size;
+        inner.metadata = Some(resolved.metadata);
+        inner.model = Some(model);
 
         info!(
             "Model loaded in {}, context: {} tokens",
@@ -181,22 +228,19 @@ impl EmbeddingModel {
 
         ensure_context(&self.backend, &self.config, &mut inner)?;
 
-        let Inner {
-            model: ref model_opt,
-            context: ref mut ctx_opt,
-            metadata: ref meta_opt,
-        } = *inner;
-
-        let model = model_opt.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
-        let metadata = meta_opt.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
-        let ctx = ctx_opt.as_mut().ok_or(EmbeddingError::ModelNotLoaded)?;
-
         let max_seq = self
             .config
             .max_sequence_length
-            .unwrap_or(metadata.context_size);
+            .unwrap_or(inner.context_size);
 
-        embed_single(ctx, model, text, max_seq, self.config.normalize_embeddings)
+        // Split borrow: take context out temporarily to avoid simultaneous
+        // immutable (model) + mutable (context) borrows on inner.
+        let mut ctx = inner.context.take().ok_or(EmbeddingError::ModelNotLoaded)?;
+        let model = inner.model.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
+
+        let result = embed_single(&mut ctx, model, text, max_seq, self.config.normalize_embeddings);
+        inner.context = Some(ctx);
+        result
     }
 
     /// Get embedding dimension (crate-internal; external callers use `TextEmbedder::embedding_dimension`).
@@ -265,14 +309,13 @@ fn ensure_context(
     }
 
     let model = inner.model.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
-    let metadata = inner
-        .metadata
-        .as_ref()
-        .ok_or(EmbeddingError::ModelNotLoaded)?;
+    if inner.metadata.is_none() {
+        return Err(EmbeddingError::ModelNotLoaded);
+    }
 
     let ctx_size = config
         .max_sequence_length
-        .unwrap_or(metadata.context_size) as u32;
+        .unwrap_or(inner.context_size) as u32;
 
     info!("Creating LlamaContext with n_ctx={}", ctx_size);
     let n_ctx = NonZeroU32::new(ctx_size);
@@ -361,7 +404,7 @@ fn embed_single(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llama_loader::ModelSource;
+    use model_loader::ModelSource;
     use serial_test::serial;
 
     #[tokio::test]

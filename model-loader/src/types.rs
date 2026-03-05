@@ -1,36 +1,41 @@
-use llama_cpp_2::model::LlamaModel;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// A loaded model with associated metadata
+/// Known model file extensions for auto-detection.
+///
+/// Used by both local directory scanning and HuggingFace repository detection.
+pub const MODEL_EXTENSIONS: &[&str] = &["gguf", "onnx", "mlmodel", "bin", "safetensors"];
+
+/// A resolved model with its file path and metadata.
+///
+/// This is the result of model resolution — the model file has been located
+/// (downloaded from HuggingFace or found locally) but not loaded into any
+/// runtime. Consumers (llama-agent, ane-embedding, etc.) load the file
+/// into their own backend.
 #[derive(Debug)]
-pub struct LoadedModel {
-    /// The loaded LLAMA model
-    pub model: LlamaModel,
-    /// Path to the model file
+pub struct ResolvedModel {
+    /// Path to the model file on disk
     pub path: PathBuf,
-    /// Metadata about the model loading process
+    /// Metadata about the resolution process
     pub metadata: ModelMetadata,
 }
 
-/// Metadata about a loaded model
+/// Metadata about a resolved model
 #[derive(Debug, Clone)]
 pub struct ModelMetadata {
-    /// The source from which the model was loaded
+    /// The source from which the model was resolved
     pub source: ModelSource,
     /// The filename of the model
     pub filename: String,
     /// Size of the model file in bytes
     pub size_bytes: u64,
-    /// Time taken to load the model
-    pub load_time: Duration,
-    /// Whether this model was loaded from cache
+    /// Time taken to resolve (download/locate) the model
+    pub resolve_time: Duration,
+    /// Whether this model was found in cache
     pub cache_hit: bool,
-    /// Model context window size in tokens
-    pub context_size: usize,
 }
 
 impl serde::Serialize for ModelMetadata {
@@ -39,13 +44,12 @@ impl serde::Serialize for ModelMetadata {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ModelMetadata", 6)?;
+        let mut state = serializer.serialize_struct("ModelMetadata", 5)?;
         state.serialize_field("source", &self.source)?;
         state.serialize_field("filename", &self.filename)?;
         state.serialize_field("size_bytes", &self.size_bytes)?;
-        state.serialize_field("load_time_secs", &self.load_time.as_secs_f64())?;
+        state.serialize_field("resolve_time_secs", &self.resolve_time.as_secs_f64())?;
         state.serialize_field("cache_hit", &self.cache_hit)?;
-        state.serialize_field("context_size", &self.context_size)?;
         state.end()
     }
 }
@@ -118,20 +122,20 @@ pub enum ModelSource {
     },
 }
 
-/// Configuration for model loading
+/// Configuration for model resolution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     /// The source from which to load the model
     pub source: ModelSource,
-    /// Batch size for model operations
+    /// Batch size for model operations (used by consumers, not the resolver)
     pub batch_size: u32,
-    /// Maximum number of sequences (KV cache slots) for concurrent processing
+    /// Maximum number of sequences for concurrent processing (used by consumers)
     pub n_seq_max: u32,
-    /// Number of threads for processing
+    /// Number of threads for processing (used by consumers)
     pub n_threads: i32,
-    /// Number of threads for batch processing
+    /// Number of threads for batch processing (used by consumers)
     pub n_threads_batch: i32,
-    /// Whether to use HuggingFace parameters
+    /// Whether to use HuggingFace parameters (used by consumers)
     pub use_hf_params: bool,
     /// Configuration for retry logic
     pub retry_config: RetryConfig,
@@ -240,10 +244,18 @@ impl ModelSource {
                             "Filename cannot be empty".to_string(),
                         ));
                     }
-                    if !f.ends_with(".gguf") {
-                        return Err(crate::error::ModelError::InvalidConfig(
-                            "Model file must have .gguf extension".to_string(),
-                        ));
+
+                    // Validate file extension against supported model formats
+                    let lower = f.to_lowercase();
+                    let has_valid_ext = MODEL_EXTENSIONS
+                        .iter()
+                        .any(|ext| lower.ends_with(&format!(".{}", ext)));
+                    if !has_valid_ext {
+                        return Err(crate::error::ModelError::InvalidConfig(format!(
+                            "Unsupported model file extension in '{}'. Supported: {}",
+                            f,
+                            MODEL_EXTENSIONS.join(", ")
+                        )));
                     }
                 }
 
@@ -284,11 +296,6 @@ impl ModelSource {
                             "Filename cannot be empty".to_string(),
                         ));
                     }
-                    if !f.ends_with(".gguf") {
-                        return Err(crate::error::ModelError::InvalidConfig(
-                            "Model file must have .gguf extension".to_string(),
-                        ));
-                    }
 
                     let full_path = folder.join(f);
                     if !full_path.exists() {
@@ -327,6 +334,14 @@ mod tests {
         };
         assert!(source.validate().is_ok());
 
+        // Any file extension is valid now (not just .gguf)
+        let source = ModelSource::HuggingFace {
+            repo: "microsoft/DialoGPT-medium".to_string(),
+            filename: Some("model.onnx".to_string()),
+            folder: None,
+        };
+        assert!(source.validate().is_ok());
+
         // Empty repo
         let source = ModelSource::HuggingFace {
             repo: "".to_string(),
@@ -339,14 +354,6 @@ mod tests {
         let source = ModelSource::HuggingFace {
             repo: "invalid-repo".to_string(),
             filename: None,
-            folder: None,
-        };
-        assert!(source.validate().is_err());
-
-        // Invalid filename extension
-        let source = ModelSource::HuggingFace {
-            repo: "microsoft/DialoGPT-medium".to_string(),
-            filename: Some("model.txt".to_string()),
             folder: None,
         };
         assert!(source.validate().is_err());
@@ -397,9 +404,8 @@ mod tests {
             },
             filename: "test.gguf".to_string(),
             size_bytes: 1024,
-            load_time: Duration::from_secs(1),
+            resolve_time: Duration::from_secs(1),
             cache_hit: false,
-            context_size: 4096,
         };
 
         assert_eq!(metadata.filename, "test.gguf");

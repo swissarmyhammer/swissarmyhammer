@@ -1,5 +1,5 @@
 use hf_hub::api::tokio::ApiBuilder;
-use llama_loader::{get_folder_files, ModelSource};
+use model_loader::{get_folder_files, ModelSource};
 
 #[tokio::test]
 async fn test_folder_download_detection() -> Result<(), Box<dyn std::error::Error>> {

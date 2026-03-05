@@ -1,6 +1,15 @@
 use crate::error::ModelError;
 use crate::multipart::detect_multi_part_base;
+use crate::types::MODEL_EXTENSIONS;
 use tracing::info;
+
+/// Check if a filename has a supported model extension
+fn has_model_extension(filename: &str) -> bool {
+    let lower = filename.to_lowercase();
+    MODEL_EXTENSIONS
+        .iter()
+        .any(|ext| lower.ends_with(&format!(".{}", ext)))
+}
 
 /// Auto-detects the best model file from a HuggingFace repository, with support for folder-based models
 pub async fn auto_detect_hf_model_file(
@@ -14,37 +23,35 @@ pub async fn auto_detect_hf_model_file_with_folder(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     folder: Option<&str>,
 ) -> Result<String, ModelError> {
-    // List files in the repository
     match repo_api.info().await {
         Ok(repo_info) => {
-            let mut gguf_files = Vec::new();
+            let mut model_files = Vec::new();
             let mut bf16_files = Vec::new();
 
-            // Look for GGUF files in the repository (optionally within a folder)
             for sibling in repo_info.siblings {
-                if sibling.rfilename.ends_with(".gguf") {
-                    // If folder is specified, only consider files in that folder
-                    if let Some(folder_name) = folder {
-                        if !sibling.rfilename.starts_with(&format!("{}/", folder_name)) {
-                            continue;
-                        }
-                    }
+                if !has_model_extension(&sibling.rfilename) {
+                    continue;
+                }
 
-                    let filename = sibling.rfilename.to_lowercase();
-                    if filename.contains("bf16") {
-                        bf16_files.push(sibling.rfilename);
-                    } else {
-                        gguf_files.push(sibling.rfilename);
+                // If folder is specified, only consider files in that folder
+                if let Some(folder_name) = folder {
+                    if !sibling.rfilename.starts_with(&format!("{}/", folder_name)) {
+                        continue;
                     }
+                }
+
+                let filename = sibling.rfilename.to_lowercase();
+                if filename.contains("bf16") {
+                    bf16_files.push(sibling.rfilename);
+                } else {
+                    model_files.push(sibling.rfilename);
                 }
             }
 
             // Prioritize BF16 files - check for multi-part files first
             if !bf16_files.is_empty() {
-                // Sort to ensure consistent ordering
                 bf16_files.sort();
 
-                // Check if this is a multi-part file
                 if let Some(base_filename) = detect_multi_part_base(&bf16_files[0]) {
                     info!("Found multi-part BF16 model file: {}", base_filename);
                     return Ok(base_filename);
@@ -54,20 +61,20 @@ pub async fn auto_detect_hf_model_file_with_folder(
                 }
             }
 
-            // Fallback to first GGUF file
-            if !gguf_files.is_empty() {
-                gguf_files.sort();
-                if let Some(base_filename) = detect_multi_part_base(&gguf_files[0]) {
-                    info!("Found multi-part GGUF model file: {}", base_filename);
+            // Fallback to first model file
+            if !model_files.is_empty() {
+                model_files.sort();
+                if let Some(base_filename) = detect_multi_part_base(&model_files[0]) {
+                    info!("Found multi-part model file: {}", base_filename);
                     return Ok(base_filename);
                 } else {
-                    info!("Found GGUF model file: {}", gguf_files[0]);
-                    return Ok(gguf_files[0].clone());
+                    info!("Found model file: {}", model_files[0]);
+                    return Ok(model_files[0].clone());
                 }
             }
 
             Err(ModelError::NotFound(format!(
-                "No .gguf model files found in HuggingFace repository{}",
+                "No model files found in HuggingFace repository{}",
                 if let Some(f) = folder {
                     format!(" in folder {}", f)
                 } else {
@@ -82,7 +89,7 @@ pub async fn auto_detect_hf_model_file_with_folder(
     }
 }
 
-/// Gets all GGUF files from a specific folder in a HuggingFace repository
+/// Gets all model files from a specific folder in a HuggingFace repository
 pub async fn get_folder_files(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     folder: &str,
@@ -92,10 +99,9 @@ pub async fn get_folder_files(
             let mut folder_files = Vec::new();
             let folder_prefix = format!("{}/", folder);
 
-            // Collect all GGUF files in the specified folder
             for sibling in repo_info.siblings {
                 if sibling.rfilename.starts_with(&folder_prefix)
-                    && sibling.rfilename.ends_with(".gguf")
+                    && has_model_extension(&sibling.rfilename)
                 {
                     folder_files.push(sibling.rfilename);
                 }
@@ -103,14 +109,13 @@ pub async fn get_folder_files(
 
             if folder_files.is_empty() {
                 Err(ModelError::NotFound(format!(
-                    "No .gguf files found in folder '{}' in HuggingFace repository",
+                    "No model files found in folder '{}' in HuggingFace repository",
                     folder
                 )))
             } else {
-                // Sort files to ensure consistent ordering
                 folder_files.sort();
                 info!(
-                    "Found {} GGUF files in folder '{}'",
+                    "Found {} model files in folder '{}'",
                     folder_files.len(),
                     folder
                 );
@@ -126,13 +131,41 @@ pub async fn get_folder_files(
 
 #[cfg(test)]
 mod tests {
-
-    // Note: These would be integration tests that require actual HuggingFace API access
-    // For unit testing, we'd need to mock the ApiRepo and repo_info structures
+    use super::*;
 
     #[test]
-    fn test_module_exists() {
-        // Basic test to ensure the module compiles correctly
-        // If this test runs, the module definition is valid
+    fn test_has_model_extension_gguf() {
+        assert!(has_model_extension("model.gguf"));
+        assert!(has_model_extension("model.GGUF"));
+        assert!(has_model_extension("path/to/model.gguf"));
+    }
+
+    #[test]
+    fn test_has_model_extension_onnx() {
+        assert!(has_model_extension("model.onnx"));
+        assert!(has_model_extension("path/to/model.onnx"));
+    }
+
+    #[test]
+    fn test_has_model_extension_safetensors() {
+        assert!(has_model_extension("model.safetensors"));
+    }
+
+    #[test]
+    fn test_has_model_extension_mlmodel() {
+        assert!(has_model_extension("model.mlmodel"));
+    }
+
+    #[test]
+    fn test_has_model_extension_bin() {
+        assert!(has_model_extension("model.bin"));
+    }
+
+    #[test]
+    fn test_has_model_extension_rejects_unsupported() {
+        assert!(!has_model_extension("model.txt"));
+        assert!(!has_model_extension("model.json"));
+        assert!(!has_model_extension("README.md"));
+        assert!(!has_model_extension("tokenizer.json"));
     }
 }

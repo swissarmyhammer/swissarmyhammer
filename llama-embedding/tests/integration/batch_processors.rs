@@ -199,8 +199,8 @@ fn test_md5_hash_consistency() {
 fn test_error_type_coverage() {
     // Test all error variants to ensure they work correctly
 
-    // ModelLoader error (from conversion)
-    let loader_error = llama_loader::ModelError::InvalidConfig("test".to_string());
+    // ModelResolver error (from conversion)
+    let loader_error = model_loader::ModelError::InvalidConfig("test".to_string());
     let embedding_error: EmbeddingError = loader_error.into();
     match embedding_error {
         EmbeddingError::ModelLoader(_) => {} // Expected

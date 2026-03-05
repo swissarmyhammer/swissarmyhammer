@@ -2595,6 +2595,7 @@ quiet: false"#;
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_load_project_models() {
         let result = ModelManager::load_project_models();
 
@@ -2612,6 +2613,7 @@ quiet: false"#;
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_list_agents_precedence() {
         // This test verifies the complete agent discovery hierarchy with precedence
         let result = ModelManager::list_agents();

@@ -6,7 +6,7 @@
 //!
 //! ## Features
 //!
-//! - **Model Loading**: Integration with `llama-loader` for unified model management
+//! - **Model Loading**: Integration with `model-loader` for unified model management
 //! - **Single Text Embedding**: Generate embeddings for individual texts
 //! - **Batch Processing**: Efficient processing of multiple texts
 //! - **File Processing**: Stream processing of large text files
@@ -17,7 +17,7 @@
 //!
 //! ```rust,no_run
 //! use llama_embedding::{EmbeddingModel, EmbeddingConfig, TextEmbedder};
-//! use llama_loader::ModelSource;
+//! use model_loader::ModelSource;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -75,7 +75,7 @@ pub use model::EmbeddingModel;
 pub use types::{EmbeddingConfig, EmbeddingResult};
 
 // Re-export commonly used types from dependencies
-pub use llama_loader::ModelSource;
+pub use model_loader::ModelSource;
 pub use model_embedding::TextEmbedder;
 
 #[cfg(test)]

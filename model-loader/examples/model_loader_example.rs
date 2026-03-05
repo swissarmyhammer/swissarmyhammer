@@ -1,6 +1,6 @@
-/// Example demonstrating the ModelLoader API
-/// This example shows how to use ModelLoader with both HuggingFace and local models
-use llama_loader::{ModelConfig, ModelSource, RetryConfig};
+/// Example demonstrating the ModelResolver API
+/// This example shows how to use ModelResolver with both HuggingFace and local models
+use model_loader::{ModelConfig, ModelSource, RetryConfig};
 use std::path::PathBuf;
 
 #[tokio::main]
@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Note: This is a compilation example only, not a functional example
     // since we would need a real llama-cpp-2 backend initialized
 
-    println!("ModelLoader API Example");
+    println!("ModelResolver API Example");
 
     // Create model configurations
     let hf_config = ModelConfig {
@@ -66,6 +66,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Custom retry config: {:?}", retry_config);
 
-    println!("ModelLoader API example completed successfully!");
+    println!("ModelResolver API example completed successfully!");
     Ok(())
 }

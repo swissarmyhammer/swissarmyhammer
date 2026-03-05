@@ -1,4 +1,4 @@
-use llama_loader::{ModelConfig, ModelSource, RetryConfig};
+use model_loader::{ModelConfig, ModelSource, RetryConfig};
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::fs::File;

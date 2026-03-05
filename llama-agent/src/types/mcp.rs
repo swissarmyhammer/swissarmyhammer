@@ -43,7 +43,7 @@ pub struct ProcessServerConfig {
     /// - Windows users may need `.exe` extensions for some commands
     ///
     /// # Examples
-    /// ```rust
+    /// ```text
     /// // Using PATH command
     /// command: "python".to_string()
     ///
@@ -66,7 +66,7 @@ pub struct ProcessServerConfig {
     /// - Each vector element becomes one process argument
     ///
     /// # Common Patterns
-    /// ```rust
+    /// ```text
     /// // Python module execution
     /// args: vec!["-m".to_string(), "mcp_server.filesystem".to_string()]
     ///
@@ -108,7 +108,7 @@ pub struct ProcessServerConfig {
     /// - **Quick operations**: 10-15 seconds for simple tools
     ///
     /// # Examples
-    /// ```rust
+    /// ```text
     /// // Standard production timeout
     /// timeout_secs: Some(30)
     ///
@@ -213,7 +213,7 @@ pub struct HttpServerConfig {
     /// - **Long-running tools**: 180+ seconds if tools perform heavy computation
     ///
     /// # Examples
-    /// ```rust
+    /// ```text
     /// // Standard production timeout
     /// timeout_secs: Some(30)
     ///
@@ -241,7 +241,7 @@ pub struct HttpServerConfig {
     /// - **Development/testing**: `None` (disabled)
     ///
     /// # Examples
-    /// ```rust
+    /// ```text
     /// // Standard keep-alive for production
     /// sse_keep_alive_secs: Some(30)
     ///
@@ -270,7 +270,7 @@ pub struct HttpServerConfig {
     /// - **Use cases**: Single-shot tool calls, stateless microservices
     ///
     /// # Examples
-    /// ```rust
+    /// ```text
     /// // Enable for conversational agents
     /// stateful_mode: true
     ///

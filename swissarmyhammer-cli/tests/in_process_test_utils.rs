@@ -92,21 +92,6 @@ fn format_prompt_output(
     }
 }
 
-/// Debug captured output with consistent formatting for test diagnostics
-fn debug_captured_output(name: &str, result: &Result<CapturedOutput>) {
-    println!("{} result analysis:", name);
-    match result {
-        Ok(cmd_result) => {
-            println!("  Exit code: {}", cmd_result.exit_code);
-            println!("  Stdout: '{}'", cmd_result.stdout);
-            println!("  Stderr: '{}'", cmd_result.stderr);
-        }
-        Err(e) => {
-            println!("  Error running {}: {}", name, e);
-        }
-    }
-}
-
 /// Helper function to get the sah binary path
 fn get_sah_binary_path() -> String {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {
@@ -355,6 +340,7 @@ fn can_run_in_process(cli: &Cli) -> bool {
         Some(Commands::Validate { .. })
             | Some(Commands::Completion { .. })
             | Some(Commands::Prompt { .. })
+            | Some(Commands::Agent { .. })
             | None
     )
 }
@@ -563,6 +549,19 @@ async fn execute_cli_command_with_capture(
         }
 
         Some(Commands::Completion { shell }) => handle_completion_command(shell),
+
+        Some(Commands::Agent { subcommand }) => {
+            match subcommand {
+                Some(_) => {
+                    // Agent subcommands parse successfully but require runtime infrastructure
+                    // (model loading, MCP server, etc.) — just confirm parsing succeeded
+                    (String::new(), String::new(), EXIT_SUCCESS)
+                }
+                None => {
+                    (String::new(), "No subcommand provided. Use 'sah agent --help' to see available subcommands.".to_string(), swissarmyhammer_cli::exit_codes::EXIT_ERROR)
+                }
+            }
+        }
 
         None => (String::new(), String::new(), EXIT_SUCCESS),
 

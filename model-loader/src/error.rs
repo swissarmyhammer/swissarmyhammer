@@ -2,11 +2,11 @@ use llama_common::error::{ErrorCategory, LlamaError};
 use std::time::Duration;
 use thiserror::Error;
 
-/// Errors that can occur during model loading operations
+/// Errors that can occur during model resolution operations
 #[derive(Debug, Error)]
 pub enum ModelError {
-    /// Model loading failed
-    #[error("Model loading failed: {0}\n🔧 Check available memory and verify GGUF file integrity")]
+    /// Model resolution/loading failed
+    #[error("Model loading failed: {0}\n🔧 Check available memory and verify model file integrity")]
     LoadingFailed(String),
 
     /// Model not found at the specified location
@@ -14,7 +14,7 @@ pub enum ModelError {
     NotFound(String),
 
     /// Invalid model configuration
-    #[error("Invalid model config: {0}\n⚙️ Ensure batch_size > 0, valid model source path, and appropriate use_hf_params setting")]
+    #[error("Invalid model config: {0}\n⚙️ Ensure batch_size > 0, valid model source path, and appropriate settings")]
     InvalidConfig(String),
 
     /// Model inference operation failed
@@ -109,18 +109,6 @@ impl LlamaError for ModelError {
     }
 }
 
-// Convert from llama-cpp-2 errors
-impl From<llama_cpp_2::LLamaCppError> for ModelError {
-    fn from(err: llama_cpp_2::LLamaCppError) -> Self {
-        match err {
-            llama_cpp_2::LLamaCppError::BackendAlreadyInitialized => {
-                ModelError::LoadingFailed("Backend already initialized".to_string())
-            }
-            other => ModelError::LoadingFailed(format!("llama-cpp-2 error: {}", other)),
-        }
-    }
-}
-
 // Convert from HuggingFace hub errors
 impl From<hf_hub::api::tokio::ApiError> for ModelError {
     fn from(err: hf_hub::api::tokio::ApiError) -> Self {
@@ -157,13 +145,6 @@ mod tests {
         let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
         let model_err = ModelError::from(io_err);
         assert!(matches!(model_err, ModelError::Io(_)));
-    }
-
-    #[test]
-    fn test_llama_cpp_error_conversion() {
-        let llama_err = llama_cpp_2::LLamaCppError::BackendAlreadyInitialized;
-        let model_err = ModelError::from(llama_err);
-        assert!(matches!(model_err, ModelError::LoadingFailed(_)));
     }
 
     #[test]

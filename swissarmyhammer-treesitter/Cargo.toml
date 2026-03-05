@@ -80,7 +80,7 @@ simsimd = { workspace = true }
 
 # Embedding support
 llama-embedding = { path = "../llama-embedding" }
-llama-loader = { path = "../llama-loader" }
+model-loader = { path = "../model-loader" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

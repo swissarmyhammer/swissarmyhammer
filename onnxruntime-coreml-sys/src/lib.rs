@@ -679,6 +679,7 @@ mod tests {
     #[test]
     fn test_session_options_with_coreml() {
         init().unwrap();
+        let _env = Env::new(LoggingLevel::Warning, "test-coreml").unwrap();
         let opts = SessionOptions::new().unwrap();
         let result = opts.with_coreml(
             COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES,

@@ -1,11 +1,9 @@
 use crate::detection::{auto_detect_hf_model_file_with_folder, get_folder_files};
 use crate::error::ModelError;
-use crate::loader::default_model_params;
 use crate::multipart::{download_folder_model, download_multi_part_model};
 use crate::retry::download_with_retry;
 use crate::types::RetryConfig;
 use hf_hub::api::tokio::ApiBuilder;
-use llama_cpp_2::{llama_backend::LlamaBackend, model::LlamaModel};
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -91,41 +89,6 @@ pub async fn load_huggingface_model_with_path_and_folder(
     info!("Model downloaded to: {}", model_path.display());
 
     Ok((model_path, target_filename))
-}
-
-/// Loads a model from HuggingFace (original function for backward compatibility)
-pub async fn load_huggingface_model(
-    backend: &LlamaBackend,
-    repo: &str,
-    filename: Option<&str>,
-    retry_config: &RetryConfig,
-) -> Result<LlamaModel, ModelError> {
-    load_huggingface_model_with_folder(backend, repo, filename, None, retry_config).await
-}
-
-/// Loads a model from HuggingFace with folder support
-pub async fn load_huggingface_model_with_folder(
-    backend: &LlamaBackend,
-    repo: &str,
-    filename: Option<&str>,
-    folder: Option<&str>,
-    retry_config: &RetryConfig,
-) -> Result<LlamaModel, ModelError> {
-    // Use the new function to get the path, then load the model
-    let (model_path, _) =
-        load_huggingface_model_with_path_and_folder(repo, filename, folder, retry_config).await?;
-
-    // Load the downloaded model
-    let model_params = default_model_params();
-    let model = LlamaModel::load_from_file(backend, &model_path, &model_params).map_err(|e| {
-        ModelError::LoadingFailed(format!(
-            "Failed to load downloaded model from {}: {}",
-            model_path.display(),
-            e
-        ))
-    })?;
-
-    Ok(model)
 }
 
 /// Gets all parts of a multi-part GGUF file

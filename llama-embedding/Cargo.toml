@@ -15,7 +15,7 @@ crate-type = ["lib"]
 [dependencies]
 model-embedding = { path = "../model-embedding" }
 llama-common = { workspace = true }
-llama-loader = { workspace = true }
+model-loader = { workspace = true }
 llama-cpp-2 = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 async-trait.workspace = true

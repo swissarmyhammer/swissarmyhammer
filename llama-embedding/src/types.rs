@@ -1,4 +1,4 @@
-use llama_loader::ModelSource;
+use model_loader::ModelSource;
 use serde::{Deserialize, Serialize};
 
 // Re-export EmbeddingResult from the shared crate

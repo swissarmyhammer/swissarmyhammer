@@ -1,15 +1,14 @@
 [package]
-name = "llama-loader"
+name = "model-loader"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Shared model loading functionality for llama-agent ecosystem"
+description = "Generic model source resolution, download, and caching — runtime-agnostic"
 
 [dependencies]
-llama-cpp-2 = { workspace = true }
 llama-common = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 thiserror = { workspace = true }

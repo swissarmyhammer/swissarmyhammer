@@ -1,4 +1,4 @@
-//! Integration tests for llama-loader
+//! Integration tests for model-loader
 
 mod api;
 mod cache;

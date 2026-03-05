@@ -6,7 +6,7 @@ use thiserror::Error;
 pub enum EmbeddingError {
     /// Error from the model loader
     #[error("Model loading error: {0}")]
-    ModelLoader(#[from] llama_loader::ModelError),
+    ModelLoader(#[from] model_loader::ModelError),
 
     /// Error initializing or using the llama-cpp-2 model
     #[error("Model error: {0}")]
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn test_model_loader_error_delegation() {
         use llama_common::error::LlamaError;
-        use llama_loader::error::ModelError;
+        use model_loader::error::ModelError;
 
         let model_error = ModelError::NotFound("test model".to_string());
         let embedding_error = EmbeddingError::ModelLoader(model_error);

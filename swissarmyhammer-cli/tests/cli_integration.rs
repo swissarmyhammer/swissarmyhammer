@@ -10,8 +10,14 @@ async fn test_validate_command() -> anyhow::Result<()> {
     // Validate should run without panicking
     assert!(
         result.exit_code == 0 || result.exit_code == 1,
-        "Should return valid exit code, got {}",
-        result.exit_code
+        "Should return valid exit code, got {} (stderr: {})",
+        result.exit_code,
+        result.stderr,
+    );
+    // stdout should contain validation output
+    assert!(
+        !result.stdout.is_empty() || result.exit_code == 0,
+        "Successful validation should produce output"
     );
     Ok(())
 }

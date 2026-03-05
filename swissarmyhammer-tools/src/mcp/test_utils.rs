@@ -68,6 +68,7 @@ mod tests {
     use rmcp::model::CallToolRequestParams;
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_client_list_tools() {
         // Use agent_mode=true since this test checks for agent tools (files)
         let mut server = start_mcp_server_with_options(
@@ -93,6 +94,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_client_list_prompts() {
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
