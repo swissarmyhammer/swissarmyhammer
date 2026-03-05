@@ -1,4 +1,6 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
+import { HexColorPicker } from "react-colorful";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { FieldPlaceholder } from "@/components/fields/field-placeholder";
 import { SubtaskProgress } from "@/components/subtask-progress";
@@ -223,6 +225,12 @@ function FieldDispatch({
     return <SubtaskProgress description={bodyText} />;
   }
 
+  // Color fields — palette + picker
+  if (field.type.kind === "color") {
+    const hex = typeof value === "string" ? value : "888888";
+    return <ColorField value={hex} onCommit={(v) => onCommit(v)} />;
+  }
+
   // Default fallback
   return (
     <FieldPlaceholder
@@ -233,6 +241,81 @@ function FieldDispatch({
       onCommit={onCommit}
       onCancel={onCancel}
     />
+  );
+}
+
+/** 16-color palette matching Rust auto_color */
+const COLOR_PALETTE = [
+  "d73a4a", "e36209", "f9c513", "0e8a16",
+  "006b75", "1d76db", "0075ca", "5319e7",
+  "b60205", "d93f0b", "fbca04", "0e8a16",
+  "006b75", "1d76db", "6f42c1", "e4e669",
+];
+
+function ColorField({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [selected, setSelected] = useState(value);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const saveDebounced = useCallback(
+    (color: string) => {
+      clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => onCommit(color), 150);
+    },
+    [onCommit],
+  );
+
+  return (
+    <div className="flex items-start gap-2">
+      <div className="grid grid-cols-8 gap-1 flex-1">
+        {COLOR_PALETTE.map((color, i) => (
+          <button
+            key={`${color}-${i}`}
+            type="button"
+            className={`w-6 h-6 rounded-full border-2 transition-all ${
+              selected === color
+                ? "border-foreground scale-110"
+                : "border-transparent hover:border-muted-foreground/50"
+            }`}
+            style={{ backgroundColor: `#${color}` }}
+            onClick={() => { setSelected(color); onCommit(color); }}
+          />
+        ))}
+      </div>
+      <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="shrink-0 w-8 h-8 rounded-md border border-input cursor-pointer"
+            style={{ backgroundColor: `#${selected}` }}
+          />
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-auto p-3">
+          <HexColorPicker
+            color={`#${selected}`}
+            onChange={(hex) => {
+              const c = hex.replace("#", "");
+              setSelected(c);
+              saveDebounced(c);
+            }}
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">#</span>
+            <input
+              type="text"
+              value={selected}
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6);
+                setSelected(v);
+                if (v.length === 6) saveDebounced(v);
+              }}
+              className="flex-1 text-xs font-mono bg-transparent border border-input rounded px-1.5 py-0.5"
+              maxLength={6}
+            />
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 
