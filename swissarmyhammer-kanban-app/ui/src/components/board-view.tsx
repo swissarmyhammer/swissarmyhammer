@@ -28,7 +28,7 @@ import { getStr, getStrList, getNum } from "@/types/kanban";
 interface BoardViewProps {
   board: BoardData;
   tasks: Entity[];
-  onTaskClick?: (taskId: string) => void;
+  onTaskInspect?: (taskId: string) => void;
   onColumnInspect?: (columnId: string) => void;
   onTaskMoved?: () => void;
 }
@@ -42,7 +42,7 @@ type ColumnLayout = Map<string, string[]>;
 
 type DragType = "task" | "column";
 
-export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMoved }: BoardViewProps) {
+export function BoardView({ board, tasks, onTaskInspect, onColumnInspect, onTaskMoved }: BoardViewProps) {
   const columns = useMemo(
     () => [...board.columns].sort((a, b) =>
       getNum(a, "order") - getNum(b, "order")
@@ -412,10 +412,10 @@ export function BoardView({ board, tasks, onTaskClick, onColumnInspect, onTaskMo
                   column={col}
                   tasks={colTasks}
                   blockedIds={blockedIds}
-                  onTaskClick={onTaskClick}
+                  onTaskInspect={onTaskInspect}
                   onAddTask={handleAddTask}
                   onRenameColumn={handleRenameColumn}
-                  onInspect={onColumnInspect}
+                  onColumnInspect={onColumnInspect}
                   presorted
                 />
               </SortableColumn>

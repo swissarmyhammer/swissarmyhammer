@@ -6,10 +6,10 @@ import type { Entity } from "@/types/kanban";
 interface SortableEntityCardProps {
   entity: Entity;
   isBlocked?: boolean;
-  onClick?: (entityId: string) => void;
+  onInspect?: (entityId: string) => void;
 }
 
-export function SortableEntityCard({ entity, isBlocked, onClick }: SortableEntityCardProps) {
+export function SortableEntityCard({ entity, isBlocked, onInspect }: SortableEntityCardProps) {
   const {
     attributes,
     listeners,
@@ -31,8 +31,7 @@ export function SortableEntityCard({ entity, isBlocked, onClick }: SortableEntit
       style={style}
       entity={entity}
       isBlocked={isBlocked}
-      onClick={onClick}
-      onInspect={onClick}
+      onInspect={onInspect}
       dragHandleProps={{ ...listeners, ...attributes }}
     />
   );

@@ -12,7 +12,6 @@ import { getStr } from "@/types/kanban";
 interface EntityCardProps {
   entity: Entity;
   isBlocked?: boolean;
-  onClick?: (entityId: string) => void;
   onInspect?: (entityId: string) => void;
   dragHandleProps?: Record<string, unknown>;
   style?: React.CSSProperties;
@@ -25,7 +24,7 @@ interface EntityCardProps {
  * dispatch logic as EntityInspector — no hardcoded field names.
  */
 export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
-  function EntityCard({ entity, isBlocked, onClick, onInspect, dragHandleProps, style, ...rest }, ref) {
+  function EntityCard({ entity, isBlocked, onInspect, dragHandleProps, style, ...rest }, ref) {
     const { updateField } = useFieldUpdate();
     const { getSchema } = useSchema();
     const { getEntities } = useEntityStore();
@@ -49,10 +48,9 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
       <div
         ref={ref}
         style={style}
-        className={`rounded-md bg-card px-3 py-2 text-sm border border-border cursor-pointer hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 ${
+        className={`rounded-md bg-card px-3 py-2 text-sm border border-border hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 ${
           isBlocked ? "opacity-50" : ""
         }`}
-        onClick={() => onClick?.(entity.id)}
         {...rest}
       >
         <button
@@ -73,17 +71,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
             <Info className="h-3.5 w-3.5" />
           </button>
         )}
-        <div
-          className="flex-1 min-w-0"
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            if (document.activeElement instanceof HTMLElement) {
-              document.activeElement.blur();
-            }
-            onClick?.(entity.id);
-          }}
-        >
+        <div className="flex-1 min-w-0">
           {headerFields.map((field) => (
             <CardFieldDispatch
               key={field.name}

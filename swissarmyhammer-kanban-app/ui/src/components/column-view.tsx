@@ -15,14 +15,14 @@ interface ColumnViewProps {
   column: Entity;
   tasks: Entity[];
   blockedIds: Set<string>;
-  onTaskClick?: (taskId: string) => void;
+  onTaskInspect?: (taskId: string) => void;
   onAddTask?: (columnId: string) => void;
   onRenameColumn?: (columnId: string, name: string) => void;
-  onInspect?: (columnId: string) => void;
+  onColumnInspect?: (columnId: string) => void;
   presorted?: boolean;
 }
 
-export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, onRenameColumn, onInspect, presorted }: ColumnViewProps) {
+export function ColumnView({ column, tasks, blockedIds, onTaskInspect, onAddTask, onRenameColumn, onColumnInspect, presorted }: ColumnViewProps) {
   const sorted = useMemo(
     () =>
       presorted
@@ -49,11 +49,11 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, 
         />
         <Badge variant="secondary">{tasks.length}</Badge>
         <div className="flex-1" />
-        {onInspect && (
+        {onColumnInspect && (
           <button
             type="button"
             className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-            onClick={() => onInspect(column.id)}
+            onClick={() => onColumnInspect(column.id)}
             title="Inspect column"
           >
             <Info className="h-3.5 w-3.5" />
@@ -81,7 +81,7 @@ export function ColumnView({ column, tasks, blockedIds, onTaskClick, onAddTask, 
                 key={entity.id}
                 entity={entity}
                 isBlocked={blockedIds.has(entity.id)}
-                onClick={onTaskClick}
+                onInspect={onTaskInspect}
               />
             ))
           )}

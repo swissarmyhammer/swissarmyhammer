@@ -94,24 +94,21 @@ describe("EntityCard", () => {
     expect(strong.tagName).toBe("STRONG");
   });
 
-  it("clicking the title does not trigger card onClick", async () => {
-    const onClick = vi.fn();
-    await renderWithProvider(<EntityCard entity={makeEntity()} onClick={onClick} />);
-    // Click on the markdown-rendered title area
-    const titleEl = screen.getByText("world");
-    fireEvent.click(titleEl);
-    expect(onClick).not.toHaveBeenCalled();
+  it("(i) button calls onInspect with entity id", async () => {
+    const onInspect = vi.fn();
+    const { container } = await renderWithProvider(
+      <EntityCard entity={makeEntity()} onInspect={onInspect} />
+    );
+    const inspectBtn = container.querySelector("button[title='Inspect']")!;
+    fireEvent.click(inspectBtn);
+    expect(onInspect).toHaveBeenCalledWith("task-1");
   });
 
-  it("clicking the card body (outside title) triggers onClick with entity id", async () => {
-    const onClick = vi.fn();
+  it("(i) button is hidden when onInspect is not provided", async () => {
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} onClick={onClick} />
+      <EntityCard entity={makeEntity()} />
     );
-    // Click the card's outer div (the progress area or card itself)
-    const card = container.querySelector(".rounded-md")!;
-    fireEvent.click(card);
-    expect(onClick).toHaveBeenCalledWith("task-1");
+    expect(container.querySelector("button[title='Inspect']")).toBeNull();
   });
 
   it("enters edit mode when title is clicked", async () => {
@@ -166,25 +163,14 @@ describe("EntityCard", () => {
     });
   });
 
-  it("double-clicking the title triggers card onClick (opens inspector)", async () => {
-    const onClick = vi.fn();
-    await renderWithProvider(<EntityCard entity={makeEntity()} onClick={onClick} />);
-    const titleEl = screen.getByText("world");
-    fireEvent.doubleClick(titleEl);
-    expect(onClick).toHaveBeenCalledWith("task-1");
-  });
-
-  it("double-clicking the title exits edit mode (blurs editor)", async () => {
+  it("clicking card body does not trigger inspect", async () => {
+    const onInspect = vi.fn();
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} onClick={() => {}} />
+      <EntityCard entity={makeEntity()} onInspect={onInspect} />
     );
-    // First click enters edit mode
-    const titleEl = screen.getByText("world");
-    fireEvent.click(titleEl);
-    expect(container.querySelector(".cm-editor")).toBeTruthy();
-    // Double-click should blur the editor, returning to display mode
-    fireEvent.doubleClick(container.querySelector(".cm-editor")!);
-    expect(container.querySelector(".cm-editor")).toBeNull();
+    const card = container.querySelector(".rounded-md")!;
+    fireEvent.click(card);
+    expect(onInspect).not.toHaveBeenCalled();
   });
 
   describe("progress bar", async () => {

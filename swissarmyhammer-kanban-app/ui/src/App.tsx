@@ -139,7 +139,7 @@ function App() {
           <BoardView
             board={board}
             tasks={taskEntities}
-            onTaskClick={(taskId) => inspectEntity("task", taskId)}
+            onTaskInspect={(taskId) => inspectEntity("task", taskId)}
             onColumnInspect={(colId) => inspectEntity("column", colId)}
             onTaskMoved={refresh}
           />

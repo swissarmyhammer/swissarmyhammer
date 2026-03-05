@@ -72,6 +72,8 @@ fn main() {
             // send the full manifest via rebuild_menu_from_manifest once loaded.
             let config = crate::state::AppConfig::load();
             let _ = menu::build_menu_from_manifest(app.handle(), &[], &config.recent_boards);
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             Ok(())
         })
         .on_menu_event(menu::handle_menu_event)
