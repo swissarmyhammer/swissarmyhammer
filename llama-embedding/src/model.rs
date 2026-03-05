@@ -29,6 +29,9 @@ static GLOBAL_BACKEND: OnceLock<std::result::Result<Arc<LlamaBackend>, String>> 
 ///
 /// Returns a shared reference to the backend. The backend is lazily
 /// initialized on first call and reused for all subsequent calls.
+///
+/// Note: `llama-agent` has a parallel implementation (`get_or_init_backend`).
+/// Both are kept separate to avoid pulling `llama-cpp-2` into `llama-common`.
 fn get_global_backend() -> Result<Arc<LlamaBackend>> {
     let result = GLOBAL_BACKEND.get_or_init(|| {
         LlamaBackend::init()

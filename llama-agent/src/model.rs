@@ -22,17 +22,12 @@ static GLOBAL_BACKEND: OnceLock<Result<Arc<LlamaBackend>, String>> = OnceLock::n
 
 /// Get or initialize the global LlamaBackend singleton.
 ///
-/// This is the canonical way to obtain a `LlamaBackend` reference. All code
-/// within the process should use this function rather than calling
-/// `LlamaBackend::init()` directly, because the llama.cpp C backend can only
-/// be initialized once per process. Going through this function ensures that
-/// every caller shares the same `Arc<LlamaBackend>` stored in `GLOBAL_BACKEND`,
-/// preventing "Backend already initialized" errors when tests or other code
-/// paths race to initialize the backend.
+/// llama.cpp can only be initialized once per process. This function ensures
+/// all callers share the same `Arc<LlamaBackend>` via `OnceLock`, preventing
+/// "Backend already initialized" errors.
 ///
-/// Uses `OnceLock::get_or_init` to guarantee that exactly one thread performs
-/// initialization, eliminating TOCTOU races between checking the lock and
-/// calling `LlamaBackend::init()`.
+/// Note: `llama-embedding` has a parallel implementation (`get_global_backend`).
+/// Both are kept separate to avoid pulling `llama-cpp-2` into `llama-common`.
 pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, ModelError> {
     let result = GLOBAL_BACKEND.get_or_init(|| {
         LlamaBackend::init()
