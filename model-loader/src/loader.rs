@@ -99,7 +99,7 @@ impl ModelResolver {
     }
 
     /// Resolve a model from local filesystem
-    pub async fn resolve_local(
+    async fn resolve_local(
         &self,
         folder: &Path,
         filename: Option<&str>,
