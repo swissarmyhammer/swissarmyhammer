@@ -63,11 +63,13 @@ If the project uses multiple languages, apply all relevant sections. Language-sp
 
 Organize findings by severity. Each finding must be specific and actionable.
 
-| Severity | Meaning | Action |
-|----------|---------|--------|
-| **blocker** | Correctness bug, security vulnerability, data loss risk | Must fix |
-| **warning** | Design problem, missing test, performance concern | Should fix |
-| **nit** | Style preference, optional improvement | Optional |
+Severity is informational — all findings become kanban cards.
+
+| Severity | Meaning |
+|----------|---------|
+| **blocker** | Correctness bug, security vulnerability, data loss risk |
+| **warning** | Design problem, missing test, performance concern |
+| **nit** | Style preference, minor improvement |
 
 Each finding: **where** (file:line), **what**, **why** (skip for nits), and **suggestion** when non-obvious.
 
@@ -85,23 +87,13 @@ Create tags for review severities:
 {"op": "add tag", "id": "review-finding", "name": "Review Finding", "color": "9900cc", "description": "Code review finding"}
 ```
 
-```json
-{"op": "add tag", "id": "blocker", "name": "Blocker", "color": "ff0000", "description": "Must fix before merge"}
-```
+Every finding — blocker, warning, and nit — becomes a kanban card tagged `review-finding`. No finding is too small to track.
 
 ```json
-{"op": "add tag", "id": "warning", "name": "Warning", "color": "ff8800", "description": "Should fix"}
-```
-
-Each **blocker** and **warning** becomes a kanban card. Always include the `review-finding` tag so the implement workflow can pick up review cards:
-
-```json
-{"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<what and why>\n\n<suggestion>", "tags": ["review-finding", "blocker"]}
+{"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<what and why>\n\n<suggestion>", "tags": ["review-finding"]}
 ```
 
 Add subtasks for each fix step. Every card MUST include a verification subtask.
-
-Do NOT create cards for nits — report them in the summary.
 
 ### 7. Summarize
 
@@ -112,7 +104,7 @@ Do NOT create cards for nits — report them in the summary.
   - **Approve**: no blockers, warnings are minor or acceptable
   - **Request changes**: blockers exist, or warnings are serious enough to address first
   - **Comment only**: not enough context to approve or reject
-- Nits listed inline
+- All findings listed as kanban cards
 
 ## Rules
 
