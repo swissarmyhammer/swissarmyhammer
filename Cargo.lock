@@ -5603,14 +5603,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "onnxruntime-coreml-sys"
-version = "0.8.0"
-dependencies = [
- "cc",
- "cmake",
-]
-
-[[package]]
 name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

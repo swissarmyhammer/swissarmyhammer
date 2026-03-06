@@ -28,7 +28,7 @@ members = [
     "model-embedding",
     "ane-embedding",
     "swissarmyhammer-embedding",
-    "onnxruntime-coreml-sys",
+    # "onnxruntime-coreml-sys",  # excluded: builds onnxruntime from source via CMake, not yet used
 
     "acp-conformance",
     "claude-agent",
