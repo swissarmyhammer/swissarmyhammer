@@ -1,0 +1,20 @@
+[package]
+name = "swissarmyhammer-embedding"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Embedding backends
+llama-embedding = { workspace = true }
+ane-embedding = { path = "../ane-embedding" }
+model-embedding = { path = "../model-embedding" }
+model-loader = { workspace = true }
+
+# Config: model resolution + platform selection
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+
+# Fundamentals
+async-trait = "0.1"
+dirs = "5"
+thiserror = "2"
+tracing = "0.1"

@@ -1,10 +1,10 @@
 //! Timing harness: Qwen3-Embedding-0.6B on ANE (CoreML) vs CPU (llama.cpp).
 //!
 //! Same model, quantized:
-//! - ANE: CoreML .mlpackage (4-bit palettized) at var/data/models/qwen3-embedding-0.6b/
+//! - ANE: Static-shape FP16 .mlpackage (seq128) for Apple Neural Engine
 //! - CPU: GGUF Q8_0 from Qwen/Qwen3-Embedding-0.6B-GGUF (auto-downloaded)
 //!
-//! Reports: load time, first-embed latency, then min/mean/max over N subsequent embeds.
+//! Reports: load time, first-embed latency, then min/mean/max/p50/p95 over N embeds.
 //!
 //! Run: cargo bench -p embedding-benchmark
 
@@ -38,22 +38,16 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn has_mlpackage() -> bool {
-    workspace_root()
-        .join("var/data/models/qwen3-embedding-0.6b/Qwen3-Embedding-0.6B.mlpackage")
-        .exists()
+fn mlpackage_path() -> PathBuf {
+    let config = ane_config();
+    config.model_path()
 }
 
 fn ane_config() -> ane_embedding::AneEmbeddingConfig {
     let dir = workspace_root().join("var/data/models/qwen3-embedding-0.6b");
     ane_embedding::AneEmbeddingConfig {
-        model_source: model_loader::ModelSource::Local {
-            folder: dir,
-            filename: Some("Qwen3-Embedding-0.6B.mlpackage".to_string()),
-        },
-        max_sequence_length: 512,
-        normalize_embeddings: true,
-        debug: false,
+        model_dir: dir,
+        ..ane_embedding::AneEmbeddingConfig::default()
     }
 }
 
@@ -75,103 +69,49 @@ struct Stats {
     min: Duration,
     max: Duration,
     mean: Duration,
-    samples: Vec<Duration>,
+    p50: Duration,
+    p95: Duration,
 }
 
 fn compute_stats(first: Duration, samples: Vec<Duration>) -> Stats {
     let min = *samples.iter().min().unwrap();
     let max = *samples.iter().max().unwrap();
     let mean = samples.iter().sum::<Duration>() / samples.len() as u32;
+
+    let mut sorted = samples;
+    sorted.sort();
+    let p50 = sorted[sorted.len() / 2];
+    let p95 = sorted[(sorted.len() as f64 * 0.95) as usize];
+
     Stats {
         first,
         min,
         max,
         mean,
-        samples,
+        p50,
+        p95,
     }
 }
 
 fn print_stats(label: &str, load_time: Duration, stats: &Stats) {
-    println!("\n=== {label} ===");
-    println!("  load model:   {:>10.2?}", load_time);
-    println!("  first embed:  {:>10.2?}", stats.first);
-    println!("  subsequent ({N} embeds, cycling {} texts):", TEXTS.len());
+    println!("  {label}");
+    println!("    load:       {:>10.2?}", load_time);
+    println!("    first:      {:>10.2?}", stats.first);
     println!("    min:        {:>10.2?}", stats.min);
     println!("    mean:       {:>10.2?}", stats.mean);
     println!("    max:        {:>10.2?}", stats.max);
-
-    // p50/p95 from sorted samples
-    let mut sorted = stats.samples.clone();
-    sorted.sort();
-    let p50 = sorted[sorted.len() / 2];
-    let p95 = sorted[(sorted.len() as f64 * 0.95) as usize];
-    println!("    p50:        {:>10.2?}", p50);
-    println!("    p95:        {:>10.2?}", p95);
+    println!("    p50:        {:>10.2?}", stats.p50);
+    println!("    p95:        {:>10.2?}", stats.p95);
 }
 
-fn main() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-
-    // --- ANE (CoreML) ---
-    if has_mlpackage() {
-        let t0 = Instant::now();
-        let model = rt.block_on(async {
-            let model = ane_embedding::AneEmbeddingModel::new(ane_config());
-            model.load().await.expect("Failed to load ANE model");
-            model
-        });
-        let load_time = t0.elapsed();
-
-        let stats = rt.block_on(async {
-            // First embed
-            let t = Instant::now();
-            model
-                .embed_text(TEXTS[0])
-                .await
-                .expect("ANE embed failed");
-            let first = t.elapsed();
-
-            // N subsequent embeds, cycling through texts
-            let mut samples = Vec::with_capacity(N);
-            for i in 0..N {
-                let text = TEXTS[i % TEXTS.len()];
-                let t = Instant::now();
-                model.embed_text(text).await.expect("ANE embed failed");
-                samples.push(t.elapsed());
-            }
-
-            compute_stats(first, samples)
-        });
-
-        print_stats("ANE CoreML (4-bit palettized)", load_time, &stats);
-    } else {
-        eprintln!("Skipping ANE: .mlpackage not found");
-    }
-
-    // --- llama.cpp CPU ---
-    let t0 = Instant::now();
-    let model = match rt.block_on(async {
-        let config = llama_config();
-        let model = llama_embedding::EmbeddingModel::new(config)
-            .await
-            .map_err(|e| model_embedding::EmbeddingError::Backend(e.into()))?;
-        model.load().await.map(|()| model)
-    }) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Skipping llama.cpp: {e}");
-            return;
-        }
-    };
-    let load_time = t0.elapsed();
-
-    let stats = rt.block_on(async {
+fn bench_embedder(
+    rt: &tokio::runtime::Runtime,
+    model: &dyn TextEmbedder,
+) -> Stats {
+    rt.block_on(async {
         // First embed
         let t = Instant::now();
-        model
-            .embed_text(TEXTS[0])
-            .await
-            .expect("Llama embed failed");
+        model.embed_text(TEXTS[0]).await.expect("embed failed");
         let first = t.elapsed();
 
         // N subsequent embeds, cycling through texts
@@ -179,12 +119,61 @@ fn main() {
         for i in 0..N {
             let text = TEXTS[i % TEXTS.len()];
             let t = Instant::now();
-            model.embed_text(text).await.expect("Llama embed failed");
+            model.embed_text(text).await.expect("embed failed");
             samples.push(t.elapsed());
         }
 
         compute_stats(first, samples)
-    });
+    })
+}
 
-    print_stats("llama.cpp CPU (Q8_0)", load_time, &stats);
+fn main() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    println!("Qwen3-Embedding-0.6B: ANE (FP16 CoreML) vs CPU (Q8_0 llama.cpp)");
+    println!("ANE uses static-shape seq128 — inputs padded/truncated to 128 tokens");
+    println!("N={N} embeds per config, cycling {} texts\n", TEXTS.len());
+
+    // ANE (CoreML) — static-shape FP16 model
+    if mlpackage_path().exists() {
+        let t0 = Instant::now();
+        let model = rt.block_on(async {
+            let model = ane_embedding::AneEmbeddingModel::new(ane_config());
+            model.load().await.expect("Failed to load ANE model");
+            model
+        });
+        let load_time = t0.elapsed();
+        let stats = bench_embedder(&rt, &model);
+        print_stats("ANE CoreML (FP16, static seq128)", load_time, &stats);
+
+        // Leak the model to avoid SIGABRT on CoreML teardown.
+        // This is a known coreml-rs issue — the Swift runtime crashes
+        // when MLModel is deallocated during process exit.
+        std::mem::forget(model);
+    } else {
+        println!("  ANE CoreML: skipped (no .mlpackage at {})", mlpackage_path().display());
+    }
+
+    println!();
+
+    // llama.cpp CPU
+    let t0 = Instant::now();
+    match rt.block_on(async {
+        let config = llama_config();
+        let model = llama_embedding::EmbeddingModel::new(config)
+            .await
+            .map_err(|e| model_embedding::EmbeddingError::Backend(e.into()))?;
+        model.load().await.map(|()| model)
+    }) {
+        Ok(model) => {
+            let load_time = t0.elapsed();
+            let stats = bench_embedder(&rt, &model);
+            print_stats("llama.cpp CPU (Q8_0)", load_time, &stats);
+        }
+        Err(e) => {
+            println!("  llama.cpp CPU: skipped ({e})");
+        }
+    }
+
+    println!();
 }

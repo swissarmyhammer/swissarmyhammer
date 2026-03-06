@@ -1,5 +1,5 @@
 ---
-description: "Qwen3 Embedding 0.6B: Compact semantic embedding model"
+description: "Nomic Embed Code v2: 768d code embedding model"
 ---
 quiet: false
 executors:
@@ -8,14 +8,14 @@ executors:
       type: ane-embedding
       config:
         source: !HuggingFace
-          repo: "wballard/Qwen3-Embedding-0.6B-CoreML"
+          repo: "wballard/nomic-embed-code-v2-CoreML"
         normalize: true
         max_sequence_length: 128
   - executor:
       type: llama-embedding
       config:
         source: !HuggingFace
-          repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
-          filename: "Qwen3-Embedding-0.6B-Q8_0.gguf"
+          repo: "nomic-ai/nomic-embed-code-v2-GGUF"
+          filename: "nomic-embed-code-v2-Q8_0.gguf"
         normalize: true
         max_sequence_length: 512

@@ -3,8 +3,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use coreml_rs::{ComputePlatform, CoreMLModelOptions, CoreMLModelWithState};
 use model_embedding::{EmbeddingResult, TextEmbedder};
-use model_loader::{ModelConfig, ModelResolver, ModelSource, RetryConfig};
-use ndarray::Array2;
+use ndarray::{Array2, ArrayD};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
@@ -16,13 +15,12 @@ struct Inner {
     model: Option<CoreMLModelWithState>,
     tokenizer: Option<Tokenizer>,
     embedding_dim: Option<usize>,
-    max_length: usize,
 }
 
 /// Text embedding model using CoreML for Apple Neural Engine.
 ///
-/// Loads a `.mlpackage` directly via `coreml-rs` for hardware-accelerated
-/// inference on Apple Silicon. Mean pooling is baked into the model.
+/// Loads a single static-shape FP16 `.mlpackage` for a fixed sequence length.
+/// Inputs are padded or truncated to fit. Mean pooling is baked into the model.
 pub struct AneEmbeddingModel {
     inner: Mutex<Inner>,
     config: AneEmbeddingConfig,
@@ -69,10 +67,14 @@ impl AneEmbeddingModel {
                 model: None,
                 tokenizer: None,
                 embedding_dim: None,
-                max_length: config.max_sequence_length,
             }),
             config,
         }
+    }
+
+    /// The fixed sequence length for this model.
+    pub fn seq_length(&self) -> usize {
+        self.config.seq_length
     }
 
     /// Load the CoreML model and tokenizer.
@@ -82,76 +84,46 @@ impl AneEmbeddingModel {
             return Ok(());
         }
 
-        // Resolve model file via model-loader
-        let resolver = ModelResolver::new();
-        let model_config = ModelConfig {
-            source: self.config.model_source.clone(),
-            retry_config: RetryConfig::default(),
-            debug: self.config.debug,
-        };
+        // Load tokenizer
+        let tok_path = self.config.tokenizer_path();
+        info!(path = %tok_path.display(), "Loading tokenizer");
+        let tokenizer = Tokenizer::from_file(&tok_path).map_err(|e| {
+            EmbeddingError::tokenization(format!(
+                "Failed to load tokenizer at {}: {e}",
+                tok_path.display()
+            ))
+        })?;
 
-        info!("Resolving CoreML model...");
-        let resolved = resolver
-            .resolve(&model_config)
-            .await
-            .map_err(EmbeddingError::ModelLoader)?;
-        let model_path = resolved.path.clone();
-
+        // Load CoreML model
+        let model_path = self.config.model_path();
         info!(
+            seq_length = self.config.seq_length,
             path = %model_path.display(),
-            size_bytes = resolved.metadata.size_bytes,
-            "Model resolved"
+            "Loading CoreML model"
         );
 
-        // Load tokenizer — download from HuggingFace if not found locally
-        let tokenizer = match load_tokenizer(&model_path) {
-            Ok(t) => t,
-            Err(_) => {
-                // Tokenizer not found near model file; download it from the repo
-                if let ModelSource::HuggingFace { ref repo, .. } = self.config.model_source {
-                    info!("Downloading tokenizer.json from {}", repo);
-                    let retry = RetryConfig::default();
-                    let (tok_path, _) =
-                        model_loader::load_huggingface_model_with_path(
-                            repo,
-                            Some("tokenizer.json"),
-                            &retry,
-                        )
-                        .await
-                        .map_err(EmbeddingError::ModelLoader)?;
-                    Tokenizer::from_file(&tok_path).map_err(|e| {
-                        EmbeddingError::tokenization(format!("Failed to load tokenizer: {e}"))
-                    })?
-                } else {
-                    return Err(EmbeddingError::configuration(
-                        "tokenizer.json not found near model file",
-                    ));
-                }
-            }
-        };
+        if !model_path.exists() {
+            return Err(EmbeddingError::configuration(format!(
+                "Model not found: {}",
+                model_path.display()
+            )));
+        }
 
-        // Load CoreML model with ANE compute preference
         let opts = CoreMLModelOptions {
             compute_platform: ComputePlatform::CpuAndANE,
             ..Default::default()
         };
 
         let model_path_str = model_path.to_string_lossy().to_string();
-        info!("Loading CoreML model...");
         let coreml_model = CoreMLModelWithState::new(model_path_str, opts);
         let mut coreml_model = coreml_model
             .load()
             .map_err(|e| EmbeddingError::coreml(format!("Failed to load .mlpackage: {e}")))?;
 
-        let desc = coreml_model
-            .description()
-            .map_err(|e| EmbeddingError::coreml(format!("Failed to get model description: {e}")))?;
-        debug!(description = ?desc, "CoreML model loaded");
-
-        // Detect embedding dimension by running a dummy inference
-        let seq_len = inner.max_length;
-        let dummy_ids = Array2::<f32>::zeros((1, seq_len)).into_dyn();
-        let dummy_mask = Array2::<f32>::zeros((1, seq_len)).into_dyn();
+        // Detect embedding dimension with a dummy inference
+        let sl = self.config.seq_length;
+        let dummy_ids = Array2::<i32>::zeros((1, sl)).into_dyn();
+        let dummy_mask = Array2::<i32>::zeros((1, sl)).into_dyn();
 
         coreml_model
             .add_input("input_ids", dummy_ids)
@@ -162,8 +134,7 @@ impl AneEmbeddingModel {
 
         if let Ok(output) = coreml_model.predict() {
             if let Some((_, arr)) = output.outputs.into_iter().find(|(k, _)| k == "embedding") {
-                let shape = arr.shape().to_vec();
-                let dim = *shape.last().unwrap_or(&0) as usize;
+                let dim = *arr.shape().last().unwrap_or(&0) as usize;
                 if dim > 0 {
                     inner.embedding_dim = Some(dim);
                     info!(embedding_dim = dim, "Detected embedding dimension");
@@ -174,62 +145,78 @@ impl AneEmbeddingModel {
         inner.model = Some(coreml_model);
         inner.tokenizer = Some(tokenizer);
 
+        info!(
+            seq_length = self.config.seq_length,
+            "CoreML model ready"
+        );
+
         Ok(())
     }
 
-    /// Embed a single text string.
+    /// Embed a single text string. Pads or truncates to the fixed seq_length.
     async fn embed_impl(&self, text: &str) -> crate::error::Result<EmbeddingResult> {
         let start = Instant::now();
         let mut inner = self.inner.lock().await;
+        let t_lock = start.elapsed();
 
         if inner.model.is_none() {
             return Err(EmbeddingError::ModelNotLoaded);
         }
 
-        // Tokenize first (immutable borrow of tokenizer)
-        let tokenizer = inner.tokenizer.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
+        // Tokenize
+        let t0 = Instant::now();
+        let tokenizer = inner
+            .tokenizer
+            .as_ref()
+            .ok_or(EmbeddingError::ModelNotLoaded)?;
         let encoding = tokenizer
             .encode(text, true)
             .map_err(|e| EmbeddingError::tokenization(e.to_string()))?;
 
         let input_ids = encoding.get_ids();
         let attention_mask = encoding.get_attention_mask();
-        let max_length = inner.max_length;
-        let seq_len = input_ids.len().min(max_length);
+        let token_count = input_ids.len();
+        let seq_len = token_count.min(self.config.seq_length);
+        let t_tokenize = t0.elapsed();
 
-        // Prepare tensors — pad or truncate to max_length for static shapes
-        // Use f32 inputs: coreml-rs 0.5.4 has a bug in bindInputI32 where it
-        // tags i32 data as float32 dataType, corrupting the values.
-        let mut ids_padded = vec![0.0f32; max_length];
-        let mut mask_padded = vec![0.0f32; max_length];
+        // Prepare tensors — pad or truncate to fixed seq_length
+        let t0 = Instant::now();
+        let padded_len = self.config.seq_length;
+        let mut ids_padded = vec![0i32; padded_len];
+        let mut mask_padded = vec![0i32; padded_len];
 
         for i in 0..seq_len {
-            ids_padded[i] = input_ids[i] as f32;
-            mask_padded[i] = attention_mask[i] as f32;
+            ids_padded[i] = input_ids[i] as i32;
+            mask_padded[i] = attention_mask[i] as i32;
         }
 
-        let ids_array = Array2::from_shape_vec((1, max_length), ids_padded)
+        let ids_array: ArrayD<i32> = Array2::from_shape_vec((1, padded_len), ids_padded)
             .map_err(|e| EmbeddingError::text_processing(format!("Shape error: {e}")))?
             .into_dyn();
-        let mask_array = Array2::from_shape_vec((1, max_length), mask_padded)
+        let mask_array: ArrayD<i32> = Array2::from_shape_vec((1, padded_len), mask_padded)
             .map_err(|e| EmbeddingError::text_processing(format!("Shape error: {e}")))?
             .into_dyn();
+        let t_tensors = t0.elapsed();
 
-        // Now take mutable borrow for model inference
         let model = inner.model.as_mut().unwrap();
 
+        let t0 = Instant::now();
         model
             .add_input("input_ids", ids_array)
             .map_err(|e| EmbeddingError::coreml(format!("Failed to add input_ids: {e}")))?;
         model
             .add_input("attention_mask", mask_array)
             .map_err(|e| EmbeddingError::coreml(format!("Failed to add attention_mask: {e}")))?;
+        let t_add_input = t0.elapsed();
 
-        // Run inference — output is already mean-pooled [1, embedding_dim]
+        // Run inference
+        let t0 = Instant::now();
         let output = model
             .predict()
             .map_err(|e| EmbeddingError::coreml(format!("Prediction failed: {e}")))?;
+        let t_predict = t0.elapsed();
 
+        let t0 = Instant::now();
         let embedding_array = output
             .outputs
             .into_iter()
@@ -238,22 +225,36 @@ impl AneEmbeddingModel {
             .1;
 
         let embedding = mlarray_to_f32(embedding_array);
+        let t_extract = t0.elapsed();
 
         if embedding.is_empty() {
             return Err(EmbeddingError::text_processing("Empty embedding output"));
         }
 
-        // Cache dimension on first real inference
         let dim = embedding.len();
         if inner.embedding_dim.is_none() {
             inner.embedding_dim = Some(dim);
         }
 
+        let total = start.elapsed();
+        debug!(
+            tokens = token_count,
+            seq_len = seq_len,
+            lock_us = t_lock.as_micros(),
+            tokenize_us = t_tokenize.as_micros(),
+            tensors_us = t_tensors.as_micros(),
+            add_input_us = t_add_input.as_micros(),
+            predict_us = t_predict.as_micros(),
+            extract_us = t_extract.as_micros(),
+            total_us = total.as_micros(),
+            "embed_impl timing breakdown"
+        );
+
         let mut result = EmbeddingResult::new(
             text.to_string(),
             embedding,
             seq_len,
-            start.elapsed().as_millis() as u64,
+            total.as_millis() as u64,
         );
 
         if self.config.normalize_embeddings {
@@ -277,38 +278,6 @@ fn mlarray_to_f32(array: coreml_rs::mlarray::MLArray) -> Vec<f32> {
     }
 }
 
-/// Load a HuggingFace tokenizer from the model directory.
-///
-/// Looks for `tokenizer.json` in the same directory as the model file,
-/// or in the parent directory (for models stored in subdirectories).
-fn load_tokenizer(model_path: &std::path::Path) -> crate::error::Result<Tokenizer> {
-    let model_dir = model_path
-        .parent()
-        .ok_or_else(|| EmbeddingError::configuration("Model path has no parent directory"))?;
-
-    // Try model dir first, then parent (for repos with subfolders)
-    let candidates = [
-        model_dir.join("tokenizer.json"),
-        model_dir
-            .parent()
-            .map(|p| p.join("tokenizer.json"))
-            .unwrap_or_default(),
-    ];
-
-    for path in &candidates {
-        if path.exists() {
-            debug!(path = %path.display(), "Loading tokenizer");
-            return Tokenizer::from_file(path)
-                .map_err(|e| EmbeddingError::tokenization(format!("Failed to load tokenizer: {e}")));
-        }
-    }
-
-    Err(EmbeddingError::configuration(format!(
-        "tokenizer.json not found near model at {}",
-        model_path.display()
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +288,6 @@ mod tests {
         let model = AneEmbeddingModel::new(config);
         assert!(!model.is_loaded());
         assert_eq!(model.embedding_dimension(), None);
+        assert_eq!(model.seq_length(), 128);
     }
 }

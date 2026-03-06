@@ -19,5 +19,4 @@ pub mod types;
 pub use error::EmbeddingError;
 pub use model::AneEmbeddingModel;
 pub use model_embedding::TextEmbedder;
-pub use model_loader::ModelSource;
-pub use types::AneEmbeddingConfig;
+pub use types::{AneEmbeddingConfig, DEFAULT_MODEL_PREFIX, DEFAULT_SEQ_LENGTH};

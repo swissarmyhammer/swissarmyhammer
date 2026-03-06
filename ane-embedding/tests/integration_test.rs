@@ -13,19 +13,18 @@ fn mlpackage_dir() -> PathBuf {
 
 fn skip_if_no_model() -> Option<AneEmbeddingConfig> {
     let dir = mlpackage_dir();
-    let mlpackage = dir.join("Qwen3-Embedding-0.6B.mlpackage");
-    if !mlpackage.exists() {
-        eprintln!("Skipping: .mlpackage not found at {}", mlpackage.display());
+    let config = AneEmbeddingConfig {
+        model_dir: dir,
+        ..AneEmbeddingConfig::default()
+    };
+    if !config.model_path().exists() {
+        eprintln!(
+            "Skipping: .mlpackage not found at {}",
+            config.model_path().display()
+        );
         return None;
     }
-    Some(AneEmbeddingConfig {
-        model_source: model_loader::ModelSource::Local {
-            folder: dir,
-            filename: Some("Qwen3-Embedding-0.6B.mlpackage".to_string()),
-        },
-        max_sequence_length: 512,
-        ..AneEmbeddingConfig::default()
-    })
+    Some(config)
 }
 
 #[tokio::test]
