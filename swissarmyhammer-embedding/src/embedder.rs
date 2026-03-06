@@ -75,7 +75,7 @@ impl Embedder {
                 let max_seq = cfg.max_sequence_length.unwrap_or(128);
                 let normalize = cfg.normalize;
                 (
-                    EmbedderBackend::Ane(build_ane_model(cfg)?),
+                    EmbedderBackend::Ane(build_ane_model(cfg).await?),
                     max_seq,
                     normalize,
                 )
@@ -329,40 +329,72 @@ async fn build_llama_model(cfg: &EmbeddingModelConfig) -> Result<EmbeddingModel,
         .map_err(|e| EmbeddingError::model(e.to_string()))
 }
 
-fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel, EmbeddingError> {
-    // Resolve model directory from the source
-    let model_dir = match &cfg.source {
+async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel, EmbeddingError> {
+    let seq_length = cfg.max_sequence_length.unwrap_or(128);
+
+    // Derive model prefix from source.
+    // Convention: HF repo "wballard/Foo-Bar-CoreML" → prefix "Foo-Bar"
+    let model_prefix = match &cfg.source {
         swissarmyhammer_config::ModelSource::HuggingFace { repo, .. } => {
-            // Use HuggingFace cache directory
-            let cache_dir = dirs::cache_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from(".cache"))
-                .join("huggingface")
-                .join("hub")
-                .join(format!("models--{}", repo.replace('/', "--")));
-            // Snapshot directory (latest)
-            let snapshots = cache_dir.join("snapshots");
-            if snapshots.exists() {
-                // Use the first (latest) snapshot
-                std::fs::read_dir(&snapshots)
-                    .ok()
-                    .and_then(|mut d| d.next())
-                    .and_then(|e| e.ok())
-                    .map(|e| e.path())
-                    .unwrap_or(cache_dir)
-            } else {
-                cache_dir
-            }
+            let name = repo.split('/').last().unwrap_or(repo);
+            name.strip_suffix("-CoreML")
+                .unwrap_or(name)
+                .to_string()
         }
-        swissarmyhammer_config::ModelSource::Local { filename, folder } => {
-            folder.clone().unwrap_or_else(|| filename.parent().unwrap_or(std::path::Path::new(".")).to_path_buf())
+        swissarmyhammer_config::ModelSource::Local { .. } => {
+            ane_embedding::DEFAULT_MODEL_PREFIX.to_string()
         }
     };
 
-    let seq_length = cfg.max_sequence_length.unwrap_or(128);
+    // Use model-loader to resolve the .mlpackage file, which handles
+    // HuggingFace download + caching and local path resolution.
+    let mlpackage_filename = format!("{model_prefix}-seq{seq_length}.mlpackage");
+    let loader_source = match &cfg.source {
+        swissarmyhammer_config::ModelSource::HuggingFace { repo, folder, .. } => {
+            ModelSource::HuggingFace {
+                repo: repo.clone(),
+                filename: Some(mlpackage_filename),
+                folder: folder.clone(),
+            }
+        }
+        swissarmyhammer_config::ModelSource::Local { folder, .. } => {
+            let dir = folder.clone().unwrap_or_default();
+            ModelSource::Local {
+                folder: dir,
+                filename: Some(format!("{model_prefix}-seq{seq_length}.mlpackage")),
+            }
+        }
+    };
+
+    let resolver = model_loader::ModelResolver::new();
+    let model_config = model_loader::ModelConfig {
+        source: loader_source,
+        retry_config: model_loader::RetryConfig::default(),
+        debug: false,
+    };
+
+    let resolved = resolver
+        .resolve(&model_config)
+        .await
+        .map_err(|e| EmbeddingError::model(format!("Failed to resolve ANE model: {e}")))?;
+
+    // The model directory is the parent of the resolved .mlpackage path
+    let model_dir = resolved
+        .path
+        .parent()
+        .unwrap_or(&resolved.path)
+        .to_path_buf();
+
+    tracing::info!(
+        model_dir = %model_dir.display(),
+        model_prefix = %model_prefix,
+        seq_length = seq_length,
+        "Resolved ANE model directory"
+    );
 
     let config = AneEmbeddingConfig {
         model_dir,
-        model_prefix: ane_embedding::DEFAULT_MODEL_PREFIX.to_string(),
+        model_prefix,
         normalize_embeddings: cfg.normalize,
         seq_length,
         debug: false,

@@ -1,21 +1,15 @@
 ---
-description: "Nomic Embed Code v2: 768d code embedding model"
+description: "Nomic Embed Code: 3584d code embedding model (7B, Qwen2-based)"
 ---
 quiet: false
 executors:
-  - platform: macos-arm64
-    executor:
-      type: ane-embedding
-      config:
-        source: !HuggingFace
-          repo: "wballard/nomic-embed-code-v2-CoreML"
-        normalize: true
-        max_sequence_length: 128
+  # No ANE executor — 7B model is too large for Apple Neural Engine.
+  # Uses llama.cpp GGUF on all platforms.
   - executor:
       type: llama-embedding
       config:
         source: !HuggingFace
-          repo: "nomic-ai/nomic-embed-code-v2-GGUF"
-          filename: "nomic-embed-code-v2-Q8_0.gguf"
+          repo: "nomic-ai/nomic-embed-code-GGUF"
+          filename: "nomic-embed-code-Q8_0.gguf"
         normalize: true
         max_sequence_length: 512
