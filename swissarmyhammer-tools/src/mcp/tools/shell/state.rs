@@ -93,11 +93,15 @@ pub struct ShellState {
 }
 
 impl ShellState {
-    /// Create a new ShellState, initializing the .shell/ directory, log file, SQLite DB,
-    /// and background embedding worker.
+    /// Create a new ShellState using a session-scoped temp directory.
     pub fn new() -> anyhow::Result<Self> {
+        let dir = std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new()));
+        Self::with_dir(dir)
+    }
+
+    /// Create a new ShellState rooted at the given directory.
+    pub fn with_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
         let session_id = ulid::Ulid::new().to_string();
-        let shell_dir = PathBuf::from(".shell");
         fs::create_dir_all(&shell_dir)?;
 
         let log_path = shell_dir.join("log");
@@ -107,10 +111,7 @@ impl ShellState {
             .append(true)
             .open(&log_path)?;
 
-        let db_path = shell_dir.join("embeddings.db");
-        let conn = Connection::open(&db_path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        let conn = Connection::open_in_memory()?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS chunks (
                 session_id  TEXT    NOT NULL,
@@ -653,10 +654,8 @@ mod tests {
     /// of the test so the directory is not deleted).
     fn create_test_state() -> (ShellState, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        let original = std::env::current_dir().expect("get cwd");
-        std::env::set_current_dir(tmp.path()).expect("cd to tmp");
-        let state = ShellState::new().expect("ShellState::new");
-        std::env::set_current_dir(original).expect("restore cwd");
+        let shell_dir = tmp.path().join(".shell");
+        let state = ShellState::with_dir(shell_dir).expect("ShellState::with_dir");
         (state, tmp)
     }
 
