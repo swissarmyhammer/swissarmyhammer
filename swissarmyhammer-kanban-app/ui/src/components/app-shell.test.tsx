@@ -16,6 +16,7 @@ import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
 import { EntityFocusProvider, useEntityFocus } from "@/lib/entity-focus-context";
 import { useAvailableCommands } from "@/lib/command-scope";
+import { InspectProvider } from "@/lib/inspect-context";
 
 /**
  * Helper component that renders inside AppShell to inspect commands
@@ -41,9 +42,11 @@ function renderShell(children?: React.ReactNode) {
       <KeymapProvider>
         <AppModeProvider>
           <UndoStackProvider>
-            <AppShell>
-              {children ?? <CommandInspector />}
-            </AppShell>
+            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+              <AppShell>
+                {children ?? <CommandInspector />}
+              </AppShell>
+            </InspectProvider>
           </UndoStackProvider>
         </AppModeProvider>
       </KeymapProvider>
@@ -171,10 +174,11 @@ describe("AppShell", () => {
         <KeymapProvider>
           <AppModeProvider>
             <UndoStackProvider>
-              <AppShell>
-                <CommandInspector />
-                {/* Import ModeIndicator inline to check mode label */}
-              </AppShell>
+              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+                <AppShell>
+                  <CommandInspector />
+                </AppShell>
+              </InspectProvider>
             </UndoStackProvider>
           </AppModeProvider>
         </KeymapProvider>

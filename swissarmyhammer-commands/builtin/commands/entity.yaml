@@ -1,0 +1,105 @@
+- id: task.add
+  name: New Task
+  scope: "entity:column"
+  undoable: true
+  keys:
+    cua: Mod+N
+    vim: a
+  params:
+    - name: column
+      from: scope_chain
+      entity_type: column
+
+- id: task.move
+  name: Move Task
+  scope: "entity:task"
+  undoable: true
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task
+    - name: column
+      from: target
+      entity_type: column
+    - name: drop_index
+      from: args
+
+- id: task.delete
+  name: Delete Task
+  scope: "entity:task"
+  undoable: true
+  context_menu: true
+  keys:
+    vim: dd
+    cua: Mod+Backspace
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task
+
+- id: task.untag
+  name: Remove Tag
+  scope: "entity:tag,entity:task"
+  undoable: true
+  context_menu: true
+  keys:
+    vim: x
+    cua: Delete
+  params:
+    - name: tag
+      from: scope_chain
+      entity_type: tag
+    - name: task
+      from: scope_chain
+      entity_type: task
+
+- id: entity.update_field
+  name: Update Field
+  undoable: true
+  visible: false
+  params:
+    - name: entity_type
+      from: args
+    - name: id
+      from: args
+    - name: field_name
+      from: args
+    - name: value
+      from: args
+
+- id: entity.delete
+  name: Delete
+  undoable: true
+  visible: false
+  params:
+    - name: moniker
+      from: target
+
+- id: tag.update
+  name: Update Tag
+  scope: "entity:tag"
+  undoable: true
+  visible: false
+  params:
+    - name: id
+      from: scope_chain
+      entity_type: tag
+
+- id: column.reorder
+  name: Reorder Columns
+  undoable: true
+  visible: false
+  params:
+    - name: columns
+      from: args
+
+- id: attachment.delete
+  name: Delete Attachment
+  scope: "entity:task"
+  undoable: true
+  visible: false
+  params:
+    - name: task_id
+      from: args
+    - name: id
+      from: args

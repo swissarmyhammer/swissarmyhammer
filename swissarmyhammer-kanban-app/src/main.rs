@@ -5,6 +5,7 @@ mod cli;
 mod commands;
 mod menu;
 mod state;
+mod watcher;
 
 use clap::Parser;
 use cli::Cli;
@@ -40,7 +41,9 @@ fn main() {
         .plugin(tauri_plugin_log::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
-            commands::execute_command,
+            commands::dispatch_command,
+            commands::set_focus,
+            commands::list_available_commands,
             commands::show_context_menu,
             commands::open_board,
             commands::list_open_boards,
@@ -66,6 +69,12 @@ fn main() {
             app.handle().plugin(
                 tauri_plugin_window_state::Builder::default().build()
             )?;
+
+            // Start file watchers for boards opened during auto_open_board
+            // (which ran before Tauri was ready, so didn't have an AppHandle).
+            let app_handle = app.handle().clone();
+            let state = app.state::<AppState>();
+            tauri::async_runtime::block_on(state.start_watchers(app_handle));
 
             #[cfg(all(debug_assertions, target_os = "macos"))]
             {

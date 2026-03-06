@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_commands::{builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState};
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor};
 use tokio::sync::RwLock;
+
+use crate::watcher::{self, BoardWatcher, EntityCache};
 
 const MAX_RECENT_BOARDS: usize = 20;
 const CONFIG_DIR_NAME: &str = "swissarmyhammer-kanban";
@@ -14,20 +17,61 @@ const CONFIG_FILE_NAME: &str = "config.json";
 
 /// A handle to a single open kanban board.
 pub struct BoardHandle {
-    pub ctx: KanbanContext,
+    pub ctx: Arc<KanbanContext>,
     pub processor: KanbanOperationProcessor,
+    /// Entity cache for detecting external file changes with field-level diffing.
+    pub entity_cache: EntityCache,
+    /// File watcher — dropped when the handle is dropped.
+    _watcher: Option<BoardWatcher>,
 }
 
 impl BoardHandle {
     /// Create a handle with a fully-initialized context (views, fields, etc.).
+    ///
+    /// Does NOT start the file watcher — call `start_watcher` after the
+    /// Tauri AppHandle is available.
     pub async fn open(kanban_path: PathBuf) -> Result<Self, String> {
         let ctx = KanbanContext::open(&kanban_path)
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
+        let entity_cache = watcher::new_entity_cache(&kanban_path);
         Ok(Self {
-            ctx,
+            ctx: Arc::new(ctx),
             processor: KanbanOperationProcessor::new(),
+            entity_cache,
+            _watcher: None,
         })
+    }
+
+    /// Start the file watcher, emitting entity-level events on the given AppHandle.
+    pub fn start_watcher(&mut self, app_handle: tauri::AppHandle) {
+        let kanban_root = self.ctx.root().to_path_buf();
+        let cache = self.entity_cache.clone();
+
+        match watcher::start_watching(kanban_root.clone(), cache, move |evt| {
+            use tauri::Emitter;
+            let event_name = match &evt {
+                watcher::WatchEvent::EntityCreated { .. } => "entity-created",
+                watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
+                watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+            };
+            let _ = app_handle.emit(event_name, &evt);
+        }) {
+            Ok(w) => {
+                tracing::info!(
+                    path = %kanban_root.display(),
+                    "file watcher started for board"
+                );
+                self._watcher = Some(w);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %kanban_root.display(),
+                    error = %e,
+                    "failed to start file watcher"
+                );
+            }
+        }
     }
 }
 
@@ -100,22 +144,44 @@ pub struct AppState {
     /// Used by `handle_menu_event` to distinguish context menu selections
     /// from regular menu commands.
     pub context_menu_ids: RwLock<HashSet<String>>,
+    /// Shared UI state (inspector stack, palette, keymap, etc.).
+    pub ui_state: Arc<UIState>,
+    /// YAML-loaded command definitions. Behind RwLock because user overrides
+    /// are merged when switching boards.
+    pub commands_registry: RwLock<CommandsRegistry>,
+    /// Trait object map from `register_commands()`.
+    pub command_impls: HashMap<String, Arc<dyn Command>>,
+    /// Current focus scope chain stored by `set_focus`.
+    pub focus_scope_chain: RwLock<Vec<String>>,
 }
 
 impl AppState {
     /// Create a new AppState, loading config from disk.
     pub fn new() -> Self {
+        let sources = builtin_yaml_sources();
+        let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
         Self {
             boards: RwLock::new(HashMap::new()),
             active_board: RwLock::new(None),
             config: RwLock::new(AppConfig::load()),
             context_menu_ids: RwLock::new(HashSet::new()),
+            ui_state: Arc::new(UIState::new()),
+            commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
+            command_impls: swissarmyhammer_kanban::commands::register_commands(),
+            focus_scope_chain: RwLock::new(Vec::new()),
         }
     }
 
     /// Open a board at the given path, resolving to its .kanban directory.
     /// Returns the canonical path used as the map key.
-    pub async fn open_board(&self, path: &Path) -> Result<PathBuf, String> {
+    ///
+    /// If `app_handle` is provided, starts a file watcher that emits
+    /// entity-level events when files change externally.
+    pub async fn open_board(
+        &self,
+        path: &Path,
+        app_handle: Option<tauri::AppHandle>,
+    ) -> Result<PathBuf, String> {
         tracing::info!("Opening board at {}", path.display());
         let kanban_path = resolve_kanban_path(path).map_err(|e| e.to_string())?;
 
@@ -133,7 +199,12 @@ impl AppState {
             }
         }
 
-        let handle = Arc::new(BoardHandle::open(kanban_path).await?);
+        let mut handle = BoardHandle::open(kanban_path).await?;
+
+        // Start file watcher if we have an app handle
+        if let Some(app) = app_handle {
+            handle.start_watcher(app);
+        }
 
         // Read board name for MRU
         let board_name = if handle.ctx.is_initialized() {
@@ -150,7 +221,7 @@ impl AppState {
 
         {
             let mut boards = self.boards.write().await;
-            boards.insert(canonical.clone(), handle);
+            boards.insert(canonical.clone(), Arc::new(handle));
         }
 
         // Update MRU
@@ -161,6 +232,10 @@ impl AppState {
         }
 
         *self.active_board.write().await = Some(canonical.clone());
+
+        // Load user command overrides from .kanban/commands/
+        self.reload_command_overrides(&canonical).await;
+
         Ok(canonical)
     }
 
@@ -231,7 +306,7 @@ impl AppState {
         match board_dir {
             Some(ref dir) => {
                 tracing::info!(path = %dir.display(), "auto_open_board: opening board");
-                if let Err(e) = self.open_board(dir).await {
+                if let Err(e) = self.open_board(dir, None).await {
                     tracing::warn!(
                         path = %dir.display(),
                         error = %e,
@@ -241,6 +316,43 @@ impl AppState {
             }
             None => {
                 tracing::info!("auto_open_board: no board found, starting without one");
+            }
+        }
+    }
+
+    /// Rebuild the commands registry from builtins + user overrides from the
+    /// active board's `.kanban/commands/` directory.
+    async fn reload_command_overrides(&self, kanban_path: &Path) {
+        let commands_dir = kanban_path.join("commands");
+        let user_sources = load_yaml_dir(&commands_dir);
+        if user_sources.is_empty() {
+            return;
+        }
+        let refs: Vec<(&str, &str)> = user_sources.iter().map(|(n, c)| (n.as_str(), c.as_str())).collect();
+
+        // Rebuild from scratch: builtins + user overrides
+        let builtin = builtin_yaml_sources();
+        let builtin_refs: Vec<(&str, &str)> = builtin.iter().map(|(n, c)| (*n, *c)).collect();
+        let mut registry = CommandsRegistry::from_yaml_sources(&builtin_refs);
+        registry.merge_yaml_sources(&refs);
+
+        *self.commands_registry.write().await = registry;
+        tracing::info!(dir = %commands_dir.display(), count = user_sources.len(), "loaded user command overrides");
+    }
+
+    /// Start file watchers for all open boards that don't have one yet.
+    ///
+    /// Call this from Tauri `setup` after the AppHandle is available,
+    /// since boards opened during `auto_open_board` (before Tauri) don't
+    /// have watchers.
+    pub async fn start_watchers(&self, app_handle: tauri::AppHandle) {
+        let mut boards = self.boards.write().await;
+        let keys: Vec<PathBuf> = boards.keys().cloned().collect();
+        for key in keys {
+            if let Some(handle) = boards.get_mut(&key) {
+                if let Some(handle_mut) = Arc::get_mut(handle) {
+                    handle_mut.start_watcher(app_handle.clone());
+                }
             }
         }
     }
@@ -481,7 +593,7 @@ mod tests {
         assert_eq!(board_dir, Some(tmp.path().to_path_buf()));
 
         // Open it
-        let result = state.open_board(board_dir.as_ref().unwrap()).await;
+        let result = state.open_board(board_dir.as_ref().unwrap(), None).await;
         assert!(result.is_ok(), "open_board failed: {:?}", result.err());
 
         // Verify active board is set
@@ -509,7 +621,7 @@ mod tests {
         create_board_at(tmp.path(), "My Board");
 
         let state = AppState::new();
-        let result = state.open_board(tmp.path()).await;
+        let result = state.open_board(tmp.path(), None).await;
         assert!(result.is_ok());
 
         let canonical = result.unwrap();

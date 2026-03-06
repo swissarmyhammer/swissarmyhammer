@@ -55,8 +55,8 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
       <SchemaProvider>
         <EntityStoreProvider entities={{ tag: tagEntities }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}}>
-              <FieldUpdateProvider onRefresh={() => {}}>
+            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+              <FieldUpdateProvider>
                 <KeymapProvider>
                   <EntityInspector entity={entity} />
                 </KeymapProvider>
@@ -116,7 +116,7 @@ describe("EntityInspector", () => {
     await act(async () => { fireEvent.blur(cmContent); });
 
     const call = mockInvoke.mock.calls.find(
-      (c) => c[0] === "execute_command" && (c[1] as Record<string, unknown>)?.cmd === "entity.update_field",
+      (c) => c[0] === "dispatch_command" && (c[1] as Record<string, unknown>)?.cmd === "entity.update_field",
     );
     expect(call).toBeTruthy();
     expect(call![1]).toEqual({ cmd: "entity.update_field", args: { entity_type: "task", id: "test-id", field_name: "title", value: "New" } });

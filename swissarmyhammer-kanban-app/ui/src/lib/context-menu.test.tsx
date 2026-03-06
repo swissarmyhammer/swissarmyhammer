@@ -116,13 +116,13 @@ describe("dispatchContextMenuCommand", () => {
     expect(execute).toHaveBeenCalled();
   });
 
-  it("dispatches rustCommand", async () => {
+  it("dispatches to Rust by id when no execute is set", async () => {
     const commands: CommandDef[] = [
       {
-        id: "entity.remove",
+        id: "task.untag",
         name: "Remove",
         contextMenu: true,
-        rustCommand: { cmd: "task.untag", args: { id: "t1", tag: "bug" } },
+        args: { id: "t1", tag: "bug" },
       },
     ];
 
@@ -131,9 +131,10 @@ describe("dispatchContextMenuCommand", () => {
     });
     result.current(fakeMouseEvent());
 
-    await dispatchContextMenuCommand("entity.remove");
-    expect(invoke).toHaveBeenCalledWith("execute_command", {
+    await dispatchContextMenuCommand("task.untag");
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "task.untag",
+      target: undefined,
       args: { id: "t1", tag: "bug" },
     });
   });

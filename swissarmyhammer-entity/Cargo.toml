@@ -19,6 +19,7 @@ ulid = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 diffy = { workspace = true }
+notify = { workspace = true }
 tempfile = { workspace = true, optional = true }
 
 [features]

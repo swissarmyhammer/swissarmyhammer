@@ -13,18 +13,22 @@ path = "src/main.rs"
 
 [dependencies]
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
+swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 swissarmyhammer-views = { path = "../swissarmyhammer-views" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 tokio = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+notify = { workspace = true }
+sha2 = { workspace = true }
 tauri-plugin-log = "2.8.0"
 tauri-plugin-window-state = "2.4.1"
 

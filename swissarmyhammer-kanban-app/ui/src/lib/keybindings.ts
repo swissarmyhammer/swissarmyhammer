@@ -159,6 +159,8 @@ export function createKeyHandler(
     const normalized = normalizeKeyEvent(e);
     if (normalized === null) return;
 
+    console.debug(`[keybindings] mode=${mode} key="${normalized}" target=${target?.tagName ?? "null"}`);
+
     // Skip non-modifier single-character keys when focus is in any editable
     // context (CodeMirror editors, inputs, textareas, contenteditable).
     // Modifier combos (Mod+Shift+P, Mod+Z, etc.) pass through because they
@@ -173,7 +175,10 @@ export function createKeyHandler(
         tag === "SELECT" ||
         target.closest?.(".cm-editor") ||
         target.closest?.("[contenteditable]")
-      ) return;
+      ) {
+        console.debug(`[keybindings] SKIPPED: editable context (${tag})`);
+        return;
+      }
     }
 
     // --- Multi-key sequence handling ---
@@ -183,6 +188,7 @@ export function createKeyHandler(
       const secondMap = sequences[pending];
       if (secondMap && normalized in secondMap) {
         const commandId = secondMap[normalized];
+        console.debug(`[keybindings] SEQUENCE MATCH: "${pending}" + "${normalized}" → ${commandId}`);
         clearPending();
         e.preventDefault();
         e.stopPropagation();
@@ -190,6 +196,7 @@ export function createKeyHandler(
         return;
       }
       // No match for the second key; clear and fall through
+      console.debug(`[keybindings] SEQUENCE BROKEN: pending="${pending}" key="${normalized}"`);
       clearPending();
     }
 
@@ -207,12 +214,14 @@ export function createKeyHandler(
     // --- Single-key binding lookup ---
 
     if (normalized in bindings) {
+      const cmdId = bindings[normalized];
+      console.debug(`[keybindings] MATCH: "${normalized}" → ${cmdId}`);
       e.preventDefault();
       e.stopPropagation();
-      executeCommand(bindings[normalized]);
+      executeCommand(cmdId);
       return;
     }
 
-    // No match; do nothing
+    console.debug(`[keybindings] NO MATCH for "${normalized}"`)
   };
 }

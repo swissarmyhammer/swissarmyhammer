@@ -256,7 +256,7 @@ fn handle_open_recent(app: &AppHandle, path: PathBuf) {
 /// menu via `syncMenuToNative` (which calls `rebuild_menu_from_manifest`).
 async fn open_and_notify(handle: &AppHandle, path: &Path) {
     let state = handle.state::<AppState>();
-    match state.open_board(path).await {
+    match state.open_board(path, Some(handle.clone())).await {
         Ok(_) => {
             let _ = handle.emit("board-changed", ());
         }

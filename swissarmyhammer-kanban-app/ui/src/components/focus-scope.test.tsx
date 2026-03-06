@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { EntityFocusProvider, useEntityFocus, useIsFocused } from "@/lib/entity-focus-context";
 import { FocusScope } from "./focus-scope";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
 /** Helper to read focus state from inside the provider. */
 function FocusReader() {
@@ -95,10 +95,12 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.contextMenu(getByText("tag"));
-    // Should only invoke once (inner scope handles it, stopPropagation prevents outer)
-    expect(invoke).toHaveBeenCalledTimes(1);
-    const call = (invoke as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(call[0]).toBe("show_context_menu");
+    // show_context_menu should be called exactly once (inner scope handles it, stopPropagation prevents outer)
+    const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => c[0] === "show_context_menu",
+    );
+    expect(ctxCalls).toHaveLength(1);
+    const call = ctxCalls[0];
     // Inner scope should show both inner and outer commands (scope chain walks up)
     const items = call[1].items;
     expect(items.find((i: { id: string }) => i.id === "inner.cmd")).toBeTruthy();
@@ -123,8 +125,11 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.contextMenu(getByText("tag"));
-    expect(invoke).toHaveBeenCalledTimes(1);
-    const call = (invoke as ReturnType<typeof vi.fn>).mock.calls[0];
+    const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => c[0] === "show_context_menu",
+    );
+    expect(ctxCalls).toHaveLength(1);
+    const call = ctxCalls[0];
     const items = call[1].items;
     // No target → shadow by id alone: inner "Inspect tag" shadows outer "Inspect task"
     expect(items).toHaveLength(1);
@@ -149,8 +154,11 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.contextMenu(getByText("tag"));
-    expect(invoke).toHaveBeenCalledTimes(1);
-    const call = (invoke as ReturnType<typeof vi.fn>).mock.calls[0];
+    const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => c[0] === "show_context_menu",
+    );
+    expect(ctxCalls).toHaveLength(1);
+    const call = ctxCalls[0];
     const items = call[1].items;
     // Different targets → both accumulate
     expect(items).toHaveLength(2);
@@ -176,8 +184,11 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.contextMenu(getByText("tag"));
-    expect(invoke).toHaveBeenCalledTimes(1);
-    const call = (invoke as ReturnType<typeof vi.fn>).mock.calls[0];
+    const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => c[0] === "show_context_menu",
+    );
+    expect(ctxCalls).toHaveLength(1);
+    const call = ctxCalls[0];
     const items = call[1].items;
     // Same target → shadow: inner wins
     expect(items).toHaveLength(1);

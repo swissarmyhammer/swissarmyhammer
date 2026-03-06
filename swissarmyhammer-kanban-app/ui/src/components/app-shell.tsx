@@ -5,11 +5,11 @@ import { CommandScopeProvider, useExecuteCommand, resolveCommand, dispatchComman
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap, type KeymapMode } from "@/lib/keymap-context";
 import { useAppMode } from "@/lib/app-mode-context";
-import { useUndoStack } from "@/lib/undo-context";
 import { createKeyHandler } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
 import { syncMenuToNative } from "@/lib/menu-sync";
 import { dispatchContextMenuCommand } from "@/lib/context-menu";
+import { useInspectDismiss } from "@/lib/inspect-context";
 
 /**
  * Internal component that attaches a global keydown listener.
@@ -33,15 +33,18 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
 
   /** Execute a command, preferring the focused scope when available. */
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
+    console.debug(`[dispatch] executeCommand("${id}")`);
     const scope = focusedScopeRef.current;
     if (scope) {
       const cmd = resolveCommand(scope, id);
       if (cmd) {
+        console.debug(`[dispatch] resolved from focused scope: ${id}`, cmd.execute ? "(has execute)" : "(dispatch to Rust)");
         await dispatchCommand(cmd);
         return true;
       }
     }
     // Fall back to root scope
+    console.debug(`[dispatch] falling back to root scope for: ${id}`);
     return rootExecuteRef.current(id);
   }, []);
 
@@ -98,9 +101,11 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const paletteOpenRef = useRef(false);
+  paletteOpenRef.current = paletteOpen;
   const { mode: keymapMode, setMode: setKeymapMode } = useKeymap();
   const { setMode } = useAppMode();
-  const { undo, redo, canUndo, canRedo } = useUndoStack();
+  const dismissInspector = useInspectDismiss();
 
   /** Global commands available throughout the app. */
   const globalCommands: CommandDef[] = useMemo(
@@ -127,22 +132,30 @@ export function AppShell({ children }: { children: ReactNode }) {
         id: "app.undo",
         name: "Undo",
         keys: { vim: "u", cua: "Mod+Z", emacs: "C-/" },
-        execute: () => undo(),
-        available: canUndo,
+        // No execute -- dispatches to Rust via dispatch_command
       },
       {
         id: "app.redo",
         name: "Redo",
         keys: { vim: "Mod+R", cua: "Mod+Shift+Z" },
-        execute: () => redo(),
-        available: canRedo,
+        // No execute -- dispatches to Rust via dispatch_command
       },
       {
         id: "app.dismiss",
         name: "Dismiss",
         keys: { vim: "Escape", cua: "Escape", emacs: "Escape" },
         execute: () => {
-          setPaletteOpen(false);
+          // Layered dismiss: palette first, then inspector stack, then clear focus.
+          // Read paletteOpen from the ref to avoid adding it to useMemo deps.
+          if (paletteOpenRef.current) {
+            setPaletteOpen(false);
+            setMode("normal");
+            return;
+          }
+          if (dismissInspector()) {
+            return;
+          }
+          // Nothing to dismiss — just ensure we're in normal mode
           setMode("normal");
         },
       },
@@ -172,28 +185,19 @@ export function AppShell({ children }: { children: ReactNode }) {
         id: "settings.keymap.vim",
         name: "Switch to Vim Keymap",
         menuPlacement: { menu: "settings", group: 0, order: 1, radioGroup: "keymap", checked: keymapMode === "vim" },
-        execute: async () => {
-          await invoke("set_keymap_mode", { mode: "vim" });
-          setKeymapMode("vim");
-        },
+        execute: () => setKeymapMode("vim"),
       },
       {
         id: "settings.keymap.cua",
         name: "Switch to CUA Keymap",
         menuPlacement: { menu: "settings", group: 0, order: 0, radioGroup: "keymap", checked: keymapMode === "cua" },
-        execute: async () => {
-          await invoke("set_keymap_mode", { mode: "cua" });
-          setKeymapMode("cua");
-        },
+        execute: () => setKeymapMode("cua"),
       },
       {
         id: "settings.keymap.emacs",
         name: "Switch to Emacs Keymap",
         menuPlacement: { menu: "settings", group: 0, order: 2, radioGroup: "keymap", checked: keymapMode === "emacs" },
-        execute: async () => {
-          await invoke("set_keymap_mode", { mode: "emacs" });
-          setKeymapMode("emacs");
-        },
+        execute: () => setKeymapMode("emacs"),
       },
       {
         id: "file.newBoard",
@@ -222,7 +226,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         },
       },
     ],
-    [canUndo, canRedo, undo, redo, setMode, setKeymapMode, keymapMode],
+    [setMode, setKeymapMode, keymapMode, dismissInspector],
   );
 
   /** Close the command palette and return to normal mode. */

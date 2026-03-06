@@ -5,21 +5,14 @@ use crate::state::AppState;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use swissarmyhammer_kanban::{
-    actor::DeleteActor,
-    attachment::DeleteAttachment,
     board::GetBoard,
-    column::{DeleteColumn, UpdateColumn},
-    entity::UpdateEntityField,
-    swimlane::DeleteSwimlane,
-    tag::{DeleteTag, UpdateTag},
-    task::{AddTask, DeleteTask, MoveTask, UntagTask},
     task_helpers::{enrich_all_task_entities, enrich_task_entity},
-    types::{Ordinal, Position},
     OperationProcessor,
 };
 use tauri::menu::{ContextMenu, MenuBuilder};
-use tauri::{AppHandle, State, Window};
+use tauri::{AppHandle, Emitter, State, Window};
 
 /// A single menu item entry received from the frontend manifest.
 ///
@@ -40,8 +33,8 @@ pub struct MenuItemEntry {
 
 /// Open a board at the given path, resolving to its .kanban directory.
 #[tauri::command]
-pub async fn open_board(state: State<'_, AppState>, path: String) -> Result<Value, String> {
-    let canonical = state.open_board(&PathBuf::from(&path)).await?;
+pub async fn open_board(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<Value, String> {
+    let canonical = state.open_board(&PathBuf::from(&path), Some(app)).await?;
 
     // Return the board data
     let handle = state
@@ -454,350 +447,221 @@ pub async fn rebuild_menu_from_manifest(
 }
 
 // ---------------------------------------------------------------------------
-// Helpers for execute_command dispatcher
+// set_focus — store the current focus scope chain
 // ---------------------------------------------------------------------------
 
-/// Column id + order pair used by the `column.reorder` dispatcher arm.
-#[derive(serde::Deserialize)]
-struct ColumnOrder {
-    id: String,
-    order: usize,
-}
-
-/// Parse a "type:id" moniker string into (entity_type, id).
+/// Store the current focus scope chain from the frontend.
 ///
-/// The id portion may itself contain colons (e.g. "task:01JAB:extra" parses
-/// as ("task", "01JAB:extra")).
-fn parse_moniker(s: &str) -> Result<(&str, &str), String> {
-    let (entity_type, id) = s
-        .split_once(':')
-        .ok_or_else(|| format!("Invalid moniker (no colon): {}", s))?;
-    if entity_type.is_empty() {
-        return Err(format!("Invalid moniker (empty type): {}", s));
-    }
-    if id.is_empty() {
-        return Err(format!("Invalid moniker (empty id): {}", s));
-    }
-    Ok((entity_type, id))
-}
-
-/// Extract a required string arg from a JSON value.
-fn required_str(args: &Value, key: &str, cmd: &str) -> Result<String, String> {
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| format!("{}: missing required arg '{}'", cmd, key))
-}
-
-/// Extract an optional string arg from a JSON value.
-fn optional_str(args: &Value, key: &str) -> Option<String> {
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-// ---------------------------------------------------------------------------
-// execute_command — unified command dispatcher
-// ---------------------------------------------------------------------------
-
-/// Unified command dispatcher that routes a `cmd` string and `args` JSON
-/// object to the appropriate kanban mutation operation.
-///
-/// All mutations (entity updates, deletes, task moves, undo/redo, etc.)
-/// flow through this single entry point.
+/// The scope chain is an ordered list of `type:id` monikers representing
+/// the focused element hierarchy. It is used by `dispatch_command` when
+/// no explicit scope chain is provided.
 #[tauri::command]
-pub async fn execute_command(
-    _app: AppHandle,
-    _window: Window,
+pub async fn set_focus(
+    state: State<'_, AppState>,
+    scope_chain: Vec<String>,
+) -> Result<(), String> {
+    tracing::debug!(scope_chain = ?scope_chain, "set_focus");
+    *state.focus_scope_chain.write().await = scope_chain;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// dispatch_command — unified command dispatcher via Command trait
+// ---------------------------------------------------------------------------
+
+/// Unified command dispatcher that routes a `cmd` string through the
+/// `Command` trait system.
+///
+/// Looks up the command definition in the registry, resolves the scope
+/// chain, checks availability, and executes via the trait implementation.
+#[tauri::command]
+pub async fn dispatch_command(
+    app: AppHandle,
     state: State<'_, AppState>,
     cmd: String,
-    args: Value,
+    scope_chain: Option<Vec<String>>,
+    target: Option<String>,
+    args: Option<Value>,
 ) -> Result<Value, String> {
-    tracing::info!(cmd = %cmd, "execute_command");
+    // Validate command ID: non-empty, reasonable length, ASCII-only
+    if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
+        return Err(format!("Invalid command ID: {:?}", cmd));
+    }
 
-    match cmd.as_str() {
-        "entity.update_field" => {
-            let entity_type = required_str(&args, "entity_type", &cmd)?;
-            let id = required_str(&args, "id", &cmd)?;
-            let field_name = required_str(&args, "field_name", &cmd)?;
-            let value = args
-                .get("value")
-                .cloned()
-                .ok_or_else(|| format!("{}: missing required arg 'value'", cmd))?;
+    tracing::info!(
+        cmd = %cmd,
+        target = ?target,
+        args = ?args,
+        scope_chain = ?scope_chain,
+        "dispatch_command"
+    );
 
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let op =
-                UpdateEntityField::new(entity_type.clone(), id.clone(), field_name.clone(), value);
-            handle
-                .processor
-                .process(&op, &handle.ctx)
-                .await
-                .map_err(|e| format!("execute_command({}): {}", cmd, e))
-        }
+    // Resolve scope chain: explicit > stored focus
+    let scope = match scope_chain {
+        Some(sc) => sc,
+        None => state.focus_scope_chain.read().await.clone(),
+    };
+    tracing::debug!(scope = ?scope, "resolved scope chain");
 
-        "entity.delete" => {
-            let moniker = required_str(&args, "moniker", &cmd)?;
-            let (entity_type, id) = parse_moniker(&moniker)?;
-            let handle = state.active_handle().await.ok_or("No active board")?;
+    // Look up command definition — clone the undoable flag so we don't
+    // hold the registry read guard across the async execute call.
+    let undoable = {
+        let registry = state.commands_registry.read().await;
+        let cmd_def = registry
+            .get(&cmd)
+            .ok_or_else(|| format!("Unknown command: {}", cmd))?;
+        cmd_def.undoable
+    };
 
-            match entity_type {
-                "task" => handle
-                    .processor
-                    .process(&DeleteTask::new(id), &handle.ctx)
-                    .await
-                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
-                "tag" => handle
-                    .processor
-                    .process(&DeleteTag::new(id), &handle.ctx)
-                    .await
-                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
-                "column" => handle
-                    .processor
-                    .process(&DeleteColumn::new(id), &handle.ctx)
-                    .await
-                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
-                "actor" => handle
-                    .processor
-                    .process(&DeleteActor::new(id), &handle.ctx)
-                    .await
-                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
-                "swimlane" => handle
-                    .processor
-                    .process(&DeleteSwimlane::new(id), &handle.ctx)
-                    .await
-                    .map_err(|e| format!("execute_command({}): {}", cmd, e)),
-                _ => Err(format!(
-                    "entity.delete: unknown entity type '{}'",
-                    entity_type
-                )),
-            }
-        }
+    // Look up command implementation
+    let cmd_impl = state
+        .command_impls
+        .get(&cmd)
+        .ok_or_else(|| format!("No implementation for command: {}", cmd))?;
 
-        "task.move" => {
-            let id = required_str(&args, "id", &cmd)?;
-            let column = required_str(&args, "column", &cmd)?;
-            let ordinal = optional_str(&args, "ordinal").unwrap_or_default();
-            let swimlane = optional_str(&args, "swimlane");
+    // Build CommandContext
+    let args_map: HashMap<String, Value> = match args {
+        Some(Value::Object(map)) => map.into_iter().collect(),
+        _ => HashMap::new(),
+    };
+    let mut ctx = swissarmyhammer_commands::CommandContext::new(
+        cmd.clone(),
+        scope,
+        target,
+        args_map,
+    );
+    ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let mut op = MoveTask::to_column(id.clone(), column);
-            op.swimlane = swimlane.map(|s| s.into());
-            if !ordinal.is_empty() {
-                op.ordinal = Some(ordinal);
-            }
-            handle
-                .processor
-                .process(&op, &handle.ctx)
-                .await
-                .map_err(|e| format!("execute_command({}): {}", cmd, e))
-        }
+    // Set KanbanContext extension if board is open
+    if let Some(handle) = state.active_handle().await {
+        ctx.set_extension(Arc::clone(&handle.ctx));
+    }
 
-        "task.add" => {
-            let title = required_str(&args, "title", &cmd)?;
-            let column = required_str(&args, "column", &cmd)?;
+    // Check availability
+    if !cmd_impl.available(&ctx) {
+        tracing::warn!(cmd = %cmd, "command not available in current context");
+        return Err(format!("Command not available: {}", cmd));
+    }
 
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let position = Position::new(column.into(), None, Ordinal::first());
-            let op = AddTask::new(title).with_position(position);
-            handle
-                .processor
-                .process(&op, &handle.ctx)
-                .await
-                .map_err(|e| format!("execute_command({}): {}", cmd, e))
-        }
+    // Execute
+    tracing::debug!(cmd = %cmd, "executing command");
+    let result = cmd_impl
+        .execute(&ctx)
+        .await
+        .map_err(|e| {
+            tracing::error!(cmd = %cmd, error = %e, "command execution failed");
+            format!("Command failed: {}", e)
+        })?;
 
-        "task.untag" => {
-            let id = required_str(&args, "id", &cmd)?;
-            let tag = required_str(&args, "tag", &cmd)?;
+    tracing::info!(cmd = %cmd, undoable = undoable, result = %result, "command completed");
 
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let op = UntagTask::new(id, tag);
-            handle
-                .processor
-                .process(&op, &handle.ctx)
-                .await
-                .map_err(|e| format!("execute_command({}): {}", cmd, e))
-        }
+    // For undoable commands (data mutations), scan entity files for changes
+    // and emit granular entity-level events. This also updates the watcher
+    // cache so the file watcher won't double-fire for our own writes.
+    //
+    // Events are enriched with the full entity state (including computed
+    // fields like tags derived from body) by re-reading through the entity
+    // context after detecting raw file changes.
+    if undoable {
+        if let Some(handle) = state.active_handle().await {
+            let kanban_root = handle.ctx.root().to_path_buf();
+            let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
 
-        "tag.update" => {
-            let id = required_str(&args, "id", &cmd)?;
-            let name = optional_str(&args, "name");
-            let color = optional_str(&args, "color");
-            let description = optional_str(&args, "description");
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let mut op = UpdateTag::new(id);
-            if let Some(n) = name {
-                op = op.with_name(n);
-            }
-            if let Some(c) = color {
-                op = op.with_color(c);
-            }
-            if let Some(d) = description {
-                op = op.with_description(d);
-            }
-            handle
-                .processor
-                .process(&op, &handle.ctx)
-                .await
-                .map_err(|e| format!("execute_command({}): {}", cmd, e))
-        }
-
-        "column.reorder" => {
-            let columns_val = args
-                .get("columns")
-                .ok_or_else(|| format!("{}: missing required arg 'columns'", cmd))?;
-            let columns: Vec<ColumnOrder> = serde_json::from_value(columns_val.clone())
-                .map_err(|e| format!("{}: invalid 'columns' arg: {}", cmd, e))?;
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let mut operation_ids: Vec<String> = Vec::new();
-            for col in &columns {
-                let op = UpdateColumn::new(col.id.clone()).with_order(col.order);
-                let result = handle
-                    .processor
-                    .process(&op, &handle.ctx)
-                    .await
-                    .map_err(|e| format!("execute_command({}): {}", cmd, e))?;
-                if let Some(op_id) = result.get("operation_id").and_then(|v| v.as_str()) {
-                    operation_ids.push(op_id.to_string());
+            // Enrich events with full entity state (including computed fields
+            // like tags derived from body, progress, etc.) by re-reading
+            // through the entity context.
+            if let Ok(ectx) = handle.ctx.entity_context().await {
+                for evt in &mut events {
+                    match evt {
+                        crate::watcher::WatchEvent::EntityCreated { entity_type, id, fields } => {
+                            if let Ok(entity) = ectx.read(entity_type, id).await {
+                                *fields = entity.fields.into_iter()
+                                    .map(|(k, v)| (k.to_string(), v))
+                                    .collect();
+                            }
+                        }
+                        crate::watcher::WatchEvent::EntityFieldChanged {
+                            entity_type, id, fields, ..
+                        } => {
+                            if let Ok(entity) = ectx.read(entity_type, id).await {
+                                *fields = Some(entity.fields.into_iter()
+                                    .map(|(k, v)| (k.to_string(), v))
+                                    .collect());
+                            }
+                        }
+                        crate::watcher::WatchEvent::EntityRemoved { .. } => {}
+                    }
                 }
             }
-            Ok(json!({ "updated": columns.len(), "operation_ids": operation_ids }))
+
+            for evt in events {
+                let event_name = match &evt {
+                    crate::watcher::WatchEvent::EntityCreated { .. } => "entity-created",
+                    crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
+                    crate::watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+                };
+                let _ = app.emit(event_name, &evt);
+            }
         }
-
-        "op.undo" => {
-            let id = required_str(&args, "id", &cmd)?;
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let ectx = handle
-                .ctx
-                .entity_context()
-                .await
-                .map_err(|e| e.to_string())?;
-            let result_ulid = ectx.undo(&id).await.map_err(|e| e.to_string())?;
-            Ok(json!({ "undone": id, "operation_id": result_ulid }))
-        }
-
-        "op.redo" => {
-            let id = required_str(&args, "id", &cmd)?;
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let ectx = handle
-                .ctx
-                .entity_context()
-                .await
-                .map_err(|e| e.to_string())?;
-            let result_ulid = ectx.redo(&id).await.map_err(|e| e.to_string())?;
-            Ok(json!({ "redone": id, "operation_id": result_ulid }))
-        }
-
-        "view.create" => {
-            let view_json = args
-                .get("view")
-                .ok_or_else(|| format!("{}: missing required arg 'view'", cmd))?;
-            let view_def: swissarmyhammer_views::ViewDef = serde_json::from_value(view_json.clone())
-                .map_err(|e| format!("{}: invalid 'view' arg: {}", cmd, e))?;
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
-            let mut views = views_lock.write().await;
-            views
-                .write_view(&view_def)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
-            let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
-            let changelog_id = changelog
-                .log_create(&view_def)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
-            Ok(json!({ "operation_id": changelog_id }))
-        }
-
-        "view.update" => {
-            let view_json = args
-                .get("view")
-                .ok_or_else(|| format!("{}: missing required arg 'view'", cmd))?;
-            let view_def: swissarmyhammer_views::ViewDef = serde_json::from_value(view_json.clone())
-                .map_err(|e| format!("{}: invalid 'view' arg: {}", cmd, e))?;
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
-            let mut views = views_lock.write().await;
-            let previous = views
-                .get_by_id(&view_def.id)
-                .ok_or_else(|| format!("{}: view not found: {}", cmd, view_def.id))?
-                .clone();
-            views
-                .write_view(&view_def)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
-            let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
-            let changelog_id = changelog
-                .log_update(&previous, &view_def)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
-            Ok(json!({ "operation_id": changelog_id }))
-        }
-
-        "view.delete" => {
-            let id = required_str(&args, "id", &cmd)?;
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
-            let mut views = views_lock.write().await;
-            let previous = views
-                .get_by_id(&id)
-                .ok_or_else(|| format!("{}: view not found: {}", cmd, id))?
-                .clone();
-            views
-                .delete_view(&id)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
-            let changelog = handle.ctx.views_changelog().ok_or("Views not initialized")?;
-            let changelog_id = changelog
-                .log_delete(&previous)
-                .await
-                .map_err(|e| format!("{}: {}", cmd, e))?;
-            Ok(json!({ "operation_id": changelog_id }))
-        }
-
-        "view.undo" => {
-            let entry_id = required_str(&args, "id", &cmd)?;
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            let changelog_path = handle
-                .ctx
-                .views_changelog()
-                .ok_or("Views not initialized")?
-                .path()
-                .to_path_buf();
-            let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
-            let mut views = views_lock.write().await;
-            let undo_id = swissarmyhammer_views::changelog::undo_entry(
-                &changelog_path,
-                &entry_id,
-                &mut views,
-            )
-            .await
-            .map_err(|e| format!("{}: {}", cmd, e))?;
-            Ok(json!({ "undone": entry_id, "operation_id": undo_id }))
-        }
-
-        "attachment.delete" => {
-            let task_id = required_str(&args, "task_id", &cmd)?;
-            let id = required_str(&args, "id", &cmd)?;
-
-            let handle = state.active_handle().await.ok_or("No active board")?;
-            handle
-                .processor
-                .process(&DeleteAttachment::new(task_id, id), &handle.ctx)
-                .await
-                .map_err(|e| format!("execute_command({}): {}", cmd, e))
-        }
-
-        _ => Err(format!("Unknown command: {}", cmd)),
     }
+
+    // Wrap result with undoable info
+    Ok(json!({
+        "result": result,
+        "undoable": undoable,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// list_available_commands — return command defs filtered by scope + availability
+// ---------------------------------------------------------------------------
+
+/// List command definitions that are available in the current focus context.
+///
+/// Filters by both static scope requirements and dynamic `Command::available()`
+/// checks. Optionally filters to only context-menu commands.
+#[tauri::command]
+pub async fn list_available_commands(
+    state: State<'_, AppState>,
+    context_menu: Option<bool>,
+) -> Result<Value, String> {
+    let scope = state.focus_scope_chain.read().await.clone();
+
+    // Clone filtered defs so we can drop the registry read guard before
+    // awaiting active_handle (avoids holding RwLock across an await point).
+    let mut available: Vec<swissarmyhammer_commands::CommandDef> = {
+        let registry = state.commands_registry.read().await;
+        registry.available_commands(&scope).into_iter().cloned().collect()
+    };
+
+    // Dynamic availability check — build a reusable context template and
+    // only swap the command_id per iteration to avoid repeated allocations.
+    let active_handle = state.active_handle().await;
+    let empty_args: HashMap<String, Value> = HashMap::new();
+    available.retain(|def| {
+        if let Some(cmd_impl) = state.command_impls.get(&def.id) {
+            let mut ctx = swissarmyhammer_commands::CommandContext::new(
+                &def.id,
+                scope.clone(),
+                None,
+                empty_args.clone(),
+            );
+            ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
+            if let Some(ref handle) = active_handle {
+                ctx.set_extension(Arc::clone(&handle.ctx));
+            }
+            cmd_impl.available(&ctx)
+        } else {
+            false
+        }
+    });
+
+    // Filter to context menu commands if requested
+    if context_menu == Some(true) {
+        available.retain(|def| def.context_menu);
+    }
+
+    serde_json::to_value(&available).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -847,64 +711,4 @@ pub async fn show_context_menu(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_moniker_valid() {
-        let (t, id) = parse_moniker("task:01JAB").unwrap();
-        assert_eq!(t, "task");
-        assert_eq!(id, "01JAB");
-    }
-
-    #[test]
-    fn test_parse_moniker_colon_in_id() {
-        let (t, id) = parse_moniker("task:01JAB:extra").unwrap();
-        assert_eq!(t, "task");
-        assert_eq!(id, "01JAB:extra");
-    }
-
-    #[test]
-    fn test_parse_moniker_no_colon() {
-        assert!(parse_moniker("badstring").is_err());
-    }
-
-    #[test]
-    fn test_parse_moniker_empty_parts() {
-        assert!(parse_moniker(":id").is_err());
-        assert!(parse_moniker("type:").is_err());
-    }
-
-    #[test]
-    fn test_required_str_present() {
-        let args = serde_json::json!({"name": "hello"});
-        assert_eq!(required_str(&args, "name", "test").unwrap(), "hello");
-    }
-
-    #[test]
-    fn test_required_str_missing() {
-        let args = serde_json::json!({});
-        let err = required_str(&args, "name", "test.cmd").unwrap_err();
-        assert!(err.contains("test.cmd"));
-        assert!(err.contains("name"));
-    }
-
-    #[test]
-    fn test_required_str_not_string() {
-        let args = serde_json::json!({"name": 42});
-        assert!(required_str(&args, "name", "test").is_err());
-    }
-
-    #[test]
-    fn test_optional_str() {
-        let args = serde_json::json!({"name": "hello"});
-        assert_eq!(optional_str(&args, "name"), Some("hello".to_string()));
-        assert_eq!(optional_str(&args, "missing"), None);
-    }
-}
 

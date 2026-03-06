@@ -1,0 +1,11 @@
+- id: settings.keymap.vim
+  name: Vim Keybindings
+  visible: false
+
+- id: settings.keymap.cua
+  name: Standard Keybindings
+  visible: false
+
+- id: settings.keymap.emacs
+  name: Emacs Keybindings
+  visible: false

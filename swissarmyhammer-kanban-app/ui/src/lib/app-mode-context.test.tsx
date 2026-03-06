@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { AppModeProvider, useAppMode, type AppMode } from "./app-mode-context";
-import { ModeIndicator } from "@/components/mode-indicator";
 
 /**
  * Helper component that exposes a button to change mode,
@@ -16,24 +15,32 @@ function ModeChanger({ to }: { to: AppMode }) {
   );
 }
 
-describe("AppModeProvider + ModeIndicator", () => {
-  it("renders NORMAL mode by default", () => {
+describe("AppModeProvider", () => {
+  it("defaults to normal mode", () => {
+    function ModeReader() {
+      const { mode } = useAppMode();
+      return <span data-testid="mode">{mode}</span>;
+    }
+
     render(
       <AppModeProvider>
-        <ModeIndicator />
+        <ModeReader />
       </AppModeProvider>,
     );
 
-    expect(screen.getByTestId("mode-indicator-mode").textContent).toBe(
-      "-- NORMAL --",
-    );
+    expect(screen.getByTestId("mode").textContent).toBe("normal");
   });
 
-  it("displays COMMAND mode when mode is changed to command", () => {
+  it("changes mode via setMode", () => {
+    function ModeReader() {
+      const { mode } = useAppMode();
+      return <span data-testid="mode">{mode}</span>;
+    }
+
     render(
       <AppModeProvider>
         <ModeChanger to="command" />
-        <ModeIndicator />
+        <ModeReader />
       </AppModeProvider>,
     );
 
@@ -41,34 +48,15 @@ describe("AppModeProvider + ModeIndicator", () => {
       screen.getByTestId("change-mode").click();
     });
 
-    expect(screen.getByTestId("mode-indicator-mode").textContent).toBe(
-      "-- COMMAND --",
-    );
-  });
-
-  it("displays SEARCH mode when mode is changed to search", () => {
-    render(
-      <AppModeProvider>
-        <ModeChanger to="search" />
-        <ModeIndicator />
-      </AppModeProvider>,
-    );
-
-    act(() => {
-      screen.getByTestId("change-mode").click();
-    });
-
-    expect(screen.getByTestId("mode-indicator-mode").textContent).toBe(
-      "-- SEARCH --",
-    );
+    expect(screen.getByTestId("mode").textContent).toBe("command");
   });
 
   it("switches between modes correctly", () => {
-    /** Renders buttons for each mode so we can cycle through them. */
     function MultiModeChanger() {
-      const { setMode } = useAppMode();
+      const { mode, setMode } = useAppMode();
       return (
         <>
+          <span data-testid="current-mode">{mode}</span>
           <button data-testid="to-command" onClick={() => setMode("command")}>
             command
           </button>
@@ -85,42 +73,26 @@ describe("AppModeProvider + ModeIndicator", () => {
     render(
       <AppModeProvider>
         <MultiModeChanger />
-        <ModeIndicator />
       </AppModeProvider>,
     );
 
-    const modeEl = screen.getByTestId("mode-indicator-mode");
+    const modeEl = screen.getByTestId("current-mode");
 
-    // Start in normal
-    expect(modeEl.textContent).toBe("-- NORMAL --");
+    expect(modeEl.textContent).toBe("normal");
 
-    // Switch to command
     act(() => {
       screen.getByTestId("to-command").click();
     });
-    expect(modeEl.textContent).toBe("-- COMMAND --");
+    expect(modeEl.textContent).toBe("command");
 
-    // Switch to search
     act(() => {
       screen.getByTestId("to-search").click();
     });
-    expect(modeEl.textContent).toBe("-- SEARCH --");
+    expect(modeEl.textContent).toBe("search");
 
-    // Back to normal
     act(() => {
       screen.getByTestId("to-normal").click();
     });
-    expect(modeEl.textContent).toBe("-- NORMAL --");
-  });
-
-  it("renders placeholder slots for view name and sort/filter", () => {
-    render(
-      <AppModeProvider>
-        <ModeIndicator />
-      </AppModeProvider>,
-    );
-
-    expect(screen.getByTestId("mode-indicator-left")).toBeDefined();
-    expect(screen.getByTestId("mode-indicator-right")).toBeDefined();
+    expect(modeEl.textContent).toBe("normal");
   });
 });

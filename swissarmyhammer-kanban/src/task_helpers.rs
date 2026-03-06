@@ -11,6 +11,66 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
 
+use crate::types::Ordinal;
+
+/// Generate a default title for a new task.
+///
+/// Returns a static default. This centralizes the default so it can be
+/// shared between the CLI, Tauri commands, and the Command trait layer.
+pub fn default_task_title() -> &'static str {
+    "New task"
+}
+
+/// Compute an ordinal for a task being dropped at `drop_index` within
+/// a list of task entities ordered by their current ordinals.
+///
+/// Looks at the ordinals of the neighbors at `drop_index - 1` and
+/// `drop_index` (the item that will shift right) to find a midpoint.
+/// Falls back to `Ordinal::first()` if the list is empty, `Ordinal::after()`
+/// if appending at the end, etc.
+///
+/// This mirrors the TypeScript `computeOrdinal()` from `board-view.tsx`,
+/// moving the logic server-side so the frontend only needs to send
+/// `drop_index`.
+pub fn compute_ordinal_for_drop(tasks: &[Entity], drop_index: usize) -> Ordinal {
+    if tasks.is_empty() {
+        return Ordinal::first();
+    }
+
+    let get_ordinal = |entity: &Entity| -> Ordinal {
+        entity
+            .get_str("position_ordinal")
+            .map(Ordinal::from_string)
+            .unwrap_or_else(Ordinal::first)
+    };
+
+    // Appending at the end
+    if drop_index >= tasks.len() {
+        let last = &tasks[tasks.len() - 1];
+        return Ordinal::after(&get_ordinal(last));
+    }
+
+    // Inserting at the beginning
+    if drop_index == 0 {
+        let first = &tasks[0];
+        let first_ord = get_ordinal(first);
+        // Use Ordinal::between with a synthetic lower bound to safely
+        // produce an ordinal before the first item, even when it starts
+        // with 'a' (where naive byte arithmetic would fail).
+        let lower = Ordinal::from_string("A");
+        let candidate = Ordinal::between(&lower, &first_ord);
+        if candidate.as_str() < first_ord.as_str() {
+            return candidate;
+        }
+        return Ordinal::first();
+    }
+
+    // Between two neighbors
+    let prev = get_ordinal(&tasks[drop_index - 1]);
+    let next = get_ordinal(&tasks[drop_index]);
+    Ordinal::between(&prev, &next)
+}
+
 /// Read tag names from the entity's pre-computed `tags` field.
 ///
 /// Tags are derived by `ComputeEngine` (parse-body-tags) on read.
@@ -505,5 +565,87 @@ mod tests {
         let t1_enriched = &entities[1];
         assert_eq!(t1_enriched.get("ready").unwrap(), &json!(true));
         assert!(t1_enriched.get_string_list("blocked_by").is_empty());
+    }
+
+    // =========================================================================
+    // default_task_title tests
+    // =========================================================================
+
+    #[test]
+    fn test_default_task_title() {
+        let title = default_task_title();
+        assert_eq!(title, "New task");
+        // Should be a static str — called multiple times returns same value
+        assert_eq!(default_task_title(), default_task_title());
+    }
+
+    // =========================================================================
+    // compute_ordinal_for_drop tests
+    // =========================================================================
+
+    fn make_ordinal_task(id: &str, ordinal: &str) -> Entity {
+        let mut e = Entity::new("task", id);
+        e.set("position_ordinal", json!(ordinal));
+        e.set("position_column", json!("todo"));
+        e
+    }
+
+    #[test]
+    fn test_compute_ordinal_empty_list() {
+        let ordinal = compute_ordinal_for_drop(&[], 0);
+        assert_eq!(ordinal.as_str(), "a0");
+    }
+
+    #[test]
+    fn test_compute_ordinal_append_at_end() {
+        let tasks = vec![
+            make_ordinal_task("t1", "a0"),
+            make_ordinal_task("t2", "a1"),
+        ];
+        let ordinal = compute_ordinal_for_drop(&tasks, 2);
+        assert!(ordinal.as_str() > "a1", "appended ordinal should be after last");
+    }
+
+    #[test]
+    fn test_compute_ordinal_insert_at_beginning() {
+        let tasks = vec![
+            make_ordinal_task("t1", "b0"),
+            make_ordinal_task("t2", "c0"),
+        ];
+        let ordinal = compute_ordinal_for_drop(&tasks, 0);
+        assert!(ordinal.as_str() < "b0", "prepended ordinal should be before first");
+    }
+
+    #[test]
+    fn test_compute_ordinal_insert_between() {
+        let tasks = vec![
+            make_ordinal_task("t1", "a0"),
+            make_ordinal_task("t2", "c0"),
+        ];
+        let ordinal = compute_ordinal_for_drop(&tasks, 1);
+        assert!(ordinal.as_str() > "a0", "between ordinal should be after first");
+        assert!(ordinal.as_str() < "c0", "between ordinal should be before second");
+    }
+
+    #[test]
+    fn test_compute_ordinal_single_element_append() {
+        let tasks = vec![make_ordinal_task("t1", "a0")];
+        let ordinal = compute_ordinal_for_drop(&tasks, 1);
+        assert!(ordinal.as_str() > "a0");
+    }
+
+    #[test]
+    fn test_compute_ordinal_single_element_prepend() {
+        let tasks = vec![make_ordinal_task("t1", "c0")];
+        let ordinal = compute_ordinal_for_drop(&tasks, 0);
+        assert!(ordinal.as_str() < "c0");
+    }
+
+    #[test]
+    fn test_compute_ordinal_drop_index_beyond_end() {
+        let tasks = vec![make_ordinal_task("t1", "a0")];
+        // drop_index way beyond list length — should still append
+        let ordinal = compute_ordinal_for_drop(&tasks, 100);
+        assert!(ordinal.as_str() > "a0");
     }
 }

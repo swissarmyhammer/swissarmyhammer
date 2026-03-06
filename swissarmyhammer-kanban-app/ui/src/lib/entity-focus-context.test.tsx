@@ -1,7 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { EntityFocusProvider, useEntityFocus, useFocusedScope, useIsFocused } from "./entity-focus-context";
 import type { CommandScope } from "./command-scope";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(() => Promise.resolve()),
+}));
 
 const wrapper = ({ children }: { children: React.ReactNode }) => (
   <EntityFocusProvider>{children}</EntityFocusProvider>

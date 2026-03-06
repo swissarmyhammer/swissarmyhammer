@@ -12,7 +12,7 @@ describe("useInspect", () => {
   it("parses moniker and calls onInspect", () => {
     const onInspect = vi.fn();
     const wrapper = ({ children }: { children: React.ReactNode }) => (
-      <InspectProvider onInspect={onInspect}>{children}</InspectProvider>
+      <InspectProvider onInspect={onInspect} onDismiss={() => false}>{children}</InspectProvider>
     );
     const { result } = renderHook(() => useInspect(), { wrapper });
     act(() => { result.current("task:abc"); });

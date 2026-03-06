@@ -1,0 +1,35 @@
+- id: ui.inspect
+  name: Inspect
+  visible: false
+  params:
+    - name: moniker
+      from: args
+
+- id: ui.inspector.close
+  name: Close Inspector
+  keys:
+    cua: Escape
+    vim: q
+
+- id: ui.inspector.close_all
+  name: Close All Inspectors
+  keys:
+    cua: Mod+Escape
+    vim: Q
+
+- id: ui.palette.open
+  name: Command Palette
+  keys:
+    cua: Mod+K
+    vim: ":"
+
+- id: ui.palette.close
+  name: Close Palette
+  visible: false
+
+- id: ui.view.set
+  name: Switch View
+  visible: false
+  params:
+    - name: view_id
+      from: args

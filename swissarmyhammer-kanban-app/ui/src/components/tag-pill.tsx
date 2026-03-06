@@ -60,10 +60,10 @@ export function TagPill({ slug, tags, taskId, className }: TagPillProps) {
     // Remove command — only if this tag is on a task (taskId is set)
     if (taskId) {
       cmds.push({
-        id: "entity.remove",
+        id: "task.untag",
         name: "Remove Tag",
         contextMenu: true,
-        rustCommand: { cmd: "task.untag", args: { id: taskId, tag: slug } },
+        args: { id: taskId, tag: slug },
       });
     }
 

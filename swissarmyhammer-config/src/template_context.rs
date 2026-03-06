@@ -980,12 +980,18 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_load_with_env_vars() {
         // Acquire the global environment variable test lock to prevent race conditions
         let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("Environment variable test lock was poisoned, recovering");
             poisoned.into_inner()
         });
+
+        // Use a temp dir with a .git sentinel so config discovery doesn't walk up
+        let temp_dir = TempDir::new().unwrap();
+        fs::create_dir(temp_dir.path().join(".git")).unwrap();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         env::set_var("SAH_PROJECT_NAME", "TestProject");
         env::set_var("SWISSARMYHAMMER_DEBUG", "true");
@@ -1395,7 +1401,12 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_set_default_variables_no_agent_config() {
+        // Use a temp dir to ensure current_dir() succeeds even if other tests changed CWD
+        let temp_dir = TempDir::new().unwrap();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
         let mut context = TemplateContext::new();
 
         // No agent config set - should default to claude

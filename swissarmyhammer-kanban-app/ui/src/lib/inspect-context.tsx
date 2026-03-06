@@ -1,21 +1,29 @@
-import { createContext, useContext, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useCallback, useMemo, type ReactNode } from "react";
 import { parseMoniker } from "@/lib/moniker";
 
 type InspectFn = (moniker: string) => void;
+type DismissFn = () => boolean;
 
-const InspectContext = createContext<InspectFn | null>(null);
+interface InspectContextValue {
+  inspect: InspectFn;
+  /** Close the topmost inspector panel. Returns true if a panel was closed. */
+  dismiss: DismissFn;
+}
+
+const InspectContext = createContext<InspectContextValue | null>(null);
 
 interface InspectProviderProps {
   /** Called with (entityType, entityId) parsed from the moniker. */
   onInspect: (entityType: string, entityId: string) => void;
+  /** Called to close the topmost inspector panel. Returns true if a panel was closed. */
+  onDismiss: () => boolean;
   children: ReactNode;
 }
 
 /**
- * Provides an inspect function that accepts a moniker string.
- * Parses the moniker and delegates to onInspect(type, id).
+ * Provides inspect and dismiss functions for the inspector panel stack.
  */
-export function InspectProvider({ onInspect, children }: InspectProviderProps) {
+export function InspectProvider({ onInspect, onDismiss, children }: InspectProviderProps) {
   const inspect = useCallback(
     (m: string) => {
       const { type, id } = parseMoniker(m);
@@ -24,8 +32,13 @@ export function InspectProvider({ onInspect, children }: InspectProviderProps) {
     [onInspect],
   );
 
+  const value = useMemo(
+    () => ({ inspect, dismiss: onDismiss }),
+    [inspect, onDismiss],
+  );
+
   return (
-    <InspectContext.Provider value={inspect}>
+    <InspectContext.Provider value={value}>
       {children}
     </InspectContext.Provider>
   );
@@ -38,5 +51,15 @@ export function InspectProvider({ onInspect, children }: InspectProviderProps) {
 export function useInspect(): InspectFn {
   const ctx = useContext(InspectContext);
   if (!ctx) throw new Error("useInspect must be used within an InspectProvider");
-  return ctx;
+  return ctx.inspect;
+}
+
+/**
+ * Returns a dismiss function that closes the topmost inspector panel.
+ * Returns true if a panel was actually closed, false if stack was empty.
+ */
+export function useInspectDismiss(): DismissFn {
+  const ctx = useContext(InspectContext);
+  if (!ctx) throw new Error("useInspectDismiss must be used within an InspectProvider");
+  return ctx.dismiss;
 }

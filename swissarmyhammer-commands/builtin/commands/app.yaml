@@ -1,0 +1,19 @@
+- id: app.quit
+  name: Quit
+  keys:
+    cua: Mod+Q
+    vim: ":q"
+
+- id: app.undo
+  name: Undo
+  undoable: false
+  keys:
+    cua: Mod+Z
+    vim: u
+
+- id: app.redo
+  name: Redo
+  undoable: false
+  keys:
+    cua: Mod+Shift+Z
+    vim: Ctrl+R

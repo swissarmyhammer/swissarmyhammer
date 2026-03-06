@@ -6,7 +6,9 @@ import { error as logError } from "@/lib/log";
  * Signature for the centralized field update function.
  *
  * All entity field mutations go through this single path:
- * invoke("execute_command", { cmd: "entity.update_field", args }) → refresh board state.
+ * invoke("dispatch_command", { cmd: "entity.update_field", args }).
+ * The Rust side emits a "board-changed" event automatically for undoable
+ * commands, so no manual refresh callback is needed.
  */
 type UpdateFieldFn = (
   entityType: string,
@@ -22,8 +24,6 @@ interface FieldUpdateContextValue {
 const FieldUpdateContext = createContext<FieldUpdateContextValue | null>(null);
 
 interface FieldUpdateProviderProps {
-  /** Called after every successful field update to reload board state. */
-  onRefresh: () => void | Promise<void>;
   children: ReactNode;
 }
 
@@ -32,25 +32,25 @@ interface FieldUpdateProviderProps {
  *
  * Every component that edits an entity field — TaskCard title, column
  * rename, tag inspector, EntityInspector fields — calls the same function.
- * This centralizes error handling, logging, and the refresh-after-save
- * pattern in one place.
+ * This centralizes error handling and logging in one place. Refresh is
+ * handled automatically via the "board-changed" Tauri event emitted by
+ * `dispatch_command`.
  */
-export function FieldUpdateProvider({ onRefresh, children }: FieldUpdateProviderProps) {
+export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
   const updateField: UpdateFieldFn = useCallback(
     async (entityType, entityId, fieldName, value) => {
       try {
-        await invoke("execute_command", {
+        await invoke("dispatch_command", {
           cmd: "entity.update_field",
           args: { entity_type: entityType, id: entityId, field_name: fieldName, value },
         });
-        await onRefresh();
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         logError(`updateField failed: ${entityType}/${entityId}.${fieldName}: ${msg}`);
         throw e;
       }
     },
-    [onRefresh],
+    [],
   );
 
   return (

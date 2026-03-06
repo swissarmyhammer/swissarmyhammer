@@ -404,35 +404,45 @@ describe("dispatchCommand", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
-  it("calls invoke for rustCommand", async () => {
+  it("dispatches to Rust by id when no execute is set", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
     await dispatchCommand({
-      id: "test",
+      id: "entity.delete",
       name: "Test",
-      rustCommand: { cmd: "entity.delete", args: { moniker: "task:abc" } },
+      target: "task:abc",
+      args: { moniker: "task:abc" },
     });
-    expect(invoke).toHaveBeenCalledWith("execute_command", {
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "entity.delete",
+      target: "task:abc",
       args: { moniker: "task:abc" },
     });
   });
 
-  it("prefers execute over rustCommand", async () => {
+  it("prefers execute over Rust dispatch", async () => {
     const execute = vi.fn();
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
     await dispatchCommand({
-      id: "test",
+      id: "entity.delete",
       name: "Test",
       execute,
-      rustCommand: { cmd: "entity.delete", args: {} },
+      args: { moniker: "task:abc" },
     });
     expect(execute).toHaveBeenCalledOnce();
-    // invoke should NOT have been called
+    // invoke should NOT have been called for dispatch_command
+    expect(invoke).not.toHaveBeenCalledWith("dispatch_command", expect.anything());
   });
 
-  it("throws when neither execute nor rustCommand", async () => {
-    await expect(dispatchCommand({ id: "test", name: "Test" })).rejects.toThrow(
-      "neither execute nor rustCommand",
-    );
+  it("dispatches to Rust when no execute is set (no args)", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    await dispatchCommand({ id: "app.undo", name: "Undo" });
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "app.undo",
+      target: undefined,
+      args: undefined,
+    });
   });
 });

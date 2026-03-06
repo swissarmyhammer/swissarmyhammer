@@ -16,21 +16,26 @@ import { getStr } from "@/types/kanban";
 interface NavBarProps {
   board: BoardData | null;
   openBoards: OpenBoard[];
-  onBoardChanged: () => void;
+  /** Called after switching the active board to reload board data. */
+  onBoardSwitched: () => void;
   onBoardInspect?: () => void;
 }
 
 export function NavBar({
   board,
   openBoards,
-  onBoardChanged,
+  onBoardSwitched,
   onBoardInspect,
 }: NavBarProps) {
   const { updateField } = useFieldUpdate();
 
   const handleSwitchBoard = async (path: string) => {
-    await invoke("set_active_board", { path });
-    onBoardChanged();
+    try {
+      await invoke("set_active_board", { path });
+      onBoardSwitched();
+    } catch (error) {
+      console.error("Failed to switch board:", error);
+    }
   };
 
   const boardName = board ? getStr(board.board, "name", "No Board") : "No Board";

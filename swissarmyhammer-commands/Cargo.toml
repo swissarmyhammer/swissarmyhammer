@@ -1,0 +1,19 @@
+[package]
+name = "swissarmyhammer-commands"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command trait, registry, and dispatch context for SwissArmyHammer"
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }

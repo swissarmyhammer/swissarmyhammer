@@ -26,6 +26,7 @@ swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
 swissarmyhammer-views = { path = "../swissarmyhammer-views" }
 swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 
 include_dir = { workspace = true }
 

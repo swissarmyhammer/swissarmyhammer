@@ -30,9 +30,10 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Listen for keymap changes from the native menu
+  // Listen for keymap changes from the native menu or dispatch_command
   useEffect(() => {
     const unlisten = listen<string>("keymap-changed", (event) => {
+      console.debug(`[keymap] received keymap-changed event: ${event.payload}`);
       if (isValidMode(event.payload)) {
         setModeState(event.payload);
       }

@@ -222,6 +222,11 @@ impl ViewsContext {
 }
 
 /// Load YAML files from a directory as `(name, content)` pairs.
+///
+/// Note: identical copies exist in `swissarmyhammer-fields` and
+/// `swissarmyhammer-commands`. The function is trivial and the crates are
+/// independent (no shared dependency path that avoids a heavy import),
+/// so the duplication is intentional.
 pub fn load_yaml_dir(dir: &Path) -> Vec<(String, String)> {
     let mut entries = Vec::new();
     if !dir.exists() {

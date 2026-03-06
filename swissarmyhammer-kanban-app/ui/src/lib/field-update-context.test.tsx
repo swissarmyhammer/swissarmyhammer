@@ -24,11 +24,9 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { FieldUpdateProvider, useFieldUpdate } from "./field-update-context";
 
 describe("FieldUpdateProvider", () => {
-  const mockRefresh = vi.fn(() => Promise.resolve());
-
   function wrapper({ children }: { children: ReactNode }) {
     return (
-      <FieldUpdateProvider onRefresh={mockRefresh}>
+      <FieldUpdateProvider>
         {children}
       </FieldUpdateProvider>
     );
@@ -38,7 +36,7 @@ describe("FieldUpdateProvider", () => {
     vi.clearAllMocks();
   });
 
-  it("calls execute_command with entity.update_field", async () => {
+  it("calls dispatch_command with entity.update_field", async () => {
     const { result } = renderHook(() => useFieldUpdate(), { wrapper });
 
     await act(async () => {
@@ -46,7 +44,7 @@ describe("FieldUpdateProvider", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
-    expect(mockInvoke).toHaveBeenCalledWith("execute_command", {
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "entity.update_field",
       args: { entity_type: "task", id: "t1", field_name: "title", value: "New Title" },
     });
@@ -67,17 +65,7 @@ describe("FieldUpdateProvider", () => {
     expect(args).not.toHaveProperty("fieldName");
   });
 
-  it("calls onRefresh after successful update", async () => {
-    const { result } = renderHook(() => useFieldUpdate(), { wrapper });
-
-    await act(async () => {
-      await result.current.updateField("task", "t1", "body", "New body");
-    });
-
-    expect(mockRefresh).toHaveBeenCalledTimes(1);
-  });
-
-  it("does NOT call onRefresh when invoke fails", async () => {
+  it("re-throws when invoke fails", async () => {
     mockInvoke.mockRejectedValueOnce(new Error("network error"));
     const { result } = renderHook(() => useFieldUpdate(), { wrapper });
 
@@ -86,8 +74,6 @@ describe("FieldUpdateProvider", () => {
         result.current.updateField("task", "t1", "title", "X"),
       ).rejects.toThrow("network error");
     });
-
-    expect(mockRefresh).not.toHaveBeenCalled();
   });
 
   it("passes correct entity type for tag updates", async () => {
@@ -97,7 +83,7 @@ describe("FieldUpdateProvider", () => {
       await result.current.updateField("tag", "tag-1", "color", "ff0000");
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("execute_command", {
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "entity.update_field",
       args: { entity_type: "tag", id: "tag-1", field_name: "color", value: "ff0000" },
     });
@@ -110,7 +96,7 @@ describe("FieldUpdateProvider", () => {
       await result.current.updateField("column", "col-1", "name", "In Progress");
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("execute_command", {
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "entity.update_field",
       args: { entity_type: "column", id: "col-1", field_name: "name", value: "In Progress" },
     });

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
+import { getCM } from "@replit/codemirror-vim";
 import { useAvailableCommands, collectAvailableCommands, type CommandAtDepth } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap } from "@/lib/keymap-context";
@@ -21,11 +22,13 @@ interface CommandPaletteProps {
  *
  * Renders as a portal to document.body with a semi-transparent backdrop.
  * Uses a CM6 single-line editor for the filter input, respecting the user's
- * keymap mode (vim/emacs/CUA). Below the input, a scrollable list of matching
- * commands is shown with keybinding hints for the current mode.
+ * keymap mode (vim/emacs/CUA). In vim mode, the editor auto-enters insert
+ * mode when the palette opens (like vim's : command line). Below the input,
+ * a scrollable list of matching commands is shown with keybinding hints.
  *
  * Navigation: Arrow keys or j/k to move selection, Enter to execute, Escape
- * to close. In vim mode, double-Escape closes (first exits insert mode).
+ * to close. In vim mode, Escape in insert mode returns to normal mode;
+ * Escape in normal mode closes the palette.
  */
 export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [filter, setFilter] = useState("");
@@ -33,7 +36,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
-  const escapeCountRef = useRef(0);
   const { mode } = useKeymap();
   const focusedScope = useFocusedScope();
   const rootCommands = useAvailableCommands();
@@ -49,9 +51,24 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     if (open) {
       setFilter("");
       setSelectedIndex(0);
-      escapeCountRef.current = 0;
     }
   }, [open]);
+
+  // Auto-enter insert mode in vim when the palette opens
+  useEffect(() => {
+    if (!open || mode !== "vim") return;
+    // Small delay to let CM6 mount and the vim extension initialize
+    const timer = setTimeout(() => {
+      const view = editorRef.current?.view;
+      if (!view) return;
+      const cm = getCM(view);
+      if (cm) {
+        // Send "i" to enter insert mode
+        (cm as any).handleKey("i");
+      }
+    }, 10);
+    return () => clearTimeout(timer);
+  }, [open, mode]);
 
   // Filter and sort commands by fuzzy match score
   const filtered = useMemo(() => {
@@ -161,27 +178,27 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           },
         },
       ]),
-      // Escape handling: in vim mode, use double-Escape to close.
-      // In CUA/emacs mode, single Escape closes.
+      // Escape handling: in vim mode, check vim state — if in insert mode,
+      // let vim handle Escape (exits to normal mode). If already in normal
+      // mode, close the palette. In CUA/emacs, Escape always closes.
       EditorView.domEventHandlers({
-        keydown(event) {
+        keydown(event, view) {
           if (event.key === "Escape") {
             if (mode !== "vim") {
-              // CUA / Emacs: close immediately
               onCloseRef.current();
               return true;
             }
-            // Vim mode: count consecutive Escapes
-            escapeCountRef.current++;
-            if (escapeCountRef.current >= 2) {
-              onCloseRef.current();
-              return true;
+            // Check vim state: if in insert mode, let vim exit to normal
+            const cm = getCM(view);
+            const vimState = cm?.state?.vim;
+            if (vimState?.insertMode) {
+              // Let vim handle it — will exit insert mode
+              return false;
             }
-            // First Escape: let vim handle it (exit insert mode)
-            return false;
+            // Already in normal mode — close the palette
+            onCloseRef.current();
+            return true;
           }
-          // Any non-Escape key resets the counter
-          escapeCountRef.current = 0;
           return false;
         },
       }),
@@ -225,10 +242,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             ref={editorRef}
             autoFocus
             value={filter}
-            onChange={(val) => {
-              setFilter(val);
-              escapeCountRef.current = 0;
-            }}
+            onChange={setFilter}
             extensions={extensions}
             basicSetup={false}
             placeholder="Type a command..."

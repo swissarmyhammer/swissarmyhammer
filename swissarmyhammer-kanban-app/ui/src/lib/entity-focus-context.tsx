@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { CommandScope } from "./command-scope";
 
 interface EntityFocusContextValue {
@@ -28,6 +29,23 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
 
   const setFocus = useCallback((moniker: string | null) => {
     setFocusedMoniker(moniker);
+
+    // Build scope chain from the scope registry and send to Rust
+    if (moniker) {
+      const scope = registryRef.current.get(moniker);
+      const chain: string[] = [moniker];
+      let current = scope?.parent ?? null;
+      while (current !== null) {
+        if (current.moniker) {
+          chain.push(current.moniker);
+        }
+        current = current.parent;
+      }
+      // Fire and forget -- don't await
+      invoke("set_focus", { scopeChain: chain }).catch((error) => console.error("set_focus failed:", error));
+    } else {
+      invoke("set_focus", { scopeChain: [] }).catch((error) => console.error("set_focus failed:", error));
+    }
   }, []);
 
   const registerScope = useCallback((moniker: string, scope: CommandScope) => {
@@ -67,7 +85,13 @@ export function useEntityFocus(): EntityFocusContextValue {
 /**
  * Returns the CommandScope of the currently focused entity, or null.
  *
- * Uses the scope registry to look up the focused moniker.
+ * Uses the scope registry (a ref) to look up the focused moniker.
+ * Note: the registry is stored in a ref for performance (scope
+ * registrations don't trigger re-renders). This means the returned
+ * value may be stale if a FocusScope registers in the same render
+ * cycle as a focus change. In practice this is safe because setFocus
+ * is called from click handlers (after mount) while scopes register
+ * during mount effects.
  */
 export function useFocusedScope(): CommandScope | null {
   const { focusedMoniker, getScope } = useEntityFocus();

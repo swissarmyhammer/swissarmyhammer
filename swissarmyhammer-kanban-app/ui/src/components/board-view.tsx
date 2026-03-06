@@ -22,7 +22,10 @@ import { EntityCard } from "@/components/entity-card";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { reorderColumns } from "@/lib/column-reorder";
-import { defaultTaskTitle } from "@/lib/task-defaults";
+/** Default title for new tasks — the Rust side also uses this as fallback. */
+function defaultTaskTitle(_columnName: string): string {
+  return "New task";
+}
 import { useFieldUpdate } from "@/lib/field-update-context";
 import { moniker } from "@/lib/moniker";
 import { useInspect } from "@/lib/inspect-context";
@@ -32,7 +35,6 @@ import { getStr, getStrList, getNum } from "@/types/kanban";
 interface BoardViewProps {
   board: BoardData;
   tasks: Entity[];
-  onTaskMoved?: () => void;
 }
 
 /**
@@ -44,7 +46,7 @@ type ColumnLayout = Map<string, string[]>;
 
 type DragType = "task" | "column";
 
-export function BoardView({ board, tasks, onTaskMoved }: BoardViewProps) {
+export function BoardView({ board, tasks }: BoardViewProps) {
   const { setFocus } = useEntityFocus();
   const inspectEntity = useInspect();
   const boardMoniker = moniker("board", "board");
@@ -263,6 +265,20 @@ export function BoardView({ board, tasks, onTaskMoved }: BoardViewProps) {
     [virtualLayout, virtualColumnOrder, findColumn, columnIds, resolveToColumnId, currentLayout]
   );
 
+  const persistMove = useCallback(
+    async (taskId: string, column: string, ordinal: string, entity: Entity) => {
+      try {
+        await invoke("dispatch_command", {
+          cmd: "task.move",
+          args: { id: taskId, column, ordinal, swimlane: getStr(entity, "position_swimlane") || null },
+        });
+      } catch (e) {
+        console.error("Failed to move task:", e);
+      }
+    },
+    []
+  );
+
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       if (dragTypeRef.current === "column") {
@@ -294,8 +310,7 @@ export function BoardView({ board, tasks, onTaskMoved }: BoardViewProps) {
         }
 
         try {
-          await invoke("execute_command", { cmd: "column.reorder", args: { columns: updates } });
-          onTaskMoved?.();
+          await invoke("dispatch_command", { cmd: "column.reorder", args: { columns: updates } });
         } catch (e) {
           console.error("Failed to reorder columns:", e);
         } finally {
@@ -352,7 +367,7 @@ export function BoardView({ board, tasks, onTaskMoved }: BoardViewProps) {
       const ordinal = computeOrdinal(targetList, finalIndex, taskMap);
       await persistMove(activeId, targetColumn, ordinal, draggedTask);
     },
-    [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList]
+    [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList, persistMove]
   );
 
   const { updateField } = useFieldUpdate();
@@ -373,34 +388,16 @@ export function BoardView({ board, tasks, onTaskMoved }: BoardViewProps) {
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        await invoke("execute_command", { cmd: "task.add", args: { title, column: columnId } });
-        onTaskMoved?.();
+        await invoke("dispatch_command", { cmd: "task.add", args: { title, column: columnId } });
       } catch (e) {
         console.error("Failed to add task:", e);
       }
     },
-    [columnMap, onTaskMoved]
+    [columnMap]
   );
 
-  async function persistMove(
-    taskId: string,
-    column: string,
-    ordinal: string,
-    entity: Entity
-  ) {
-    try {
-      await invoke("execute_command", {
-        cmd: "task.move",
-        args: { id: taskId, column, ordinal, swimlane: getStr(entity, "position_swimlane") || null },
-      });
-      onTaskMoved?.();
-    } catch (e) {
-      console.error("Failed to move task:", e);
-    }
-  }
-
   return (
-    <FocusScope moniker={boardMoniker} commands={boardCommands} className="flex flex-col flex-1 min-h-0">
+    <FocusScope moniker={boardMoniker} commands={boardCommands} className="flex flex-col flex-1 min-h-0 min-w-0">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}

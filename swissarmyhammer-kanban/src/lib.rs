@@ -71,6 +71,9 @@ pub mod tag_parser;
 pub mod task_helpers;
 pub mod types;
 
+// Domain command trait implementations
+pub mod commands;
+
 // Command modules
 pub mod activity;
 pub mod actor;

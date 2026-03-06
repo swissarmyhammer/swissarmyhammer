@@ -47,6 +47,7 @@ members = [
     "swissarmyhammer-fields",
     "swissarmyhammer-entity",
     "swissarmyhammer-views",
+    "swissarmyhammer-commands",
 ]
 resolver = "2"
 

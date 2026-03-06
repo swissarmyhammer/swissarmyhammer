@@ -46,8 +46,8 @@ export interface CommandDef {
    * - No target → shadow by id alone (existing behavior for app.quit etc.)
    */
   target?: string;
-  /** If set, dispatches to Rust via invoke("execute_command", { cmd, args }). */
-  rustCommand?: { cmd: string; args: Record<string, unknown> };
+  /** Optional explicit args to pass when dispatching to Rust. */
+  args?: Record<string, unknown>;
 }
 
 /** A node in the scope chain linking a set of commands to an optional parent. */
@@ -97,6 +97,11 @@ export function CommandScopeProvider({ commands, children, moniker }: CommandSco
  * - If the command is found and `available !== false`, return it.
  * - If the command is found and `available === false`, stop searching (blocking).
  * - If the command is not found in the current scope, continue to parent.
+ *
+ * Note: this resolves by `id` alone — the first match wins regardless of
+ * `target`. This is intentional: keyboard shortcuts act on the nearest
+ * (innermost) entity. For target-aware accumulation (e.g. context menus
+ * showing all targeted commands), use `collectAvailableCommands` instead.
  *
  * @returns The resolved CommandDef, or null if not found or blocked.
  */
@@ -170,16 +175,21 @@ export function useAvailableCommands(): CommandAtDepth[] {
 
 /**
  * Execute a command. If `execute` is set, calls it directly.
- * If `rustCommand` is set, invokes the Rust execute_command dispatcher.
- * `execute` takes priority over `rustCommand` if both are set.
+ * Otherwise dispatches to Rust by command id via invoke("dispatch_command").
  */
 export async function dispatchCommand(cmd: CommandDef): Promise<void> {
   if (cmd.execute) {
+    console.debug(`[dispatch] executing locally: ${cmd.id}`);
     await cmd.execute();
-  } else if (cmd.rustCommand) {
-    await invoke("execute_command", { cmd: cmd.rustCommand.cmd, args: cmd.rustCommand.args });
   } else {
-    throw new Error(`Command '${cmd.id}' has neither execute nor rustCommand`);
+    // Dispatch to Rust by command ID
+    console.debug(`[dispatch] invoking Rust: ${cmd.id}`, { target: cmd.target, args: cmd.args });
+    const result = await invoke("dispatch_command", {
+      cmd: cmd.id,
+      target: cmd.target,
+      args: cmd.args,
+    });
+    console.debug(`[dispatch] Rust returned for ${cmd.id}:`, result);
   }
 }
 

@@ -38,7 +38,7 @@ function renderTagPill(props: { slug: string; tags?: Entity[]; taskId?: string }
     ...render(
       <TooltipProvider>
         <EntityFocusProvider>
-          <InspectProvider onInspect={onInspect}>
+          <InspectProvider onInspect={onInspect} onDismiss={() => false}>
             <TagPill slug={props.slug} tags={props.tags ?? mockTags} taskId={props.taskId} />
           </InspectProvider>
         </EntityFocusProvider>
@@ -61,7 +61,7 @@ describe("TagPill", () => {
       items: expect.arrayContaining([
         // target-aware: handler key is "id:target"
         expect.objectContaining({ id: "entity.inspect:tag:tag-1", name: "Inspect Tag" }),
-        expect.objectContaining({ id: "entity.remove", name: "Remove Tag" }),
+        expect.objectContaining({ id: "task.untag", name: "Remove Tag" }),
       ]),
     });
   });
@@ -117,7 +117,7 @@ describe("TagPill", () => {
     const { container } = render(
       <TooltipProvider>
         <EntityFocusProvider>
-          <InspectProvider onInspect={onInspect}>
+          <InspectProvider onInspect={onInspect} onDismiss={() => false}>
             <FocusScope
               moniker="task:parent"
               commands={[{ id: "entity.inspect", name: "Inspect task", target: "task:parent", contextMenu: true, execute: vi.fn() }]}

@@ -7941,6 +7941,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-commands"
+version = "0.8.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 1.0.69",
+ "tokio-test",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-common"
 version = "0.8.0"
 dependencies = [
@@ -8021,6 +8034,7 @@ version = "0.8.0"
 dependencies = [
  "chrono",
  "diffy",
+ "notify 6.1.1",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -8099,6 +8113,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
@@ -8119,8 +8134,12 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "notify 6.1.1",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "sha2",
+ "swissarmyhammer-commands",
  "swissarmyhammer-kanban",
  "swissarmyhammer-views",
  "tauri",

@@ -15,17 +15,23 @@
 //! Entity IDs come from filenames, not file contents.
 //! Writes are atomic (temp file + rename).
 
+pub mod cache;
 pub mod changelog;
 pub mod context;
 pub mod entity;
 pub mod error;
+pub mod events;
 pub mod id_types;
 pub mod io;
+pub mod watcher;
 
+pub use cache::{CachedEntity, EntityCache};
 pub use context::EntityContext;
 pub use entity::Entity;
 pub use error::{EntityError, Result};
+pub use events::EntityEvent;
 pub use id_types::{ChangeEntryId, EntityId, TransactionId};
+pub use watcher::EntityWatcher;
 pub use io::{
     entity_extension, entity_file_path, read_entity, read_entity_dir, restore_entity_files,
     trash_entity_files, write_entity,

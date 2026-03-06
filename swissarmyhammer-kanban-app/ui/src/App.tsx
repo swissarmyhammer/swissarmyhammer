@@ -27,6 +27,32 @@ import { entityFromBag, parseBoardData, getStr } from "@/types/kanban";
 
 const PANEL_WIDTH = 420;
 
+/** Payload for entity-created Tauri event. */
+interface EntityCreatedEvent {
+  kind: "entity-created";
+  entity_type: string;
+  id: string;
+  fields: Record<string, unknown>;
+}
+
+/** Payload for entity-removed Tauri event. */
+interface EntityRemovedEvent {
+  kind: "entity-removed";
+  entity_type: string;
+  id: string;
+}
+
+/** Payload for entity-field-changed Tauri event. */
+interface EntityFieldChangedEvent {
+  kind: "entity-field-changed";
+  entity_type: string;
+  id: string;
+  changes: Array<{ field: string; value: unknown }>;
+  /** Full entity state including computed fields. Present for own-command
+   *  events; absent for external file-watcher events. */
+  fields?: Record<string, unknown>;
+}
+
 /** A panel entry is just an entity reference — entity type + id. */
 interface PanelEntry {
   entityType: string;
@@ -39,6 +65,8 @@ function App() {
   const [tagEntities, setTagEntities] = useState<Entity[]>([]);
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
+  const panelStackRef = useRef(panelStack);
+  panelStackRef.current = panelStack;
 
   /** Open an inspector for any entity. Replaces the stack for primary entities, pushes for secondary. */
   const inspectEntity = useCallback((entityType: string, entityId: string) => {
@@ -55,6 +83,13 @@ function App() {
 
   const closeTopPanel = useCallback(() => {
     setPanelStack((prev) => prev.slice(0, -1));
+  }, []);
+
+  /** Close the topmost panel. Returns true if a panel was actually closed. */
+  const dismissTopPanel = useCallback((): boolean => {
+    if (panelStackRef.current.length === 0) return false;
+    setPanelStack((prev) => prev.slice(0, -1));
+    return true;
   }, []);
 
   const closeAll = useCallback(() => {
@@ -81,12 +116,97 @@ function App() {
     refresh();
   }, [refresh]);
 
+  // ---------------------------------------------------------------------------
+  // Granular entity event listeners — patch local state surgically instead
+  // of doing a full refresh.
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
-    const unlisten = listen("board-changed", () => {
-      refresh();
-    });
+    const unlisteners = [
+      listen<EntityCreatedEvent>("entity-created", (event) => {
+        const { entity_type, id } = event.payload;
+        if (entity_type === "column" || entity_type === "swimlane") {
+          // Structural changes — full refresh to get correct counts/ordering
+          refresh();
+          return;
+        }
+        // Re-fetch the full entity so computed fields are included
+        invoke<EntityBag>("get_entity", { entityType: entity_type, id })
+          .then((bag) => {
+            const entity = entityFromBag(bag);
+            if (entity_type === "task") {
+              setTaskEntities((prev) => {
+                // Guard against duplicates (cache may lag behind entity store)
+                if (prev.some((e) => e.id === id)) {
+                  return prev.map((e) => (e.id === id ? entity : e));
+                }
+                return [...prev, entity];
+              });
+            } else if (entity_type === "tag") {
+              setTagEntities((prev) => {
+                if (prev.some((e) => e.id === id)) {
+                  return prev.map((e) => (e.id === id ? entity : e));
+                }
+                return [...prev, entity];
+              });
+            }
+          })
+          .catch((err) => {
+            console.error(`[entity-created] Failed to fetch ${entity_type}/${id}:`, err);
+          });
+      }),
+      listen<EntityRemovedEvent>("entity-removed", (event) => {
+        const { entity_type, id } = event.payload;
+        if (entity_type === "task") {
+          setTaskEntities((prev) => prev.filter((e) => e.id !== id));
+        } else if (entity_type === "tag") {
+          setTagEntities((prev) => prev.filter((e) => e.id !== id));
+        } else if (entity_type === "column" || entity_type === "swimlane") {
+          refresh();
+        }
+      }),
+      listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
+        const { entity_type, id, fields: fullFields } = event.payload;
+
+        // Use enriched fields from the event when available (includes
+        // computed fields like tags, progress). Fall back to fetching
+        // via get_entity for external watcher events.
+        const applyEntity = (entity: Entity) => {
+          const replaceById = (entities: Entity[]) =>
+            entities.map((e) => (e.id === id ? entity : e));
+
+          if (entity_type === "task") {
+            setTaskEntities(replaceById);
+          } else if (entity_type === "tag") {
+            setTagEntities(replaceById);
+          } else if (entity_type === "board") {
+            setBoard((prev) => (prev ? { ...prev, board: entity } : prev));
+          } else if (entity_type === "column") {
+            setBoard((prev) => (prev ? { ...prev, columns: replaceById(prev.columns) } : prev));
+          } else if (entity_type === "swimlane") {
+            setBoard((prev) => (prev ? { ...prev, swimlanes: replaceById(prev.swimlanes) } : prev));
+          }
+        };
+
+        if (fullFields) {
+          applyEntity({ entity_type, id, fields: fullFields });
+        } else {
+          invoke<EntityBag>("get_entity", { entityType: entity_type, id })
+            .then((bag) => applyEntity(entityFromBag(bag)))
+            .catch((err) => {
+              console.error(`[entity-field-changed] Failed to fetch ${entity_type}/${id}:`, err);
+            });
+        }
+      }),
+      // Keep board-changed for structural operations (open/switch board)
+      listen("board-changed", () => {
+        refresh();
+      }),
+    ];
     return () => {
-      unlisten.then((fn) => fn());
+      for (const p of unlisteners) {
+        p.then((fn) => fn());
+      }
     };
   }, [refresh]);
 
@@ -102,11 +222,11 @@ function App() {
     <SchemaProvider>
     <EntityStoreProvider entities={entityStore}>
     <EntityFocusProvider>
-    <FieldUpdateProvider onRefresh={refresh}>
+    <FieldUpdateProvider>
     <KeymapProvider>
     <AppModeProvider>
     <UndoStackProvider>
-    <InspectProvider onInspect={inspectEntity}>
+    <InspectProvider onInspect={inspectEntity} onDismiss={dismissTopPanel}>
     <AppShell>
     <ViewsProvider>
     <ViewCommandScope>
@@ -114,7 +234,7 @@ function App() {
       <NavBar
         board={board}
         openBoards={openBoards}
-        onBoardChanged={refresh}
+        onBoardSwitched={refresh}
         onBoardInspect={() => inspectEntity("board", "board")}
       />
       {board ? (
@@ -124,7 +244,6 @@ function App() {
             <ActiveViewRenderer
               board={board}
               tasks={taskEntities}
-              onTaskMoved={refresh}
             />
           </div>
 
@@ -205,11 +324,9 @@ function ViewCommandScope({ children }: { children: React.ReactNode }) {
 function ActiveViewRenderer({
   board,
   tasks,
-  onTaskMoved,
 }: {
   board: BoardData;
   tasks: Entity[];
-  onTaskMoved?: () => void;
 }) {
   const { activeView } = useViews();
 
@@ -218,7 +335,6 @@ function ActiveViewRenderer({
       <BoardView
         board={board}
         tasks={tasks}
-        onTaskMoved={onTaskMoved}
       />
     );
   }
@@ -266,6 +382,13 @@ function InspectorPanel({
 
   // Fetch from backend if not found locally
   const fetchKey = `${entry.entityType}:${entry.entityId}`;
+
+  // Reset fetch dedup ref when the target entity changes so a new
+  // fetch can be attempted (e.g. after a failed fetch for a different entity).
+  useEffect(() => {
+    fetchedRef.current = null;
+  }, [fetchKey]);
+
   useEffect(() => {
     if (resolved || fetchedRef.current === fetchKey) return;
     fetchedRef.current = fetchKey;

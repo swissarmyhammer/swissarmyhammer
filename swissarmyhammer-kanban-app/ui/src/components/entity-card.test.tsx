@@ -72,8 +72,8 @@ function renderCard(ui: React.ReactElement) {
       <SchemaProvider>
         <EntityStoreProvider entities={{ tag: [] }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={mockOnInspect}>
-              <FieldUpdateProvider onRefresh={() => {}}>
+            <InspectProvider onInspect={mockOnInspect} onDismiss={() => false}>
+              <FieldUpdateProvider>
                 <KeymapProvider>{ui}</KeymapProvider>
               </FieldUpdateProvider>
             </InspectProvider>
@@ -158,9 +158,9 @@ describe("EntityCard", () => {
       fireEvent.blur(cmContent);
     });
 
-    // Verify invoke was called via execute_command for the title save
+    // Verify invoke was called via dispatch_command for the title save
     const updateCall = mockInvoke.mock.calls.find(
-      (call) => call[0] === "execute_command" && (call[1] as Record<string, unknown>)?.cmd === "entity.update_field"
+      (call) => call[0] === "dispatch_command" && (call[1] as Record<string, unknown>)?.cmd === "entity.update_field"
     );
     expect(updateCall).toBeTruthy();
     expect(updateCall![1]).toEqual({
