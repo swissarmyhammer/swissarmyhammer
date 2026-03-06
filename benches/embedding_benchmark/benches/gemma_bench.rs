@@ -130,7 +130,7 @@ fn bench_embedder(rt: &tokio::runtime::Runtime, model: &dyn TextEmbedder) -> Sta
 fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    println!("EmbeddingGemma-300M: ANE (FP32 CoreML) vs CPU (Q8_0 llama.cpp)");
+    println!("EmbeddingGemma-300M: ANE (FP32+palettize4 CoreML) vs CPU (Q8_0 llama.cpp)");
     println!("ANE uses static-shape seq128 — inputs padded/truncated to 128 tokens");
     println!("N={N} embeds per config, cycling {} texts\n", TEXTS.len());
 
@@ -144,7 +144,7 @@ fn main() {
         });
         let load_time = t0.elapsed();
         let stats = bench_embedder(&rt, &model);
-        print_stats("ANE CoreML (FP32, static seq128)", load_time, &stats);
+        print_stats("ANE CoreML (FP32+palettize4, static seq128)", load_time, &stats);
 
         // Leak the model to avoid SIGABRT on CoreML teardown.
         std::mem::forget(model);
