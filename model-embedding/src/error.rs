@@ -104,8 +104,7 @@ mod tests {
 
     #[test]
     fn test_backend_error() {
-        let backend_err: Box<dyn std::error::Error + Send + Sync> =
-            "onnx runtime failed".into();
+        let backend_err: Box<dyn std::error::Error + Send + Sync> = "onnx runtime failed".into();
         let error: EmbeddingError = backend_err.into();
         assert!(matches!(error, EmbeddingError::Backend(_)));
         assert!(error.to_string().contains("onnx runtime failed"));

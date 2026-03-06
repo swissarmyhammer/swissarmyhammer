@@ -206,11 +206,7 @@ fn collect_build_output(build_dir: &Path, ort_src: &Path, install_dir: &Path) {
             let dest = lib_dir.join(&name);
             if !dest.exists() {
                 if let Err(e) = std::fs::copy(&entry, &dest) {
-                    println!(
-                        "cargo:warning=Failed to copy {}: {}",
-                        entry.display(),
-                        e
-                    );
+                    println!("cargo:warning=Failed to copy {}: {}", entry.display(), e);
                 } else {
                     count += 1;
                 }

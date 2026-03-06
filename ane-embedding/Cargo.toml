@@ -8,7 +8,7 @@ description = "Text embedding using CoreML for Apple Neural Engine"
 
 [dependencies]
 async-trait = { workspace = true }
-coreml-rs = { path = "../../coreml-rs" }
+coreml-rs = "0.5.4"
 llama-common = { path = "../llama-common" }
 md5 = "0.7"
 model-embedding = { path = "../model-embedding" }

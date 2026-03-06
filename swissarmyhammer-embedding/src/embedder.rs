@@ -337,9 +337,7 @@ async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel
     let model_prefix = match &cfg.source {
         swissarmyhammer_config::ModelSource::HuggingFace { repo, .. } => {
             let name = repo.split('/').next_back().unwrap_or(repo);
-            name.strip_suffix("-CoreML")
-                .unwrap_or(name)
-                .to_string()
+            name.strip_suffix("-CoreML").unwrap_or(name).to_string()
         }
         swissarmyhammer_config::ModelSource::Local { .. } => {
             ane_embedding::DEFAULT_MODEL_PREFIX.to_string()

@@ -1,6 +1,8 @@
 use crate::error::ModelError;
 use crate::huggingface::load_huggingface_model_with_path_and_folder;
-use crate::types::{ModelConfig, ModelMetadata, ModelSource, ResolvedModel, RetryConfig, MODEL_EXTENSIONS};
+use crate::types::{
+    ModelConfig, ModelMetadata, ModelSource, ResolvedModel, RetryConfig, MODEL_EXTENSIONS,
+};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use swissarmyhammer_common::Pretty;

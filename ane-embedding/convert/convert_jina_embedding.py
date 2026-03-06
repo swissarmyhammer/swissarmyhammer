@@ -3,7 +3,7 @@
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
 #     "torch>=2.7,<2.8",
-#     "transformers>=4.51",
+#     "transformers>=4.45,<4.51",
 #     "coremltools>=8.0,<10.0",
 #     "numpy",
 #     "einops",
@@ -11,9 +11,13 @@
 # ///
 """Convert jina-embeddings-v3 to CoreML .mlpackage for Apple Neural Engine.
 
-Uses torch.export (ExportedProgram) → coremltools conversion with static shapes.
-Merges the selected LoRA adapter into the base weights before export so the
-CoreML model needs no adapter logic at runtime.
+Uses torch.jit.trace → coremltools conversion with static shapes.
+(torch.export produces `alias` fx nodes that coremltools cannot convert
+for jina's custom XLM-RoBERTa architecture.)
+
+LoRA parametrizations are kept intact during tracing — torch.jit.trace
+captures the full merged computation graph, so the CoreML model needs
+no adapter logic at runtime.
 
 Produces one .mlpackage per sequence length (default: 128).
 
@@ -63,60 +67,28 @@ class EmbeddingWithPooling(nn.Module):
         return (summed / counts).float()
 
 
-def merge_lora_weights(model, task: str):
-    """Merge a LoRA adapter's weights into the base model in-place.
+def select_lora_task(model, task: str):
+    """Select and activate the LoRA adapter for the given task.
 
-    jina-embeddings-v3 stores LoRA adapters as named parameters on
-    each transformer layer. This finds lora_A/lora_B weight pairs
-    for the selected task and merges them: W += (B @ A) * scale.
+    jina-embeddings-v3 uses PyTorch parametrizations to store LoRA weights.
+    The parametrized weights compute merged (base + LoRA) values on-the-fly.
+    We do NOT remove parametrizations — jina's attention code checks
+    hasattr(Wqkv, 'parametrizations') to decide the forward path, and
+    removing them breaks that control flow.
+
+    torch.jit.trace will capture the full computation graph including the
+    parametrized weight merge, which is exactly what we want.
     """
-    # The model exposes a set_adapter method if adapters are loaded
-    if hasattr(model, "set_adapter"):
-        print(f"  Using model.set_adapter('{task}')...")
-        model.set_adapter(task)
-        # After setting, we can try to merge
-        if hasattr(model, "merge_adapter"):
-            model.merge_adapter()
-            print("  Merged adapter via model.merge_adapter()")
-            return
-        if hasattr(model, "merge_and_unload"):
-            model.merge_and_unload()
-            print("  Merged adapter via model.merge_and_unload()")
-            return
+    import torch.nn.utils.parametrize as parametrize
 
-    # Fallback: manually search for LoRA parameters
-    merged_count = 0
-    state_dict = dict(model.named_parameters())
-    lora_a_keys = [k for k in state_dict if "lora_A" in k and task.replace(".", "_") in k]
-
-    for a_key in lora_a_keys:
-        b_key = a_key.replace("lora_A", "lora_B")
-        if b_key not in state_dict:
-            continue
-
-        # Find the base weight key
-        # Typical pattern: layer.attention.self.query.lora_A.retrieval_passage.weight
-        # Base key: layer.attention.self.query.weight
-        base_key = a_key.split(".lora_A")[0] + ".weight"
-        if base_key not in state_dict:
-            # Try without .weight suffix
-            base_key = a_key.split(".lora_A")[0]
-            if base_key not in state_dict:
-                print(f"  Warning: no base weight for {a_key}")
-                continue
-
-        lora_a = state_dict[a_key].data
-        lora_b = state_dict[b_key].data
-        base = state_dict[base_key].data
-
-        # LoRA merge: W = W + B @ A (scale is typically baked into weights)
-        base.add_(lora_b @ lora_a)
-        merged_count += 1
-
-    if merged_count > 0:
-        print(f"  Manually merged {merged_count} LoRA weight pairs for task '{task}'")
+    param_count = sum(
+        1 for _, m in model.named_modules()
+        if parametrize.is_parametrized(m, "weight")
+    )
+    if param_count > 0:
+        print(f"  Found {param_count} parametrized LoRA weights (kept intact for tracing)")
     else:
-        print(f"  Warning: no LoRA weights found for task '{task}' — using base model")
+        print(f"  No parametrized weights found — using model as-is")
 
 
 def convert(output_dir: Path, seq_lengths: list[int], task: str):
@@ -131,9 +103,9 @@ def convert(output_dir: Path, seq_lengths: list[int], task: str):
     )
     base_model.eval()
 
-    # Merge LoRA adapter into base weights
-    print(f"Merging LoRA adapter '{task}'...")
-    merge_lora_weights(base_model, task)
+    # Select LoRA task — parametrizations are kept intact for tracing
+    print(f"Selecting LoRA adapter '{task}'...")
+    select_lora_task(base_model, task)
 
     wrapper = EmbeddingWithPooling(base_model)
     wrapper.eval().float()
@@ -146,12 +118,12 @@ def convert(output_dir: Path, seq_lengths: list[int], task: str):
     hidden_dim = int(test_out.shape[-1])
     print(f"Model output shape: {test_out.shape} (hidden_dim={hidden_dim})")
 
-    # Export with torch.export
-    print("Exporting model with torch.export...")
+    # Trace with torch.jit.trace (torch.export produces `alias` fx nodes
+    # that coremltools cannot convert for jina's XLM-RoBERTa architecture)
+    print("Tracing model with torch.jit.trace...")
     example_inputs = (dummy_ids, dummy_mask)
-    exported = torch.export.export(wrapper, example_inputs)
-    exported = exported.run_decompositions({})
-    print("torch.export succeeded")
+    traced = torch.jit.trace(wrapper, example_inputs)
+    print("torch.jit.trace succeeded")
 
     for sl in seq_lengths:
         print(f"\n--- Converting seq_len={sl} ---")
@@ -159,7 +131,7 @@ def convert(output_dir: Path, seq_lengths: list[int], task: str):
         output_path = output_dir / f"{OUTPUT_PREFIX}-seq{sl}.mlpackage"
 
         mlmodel = ct.convert(
-            exported,
+            traced,
             inputs=[
                 ct.TensorType(name="input_ids", shape=(1, sl), dtype=np.int32),
                 ct.TensorType(name="attention_mask", shape=(1, sl), dtype=np.int32),

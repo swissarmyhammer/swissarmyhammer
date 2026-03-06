@@ -23,7 +23,11 @@ pub use detection::{
 };
 pub use download_lock::DownloadCoordinator;
 pub use error::ModelError;
-pub use huggingface::{load_huggingface_model_with_path, load_huggingface_model_with_path_and_folder};
+pub use huggingface::{
+    load_huggingface_model_with_path, load_huggingface_model_with_path_and_folder,
+};
 pub use loader::ModelResolver;
 pub use multipart::{download_folder_model, download_multi_part_model};
-pub use types::{ModelConfig, ModelMetadata, ModelSource, ResolvedModel, RetryConfig, MODEL_EXTENSIONS};
+pub use types::{
+    ModelConfig, ModelMetadata, ModelSource, ResolvedModel, RetryConfig, MODEL_EXTENSIONS,
+};

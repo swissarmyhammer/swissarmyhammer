@@ -557,9 +557,12 @@ async fn execute_cli_command_with_capture(
                     // (model loading, MCP server, etc.) — just confirm parsing succeeded
                     (String::new(), String::new(), EXIT_SUCCESS)
                 }
-                None => {
-                    (String::new(), "No subcommand provided. Use 'sah agent --help' to see available subcommands.".to_string(), swissarmyhammer_cli::exit_codes::EXIT_ERROR)
-                }
+                None => (
+                    String::new(),
+                    "No subcommand provided. Use 'sah agent --help' to see available subcommands."
+                        .to_string(),
+                    swissarmyhammer_cli::exit_codes::EXIT_ERROR,
+                ),
             }
         }
 

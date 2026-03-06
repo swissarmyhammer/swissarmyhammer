@@ -173,7 +173,10 @@ mod tests {
         let err = ModelError::LoadingFailed("test error".to_string());
         let display_str = format!("{}", err);
         assert!(display_str.contains("test error"));
-        assert!(!display_str.contains("🔧"), "Display should not contain emojis");
+        assert!(
+            !display_str.contains("🔧"),
+            "Display should not contain emojis"
+        );
 
         // user_friendly_message has the emojis
         let friendly = err.user_friendly_message();

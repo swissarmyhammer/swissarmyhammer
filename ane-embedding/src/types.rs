@@ -81,7 +81,9 @@ mod tests {
         let config = AneEmbeddingConfig::default();
         assert_eq!(
             config.model_path(),
-            PathBuf::from("var/data/models/qwen3-embedding-0.6b/Qwen3-Embedding-0.6B-seq128.mlpackage")
+            PathBuf::from(
+                "var/data/models/qwen3-embedding-0.6b/Qwen3-Embedding-0.6B-seq128.mlpackage"
+            )
         );
     }
 

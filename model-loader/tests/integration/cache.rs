@@ -61,7 +61,10 @@ async fn test_model_cache_hit_behavior() {
     let model1 = resolver.resolve(&config).await;
 
     let first_resolve_time = start_time.elapsed();
-    tracing::info!("First resolve completed in: {}", Pretty(&first_resolve_time));
+    tracing::info!(
+        "First resolve completed in: {}",
+        Pretty(&first_resolve_time)
+    );
 
     // Verify first resolve succeeded
     assert!(
@@ -82,7 +85,10 @@ async fn test_model_cache_hit_behavior() {
     let model2 = resolver.resolve(&config).await;
 
     let second_resolve_time = start_time.elapsed();
-    tracing::info!("Second resolve completed in: {}", Pretty(&second_resolve_time));
+    tracing::info!(
+        "Second resolve completed in: {}",
+        Pretty(&second_resolve_time)
+    );
 
     // Verify second resolve succeeded
     assert!(
@@ -102,7 +108,8 @@ async fn test_model_cache_hit_behavior() {
 
     // The second resolve should be significantly faster than the first
     // Allow some variance but expect at least 50% faster
-    let speedup_ratio = first_resolve_time.as_millis() as f64 / second_resolve_time.as_millis() as f64;
+    let speedup_ratio =
+        first_resolve_time.as_millis() as f64 / second_resolve_time.as_millis() as f64;
 
     tracing::info!("Resolve time comparison:");
     tracing::info!("  First resolve:  {}", Pretty(&first_resolve_time));
@@ -120,7 +127,9 @@ async fn test_model_cache_hit_behavior() {
             second_resolve_time
         );
     } else {
-        tracing::warn!("⚠️  Second resolve was not significantly faster - cache may not be working");
+        tracing::warn!(
+            "⚠️  Second resolve was not significantly faster - cache may not be working"
+        );
         tracing::warn!("    This could be due to network conditions or model size");
     }
 
@@ -148,7 +157,10 @@ async fn test_model_resolver_cache_reuse() {
     let model1 = resolver1.resolve(&config).await;
 
     let first_resolve_time = start_time.elapsed();
-    tracing::info!("First resolver completed in: {}", Pretty(&first_resolve_time));
+    tracing::info!(
+        "First resolver completed in: {}",
+        Pretty(&first_resolve_time)
+    );
 
     assert!(
         model1.is_ok(),
@@ -166,7 +178,10 @@ async fn test_model_resolver_cache_reuse() {
     let model2 = resolver2.resolve(&config).await;
 
     let second_resolve_time = start_time.elapsed();
-    tracing::info!("Second resolver completed in: {}", Pretty(&second_resolve_time));
+    tracing::info!(
+        "Second resolver completed in: {}",
+        Pretty(&second_resolve_time)
+    );
 
     assert!(
         model2.is_ok(),
@@ -183,7 +198,8 @@ async fn test_model_resolver_cache_reuse() {
     assert_eq!(metadata1.size_bytes, metadata2.size_bytes);
 
     // Second resolve should benefit from HuggingFace Hub's caching
-    let speedup_ratio = first_resolve_time.as_millis() as f64 / second_resolve_time.as_millis() as f64;
+    let speedup_ratio =
+        first_resolve_time.as_millis() as f64 / second_resolve_time.as_millis() as f64;
 
     tracing::info!("ModelResolver comparison:");
     tracing::info!("  First instance:  {}", Pretty(&first_resolve_time));

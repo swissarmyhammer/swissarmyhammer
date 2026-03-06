@@ -446,11 +446,7 @@ mod tests {
         let kanban_dir = root.join(".kanban");
         let boards_dir = kanban_dir.join("boards");
         std::fs::create_dir_all(&boards_dir).unwrap();
-        std::fs::write(
-            boards_dir.join("board.yaml"),
-            format!("name: {}\n", name),
-        )
-        .unwrap();
+        std::fs::write(boards_dir.join("board.yaml"), format!("name: {}\n", name)).unwrap();
         // Also create columns dir so the processor doesn't try to auto-init
         std::fs::create_dir_all(kanban_dir.join("columns")).unwrap();
         std::fs::create_dir_all(kanban_dir.join("tasks")).unwrap();

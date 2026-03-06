@@ -1477,11 +1477,7 @@ impl AgentAPI for AgentServer {
             Self::create_summary_generator(self.model_manager.clone(), self.chat_template.clone());
 
         // Get model context size from loaded model
-        let model_context_size = self
-            .model_manager
-            .get_context_size()
-            .await
-            .unwrap_or(4096); // Fallback to 4096 if model not loaded
+        let model_context_size = self.model_manager.get_context_size().await.unwrap_or(4096); // Fallback to 4096 if model not loaded
 
         self.session_manager
             .auto_compact_sessions(config, model_context_size, generate_summary)

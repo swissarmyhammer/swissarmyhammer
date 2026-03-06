@@ -122,12 +122,7 @@ async fn test_normalization() {
 
     let result = model.embed_text("Normalization test").await.unwrap();
 
-    let magnitude: f32 = result
-        .embedding()
-        .iter()
-        .map(|x| x * x)
-        .sum::<f32>()
-        .sqrt();
+    let magnitude: f32 = result.embedding().iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!(
         (magnitude - 1.0).abs() < 1e-3,
         "Normalized embedding should have magnitude ~1.0, got: {}",
@@ -171,9 +166,18 @@ async fn test_cosine_similarity() {
     let model = AneEmbeddingModel::new(config);
     model.load().await.expect("Failed to load model");
 
-    let r_dog = model.embed_text("The dog ran across the park").await.unwrap();
-    let r_puppy = model.embed_text("A puppy sprinted through the garden").await.unwrap();
-    let r_quantum = model.embed_text("Quantum entanglement violates Bell inequalities").await.unwrap();
+    let r_dog = model
+        .embed_text("The dog ran across the park")
+        .await
+        .unwrap();
+    let r_puppy = model
+        .embed_text("A puppy sprinted through the garden")
+        .await
+        .unwrap();
+    let r_quantum = model
+        .embed_text("Quantum entanglement violates Bell inequalities")
+        .await
+        .unwrap();
 
     let sim_similar = cosine_similarity(r_dog.embedding(), r_puppy.embedding());
     let sim_different = cosine_similarity(r_dog.embedding(), r_quantum.embedding());

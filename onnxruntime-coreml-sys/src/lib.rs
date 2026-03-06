@@ -254,7 +254,8 @@ impl Env {
         })?;
         let mut raw: OrtWrapperEnv = ptr::null_mut();
         let mut err = OrtWrapperError::new();
-        let ret = unsafe { ort_wrapper_create_env(level as i32, c_name.as_ptr(), &mut raw, &mut err) };
+        let ret =
+            unsafe { ort_wrapper_create_env(level as i32, c_name.as_ptr(), &mut raw, &mut err) };
         if ret != 0 {
             return Err(err.to_error());
         }
@@ -358,9 +359,7 @@ impl Session {
 
         // Get input names — check every return code (B2 fix)
         let mut input_count: usize = 0;
-        let ret = unsafe {
-            ort_wrapper_session_get_input_count(raw, &mut input_count, &mut err)
-        };
+        let ret = unsafe { ort_wrapper_session_get_input_count(raw, &mut input_count, &mut err) };
         if ret != 0 {
             unsafe { release_session_raw(raw) };
             return Err(err.to_error());
@@ -369,9 +368,8 @@ impl Session {
         let mut input_names = Vec::with_capacity(input_count);
         for i in 0..input_count {
             let mut name_ptr: *mut c_char = ptr::null_mut();
-            let ret = unsafe {
-                ort_wrapper_session_get_input_name(raw, i, &mut name_ptr, &mut err)
-            };
+            let ret =
+                unsafe { ort_wrapper_session_get_input_name(raw, i, &mut name_ptr, &mut err) };
             if ret != 0 {
                 unsafe { release_session_raw(raw) };
                 return Err(err.to_error());
@@ -390,9 +388,7 @@ impl Session {
 
         // Get output names
         let mut output_count: usize = 0;
-        let ret = unsafe {
-            ort_wrapper_session_get_output_count(raw, &mut output_count, &mut err)
-        };
+        let ret = unsafe { ort_wrapper_session_get_output_count(raw, &mut output_count, &mut err) };
         if ret != 0 {
             unsafe { release_session_raw(raw) };
             return Err(err.to_error());
@@ -401,9 +397,8 @@ impl Session {
         let mut output_names = Vec::with_capacity(output_count);
         for i in 0..output_count {
             let mut name_ptr: *mut c_char = ptr::null_mut();
-            let ret = unsafe {
-                ort_wrapper_session_get_output_name(raw, i, &mut name_ptr, &mut err)
-            };
+            let ret =
+                unsafe { ort_wrapper_session_get_output_name(raw, i, &mut name_ptr, &mut err) };
             if ret != 0 {
                 unsafe { release_session_raw(raw) };
                 return Err(err.to_error());
@@ -703,11 +698,14 @@ mod tests {
         init().unwrap();
         let _env = Env::new(LoggingLevel::Warning, "test-coreml").unwrap();
         let opts = SessionOptions::new().unwrap();
-        let result = opts.with_coreml(
-            COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES,
-        );
+        let result =
+            opts.with_coreml(COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES);
         if cfg!(target_os = "macos") {
-            assert!(result.is_ok(), "CoreML should be available: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "CoreML should be available: {:?}",
+                result.err()
+            );
         }
     }
 
@@ -760,10 +758,16 @@ mod tests {
 
     #[test]
     fn test_ort_error_traits() {
-        let err = OrtError { code: 1, message: "test".to_string() };
+        let err = OrtError {
+            code: 1,
+            message: "test".to_string(),
+        };
         let err2 = err.clone();
         assert_eq!(err, err2);
-        assert_eq!(format!("{:?}", err), "OrtError { code: 1, message: \"test\" }");
+        assert_eq!(
+            format!("{:?}", err),
+            "OrtError { code: 1, message: \"test\" }"
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::error::{EmbeddingError, EmbedResult as Result};
+use crate::error::{EmbedResult as Result, EmbeddingError};
 use crate::types::{EmbeddingConfig, EmbeddingResult};
 use llama_cpp_2::{
     context::{params::LlamaContextParams, LlamaContext},
@@ -7,8 +7,8 @@ use llama_cpp_2::{
     model::LlamaModel,
     send_logs_to_tracing, LogOptions,
 };
-use model_loader::{ModelConfig, ModelMetadata, ModelResolver, RetryConfig};
 use model_embedding::TextEmbedder;
+use model_loader::{ModelConfig, ModelMetadata, ModelResolver, RetryConfig};
 use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -242,7 +242,13 @@ impl EmbeddingModel {
         let mut ctx = inner.context.take().ok_or(EmbeddingError::ModelNotLoaded)?;
         let model = inner.model.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
 
-        let result = embed_single(&mut ctx, model, text, max_seq, self.config.normalize_embeddings);
+        let result = embed_single(
+            &mut ctx,
+            model,
+            text,
+            max_seq,
+            self.config.normalize_embeddings,
+        );
         inner.context = Some(ctx);
         result
     }
@@ -279,18 +285,19 @@ impl EmbeddingModel {
 #[async_trait::async_trait]
 impl TextEmbedder for EmbeddingModel {
     async fn load(&self) -> std::result::Result<(), model_embedding::EmbeddingError> {
-        self.load_model().await.map_err(|e| {
-            model_embedding::EmbeddingError::Backend(Box::new(e))
-        })
+        self.load_model()
+            .await
+            .map_err(|e| model_embedding::EmbeddingError::Backend(Box::new(e)))
     }
 
     async fn embed_text(
         &self,
         text: &str,
-    ) -> std::result::Result<model_embedding::EmbeddingResult, model_embedding::EmbeddingError> {
-        self.embed_impl(text).await.map_err(|e| {
-            model_embedding::EmbeddingError::Backend(Box::new(e))
-        })
+    ) -> std::result::Result<model_embedding::EmbeddingResult, model_embedding::EmbeddingError>
+    {
+        self.embed_impl(text)
+            .await
+            .map_err(|e| model_embedding::EmbeddingError::Backend(Box::new(e)))
     }
 
     fn embedding_dimension(&self) -> Option<usize> {
@@ -317,9 +324,7 @@ fn ensure_context(
         return Err(EmbeddingError::ModelNotLoaded);
     }
 
-    let ctx_size = config
-        .max_sequence_length
-        .unwrap_or(inner.context_size) as u32;
+    let ctx_size = config.max_sequence_length.unwrap_or(inner.context_size) as u32;
 
     info!("Creating LlamaContext with n_ctx={}", ctx_size);
     let n_ctx = NonZeroU32::new(ctx_size);

@@ -121,7 +121,8 @@ impl LlamaError for EmbeddingError {
                 format!("💾 I/O Error: {}\n💡 Check file permissions, disk space, and ensure all required files are accessible.", io_error)
             }
             EmbeddingError::ModelNotLoaded => {
-                "🚫 Model Not Loaded\n💡 Call load() first before performing embedding operations.".to_string()
+                "🚫 Model Not Loaded\n💡 Call load() first before performing embedding operations."
+                    .to_string()
             }
             EmbeddingError::DimensionMismatch { expected, actual } => {
                 format!("📏 Embedding Dimension Mismatch: expected {}, got {}\n💡 Ensure all embeddings have consistent dimensions or adjust your model configuration.", expected, actual)
@@ -153,10 +154,7 @@ mod tests {
 
         let error = EmbeddingError::ModelNotLoaded;
         assert!(matches!(error, EmbeddingError::ModelNotLoaded));
-        assert_eq!(
-            error.to_string(),
-            "Model not loaded - call load() first"
-        );
+        assert_eq!(error.to_string(), "Model not loaded - call load() first");
     }
 
     #[test]

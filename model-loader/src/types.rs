@@ -7,7 +7,8 @@ use std::time::Duration;
 /// Known model file extensions for auto-detection.
 ///
 /// Used by both local directory scanning and HuggingFace repository detection.
-pub const MODEL_EXTENSIONS: &[&str] = &["gguf", "onnx", "mlmodel", "mlpackage", "bin", "safetensors"];
+pub const MODEL_EXTENSIONS: &[&str] =
+    &["gguf", "onnx", "mlmodel", "mlpackage", "bin", "safetensors"];
 
 /// A resolved model with its file path and metadata.
 ///

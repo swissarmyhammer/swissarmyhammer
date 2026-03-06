@@ -1419,11 +1419,7 @@ impl agent_client_protocol::Agent for AcpServer {
 
         loop {
             // Calculate max_tokens based on available context space
-            let model_context_size = self
-                .agent_server
-                .get_context_size()
-                .await
-                .unwrap_or(4096); // Default fallback
+            let model_context_size = self.agent_server.get_context_size().await.unwrap_or(4096); // Default fallback
 
             // Get current token usage from session
             let current_tokens = self

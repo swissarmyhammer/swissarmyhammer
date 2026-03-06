@@ -25,9 +25,7 @@ fn test_load_model_with_coreml() {
     // Create session with CoreML EP
     let opts = SessionOptions::new()
         .expect("session options failed")
-        .with_coreml(
-            COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES,
-        )
+        .with_coreml(COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES)
         .expect("CoreML append failed");
 
     let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -69,9 +67,7 @@ fn test_run_inference() {
 
     let opts = SessionOptions::new()
         .expect("session options failed")
-        .with_coreml(
-            COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES,
-        )
+        .with_coreml(COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES)
         .expect("CoreML append failed");
 
     let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -119,7 +115,10 @@ fn test_run_inference() {
 
     println!("Output shape: {:?}", output_shape);
     println!("Output element count: {}", output_data.len());
-    println!("First 5 values: {:?}", &output_data[..5.min(output_data.len())]);
+    println!(
+        "First 5 values: {:?}",
+        &output_data[..5.min(output_data.len())]
+    );
 
     // Verify we got reasonable output
     assert!(!output_data.is_empty(), "Output should have data");
@@ -128,5 +127,8 @@ fn test_run_inference() {
     let sum: f32 = output_data.iter().map(|x| x.abs()).sum();
     assert!(sum > 0.0, "Output values should not all be zero");
 
-    println!("Smoke test passed! Model produced {} output values", output_data.len());
+    println!(
+        "Smoke test passed! Model produced {} output values",
+        output_data.len()
+    );
 }

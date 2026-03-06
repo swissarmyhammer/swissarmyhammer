@@ -122,7 +122,10 @@ async fn test_model_loading_and_caching() {
         .expect("Failed to create first model instance");
 
     // Load via trait
-    model1.load().await.expect("Failed to load model first time");
+    model1
+        .load()
+        .await
+        .expect("Failed to load model first time");
 
     // Check via trait
     assert!(model1.is_loaded());
@@ -137,7 +140,10 @@ async fn test_model_loading_and_caching() {
         .await
         .expect("Failed to create second model instance");
 
-    model2.load().await.expect("Failed to load model second time");
+    model2
+        .load()
+        .await
+        .expect("Failed to load model second time");
 
     assert_eq!(model1.embedding_dimension(), Some(1024));
     assert_eq!(model2.embedding_dimension(), Some(1024));

@@ -84,7 +84,9 @@ impl LlamaError for EmbeddingError {
 
     fn user_friendly_message(&self) -> String {
         match self {
-            EmbeddingError::ModelLoader(e) => format!("Model loader: {}", e.user_friendly_message()),
+            EmbeddingError::ModelLoader(e) => {
+                format!("Model loader: {}", e.user_friendly_message())
+            }
             EmbeddingError::CoreML(msg) => format!("CoreML error: {msg}"),
             EmbeddingError::Tokenization(msg) => format!("Tokenization error: {msg}"),
             EmbeddingError::TextProcessing(msg) => format!("Text processing error: {msg}"),
@@ -167,8 +169,7 @@ mod tests {
         let e: model_embedding::EmbeddingError = EmbeddingError::ModelNotLoaded.into();
         assert!(matches!(e, model_embedding::EmbeddingError::ModelNotLoaded));
 
-        let e: model_embedding::EmbeddingError =
-            EmbeddingError::coreml("runtime fail").into();
+        let e: model_embedding::EmbeddingError = EmbeddingError::coreml("runtime fail").into();
         assert!(matches!(e, model_embedding::EmbeddingError::Backend(_)));
     }
 }

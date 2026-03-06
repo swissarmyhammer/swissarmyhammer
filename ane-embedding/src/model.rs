@@ -145,10 +145,7 @@ impl AneEmbeddingModel {
         inner.model = Some(coreml_model);
         inner.tokenizer = Some(tokenizer);
 
-        info!(
-            seq_length = self.config.seq_length,
-            "CoreML model ready"
-        );
+        info!(seq_length = self.config.seq_length, "CoreML model ready");
 
         Ok(())
     }

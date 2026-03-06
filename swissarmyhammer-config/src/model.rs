@@ -218,20 +218,30 @@ impl Platform {
     /// Detect the current compile-time platform
     pub fn current() -> Self {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        { Platform::MacosArm64 }
+        {
+            Platform::MacosArm64
+        }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        { Platform::MacosX86_64 }
+        {
+            Platform::MacosX86_64
+        }
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        { Platform::LinuxX86_64 }
+        {
+            Platform::LinuxX86_64
+        }
         #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-        { Platform::LinuxAarch64 }
+        {
+            Platform::LinuxAarch64
+        }
         #[cfg(not(any(
             all(target_os = "macos", target_arch = "aarch64"),
             all(target_os = "macos", target_arch = "x86_64"),
             all(target_os = "linux", target_arch = "x86_64"),
             all(target_os = "linux", target_arch = "aarch64"),
         )))]
-        { Platform::LinuxX86_64 } // fallback
+        {
+            Platform::LinuxX86_64
+        } // fallback
     }
 }
 

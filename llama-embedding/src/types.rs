@@ -52,12 +52,7 @@ mod tests {
 
     #[test]
     fn test_embedding_normalization() {
-        let mut result = EmbeddingResult::new(
-            "test".to_string(),
-            vec![3.0, 4.0],
-            2,
-            50,
-        );
+        let mut result = EmbeddingResult::new("test".to_string(), vec![3.0, 4.0], 2, 50);
 
         result.normalize();
 

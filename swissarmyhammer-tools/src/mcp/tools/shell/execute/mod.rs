@@ -2155,8 +2155,8 @@ impl McpTool for ShellExecuteTool {
 mod tests {
     use super::*;
     use crate::test_utils::create_test_context;
-    use serial_test::serial;
     use serde_json::json;
+    use serial_test::serial;
 
     /// Generic helper function to assert that items are blocked by security validation
     ///

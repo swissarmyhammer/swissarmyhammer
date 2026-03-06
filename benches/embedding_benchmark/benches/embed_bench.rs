@@ -104,10 +104,7 @@ fn print_stats(label: &str, load_time: Duration, stats: &Stats) {
     println!("    p95:        {:>10.2?}", stats.p95);
 }
 
-fn bench_embedder(
-    rt: &tokio::runtime::Runtime,
-    model: &dyn TextEmbedder,
-) -> Stats {
+fn bench_embedder(rt: &tokio::runtime::Runtime, model: &dyn TextEmbedder) -> Stats {
     rt.block_on(async {
         // First embed
         let t = Instant::now();
@@ -151,7 +148,10 @@ fn main() {
         // when MLModel is deallocated during process exit.
         std::mem::forget(model);
     } else {
-        println!("  ANE CoreML: skipped (no .mlpackage at {})", mlpackage_path().display());
+        println!(
+            "  ANE CoreML: skipped (no .mlpackage at {})",
+            mlpackage_path().display()
+        );
     }
 
     println!();
