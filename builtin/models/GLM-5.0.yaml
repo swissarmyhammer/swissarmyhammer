@@ -1,5 +1,5 @@
 ---
-description: "671B: Strong agents, MIT licensed"
+description: "GLM 5.0: 357B MoE, top coding, 200K context"
 ---
 quiet: false
 executor:
@@ -7,5 +7,5 @@ executor:
   config:
     model:
       source: !HuggingFace
-        repo: "unsloth/DeepSeek-V3.1-Terminus-GGUF"
+        repo: "unsloth/GLM-5.0-GGUF"
         folder: "IQ4_NL"

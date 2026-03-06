@@ -27,6 +27,7 @@ members = [
     "model-loader",
     "model-embedding",
     "ane-embedding",
+    "swissarmyhammer-embedding",
     "onnxruntime-coreml-sys",
 
     "acp-conformance",

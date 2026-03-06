@@ -24,6 +24,7 @@
 //! consistency and make updates easier to manage. New constants should follow the
 //! established categories and naming conventions.
 
-/// Default embedding model used for testing across the SwissArmyHammer ecosystem.
-/// This model is chosen for its balance of performance and accuracy in test scenarios.
-pub const DEFAULT_TEST_EMBEDDING_MODEL: &str = "nomic-ai/nomic-embed-code";
+/// Default embedding model name for testing across the SwissArmyHammer ecosystem.
+/// References the builtin `qwen-embedding` config, which selects ANE on Apple Silicon
+/// and llama.cpp elsewhere via `Embedder::from_model_name()`.
+pub const DEFAULT_TEST_EMBEDDING_MODEL: &str = "qwen-embedding";

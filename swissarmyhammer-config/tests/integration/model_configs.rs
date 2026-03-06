@@ -436,7 +436,7 @@ fn test_agent_precedence_verification() {
 
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
-    assert_agent_has_source(&agents, "qwen-next", ModelConfigSource::Builtin);
+    assert_agent_has_source(&agents, "qwen-embedding", ModelConfigSource::Builtin);
 }
 
 #[serial_test::serial(cwd)]
@@ -1255,7 +1255,7 @@ fn test_global_agent_override_preserves_config_file() {
     // Simulate what the CLI would do for --agent override:
     // 1. Load the override agent's config
     let override_agent_info =
-        ModelManager::find_agent_by_name("qwen-next").expect("Should find override agent");
+        ModelManager::find_agent_by_name("qwen-embedding").expect("Should find override agent");
     let _override_config =
         parse_model_config(&override_agent_info.content).expect("Should parse override config");
 
@@ -1304,7 +1304,8 @@ fn test_global_agent_override_all_builtin_agents() {
         match config.executor_type() {
             swissarmyhammer_config::ModelExecutorType::ClaudeCode
             | swissarmyhammer_config::ModelExecutorType::LlamaAgent
-            | swissarmyhammer_config::ModelExecutorType::LlamaEmbedding => {
+            | swissarmyhammer_config::ModelExecutorType::LlamaEmbedding
+            | swissarmyhammer_config::ModelExecutorType::AneEmbedding => {
                 // Valid executor type
             }
         }

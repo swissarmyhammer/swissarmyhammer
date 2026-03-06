@@ -150,3 +150,4 @@ var/data/models/
 
 # Claude Code local settings
 .claude/settings.local.json
+.claude/plans/
