@@ -13,8 +13,15 @@
 Uses torch.export (ExportedProgram) → coremltools conversion, which avoids
 torch.jit.trace incompatibilities with modern transformers masking.
 
+Supports post-training weight compression:
+  --quantize palettize4  (4-bit palettization via k-means LUT — recommended)
+  --quantize palettize2  (2-bit palettization)
+  --quantize linear4     (4-bit linear symmetric quantization)
+  --quantize linear8     (8-bit linear symmetric quantization)
+  --quantize none        (fp16 weights, no compression — default)
+
 Usage:
-    uv run convert_qwen_embedding.py [--output-dir ../../var/data/models/qwen3-embedding-0.6b]
+    uv run convert_qwen_embedding.py --quantize palettize4
 """
 
 import argparse
@@ -22,6 +29,7 @@ import shutil
 from pathlib import Path
 
 import coremltools as ct
+import coremltools.optimize as cto
 import numpy as np
 import torch
 import torch.nn as nn
@@ -45,7 +53,37 @@ class EmbeddingWithPooling(nn.Module):
         return (summed / counts).float()
 
 
-def convert(output_dir: Path, seq_length: int = 512):
+def compress_model(mlmodel, quantize: str):
+    """Apply post-training weight compression to the converted model."""
+    if quantize == "none":
+        return mlmodel
+
+    if quantize.startswith("palettize"):
+        nbits = int(quantize.replace("palettize", ""))
+        print(f"Applying {nbits}-bit palettization (k-means LUT)...")
+        op_config = cto.coreml.OpPalettizerConfig(
+            mode="kmeans",
+            nbits=nbits,
+        )
+        config = cto.coreml.OptimizationConfig(global_config=op_config)
+        return cto.coreml.palettize_weights(mlmodel, config=config)
+
+    elif quantize.startswith("linear"):
+        nbits = int(quantize.replace("linear", ""))
+        dtype_str = f"int{nbits}"
+        print(f"Applying {nbits}-bit linear symmetric quantization...")
+        op_config = cto.coreml.OpLinearQuantizerConfig(
+            mode="linear_symmetric",
+            dtype=dtype_str,
+        )
+        config = cto.coreml.OptimizationConfig(global_config=op_config)
+        return cto.coreml.linear_quantize_weights(mlmodel, config=config)
+
+    else:
+        raise ValueError(f"Unknown quantize option: {quantize}")
+
+
+def convert(output_dir: Path, seq_length: int = 512, quantize: str = "none"):
     model_name = "Qwen/Qwen3-Embedding-0.6B"
 
     print(f"Loading {model_name}...")
@@ -88,13 +126,16 @@ def convert(output_dir: Path, seq_length: int = 512):
         convert_to="mlprogram",
         compute_precision=ct.precision.FLOAT16,
         compute_units=ct.ComputeUnit.CPU_AND_NE,
-        minimum_deployment_target=ct.target.macOS14,
+        minimum_deployment_target=ct.target.macOS15,
     )
+
+    # Apply post-training weight compression
+    mlmodel = compress_model(mlmodel, quantize)
 
     # Set metadata
     mlmodel.author = "swissarmyhammer"
     mlmodel.short_description = (
-        f"Qwen3-Embedding-0.6B with mean pooling. "
+        f"Qwen3-Embedding-0.6B with mean pooling ({quantize}). "
         f"Input: token IDs + attention mask [{seq_length}]. "
         f"Output: {hidden_dim}-dim embedding vector."
     )
@@ -134,7 +175,8 @@ def convert(output_dir: Path, seq_length: int = 512):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     default_output = (
         Path(__file__).resolve().parent.parent.parent
         / "var" / "data" / "models" / "qwen3-embedding-0.6b"
@@ -151,9 +193,15 @@ def main():
         default=512,
         help="Static sequence length (default: 512)",
     )
+    parser.add_argument(
+        "--quantize",
+        choices=["none", "palettize2", "palettize4", "linear4", "linear8"],
+        default="none",
+        help="Post-training weight compression (default: none)",
+    )
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    convert(args.output_dir, args.seq_length)
+    convert(args.output_dir, args.seq_length, args.quantize)
 
 
 if __name__ == "__main__":

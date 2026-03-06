@@ -1,15 +1,33 @@
-//! Criterion benchmarks: Qwen3-Embedding-0.6B on ANE (CoreML) vs CPU (llama.cpp).
+//! Timing harness: Qwen3-Embedding-0.6B on ANE (CoreML) vs CPU (llama.cpp).
 //!
-//! Same model, two backends:
-//! - ANE: CoreML .mlpackage at var/data/models/qwen3-embedding-0.6b/
+//! Same model, quantized:
+//! - ANE: CoreML .mlpackage (4-bit palettized) at var/data/models/qwen3-embedding-0.6b/
 //! - CPU: GGUF Q8_0 from Qwen/Qwen3-Embedding-0.6B-GGUF (auto-downloaded)
+//!
+//! Reports: load time, first-embed latency, then min/mean/max over N subsequent embeds.
 //!
 //! Run: cargo bench -p embedding-benchmark
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
-use criterion::{criterion_group, criterion_main, Criterion};
 use model_embedding::TextEmbedder;
+
+const N: usize = 50;
+
+const TEXTS: &[&str] = &[
+    "The quick brown fox jumps over the lazy dog.",
+    "Quantum computing leverages quantum mechanical phenomena such as \
+     superposition and entanglement to perform computations.",
+    "Rust is a systems programming language focused on safety and performance.",
+    "The mitochondria is the powerhouse of the cell.",
+    "In 1969, humans first set foot on the Moon during the Apollo 11 mission.",
+    "Machine learning models learn patterns from data to make predictions.",
+    "The Great Wall of China stretches over 13,000 miles across northern China.",
+    "Photosynthesis converts sunlight into chemical energy in plants.",
+    "TCP/IP is the fundamental protocol suite powering the internet.",
+    "A neural network consists of layers of interconnected nodes called neurons.",
+];
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -40,7 +58,6 @@ fn ane_config() -> ane_embedding::AneEmbeddingConfig {
 }
 
 fn llama_config() -> llama_embedding::EmbeddingConfig {
-    // Same model (Qwen3-Embedding-0.6B) in GGUF Q8_0 format for llama.cpp
     llama_embedding::EmbeddingConfig {
         model_source: model_loader::ModelSource::HuggingFace {
             repo: "Qwen/Qwen3-Embedding-0.6B-GGUF".to_string(),
@@ -53,56 +70,86 @@ fn llama_config() -> llama_embedding::EmbeddingConfig {
     }
 }
 
-const SHORT_TEXT: &str = "The quick brown fox jumps over the lazy dog.";
-const LONG_TEXT: &str = "Quantum computing leverages quantum mechanical phenomena such as \
-    superposition and entanglement to perform computations that would be impractical \
-    for classical computers. Quantum bits, or qubits, can exist in multiple states \
-    simultaneously, enabling massive parallelism for certain problem classes including \
-    cryptography, optimization, and molecular simulation.";
-
-fn bench_ane_embed(c: &mut Criterion) {
-    if !has_mlpackage() {
-        eprintln!("Skipping ANE benchmarks: .mlpackage not found");
-        return;
-    }
-
-    let rt = tokio::runtime::Runtime::new().unwrap();
-
-    let model = rt.block_on(async {
-        let model = ane_embedding::AneEmbeddingModel::new(ane_config());
-        model.load().await.expect("Failed to load ANE model");
-        model
-    });
-
-    let mut group = c.benchmark_group("qwen3_0.6b_ane_coreml");
-    group.sample_size(20);
-
-    group.bench_function("embed_short", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap())
-            .iter(|| async {
-                model
-                    .embed_text(SHORT_TEXT)
-                    .await
-                    .expect("ANE embed failed")
-            });
-    });
-
-    group.bench_function("embed_long", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap())
-            .iter(|| async {
-                model
-                    .embed_text(LONG_TEXT)
-                    .await
-                    .expect("ANE embed failed")
-            });
-    });
-
-    group.finish();
+struct Stats {
+    first: Duration,
+    min: Duration,
+    max: Duration,
+    mean: Duration,
+    samples: Vec<Duration>,
 }
 
-fn bench_llama_embed(c: &mut Criterion) {
+fn compute_stats(first: Duration, samples: Vec<Duration>) -> Stats {
+    let min = *samples.iter().min().unwrap();
+    let max = *samples.iter().max().unwrap();
+    let mean = samples.iter().sum::<Duration>() / samples.len() as u32;
+    Stats {
+        first,
+        min,
+        max,
+        mean,
+        samples,
+    }
+}
+
+fn print_stats(label: &str, load_time: Duration, stats: &Stats) {
+    println!("\n=== {label} ===");
+    println!("  load model:   {:>10.2?}", load_time);
+    println!("  first embed:  {:>10.2?}", stats.first);
+    println!("  subsequent ({N} embeds, cycling {} texts):", TEXTS.len());
+    println!("    min:        {:>10.2?}", stats.min);
+    println!("    mean:       {:>10.2?}", stats.mean);
+    println!("    max:        {:>10.2?}", stats.max);
+
+    // p50/p95 from sorted samples
+    let mut sorted = stats.samples.clone();
+    sorted.sort();
+    let p50 = sorted[sorted.len() / 2];
+    let p95 = sorted[(sorted.len() as f64 * 0.95) as usize];
+    println!("    p50:        {:>10.2?}", p50);
+    println!("    p95:        {:>10.2?}", p95);
+}
+
+fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
+    // --- ANE (CoreML) ---
+    if has_mlpackage() {
+        let t0 = Instant::now();
+        let model = rt.block_on(async {
+            let model = ane_embedding::AneEmbeddingModel::new(ane_config());
+            model.load().await.expect("Failed to load ANE model");
+            model
+        });
+        let load_time = t0.elapsed();
+
+        let stats = rt.block_on(async {
+            // First embed
+            let t = Instant::now();
+            model
+                .embed_text(TEXTS[0])
+                .await
+                .expect("ANE embed failed");
+            let first = t.elapsed();
+
+            // N subsequent embeds, cycling through texts
+            let mut samples = Vec::with_capacity(N);
+            for i in 0..N {
+                let text = TEXTS[i % TEXTS.len()];
+                let t = Instant::now();
+                model.embed_text(text).await.expect("ANE embed failed");
+                samples.push(t.elapsed());
+            }
+
+            compute_stats(first, samples)
+        });
+
+        print_stats("ANE CoreML (4-bit palettized)", load_time, &stats);
+    } else {
+        eprintln!("Skipping ANE: .mlpackage not found");
+    }
+
+    // --- llama.cpp CPU ---
+    let t0 = Instant::now();
     let model = match rt.block_on(async {
         let config = llama_config();
         let model = llama_embedding::EmbeddingModel::new(config)
@@ -112,36 +159,32 @@ fn bench_llama_embed(c: &mut Criterion) {
     }) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("Skipping llama benchmarks: {e}");
+            eprintln!("Skipping llama.cpp: {e}");
             return;
         }
     };
+    let load_time = t0.elapsed();
 
-    let mut group = c.benchmark_group("qwen3_0.6b_llama_cpu");
-    group.sample_size(20);
+    let stats = rt.block_on(async {
+        // First embed
+        let t = Instant::now();
+        model
+            .embed_text(TEXTS[0])
+            .await
+            .expect("Llama embed failed");
+        let first = t.elapsed();
 
-    group.bench_function("embed_short", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap())
-            .iter(|| async {
-                model
-                    .embed_text(SHORT_TEXT)
-                    .await
-                    .expect("Llama embed failed")
-            });
+        // N subsequent embeds, cycling through texts
+        let mut samples = Vec::with_capacity(N);
+        for i in 0..N {
+            let text = TEXTS[i % TEXTS.len()];
+            let t = Instant::now();
+            model.embed_text(text).await.expect("Llama embed failed");
+            samples.push(t.elapsed());
+        }
+
+        compute_stats(first, samples)
     });
 
-    group.bench_function("embed_long", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap())
-            .iter(|| async {
-                model
-                    .embed_text(LONG_TEXT)
-                    .await
-                    .expect("Llama embed failed")
-            });
-    });
-
-    group.finish();
+    print_stats("llama.cpp CPU (Q8_0)", load_time, &stats);
 }
-
-criterion_group!(benches, bench_ane_embed, bench_llama_embed);
-criterion_main!(benches);
