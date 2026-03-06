@@ -11,7 +11,7 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 #[operation(
     verb = "next",
     noun = "task",
-    description = "Get the oldest ready task from the first column"
+    description = "Get the oldest ready task not in the done column"
 )]
 #[derive(Debug, Default, Deserialize)]
 pub struct NextTask {
@@ -59,24 +59,26 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
             let board = ctx.read_board().await?;
             let all_tasks = ctx.read_all_tasks().await?;
 
-            // Get first column
-            let first_column = match board.first_column() {
-                Some(c) => &c.id,
-                None => return Ok(Value::Null),
-            };
-
-            // Get terminal column for readiness check
+            // Get terminal column — tasks here are done
             let terminal_column = board
                 .terminal_column()
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            // Filter to tasks in first column that are ready
+            // Get column ordering for sorting candidates
+            let column_order: std::collections::HashMap<&str, usize> = board
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (c.id.as_str(), i))
+                .collect();
+
+            // Filter to tasks not in terminal column that are ready
             let mut candidates: Vec<&Task> = all_tasks
                 .iter()
                 .filter(|t| {
-                    // Must be in first column
-                    if &t.position.column != first_column {
+                    // Must not be in terminal column
+                    if t.position.column.as_str() == terminal_column {
                         return false;
                     }
 
@@ -110,8 +112,12 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                 })
                 .collect();
 
-            // Sort by ordinal (position within column)
-            candidates.sort_by(|a, b| a.position.ordinal.cmp(&b.position.ordinal));
+            // Sort by column order first, then ordinal within column
+            candidates.sort_by(|a, b| {
+                let col_a = column_order.get(a.position.column.as_str()).unwrap_or(&0);
+                let col_b = column_order.get(b.position.column.as_str()).unwrap_or(&0);
+                col_a.cmp(col_b).then(a.position.ordinal.cmp(&b.position.ordinal))
+            });
 
             // Return the first (oldest by position)
             match candidates.first() {

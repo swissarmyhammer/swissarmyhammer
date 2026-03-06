@@ -566,14 +566,31 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .await
         }
         (Verb::Next, Noun::Task) => {
-            let cmd = NextTask::new();
-            // Could add swimlane/assignee filtering here
+            let mut cmd = NextTask::new();
+            if let Some(tag) = op.get_string("tag") {
+                cmd = cmd.with_tag(tag);
+            }
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd = cmd.with_swimlane(swimlane);
+            }
+            if let Some(assignee) = op.get_string("assignee") {
+                cmd = cmd.with_assignee(assignee);
+            }
             processor.process(&cmd, ctx).await
         }
         (Verb::List, Noun::Tasks) => {
             let mut cmd = ListTasks::new();
             if let Some(column) = op.get_string("column") {
                 cmd = cmd.with_column(column);
+            }
+            if let Some(tag) = op.get_string("tag") {
+                cmd = cmd.with_tag(tag);
+            }
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd = cmd.with_swimlane(swimlane);
+            }
+            if let Some(assignee) = op.get_string("assignee") {
+                cmd = cmd.with_assignee(assignee);
             }
             if let Some(ready) = op.get_param("ready").and_then(|v| v.as_bool()) {
                 cmd = cmd.with_ready(ready);
