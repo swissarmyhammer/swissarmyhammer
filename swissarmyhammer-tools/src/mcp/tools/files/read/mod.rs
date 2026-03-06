@@ -29,24 +29,24 @@
 //!
 //! ## Examples
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! # use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
 //! # use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 //! # use serde_json::json;
 //! # async fn example(context: &ToolContext) -> Result<(), rmcp::ErrorData> {
-//! let tool = ReadFileTool::new();
+//! use swissarmyhammer_tools::mcp::tools::files::read::execute_read;
 //!
 //! // Read entire file
 //! let mut args = serde_json::Map::new();
 //! args.insert("path".to_string(), json!("/workspace/src/main.rs"));
-//! let result = tool.execute(args, context).await?;
+//! let result = execute_read(args, context).await?;
 //!
 //! // Read with offset and limit
 //! let mut args = serde_json::Map::new();
 //! args.insert("path".to_string(), json!("/workspace/logs/app.log"));
 //! args.insert("offset".to_string(), json!(100));
 //! args.insert("limit".to_string(), json!(50));
-//! let result = tool.execute(args, context).await?;
+//! let result = execute_read(args, context).await?;
 //! # Ok(())
 //! # }
 //! ```

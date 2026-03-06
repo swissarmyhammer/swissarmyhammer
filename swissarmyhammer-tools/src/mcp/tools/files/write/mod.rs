@@ -374,6 +374,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_relative_path_acceptance() {
         let temp_dir = TempDir::new().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let context = crate::test_utils::create_test_context().await;
@@ -388,6 +389,8 @@ mod tests {
 
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "test content");
+
+        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[tokio::test]

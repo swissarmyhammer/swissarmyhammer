@@ -143,16 +143,25 @@ mod tests {
     use serial_test::serial;
     use tempfile::TempDir;
 
-    fn setup_test_env() -> TempDir {
+    /// RAII guard to restore working directory when dropped
+    struct DirGuard(std::path::PathBuf);
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    fn setup_test_env() -> (TempDir, DirGuard) {
+        let original_dir = std::env::current_dir().unwrap();
         let temp_dir = TempDir::new().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
-        temp_dir
+        (temp_dir, DirGuard(original_dir))
     }
 
     #[test]
     #[serial]
     fn test_save_question_answer() {
-        let _temp = setup_test_env();
+        let (_temp, _orig_dir) = setup_test_env();
 
         let file_path =
             save_question_answer("What is your name?", "Alice").expect("Should save question");
@@ -169,7 +178,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_load_all_questions_empty_dir() {
-        let _temp = setup_test_env();
+        let (_temp, _orig_dir) = setup_test_env();
 
         let entries = load_all_questions().expect("Should handle empty directory");
         assert_eq!(entries.len(), 0);
@@ -178,7 +187,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_load_all_questions() {
-        let _temp = setup_test_env();
+        let (_temp, _orig_dir) = setup_test_env();
 
         // Create multiple questions
         save_question_answer("Question 1", "Answer 1").unwrap();
@@ -199,7 +208,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_save_with_special_characters() {
-        let _temp = setup_test_env();
+        let (_temp, _orig_dir) = setup_test_env();
 
         let question = r#"What's your "favorite" thing?"#;
         let answer = r#"My "answer" with quotes"#;
