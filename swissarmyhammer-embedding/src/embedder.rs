@@ -39,8 +39,8 @@ pub struct Embedder {
 }
 
 enum EmbedderBackend {
-    Llama(EmbeddingModel),
-    Ane(AneEmbeddingModel),
+    Llama(Box<EmbeddingModel>),
+    Ane(Box<AneEmbeddingModel>),
 }
 
 impl Embedder {
@@ -66,7 +66,7 @@ impl Embedder {
                 let max_seq = cfg.max_sequence_length.unwrap_or(512);
                 let normalize = cfg.normalize;
                 (
-                    EmbedderBackend::Llama(build_llama_model(cfg).await?),
+                    EmbedderBackend::Llama(Box::new(build_llama_model(cfg).await?)),
                     max_seq,
                     normalize,
                 )
@@ -75,7 +75,7 @@ impl Embedder {
                 let max_seq = cfg.max_sequence_length.unwrap_or(128);
                 let normalize = cfg.normalize;
                 (
-                    EmbedderBackend::Ane(build_ane_model(cfg).await?),
+                    EmbedderBackend::Ane(Box::new(build_ane_model(cfg).await?)),
                     max_seq,
                     normalize,
                 )
@@ -336,7 +336,7 @@ async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel
     // Convention: HF repo "wballard/Foo-Bar-CoreML" → prefix "Foo-Bar"
     let model_prefix = match &cfg.source {
         swissarmyhammer_config::ModelSource::HuggingFace { repo, .. } => {
-            let name = repo.split('/').last().unwrap_or(repo);
+            let name = repo.split('/').next_back().unwrap_or(repo);
             name.strip_suffix("-CoreML")
                 .unwrap_or(name)
                 .to_string()

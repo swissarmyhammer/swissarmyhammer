@@ -134,7 +134,7 @@ impl AneEmbeddingModel {
 
         if let Ok(output) = coreml_model.predict() {
             if let Some((_, arr)) = output.outputs.into_iter().find(|(k, _)| k == "embedding") {
-                let dim = *arr.shape().last().unwrap_or(&0) as usize;
+                let dim = *arr.shape().last().unwrap_or(&0);
                 if dim > 0 {
                     inner.embedding_dim = Some(dim);
                     info!(embedding_dim = dim, "Detected embedding dimension");
