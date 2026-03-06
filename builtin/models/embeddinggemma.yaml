@@ -1,0 +1,21 @@
+---
+description: "EmbeddingGemma 300M: 768d multilingual embeddings (Gemma3-based, Matryoshka)"
+---
+quiet: false
+executors:
+  - platform: macos-arm64
+    executor:
+      type: ane-embedding
+      config:
+        source: !HuggingFace
+          repo: "wballard/EmbeddingGemma-300M-CoreML"
+        normalize: true
+        max_sequence_length: 128
+  - executor:
+      type: llama-embedding
+      config:
+        source: !HuggingFace
+          repo: "ggml-org/embeddinggemma-300M-GGUF"
+          filename: "embeddinggemma-300M-Q8_0.gguf"
+        normalize: true
+        max_sequence_length: 512
