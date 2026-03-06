@@ -8,9 +8,9 @@ pub enum EmbeddingError {
     #[error("Model loading error: {0}")]
     ModelLoader(#[from] model_loader::ModelError),
 
-    /// Error from ONNX Runtime
-    #[error("ONNX Runtime error: {0}")]
-    OnnxRuntime(String),
+    /// Error from CoreML runtime
+    #[error("CoreML error: {0}")]
+    CoreML(String),
 
     /// Error during tokenization
     #[error("Tokenization error: {0}")]
@@ -38,8 +38,8 @@ pub enum EmbeddingError {
 }
 
 impl EmbeddingError {
-    pub fn onnx_runtime<S: Into<String>>(message: S) -> Self {
-        Self::OnnxRuntime(message.into())
+    pub fn coreml<S: Into<String>>(message: S) -> Self {
+        Self::CoreML(message.into())
     }
 
     pub fn tokenization<S: Into<String>>(message: S) -> Self {
@@ -55,17 +55,11 @@ impl EmbeddingError {
     }
 }
 
-impl From<onnxruntime_coreml_sys::OrtError> for EmbeddingError {
-    fn from(e: onnxruntime_coreml_sys::OrtError) -> Self {
-        Self::OnnxRuntime(e.message)
-    }
-}
-
 impl LlamaError for EmbeddingError {
     fn category(&self) -> ErrorCategory {
         match self {
             EmbeddingError::ModelLoader(e) => e.category(),
-            EmbeddingError::OnnxRuntime(_) => ErrorCategory::System,
+            EmbeddingError::CoreML(_) => ErrorCategory::System,
             EmbeddingError::Tokenization(_) => ErrorCategory::User,
             EmbeddingError::TextProcessing(_) => ErrorCategory::System,
             EmbeddingError::Configuration(_) => ErrorCategory::User,
@@ -78,7 +72,7 @@ impl LlamaError for EmbeddingError {
     fn error_code(&self) -> &'static str {
         match self {
             EmbeddingError::ModelLoader(_) => "ANE_EMBEDDING_MODEL_LOADER",
-            EmbeddingError::OnnxRuntime(_) => "ANE_EMBEDDING_ONNX_RUNTIME",
+            EmbeddingError::CoreML(_) => "ANE_EMBEDDING_COREML",
             EmbeddingError::Tokenization(_) => "ANE_EMBEDDING_TOKENIZATION",
             EmbeddingError::TextProcessing(_) => "ANE_EMBEDDING_TEXT_PROCESSING",
             EmbeddingError::Configuration(_) => "ANE_EMBEDDING_CONFIGURATION",
@@ -91,7 +85,7 @@ impl LlamaError for EmbeddingError {
     fn user_friendly_message(&self) -> String {
         match self {
             EmbeddingError::ModelLoader(e) => format!("Model loader: {}", e.user_friendly_message()),
-            EmbeddingError::OnnxRuntime(msg) => format!("ONNX Runtime error: {msg}"),
+            EmbeddingError::CoreML(msg) => format!("CoreML error: {msg}"),
             EmbeddingError::Tokenization(msg) => format!("Tokenization error: {msg}"),
             EmbeddingError::TextProcessing(msg) => format!("Text processing error: {msg}"),
             EmbeddingError::Configuration(msg) => format!("Configuration error: {msg}"),
@@ -129,9 +123,9 @@ mod tests {
 
     #[test]
     fn test_error_creation() {
-        let e = EmbeddingError::onnx_runtime("session failed");
-        assert!(matches!(e, EmbeddingError::OnnxRuntime(_)));
-        assert_eq!(e.to_string(), "ONNX Runtime error: session failed");
+        let e = EmbeddingError::coreml("session failed");
+        assert!(matches!(e, EmbeddingError::CoreML(_)));
+        assert_eq!(e.to_string(), "CoreML error: session failed");
 
         let e = EmbeddingError::tokenization("bad input");
         assert!(matches!(e, EmbeddingError::Tokenization(_)));
@@ -147,7 +141,7 @@ mod tests {
             ErrorCategory::User
         );
         assert_eq!(
-            EmbeddingError::onnx_runtime("fail").category(),
+            EmbeddingError::coreml("fail").category(),
             ErrorCategory::System
         );
         assert_eq!(
@@ -159,8 +153,8 @@ mod tests {
     #[test]
     fn test_error_codes() {
         assert_eq!(
-            EmbeddingError::onnx_runtime("x").error_code(),
-            "ANE_EMBEDDING_ONNX_RUNTIME"
+            EmbeddingError::coreml("x").error_code(),
+            "ANE_EMBEDDING_COREML"
         );
         assert_eq!(
             EmbeddingError::ModelNotLoaded.error_code(),
@@ -174,7 +168,7 @@ mod tests {
         assert!(matches!(e, model_embedding::EmbeddingError::ModelNotLoaded));
 
         let e: model_embedding::EmbeddingError =
-            EmbeddingError::onnx_runtime("runtime fail").into();
+            EmbeddingError::coreml("runtime fail").into();
         assert!(matches!(e, model_embedding::EmbeddingError::Backend(_)));
     }
 }

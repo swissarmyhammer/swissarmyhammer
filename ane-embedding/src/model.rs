@@ -1,48 +1,35 @@
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use coreml_rs::{ComputePlatform, CoreMLModelOptions, CoreMLModelWithState};
 use model_embedding::{EmbeddingResult, TextEmbedder};
-use model_loader::{ModelConfig, ModelResolver, RetryConfig};
-use onnxruntime_coreml_sys::{self as ort, LoggingLevel, Session, SessionOptions, Tensor};
+use model_loader::{ModelConfig, ModelResolver, ModelSource, RetryConfig};
+use ndarray::Array2;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 use crate::error::EmbeddingError;
-use crate::types::{AneEmbeddingConfig, Pooling};
-
-/// Global ORT initialization (safe to call multiple times, only initializes once)
-static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
-
-fn ensure_ort_initialized() -> std::result::Result<(), EmbeddingError> {
-    let result = ORT_INIT.get_or_init(|| {
-        ort::init().map_err(|e| format!("Failed to initialize ORT: {}", e.message))
-    });
-    match result {
-        Ok(()) => Ok(()),
-        Err(msg) => Err(EmbeddingError::onnx_runtime(msg.clone())),
-    }
-}
+use crate::types::AneEmbeddingConfig;
 
 struct Inner {
-    session: Option<Session>,
+    model: Option<CoreMLModelWithState>,
     tokenizer: Option<Tokenizer>,
-    env: Option<ort::Env>,
     embedding_dim: Option<usize>,
     max_length: usize,
 }
 
-/// Text embedding model using ONNX Runtime with CoreML execution provider.
+/// Text embedding model using CoreML for Apple Neural Engine.
 ///
-/// Uses the Apple Neural Engine on supported hardware, with CPU fallback elsewhere.
+/// Loads a `.mlpackage` directly via `coreml-rs` for hardware-accelerated
+/// inference on Apple Silicon. Mean pooling is baked into the model.
 pub struct AneEmbeddingModel {
     inner: Mutex<Inner>,
     config: AneEmbeddingConfig,
 }
 
-// Safety: Inner contains ORT handles that are thread-safe (ORT guarantees
-// thread-safe inference on a single session). Access is serialized by Mutex.
+// Safety: CoreMLModelWithState is thread-safe for inference.
+// Access is serialized by Mutex.
 unsafe impl Send for Inner {}
 unsafe impl Sync for Inner {}
 
@@ -68,7 +55,7 @@ impl TextEmbedder for AneEmbeddingModel {
     fn is_loaded(&self) -> bool {
         self.inner
             .try_lock()
-            .map(|g| g.session.is_some())
+            .map(|g| g.model.is_some())
             .unwrap_or(false)
     }
 }
@@ -79,22 +66,19 @@ impl AneEmbeddingModel {
     pub fn new(config: AneEmbeddingConfig) -> Self {
         Self {
             inner: Mutex::new(Inner {
-                session: None,
+                model: None,
                 tokenizer: None,
-                env: None,
                 embedding_dim: None,
-                max_length: config.max_sequence_length.unwrap_or(512),
+                max_length: config.max_sequence_length,
             }),
             config,
         }
     }
 
-    /// Load the ONNX model and tokenizer.
+    /// Load the CoreML model and tokenizer.
     async fn load_model(&self) -> crate::error::Result<()> {
-        ensure_ort_initialized()?;
-
         let mut inner = self.inner.lock().await;
-        if inner.session.is_some() {
+        if inner.model.is_some() {
             return Ok(());
         }
 
@@ -106,7 +90,7 @@ impl AneEmbeddingModel {
             debug: self.config.debug,
         };
 
-        info!("Resolving ONNX model...");
+        info!("Resolving CoreML model...");
         let resolved = resolver
             .resolve(&model_config)
             .await
@@ -119,32 +103,76 @@ impl AneEmbeddingModel {
             "Model resolved"
         );
 
-        // Load tokenizer from the same directory
-        let tokenizer = load_tokenizer(&model_path)?;
-        if let Some(max_len) = self.config.max_sequence_length {
-            inner.max_length = max_len;
+        // Load tokenizer — download from HuggingFace if not found locally
+        let tokenizer = match load_tokenizer(&model_path) {
+            Ok(t) => t,
+            Err(_) => {
+                // Tokenizer not found near model file; download it from the repo
+                if let ModelSource::HuggingFace { ref repo, .. } = self.config.model_source {
+                    info!("Downloading tokenizer.json from {}", repo);
+                    let retry = RetryConfig::default();
+                    let (tok_path, _) =
+                        model_loader::load_huggingface_model_with_path(
+                            repo,
+                            Some("tokenizer.json"),
+                            &retry,
+                        )
+                        .await
+                        .map_err(EmbeddingError::ModelLoader)?;
+                    Tokenizer::from_file(&tok_path).map_err(|e| {
+                        EmbeddingError::tokenization(format!("Failed to load tokenizer: {e}"))
+                    })?
+                } else {
+                    return Err(EmbeddingError::configuration(
+                        "tokenizer.json not found near model file",
+                    ));
+                }
+            }
+        };
+
+        // Load CoreML model with ANE compute preference
+        let opts = CoreMLModelOptions {
+            compute_platform: ComputePlatform::CpuAndANE,
+            ..Default::default()
+        };
+
+        let model_path_str = model_path.to_string_lossy().to_string();
+        info!("Loading CoreML model...");
+        let coreml_model = CoreMLModelWithState::new(model_path_str, opts);
+        let mut coreml_model = coreml_model
+            .load()
+            .map_err(|e| EmbeddingError::coreml(format!("Failed to load .mlpackage: {e}")))?;
+
+        let desc = coreml_model
+            .description()
+            .map_err(|e| EmbeddingError::coreml(format!("Failed to get model description: {e}")))?;
+        debug!(description = ?desc, "CoreML model loaded");
+
+        // Detect embedding dimension by running a dummy inference
+        let seq_len = inner.max_length;
+        let dummy_ids = Array2::<f32>::zeros((1, seq_len)).into_dyn();
+        let dummy_mask = Array2::<f32>::zeros((1, seq_len)).into_dyn();
+
+        coreml_model
+            .add_input("input_ids", dummy_ids)
+            .map_err(|e| EmbeddingError::coreml(format!("Failed to add dummy input: {e}")))?;
+        coreml_model
+            .add_input("attention_mask", dummy_mask)
+            .map_err(|e| EmbeddingError::coreml(format!("Failed to add dummy mask: {e}")))?;
+
+        if let Ok(output) = coreml_model.predict() {
+            if let Some((_, arr)) = output.outputs.into_iter().find(|(k, _)| k == "embedding") {
+                let shape = arr.shape().to_vec();
+                let dim = *shape.last().unwrap_or(&0) as usize;
+                if dim > 0 {
+                    inner.embedding_dim = Some(dim);
+                    info!(embedding_dim = dim, "Detected embedding dimension");
+                }
+            }
         }
 
-        // Create ORT env + session with CoreML
-        let env = ort::Env::new(LoggingLevel::Warning, "ane-embedding")
-            .map_err(EmbeddingError::from)?;
-
-        let opts = create_session_options()?;
-
-        let model_path_str = model_path.to_string_lossy();
-        info!("Loading ONNX session...");
-        let session =
-            Session::new(&env, &model_path_str, &opts).map_err(EmbeddingError::from)?;
-
-        debug!(
-            inputs = ?session.input_names(),
-            outputs = ?session.output_names(),
-            "Session loaded"
-        );
-
-        inner.session = Some(session);
+        inner.model = Some(coreml_model);
         inner.tokenizer = Some(tokenizer);
-        inner.env = Some(env);
 
         Ok(())
     }
@@ -152,119 +180,101 @@ impl AneEmbeddingModel {
     /// Embed a single text string.
     async fn embed_impl(&self, text: &str) -> crate::error::Result<EmbeddingResult> {
         let start = Instant::now();
-        let inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().await;
 
-        let session = inner
-            .session
-            .as_ref()
-            .ok_or(EmbeddingError::ModelNotLoaded)?;
-        let tokenizer = inner
-            .tokenizer
-            .as_ref()
-            .ok_or(EmbeddingError::ModelNotLoaded)?;
+        if inner.model.is_none() {
+            return Err(EmbeddingError::ModelNotLoaded);
+        }
 
-        // Tokenize with padding/truncation to fixed length
+        // Tokenize first (immutable borrow of tokenizer)
+        let tokenizer = inner.tokenizer.as_ref().ok_or(EmbeddingError::ModelNotLoaded)?;
         let encoding = tokenizer
             .encode(text, true)
             .map_err(|e| EmbeddingError::tokenization(e.to_string()))?;
 
         let input_ids = encoding.get_ids();
         let attention_mask = encoding.get_attention_mask();
-        let token_type_ids = encoding.get_type_ids();
-        let seq_len = input_ids.len().min(inner.max_length);
+        let max_length = inner.max_length;
+        let seq_len = input_ids.len().min(max_length);
 
         // Prepare tensors — pad or truncate to max_length for static shapes
-        let padded_len = inner.max_length;
-        let mut ids_padded = vec![0i64; padded_len];
-        let mut mask_padded = vec![0i64; padded_len];
-        let mut types_padded = vec![0i64; padded_len];
+        // Use f32 inputs: coreml-rs 0.5.4 has a bug in bindInputI32 where it
+        // tags i32 data as float32 dataType, corrupting the values.
+        let mut ids_padded = vec![0.0f32; max_length];
+        let mut mask_padded = vec![0.0f32; max_length];
 
         for i in 0..seq_len {
-            ids_padded[i] = input_ids[i] as i64;
-            mask_padded[i] = attention_mask[i] as i64;
-            types_padded[i] = token_type_ids[i] as i64;
+            ids_padded[i] = input_ids[i] as f32;
+            mask_padded[i] = attention_mask[i] as f32;
         }
 
-        let shape = [1i64, padded_len as i64];
-        let input_ids_tensor =
-            Tensor::from_i64(&ids_padded, &shape).map_err(EmbeddingError::from)?;
-        let attention_mask_tensor =
-            Tensor::from_i64(&mask_padded, &shape).map_err(EmbeddingError::from)?;
-        let token_type_ids_tensor =
-            Tensor::from_i64(&types_padded, &shape).map_err(EmbeddingError::from)?;
+        let ids_array = Array2::from_shape_vec((1, max_length), ids_padded)
+            .map_err(|e| EmbeddingError::text_processing(format!("Shape error: {e}")))?
+            .into_dyn();
+        let mask_array = Array2::from_shape_vec((1, max_length), mask_padded)
+            .map_err(|e| EmbeddingError::text_processing(format!("Shape error: {e}")))?
+            .into_dyn();
 
-        // Run inference — input order: input_ids, attention_mask, token_type_ids
-        let outputs = session
-            .run(&[
-                &input_ids_tensor,
-                &attention_mask_tensor,
-                &token_type_ids_tensor,
-            ])
-            .map_err(EmbeddingError::from)?;
+        // Now take mutable borrow for model inference
+        let model = inner.model.as_mut().unwrap();
 
-        if outputs.is_empty() {
-            return Err(EmbeddingError::text_processing("No output from model"));
+        model
+            .add_input("input_ids", ids_array)
+            .map_err(|e| EmbeddingError::coreml(format!("Failed to add input_ids: {e}")))?;
+        model
+            .add_input("attention_mask", mask_array)
+            .map_err(|e| EmbeddingError::coreml(format!("Failed to add attention_mask: {e}")))?;
+
+        // Run inference — output is already mean-pooled [1, embedding_dim]
+        let output = model
+            .predict()
+            .map_err(|e| EmbeddingError::coreml(format!("Prediction failed: {e}")))?;
+
+        let embedding_array = output
+            .outputs
+            .into_iter()
+            .find(|(k, _)| k == "embedding")
+            .ok_or_else(|| EmbeddingError::text_processing("No 'embedding' output found"))?
+            .1;
+
+        let embedding = mlarray_to_f32(embedding_array);
+
+        if embedding.is_empty() {
+            return Err(EmbeddingError::text_processing("Empty embedding output"));
         }
 
-        // Extract embeddings — output shape is typically [1, seq_len, hidden_dim]
-        let output = &outputs[0];
-        let output_shape = output.shape().map_err(EmbeddingError::from)?;
-        let output_data = output.as_f32_slice().map_err(EmbeddingError::from)?;
-
-        let embedding = match output_shape.len() {
-            3 => {
-                // [batch, seq_len, hidden_dim] — needs pooling
-                let hidden_dim = output_shape[2] as usize;
-                pool_embeddings(output_data, &mask_padded, hidden_dim, self.config.pooling)
-            }
-            2 => {
-                // [batch, hidden_dim] — already pooled (e.g., sentence-transformers)
-                output_data.to_vec()
-            }
-            _ => {
-                return Err(EmbeddingError::text_processing(format!(
-                    "Unexpected output shape: {:?}",
-                    output_shape
-                )));
-            }
-        };
-
-        // Detect embedding dimension on first run
-        if inner.embedding_dim.is_none() {
-            // We need to drop the lock to mutate; do it after
-        }
+        // Cache dimension on first real inference
         let dim = embedding.len();
+        if inner.embedding_dim.is_none() {
+            inner.embedding_dim = Some(dim);
+        }
 
-        let mut result = EmbeddingResult::new(text.to_string(), embedding, seq_len, start.elapsed().as_millis() as u64);
+        let mut result = EmbeddingResult::new(
+            text.to_string(),
+            embedding,
+            seq_len,
+            start.elapsed().as_millis() as u64,
+        );
 
         if self.config.normalize_embeddings {
             result.normalize();
-        }
-
-        // Update cached dimension outside the main lock scope
-        drop(inner);
-        if let Ok(mut inner) = self.inner.try_lock() {
-            if inner.embedding_dim.is_none() {
-                inner.embedding_dim = Some(dim);
-            }
         }
 
         Ok(result)
     }
 }
 
-/// Create ORT session options with CoreML on supported platforms.
-fn create_session_options() -> crate::error::Result<SessionOptions> {
-    let opts = SessionOptions::new().map_err(EmbeddingError::from)?;
-
-    #[cfg(target_os = "macos")]
-    let opts = {
-        use onnxruntime_coreml_sys::{COREML_FLAG_CREATE_MLPROGRAM, COREML_FLAG_STATIC_INPUT_SHAPES};
-        opts.with_coreml(COREML_FLAG_CREATE_MLPROGRAM | COREML_FLAG_STATIC_INPUT_SHAPES)
-            .map_err(EmbeddingError::from)?
-    };
-
-    Ok(opts)
+/// Extract f32 values from an MLArray, handling both f32 and f16 outputs.
+fn mlarray_to_f32(array: coreml_rs::mlarray::MLArray) -> Vec<f32> {
+    use coreml_rs::mlarray::MLArray;
+    match array {
+        MLArray::Float32Array(a) => a.into_raw_vec(),
+        MLArray::Float16Array(a) => a.into_raw_vec().iter().map(|v| v.to_f32()).collect(),
+        other => {
+            tracing::warn!("Unexpected output type, shape: {:?}", other.shape());
+            vec![]
+        }
+    }
 }
 
 /// Load a HuggingFace tokenizer from the model directory.
@@ -276,7 +286,7 @@ fn load_tokenizer(model_path: &std::path::Path) -> crate::error::Result<Tokenize
         .parent()
         .ok_or_else(|| EmbeddingError::configuration("Model path has no parent directory"))?;
 
-    // Try model dir first, then parent (for repos with onnx/ subfolder)
+    // Try model dir first, then parent (for repos with subfolders)
     let candidates = [
         model_dir.join("tokenizer.json"),
         model_dir
@@ -299,87 +309,9 @@ fn load_tokenizer(model_path: &std::path::Path) -> crate::error::Result<Tokenize
     )))
 }
 
-/// Pool per-token embeddings into a single sentence embedding.
-fn pool_embeddings(data: &[f32], attention_mask: &[i64], hidden_dim: usize, pooling: Pooling) -> Vec<f32> {
-    match pooling {
-        Pooling::Mean => {
-            let mut sum = vec![0.0f32; hidden_dim];
-            let mut count = 0.0f32;
-            for (i, &mask) in attention_mask.iter().enumerate() {
-                if mask != 0 {
-                    let offset = i * hidden_dim;
-                    if offset + hidden_dim <= data.len() {
-                        for (j, s) in sum.iter_mut().enumerate() {
-                            *s += data[offset + j];
-                        }
-                        count += 1.0;
-                    }
-                }
-            }
-            if count > 0.0 {
-                for s in &mut sum {
-                    *s /= count;
-                }
-            }
-            sum
-        }
-        Pooling::Cls => {
-            // First token embedding
-            data[..hidden_dim].to_vec()
-        }
-        Pooling::LastToken => {
-            // Find last non-masked token
-            let last_idx = attention_mask
-                .iter()
-                .rposition(|&m| m != 0)
-                .unwrap_or(0);
-            let offset = last_idx * hidden_dim;
-            if offset + hidden_dim <= data.len() {
-                data[offset..offset + hidden_dim].to_vec()
-            } else {
-                data[..hidden_dim].to_vec()
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_pool_mean() {
-        // 2 tokens, hidden_dim=3, both unmasked
-        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mask = [1, 1];
-        let result = pool_embeddings(&data, &mask, 3, Pooling::Mean);
-        assert_eq!(result, vec![2.5, 3.5, 4.5]);
-    }
-
-    #[test]
-    fn test_pool_mean_with_mask() {
-        // 3 tokens, hidden_dim=2, only first 2 unmasked
-        let data = [1.0, 2.0, 3.0, 4.0, 0.0, 0.0];
-        let mask = [1, 1, 0];
-        let result = pool_embeddings(&data, &mask, 2, Pooling::Mean);
-        assert_eq!(result, vec![2.0, 3.0]);
-    }
-
-    #[test]
-    fn test_pool_cls() {
-        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mask = [1, 1];
-        let result = pool_embeddings(&data, &mask, 3, Pooling::Cls);
-        assert_eq!(result, vec![1.0, 2.0, 3.0]);
-    }
-
-    #[test]
-    fn test_pool_last_token() {
-        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 0.0, 0.0];
-        let mask = [1, 1, 0];
-        let result = pool_embeddings(&data, &mask, 3, Pooling::LastToken);
-        assert_eq!(result, vec![4.0, 5.0, 6.0]);
-    }
 
     #[test]
     fn test_new_model() {

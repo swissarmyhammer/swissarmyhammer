@@ -145,5 +145,8 @@ mirdan-lock.json
 
 .github/copilot/
 
+# Model conversion output (large .mlpackage files)
+var/data/models/
+
 # Claude Code local settings
 .claude/settings.local.json

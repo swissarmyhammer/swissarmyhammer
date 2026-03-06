@@ -49,6 +49,7 @@ members = [
     "swissarmyhammer-kanban-app",
     "swissarmyhammer-fields",
     "swissarmyhammer-entity",
+    "benches/embedding_benchmark",
 ]
 resolver = "2"
 

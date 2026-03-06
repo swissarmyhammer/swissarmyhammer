@@ -1,0 +1,8 @@
+# Link against Swift runtime libraries from the Xcode toolchain.
+# Required for coreml-rs (swift-bridge) to find libswift_Concurrency.dylib at runtime.
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx",
+    "-C", "link-arg=-Wl,-rpath,/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx",
+    "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+]

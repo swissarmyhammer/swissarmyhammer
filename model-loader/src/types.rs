@@ -7,7 +7,7 @@ use std::time::Duration;
 /// Known model file extensions for auto-detection.
 ///
 /// Used by both local directory scanning and HuggingFace repository detection.
-pub const MODEL_EXTENSIONS: &[&str] = &["gguf", "onnx", "mlmodel", "bin", "safetensors"];
+pub const MODEL_EXTENSIONS: &[&str] = &["gguf", "onnx", "mlmodel", "mlpackage", "bin", "safetensors"];
 
 /// A resolved model with its file path and metadata.
 ///
@@ -280,9 +280,10 @@ impl ModelSource {
                         )));
                     }
 
-                    if !full_path.is_file() {
+                    // Allow both files and directories (.mlpackage is a directory bundle)
+                    if !full_path.is_file() && !full_path.is_dir() {
                         return Err(crate::error::ModelError::InvalidConfig(format!(
-                            "Path is not a file: {}",
+                            "Path is not a file or package: {}",
                             full_path.display()
                         )));
                     }

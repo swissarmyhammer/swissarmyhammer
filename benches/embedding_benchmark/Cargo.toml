@@ -1,0 +1,20 @@
+[package]
+name = "embedding-benchmark"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Benchmarks comparing ANE (CoreML) vs CPU (llama.cpp) embedding backends"
+
+[[bench]]
+name = "embed_bench"
+harness = false
+
+[dependencies]
+ane-embedding = { path = "../../ane-embedding" }
+criterion = { version = "0.5", features = ["async_tokio"] }
+llama-embedding = { path = "../../llama-embedding" }
+model-embedding = { path = "../../model-embedding" }
+model-loader = { path = "../../model-loader" }
+tokio = { workspace = true, features = ["full"] }

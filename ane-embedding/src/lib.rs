@@ -1,16 +1,16 @@
-//! Text embedding using ONNX Runtime with CoreML for Apple Neural Engine.
+//! Text embedding using CoreML for Apple Neural Engine.
 //!
 //! This crate implements the [`TextEmbedder`] trait from `model-embedding`,
-//! using ONNX Runtime with CoreML execution provider for hardware-accelerated
-//! inference on Apple Silicon.
+//! loading a `.mlpackage` model directly via `coreml-rs` for hardware-accelerated
+//! inference on Apple Silicon's Neural Engine.
 //!
 //! # Differences from llama-embedding
 //!
-//! - **Runtime**: ONNX Runtime (via `onnxruntime-coreml-sys`) instead of llama.cpp
-//! - **Model format**: ONNX instead of GGUF
+//! - **Runtime**: CoreML (via `coreml-rs`) instead of llama.cpp
+//! - **Model format**: CoreML `.mlpackage` instead of GGUF
 //! - **Tokenization**: HuggingFace `tokenizers` crate instead of llama.cpp built-in
-//! - **Compute**: CoreML EP on Apple Silicon, CPU fallback elsewhere
-//! - **Pooling**: Explicit mean pooling (ONNX models output per-token embeddings)
+//! - **Compute**: Apple Neural Engine on Apple Silicon, CPU fallback elsewhere
+//! - **Pooling**: Mean pooling baked into the `.mlpackage` at conversion time
 
 pub mod error;
 pub mod model;

@@ -4,15 +4,16 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Text embedding using ONNX Runtime with CoreML execution provider for Apple Neural Engine"
+description = "Text embedding using CoreML for Apple Neural Engine"
 
 [dependencies]
 async-trait = { workspace = true }
+coreml-rs = "0.5"
 llama-common = { path = "../llama-common" }
 md5 = "0.7"
 model-embedding = { path = "../model-embedding" }
 model-loader = { path = "../model-loader" }
-onnxruntime-coreml-sys = { path = "../onnxruntime-coreml-sys" }
+ndarray = "0.15"
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
