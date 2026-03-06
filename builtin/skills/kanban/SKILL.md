@@ -25,7 +25,7 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 3. Read the task details: use `kanban` with `op: "get task"`, `id: "<task-id>"` to see description and subtasks
 4. Work through each subtask:
    - Implement what the subtask describes
-   - Mark it complete: use `kanban` with `op: "complete subtask"`, `task_id: "<task-id>"`, `id: "<subtask-id>"`
+   - Mark it complete: use `kanban` with `op: "update task"`, `id: "<task-id>"`, and update the `description` to change `- [ ]` to `- [x]` for the completed subtask
 5. **Complete the card**: when ALL subtasks are done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
 
 ## Filtering Work
