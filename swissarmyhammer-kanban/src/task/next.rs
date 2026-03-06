@@ -116,7 +116,9 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
             candidates.sort_by(|a, b| {
                 let col_a = column_order.get(a.position.column.as_str()).unwrap_or(&0);
                 let col_b = column_order.get(b.position.column.as_str()).unwrap_or(&0);
-                col_a.cmp(col_b).then(a.position.ordinal.cmp(&b.position.ordinal))
+                col_a
+                    .cmp(col_b)
+                    .then(a.position.ordinal.cmp(&b.position.ordinal))
             });
 
             // Return the first (oldest by position)
