@@ -152,7 +152,7 @@ impl Default for CommandsRegistry {
 fn scope_matches(scope: Option<&str>, scope_chain: &[String]) -> bool {
     let scope = match scope {
         None => return true,
-        Some(s) if s.is_empty() => return true,
+        Some("") => return true,
         Some(s) => s,
     };
 

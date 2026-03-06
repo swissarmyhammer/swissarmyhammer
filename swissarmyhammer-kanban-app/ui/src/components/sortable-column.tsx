@@ -32,7 +32,7 @@ export function SortableColumn({ id, children, showSeparator }: SortableColumnPr
       className="flex flex-1 min-w-[20em] max-w-[60em] relative"
     >
       {showSeparator && <div className="w-px bg-border shrink-0 my-3" />}
-      <div className="flex flex-col min-h-0 flex-1">
+      <div className="flex flex-col min-h-0 min-w-0 flex-1">
         <div className="flex items-center justify-center">
           <button
             type="button"

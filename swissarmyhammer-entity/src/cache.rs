@@ -171,7 +171,7 @@ impl EntityCache {
         let new_hash = hash_entity(&canonical);
         let key = (entity.entity_type.to_string(), entity.id.to_string());
 
-        let changed = old_hash.map_or(true, |old| old != new_hash);
+        let changed = old_hash != Some(new_hash);
 
         let version = if changed {
             self.bump_version()

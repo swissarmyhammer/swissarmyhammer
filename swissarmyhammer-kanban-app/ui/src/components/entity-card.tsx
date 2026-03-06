@@ -64,7 +64,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
         <div
           ref={ref}
           style={style}
-          className={`rounded-md bg-card px-3 py-2 text-sm border border-border hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 ${
+          className={`rounded-md bg-card px-3 py-2 text-sm border border-border hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 overflow-hidden ${
             isBlocked ? "opacity-50" : ""
           }`}
           {...rest}
@@ -77,7 +77,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
           >
             <GripVertical className="h-4 w-4" />
           </button>
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 break-words">
             {headerFields.map((field) => (
               <CardFieldDispatch
                 key={field.name}

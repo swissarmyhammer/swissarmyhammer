@@ -35,6 +35,7 @@ const ENTITY_EXTENSIONS: &[&str] = &["yaml", "yml", "md"];
 /// An event emitted when an entity or field changes.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
+#[allow(clippy::enum_variant_names)]
 pub enum WatchEvent {
     /// A new entity file appeared.
     #[serde(rename = "entity-created")]
@@ -122,20 +123,13 @@ pub fn new_entity_cache(kanban_root: &Path) -> EntityCache {
 ///
 /// Call this from command execution paths so the watcher knows
 /// the content we just wrote and doesn't treat it as an external change.
+#[cfg(test)]
 pub fn update_cache(cache: &EntityCache, path: &Path) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Some(cached) = cache_file(&canonical) {
         if let Ok(mut map) = cache.lock() {
             map.insert(canonical, cached);
         }
-    }
-}
-
-/// Remove a file from the cache (e.g. after deletion).
-pub fn remove_from_cache(cache: &EntityCache, path: &Path) {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if let Ok(mut map) = cache.lock() {
-        map.remove(&canonical);
     }
 }
 
@@ -589,11 +583,7 @@ fn path_to_entity(path: &Path, kanban_root: &Path) -> Option<(String, String)> {
         return None;
     }
 
-    let entity_type = if parent_name.ends_with('s') {
-        &parent_name[..parent_name.len() - 1]
-    } else {
-        parent_name
-    };
+    let entity_type = parent_name.strip_suffix('s').unwrap_or(parent_name);
 
     Some((entity_type.to_string(), stem.to_string()))
 }

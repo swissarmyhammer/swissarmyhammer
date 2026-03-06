@@ -53,8 +53,8 @@ export function ColumnView({ column, tasks, blockedIds, onAddTask, onRenameColum
   ], [columnMoniker, inspectEntity]);
 
   return (
-    <FocusScope moniker={columnMoniker} commands={commands} className="flex flex-col min-h-0 flex-1">
-      <div className="flex flex-col min-h-0 flex-1">
+    <FocusScope moniker={columnMoniker} commands={commands} className="flex flex-col min-h-0 min-w-0 flex-1">
+      <div className="flex flex-col min-h-0 min-w-0 flex-1">
         <div className="px-3 py-2 flex items-center gap-2">
           <EditableMarkdown
             value={getStr(column, "name")}
