@@ -1385,6 +1385,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_secure_file_access_read_relative_paths() {
         // Use default secure access without workspace restrictions for simple testing
         let secure_access = SecureFileAccess::default_secure();
