@@ -15,6 +15,7 @@ import { NavBar } from "@/components/nav-bar";
 import { LeftNav } from "@/components/left-nav";
 import { ModeIndicator } from "@/components/mode-indicator";
 import { BoardView } from "@/components/board-view";
+import { GridView } from "@/components/grid-view";
 import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import { ViewsProvider, useViews } from "@/lib/views-context";
@@ -334,6 +335,15 @@ function ActiveViewRenderer({
     return (
       <BoardView
         board={board}
+        tasks={tasks}
+      />
+    );
+  }
+
+  if (activeView.kind === "grid") {
+    return (
+      <GridView
+        view={activeView}
         tasks={tasks}
       />
     );

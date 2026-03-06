@@ -14,6 +14,7 @@ pub type ViewId = String;
 #[serde(rename_all = "kebab-case")]
 pub enum ViewKind {
     Board,
+    Grid,
     List,
     Calendar,
     Timeline,
@@ -145,6 +146,14 @@ kind: list
         assert!(def.icon.is_none());
         assert!(def.card_fields.is_empty());
         assert!(def.commands.is_empty());
+    }
+
+    #[test]
+    fn grid_kind_round_trip() {
+        let kind = ViewKind::Grid;
+        let yaml = serde_yaml::to_string(&kind).unwrap();
+        let parsed: ViewKind = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(kind, parsed);
     }
 
     #[test]
