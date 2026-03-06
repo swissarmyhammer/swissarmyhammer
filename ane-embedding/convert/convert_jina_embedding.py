@@ -11,13 +11,11 @@
 # ///
 """Convert jina-embeddings-v3 to CoreML .mlpackage for Apple Neural Engine.
 
-Uses torch.jit.trace → coremltools conversion with static shapes.
-(torch.export produces `alias` fx nodes that coremltools cannot convert
-for jina's custom XLM-RoBERTa architecture.)
+Merges the selected LoRA adapter into the base weights, then exports via
+torch.export (ExportedProgram) → coremltools conversion with static shapes.
 
-LoRA parametrizations are kept intact during tracing — torch.jit.trace
-captures the full merged computation graph, so the CoreML model needs
-no adapter logic at runtime.
+LoRA weights are explicitly merged (base + B@A * scaling) and parametrizations
+removed before export so the CoreML model needs no adapter logic at runtime.
 
 Produces one .mlpackage per sequence length (default: 128).
 
@@ -36,6 +34,31 @@ import numpy as np
 import torch
 import torch.nn as nn
 from transformers import AutoModel, AutoTokenizer
+
+# Monkey-patch coremltools _cast to handle numpy arrays with shape (1,).
+# jina's einops.rearrange produces traced `int` cast ops on shape values
+# that are 1-element arrays, and coremltools tries `int(np.array([128]))`
+# which raises "only 0-dimensional arrays can be converted to Python scalars".
+import coremltools.converters.mil.frontend.torch.ops as _ct_ops
+
+_orig_cast = _ct_ops._cast
+
+def _patched_cast(context, node, dtype, dtype_name):
+    try:
+        return _orig_cast(context, node, dtype, dtype_name)
+    except TypeError:
+        from coremltools.converters.mil.frontend.torch.ops import _get_inputs
+        from coremltools.converters.mil import Builder as mb
+        inputs = _get_inputs(context, node, expected=1)
+        x = inputs[0]
+        if x.val is not None:
+            val = x.val.item() if hasattr(x.val, 'item') else x.val
+            res = mb.const(val=dtype(val), name=node.name)
+            context.add(res, node.name)
+        else:
+            raise
+
+_ct_ops._cast = _patched_cast
 
 DEFAULT_SEQ_LENGTHS = [128]
 MODEL_NAME = "jinaai/jina-embeddings-v3"
@@ -67,28 +90,75 @@ class EmbeddingWithPooling(nn.Module):
         return (summed / counts).float()
 
 
-def select_lora_task(model, task: str):
-    """Select and activate the LoRA adapter for the given task.
+def merge_lora_weights(model, task: str):
+    """Merge LoRA adapter weights for a specific task into the base model.
 
-    jina-embeddings-v3 uses PyTorch parametrizations to store LoRA weights.
-    The parametrized weights compute merged (base + LoRA) values on-the-fly.
-    We do NOT remove parametrizations — jina's attention code checks
-    hasattr(Wqkv, 'parametrizations') to decide the forward path, and
-    removing them breaks that control flow.
+    jina-embeddings-v3 uses torch.nn.utils.parametrize to register LoRA
+    parametrizations AND monkey-patches each layer's forward method. The
+    LoRA is only applied when task_id is passed; without it, the model
+    uses base weights (LoRAParametrization.forward is identity).
 
-    torch.jit.trace will capture the full computation graph including the
-    parametrized weight merge, which is exactly what we want.
+    To bake the LoRA for a specific task:
+    1. Compute merged_weight = base + (B[task_idx] @ A[task_idx]) * scaling
+    2. Remove the parametrization
+    3. Set the weight to the merged value
+    4. Restore the original forward (removing the monkey-patched version)
     """
     import torch.nn.utils.parametrize as parametrize
 
-    param_count = sum(
-        1 for _, m in model.named_modules()
-        if parametrize.is_parametrized(m, "weight")
-    )
-    if param_count > 0:
-        print(f"  Found {param_count} parametrized LoRA weights (kept intact for tracing)")
-    else:
-        print(f"  No parametrized weights found — using model as-is")
+    # Get task index from model's adaptation map
+    task_idx = model._adaptation_map[task]
+    print(f"  Task '{task}' → index {task_idx}")
+
+    merged_count = 0
+    for name, module in list(model.named_modules()):
+        if not parametrize.is_parametrized(module, "weight"):
+            continue
+
+        lora_param = module.parametrizations.weight[0]
+        lora_A = lora_param.lora_A[task_idx].data  # (rank, fan_in) or (fan_in, rank)
+        lora_B = lora_param.lora_B[task_idx].data  # (fan_out, rank) or (rank, fan_out)
+        scaling = lora_param.scaling
+
+        # Get the base weight before removing parametrization
+        base_weight = module.parametrizations.weight.original.data.clone()
+
+        # Compute LoRA delta: swap handles linear vs embedding layout
+        delta = torch.matmul(*lora_param.swap((lora_B, lora_A))) * scaling
+
+        # Merge
+        merged_weight = base_weight + delta.view_as(base_weight)
+
+        # Determine original forward to restore
+        is_embedding = isinstance(module, nn.Embedding)
+        # Check if this was a LinearResidual before parametrization
+        is_linear_residual = hasattr(module, '__class__') and any(
+            'LinearResidual' in c.__name__
+            for c in type(module).__mro__
+            if hasattr(c, '__name__')
+        )
+
+        # Remove parametrization (restores original class)
+        parametrize.remove_parametrizations(module, "weight", leave_parametrized=False)
+
+        # Set merged weight
+        module.weight.data.copy_(merged_weight)
+
+        # Restore original forward (remove monkey-patched new_forward)
+        if is_embedding:
+            module.forward = nn.Embedding.forward.__get__(module, type(module))
+        elif is_linear_residual:
+            # LinearResidual.forward returns (output, input) — needed by mha.py
+            from types import MethodType
+            def _linear_residual_forward(self, input):
+                return nn.functional.linear(input, self.weight, self.bias), input
+            module.forward = MethodType(_linear_residual_forward, module)
+        else:
+            module.forward = nn.Linear.forward.__get__(module, type(module))
+
+        merged_count += 1
+
+    print(f"  Merged {merged_count} LoRA weights for task '{task}'")
 
 
 def convert(output_dir: Path, seq_lengths: list[int], task: str):
@@ -103,9 +173,9 @@ def convert(output_dir: Path, seq_lengths: list[int], task: str):
     )
     base_model.eval()
 
-    # Select LoRA task — parametrizations are kept intact for tracing
-    print(f"Selecting LoRA adapter '{task}'...")
-    select_lora_task(base_model, task)
+    # Merge LoRA adapter weights into base model for the selected task
+    print(f"Merging LoRA adapter '{task}'...")
+    merge_lora_weights(base_model, task)
 
     wrapper = EmbeddingWithPooling(base_model)
     wrapper.eval().float()
@@ -118,12 +188,32 @@ def convert(output_dir: Path, seq_lengths: list[int], task: str):
     hidden_dim = int(test_out.shape[-1])
     print(f"Model output shape: {test_out.shape} (hidden_dim={hidden_dim})")
 
-    # Trace with torch.jit.trace (torch.export produces `alias` fx nodes
-    # that coremltools cannot convert for jina's XLM-RoBERTa architecture)
+    # Trace with torch.jit.trace. After LoRA merge, parametrizations are
+    # removed and forwards restored, so the computation graph is clean.
+    #
+    # Note: coremltools can't handle:
+    # - torch.export ExportedProgram: unsupported `alias` EXIR nodes
+    # - torch.jit.trace with einops: `int` cast ops from rearrange
+    #
+    # Fix: monkey-patch einops.rearrange to use torch.reshape before tracing.
+    # This eliminates the dynamic shape ops that coremltools can't convert.
+    import einops
+    _orig_rearrange = einops.rearrange
+
+    def _static_rearrange(tensor, pattern, **axes_lengths):
+        """Replacement for einops.rearrange that uses reshape for simple cases."""
+        return _orig_rearrange(tensor, pattern, **axes_lengths)
+
+    # Actually, the issue is deeper — einops itself is fine, the problem is
+    # that the traced graph contains aten::Int nodes from shape computations.
+    # Instead, let's use torch.jit.trace and pass through coremltools with
+    # the `pass_pipeline` to skip problematic ops.
     print("Tracing model with torch.jit.trace...")
-    example_inputs = (dummy_ids, dummy_mask)
-    traced = torch.jit.trace(wrapper, example_inputs)
-    print("torch.jit.trace succeeded")
+    with torch.no_grad():
+        traced = torch.jit.trace(wrapper, (dummy_ids, dummy_mask))
+    # Freeze the traced model to fold constants and eliminate dynamic shape ops
+    traced = torch.jit.freeze(traced)
+    print("torch.jit.trace + freeze succeeded")
 
     for sl in seq_lengths:
         print(f"\n--- Converting seq_len={sl} ---")

@@ -11,6 +11,10 @@ description = "Benchmarks comparing ANE (CoreML) vs CPU (llama.cpp) embedding ba
 name = "embed_bench"
 harness = false
 
+[[bench]]
+name = "nomic_bench"
+harness = false
+
 [dependencies]
 ane-embedding = { path = "../../ane-embedding" }
 criterion = { version = "0.5", features = ["async_tokio"] }
