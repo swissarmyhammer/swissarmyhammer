@@ -196,9 +196,9 @@ impl BuiltinGenerator {
 
                 // Read the file content at build time and embed it as a string literal
                 if let Ok(content) = fs::read_to_string(&path) {
-                    // Escape any raw string delimiters in the content
-                    let escaped = escape_raw_string(&content);
-                    writeln!(code, "        (\"{resource_name}\", r#\"{escaped}\"#),").unwrap();
+                    let hashes = raw_string_hashes(&content);
+                    writeln!(code, "        (\"{resource_name}\", r{hashes}\"{content}\"{hashes}),")
+                        .unwrap();
                 }
             }
         }
@@ -238,14 +238,18 @@ impl BuiltinGenerator {
     }
 }
 
-/// Escape content for use in a raw string literal.
+/// Determine the number of `#` characters needed for a raw string literal.
 ///
-/// Raw strings in Rust use `r#"..."#` syntax. If the content contains `"#`,
-/// we need to use more `#` characters.
-fn escape_raw_string(content: &str) -> String {
-    // For now, we assume content doesn't contain `"#`
-    // A more robust solution would count `#` sequences and use more
-    content.to_string()
+/// Scans the content for `"` followed by `#` sequences, and returns a string
+/// of `#` characters one longer than the longest such sequence found.
+fn raw_string_hashes(content: &str) -> String {
+    let mut max_hashes = 0usize;
+    for (i, _) in content.match_indices('"') {
+        let after = &content[i + 1..];
+        let count = after.chars().take_while(|&c| c == '#').count();
+        max_hashes = max_hashes.max(count + 1);
+    }
+    "#".repeat(max_hashes)
 }
 
 /// Helper to get the manifest directory.

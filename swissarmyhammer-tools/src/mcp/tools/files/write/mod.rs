@@ -240,6 +240,7 @@ pub async fn execute_write(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
@@ -372,6 +373,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_write_relative_path_acceptance() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();

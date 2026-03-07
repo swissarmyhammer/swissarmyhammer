@@ -24,23 +24,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-/// Global shell state — initialized lazily on first use.
-static SHELL_STATE: Lazy<Arc<Mutex<Option<ShellState>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
-
-/// Get or initialize the global shell state.
-async fn get_shell_state() -> Result<Arc<Mutex<Option<ShellState>>>, McpError> {
-    let state = Arc::clone(&SHELL_STATE);
-    {
-        let mut guard = state.lock().await;
-        if guard.is_none() {
-            let s = ShellState::new().map_err(|e| {
-                McpError::internal_error(format!("Failed to initialize shell state: {}", e), None)
-            })?;
-            *guard = Some(s);
-        }
-    }
-    Ok(state)
-}
 
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
 
@@ -1679,13 +1662,18 @@ pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
 });
 
 /// Tool for executing shell commands
-#[derive(Default, Clone)]
-pub struct ShellExecuteTool;
+#[derive(Clone)]
+pub struct ShellExecuteTool {
+    state: Arc<Mutex<ShellState>>,
+}
 
 impl ShellExecuteTool {
-    /// Creates a new instance of the ShellExecuteTool
+    /// Creates a new instance of the ShellExecuteTool with in-memory state.
     pub fn new() -> Self {
-        Self
+        let state = ShellState::new().expect("Failed to initialize shell state");
+        Self {
+            state: Arc::new(Mutex::new(state)),
+        }
     }
 }
 
@@ -1737,70 +1725,57 @@ impl McpTool for ShellExecuteTool {
                 // Default: execute command — falls through to existing logic below
             }
             "list processes" => {
-                let state = get_shell_state().await?;
-                let guard = state.lock().await;
-                if let Some(ref s) = *guard {
-                    let commands = s.list_commands();
-                    if commands.is_empty() {
-                        return Ok(BaseToolImpl::create_success_response(
-                            "No commands in history.".to_string(),
-                        ));
-                    }
-                    let mut output = String::from(
-                        "ID  STATUS      EXIT  LINES  STARTED              DURATION  COMMAND\n",
-                    );
-                    for cmd in commands {
-                        let duration = cmd.duration();
-                        let dur_str = if cmd.status == super::state::CommandStatus::Running {
-                            format!("{:.1}s+", duration.as_secs_f64())
-                        } else {
-                            format!("{:.1}s", duration.as_secs_f64())
-                        };
-                        let exit_str = cmd
-                            .exit_code
-                            .map(|c| c.to_string())
-                            .unwrap_or_else(|| "-".to_string());
-                        output.push_str(&format!(
-                            "{:<3} {:<11} {:<5} {:<6} {}  {:<9} {}\n",
-                            cmd.id,
-                            cmd.status,
-                            exit_str,
-                            cmd.line_count,
-                            cmd.started_at_wall.format("%Y-%m-%d %H:%M:%S"),
-                            dur_str,
-                            cmd.command,
-                        ));
-                    }
-                    return Ok(BaseToolImpl::create_success_response(output));
+                let guard = self.state.lock().await;
+                let commands = guard.list_commands();
+                if commands.is_empty() {
+                    return Ok(BaseToolImpl::create_success_response(
+                        "No commands in history.".to_string(),
+                    ));
                 }
-                return Ok(BaseToolImpl::create_success_response(
-                    "Shell state not initialized.".to_string(),
-                ));
+                let mut output = String::from(
+                    "ID  STATUS      EXIT  LINES  STARTED              DURATION  COMMAND\n",
+                );
+                for cmd in commands {
+                    let duration = cmd.duration();
+                    let dur_str = if cmd.status == super::state::CommandStatus::Running {
+                        format!("{:.1}s+", duration.as_secs_f64())
+                    } else {
+                        format!("{:.1}s", duration.as_secs_f64())
+                    };
+                    let exit_str = cmd
+                        .exit_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    output.push_str(&format!(
+                        "{:<3} {:<11} {:<5} {:<6} {}  {:<9} {}\n",
+                        cmd.id,
+                        cmd.status,
+                        exit_str,
+                        cmd.line_count,
+                        cmd.started_at_wall.format("%Y-%m-%d %H:%M:%S"),
+                        dur_str,
+                        cmd.command,
+                    ));
+                }
+                return Ok(BaseToolImpl::create_success_response(output));
             }
             "kill process" => {
                 let id = args.get("id").and_then(|v| v.as_u64()).ok_or_else(|| {
                     McpError::invalid_params("'id' parameter is required for kill process", None)
                 })? as usize;
 
-                let state = get_shell_state().await?;
-                let mut guard = state.lock().await;
-                if let Some(ref mut s) = *guard {
-                    match s.kill_process(id) {
-                        Ok(record) => {
-                            return Ok(BaseToolImpl::create_success_response(format!(
-                                "Killed command {} ({}). {} lines captured.",
-                                id, record.command, record.line_count
-                            )));
-                        }
-                        Err(e) => {
-                            return Err(McpError::invalid_params(format!("{}", e), None));
-                        }
+                let mut guard = self.state.lock().await;
+                match guard.kill_process(id) {
+                    Ok(record) => {
+                        return Ok(BaseToolImpl::create_success_response(format!(
+                            "Killed command {} ({}). {} lines captured.",
+                            id, record.command, record.line_count
+                        )));
+                    }
+                    Err(e) => {
+                        return Err(McpError::invalid_params(format!("{}", e), None));
                     }
                 }
-                return Err(McpError::internal_error(
-                    "Shell state not initialized",
-                    None,
-                ));
             }
             "search history" => {
                 let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
@@ -1819,17 +1794,9 @@ impl McpTool for ShellExecuteTool {
                     .map(|v| v as usize);
 
                 // Clone search data under lock, then release lock before the expensive async search
-                let state = get_shell_state().await?;
                 let (session_id, db) = {
-                    let guard = state.lock().await;
-                    if let Some(ref s) = *guard {
-                        s.search_handle()
-                    } else {
-                        return Err(McpError::internal_error(
-                            "Shell state not initialized",
-                            None,
-                        ));
-                    }
+                    let guard = self.state.lock().await;
+                    guard.search_handle()
                 };
                 // Lock is released — search runs without blocking other shell operations
                 match super::state::search(&session_id, &db, query, command_id, limit).await {
@@ -1875,37 +1842,30 @@ impl McpTool for ShellExecuteTool {
                     .and_then(|v| v.as_u64())
                     .map(|v| v as usize);
 
-                let state = get_shell_state().await?;
-                let guard = state.lock().await;
-                if let Some(ref s) = *guard {
-                    match s.grep(pattern, command_id, limit) {
-                        Ok(results) => {
-                            if results.is_empty() {
-                                return Ok(BaseToolImpl::create_success_response(
-                                    "No matching results found.".to_string(),
-                                ));
-                            }
-                            let mut output = String::new();
-                            for r in &results {
-                                output.push_str(&format!(
-                                    "[cmd {}, line {}] {}\n",
-                                    r.command_id, r.line_number, r.text
-                                ));
-                            }
-                            return Ok(BaseToolImpl::create_success_response(output));
-                        }
-                        Err(e) => {
-                            return Err(McpError::internal_error(
-                                format!("Grep failed: {}", e),
-                                None,
+                let guard = self.state.lock().await;
+                match guard.grep(pattern, command_id, limit) {
+                    Ok(results) => {
+                        if results.is_empty() {
+                            return Ok(BaseToolImpl::create_success_response(
+                                "No matching results found.".to_string(),
                             ));
                         }
+                        let mut output = String::new();
+                        for r in &results {
+                            output.push_str(&format!(
+                                "[cmd {}, line {}] {}\n",
+                                r.command_id, r.line_number, r.text
+                            ));
+                        }
+                        return Ok(BaseToolImpl::create_success_response(output));
+                    }
+                    Err(e) => {
+                        return Err(McpError::internal_error(
+                            format!("Grep failed: {}", e),
+                            None,
+                        ));
                     }
                 }
-                return Err(McpError::internal_error(
-                    "Shell state not initialized",
-                    None,
-                ));
             }
             "get lines" => {
                 let command_id =
@@ -1923,40 +1883,33 @@ impl McpTool for ShellExecuteTool {
                     .map(|v| v as usize);
                 let end = args.get("end").and_then(|v| v.as_u64()).map(|v| v as usize);
 
-                let state = get_shell_state().await?;
-                let guard = state.lock().await;
-                if let Some(ref s) = *guard {
-                    match s.get_lines(command_id, start, end) {
-                        Ok(lines) => {
-                            if lines.is_empty() {
-                                return Ok(BaseToolImpl::create_success_response(format!(
-                                    "No output lines found for command {}.",
-                                    command_id
-                                )));
-                            }
-                            let start_line = lines.first().map(|(n, _)| *n).unwrap_or(0);
-                            let end_line = lines.last().map(|(n, _)| *n).unwrap_or(0);
-                            let mut output = format!(
-                                "[cmd {}, lines {}-{}]\n",
-                                command_id, start_line, end_line
-                            );
-                            for (num, text) in &lines {
-                                output.push_str(&format!("{}: {}\n", num, text));
-                            }
-                            return Ok(BaseToolImpl::create_success_response(output));
+                let guard = self.state.lock().await;
+                match guard.get_lines(command_id, start, end) {
+                    Ok(lines) => {
+                        if lines.is_empty() {
+                            return Ok(BaseToolImpl::create_success_response(format!(
+                                "No output lines found for command {}.",
+                                command_id
+                            )));
                         }
-                        Err(e) => {
-                            return Err(McpError::internal_error(
-                                format!("Get lines failed: {}", e),
-                                None,
-                            ));
+                        let start_line = lines.first().map(|(n, _)| *n).unwrap_or(0);
+                        let end_line = lines.last().map(|(n, _)| *n).unwrap_or(0);
+                        let mut output = format!(
+                            "[cmd {}, lines {}-{}]\n",
+                            command_id, start_line, end_line
+                        );
+                        for (num, text) in &lines {
+                            output.push_str(&format!("{}: {}\n", num, text));
                         }
+                        return Ok(BaseToolImpl::create_success_response(output));
+                    }
+                    Err(e) => {
+                        return Err(McpError::internal_error(
+                            format!("Get lines failed: {}", e),
+                            None,
+                        ));
                     }
                 }
-                return Err(McpError::internal_error(
-                    "Shell state not initialized",
-                    None,
-                ));
             }
             other => {
                 return Err(McpError::invalid_params(
@@ -1977,17 +1930,10 @@ impl McpTool for ShellExecuteTool {
         let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
         let working_directory = request.working_directory.map(PathBuf::from);
 
-        // Register command in shell state (non-fatal — execute works without history)
-        let state = get_shell_state().await.ok();
-        let cmd_id = if let Some(ref state) = state {
-            let mut guard = state.lock().await;
-            if let Some(ref mut s) = *guard {
-                s.start_command(request.command.clone())
-            } else {
-                0
-            }
-        } else {
-            0
+        // Register command in shell state
+        let cmd_id = {
+            let mut guard = self.state.lock().await;
+            guard.start_command(request.command.clone())
         };
 
         send_start_notification(_context, &request.command).await;
@@ -2000,13 +1946,9 @@ impl McpTool for ShellExecuteTool {
         )
         .map_err(|e| McpError::internal_error(format!("Failed to spawn command: {}", e), None))?;
 
-        if let Some(ref state) = state {
-            if let Some(pid) = process_guard.child_mut().and_then(|c| c.id()) {
-                let mut guard = state.lock().await;
-                if let Some(ref mut s) = *guard {
-                    s.register_process(cmd_id, pid);
-                }
-            }
+        if let Some(pid) = process_guard.child_mut().and_then(|c| c.id()) {
+            let mut guard = self.state.lock().await;
+            guard.register_process(cmd_id, pid);
         }
 
         let result = if let Some(timeout_secs) = request.timeout {
@@ -2025,11 +1967,9 @@ impl McpTool for ShellExecuteTool {
                 Ok(result) => result,
                 Err(_) => {
                     // Timeout: guard is dropped here, killing the process
-                    if let Some(ref state) = state {
-                        let mut guard = state.lock().await;
-                        if let Some(ref mut s) = *guard {
-                            s.timeout_command(cmd_id);
-                        }
+                    {
+                        let mut guard = self.state.lock().await;
+                        guard.timeout_command(cmd_id);
                     }
                     return Ok(BaseToolImpl::create_success_response(format!(
                         "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
@@ -2051,26 +1991,24 @@ impl McpTool for ShellExecuteTool {
         match result {
             Ok(result) => {
                 // Store output in shell state
-                if let Some(ref state) = state {
-                    let mut guard = state.lock().await;
-                    if let Some(ref mut s) = *guard {
-                        let lines: Vec<String> = result.stdout.lines().map(String::from).collect();
-                        if let Err(e) = s.append_lines(cmd_id, &lines) {
-                            tracing::warn!("Failed to store stdout for command {}: {}", cmd_id, e);
-                        }
-                        if !result.stderr.is_empty() {
-                            let stderr_lines: Vec<String> =
-                                result.stderr.lines().map(String::from).collect();
-                            if let Err(e) = s.append_lines(cmd_id, &stderr_lines) {
-                                tracing::warn!(
-                                    "Failed to store stderr for command {}: {}",
-                                    cmd_id,
-                                    e
-                                );
-                            }
-                        }
-                        s.complete_command(cmd_id, Some(result.exit_code));
+                {
+                    let mut guard = self.state.lock().await;
+                    let lines: Vec<String> = result.stdout.lines().map(String::from).collect();
+                    if let Err(e) = guard.append_lines(cmd_id, &lines) {
+                        tracing::warn!("Failed to store stdout for command {}: {}", cmd_id, e);
                     }
+                    if !result.stderr.is_empty() {
+                        let stderr_lines: Vec<String> =
+                            result.stderr.lines().map(String::from).collect();
+                        if let Err(e) = guard.append_lines(cmd_id, &stderr_lines) {
+                            tracing::warn!(
+                                "Failed to store stderr for command {}: {}",
+                                cmd_id,
+                                e
+                            );
+                        }
+                    }
+                    guard.complete_command(cmd_id, Some(result.exit_code));
                 }
 
                 // Apply max_lines capping to combined stdout+stderr
@@ -2112,11 +2050,9 @@ impl McpTool for ShellExecuteTool {
             }
             Err(shell_error) => {
                 // Mark command as completed with error in state
-                if let Some(ref state) = state {
-                    let mut guard = state.lock().await;
-                    if let Some(ref mut s) = *guard {
-                        s.complete_command(cmd_id, Some(-1));
-                    }
+                {
+                    let mut guard = self.state.lock().await;
+                    guard.complete_command(cmd_id, Some(-1));
                 }
                 send_mcp_log(
                     _context,
@@ -2367,8 +2303,8 @@ mod tests {
         AsyncProcessGuard::new(child, format!("sleep {duration_secs}"))
     }
 
-    #[test]
-    fn test_shell_tool_has_operations() {
+    #[tokio::test]
+    async fn test_shell_tool_has_operations() {
         let tool = ShellExecuteTool::new();
         let ops = tool.operations();
         assert_eq!(ops.len(), 6);
@@ -2380,8 +2316,8 @@ mod tests {
         assert!(ops.iter().any(|o| o.op_string() == "get lines"));
     }
 
-    #[test]
-    fn test_tool_properties() {
+    #[tokio::test]
+    async fn test_tool_properties() {
         let tool = ShellExecuteTool::new();
         assert_eq!(tool.name(), "shell");
         assert!(!tool.description().is_empty());
@@ -4262,12 +4198,25 @@ mod tests {
         }
     }
 
+    /// Create a shared test tool for tests that need state continuity
+    fn shared_tool() -> ShellExecuteTool {
+        ShellExecuteTool::new()
+    }
+
     /// Execute a shell tool operation with the given op and args
     async fn execute_op(
         op: &str,
         extra_args: Vec<(&str, serde_json::Value)>,
     ) -> Result<CallToolResult, McpError> {
-        let tool = ShellExecuteTool::new();
+        execute_op_with(&shared_tool(), op, extra_args).await
+    }
+
+    /// Execute a shell tool operation on a specific tool instance
+    async fn execute_op_with(
+        tool: &ShellExecuteTool,
+        op: &str,
+        extra_args: Vec<(&str, serde_json::Value)>,
+    ) -> Result<CallToolResult, McpError> {
         let context = create_test_context().await;
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), json!(op));
@@ -4279,7 +4228,15 @@ mod tests {
 
     /// Run a command through the shell tool and return its command_id
     async fn run_command(command: &str) -> usize {
-        let result = TestCommandBuilder::new(command).execute().await;
+        run_command_with(&shared_tool(), command).await
+    }
+
+    /// Run a command on a specific tool instance and return its command_id
+    async fn run_command_with(tool: &ShellExecuteTool, command: &str) -> usize {
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert("command".to_string(), json!(command));
+        let result = tool.execute(args, &context).await;
         assert!(result.is_ok(), "Setup command failed: {:?}", result.err());
         let call_result = result.unwrap();
         let text = extract_text(&call_result);
@@ -4306,10 +4263,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_processes_shows_completed_commands() {
+        let tool = shared_tool();
         // Run a command first so there's something to list
-        run_command("echo list_test_marker").await;
+        run_command_with(&tool, "echo list_test_marker").await;
 
-        let result = execute_op("list processes", vec![]).await;
+        let result = execute_op_with(&tool, "list processes", vec![]).await;
         assert!(
             result.is_ok(),
             "list processes should succeed: {:?}",
@@ -4340,9 +4298,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_processes_table_format() {
-        run_command("echo format_check").await;
+        let tool = shared_tool();
+        run_command_with(&tool, "echo format_check").await;
 
-        let result = execute_op("list processes", vec![]).await;
+        let result = execute_op_with(&tool, "list processes", vec![]).await;
         let call_result = result.unwrap();
         let text = extract_text(&call_result);
 
@@ -4420,10 +4379,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_history_finds_matching_output() {
+        let tool = shared_tool();
         // Run a command that produces known output
-        run_command("echo UNIQUE_GREP_MARKER_12345").await;
+        run_command_with(&tool, "echo UNIQUE_GREP_MARKER_12345").await;
 
-        let result = execute_op(
+        let result = execute_op_with(
+            &tool,
             "grep history",
             vec![("pattern", json!("UNIQUE_GREP_MARKER_12345"))],
         )
@@ -4457,9 +4418,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_history_with_command_id_filter() {
-        let cmd_id = run_command("echo GREP_FILTER_TARGET").await;
+        let tool = shared_tool();
+        let cmd_id = run_command_with(&tool, "echo GREP_FILTER_TARGET").await;
 
-        let result = execute_op(
+        let result = execute_op_with(
+            &tool,
             "grep history",
             vec![
                 ("pattern", json!("GREP_FILTER_TARGET")),
@@ -4479,11 +4442,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_history_with_limit() {
+        let tool = shared_tool();
         // Run a command with multiple matching lines
-        run_command("printf 'LIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\n'")
+        run_command_with(&tool, "printf 'LIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\n'")
             .await;
 
-        let result = execute_op(
+        let result = execute_op_with(
+            &tool,
             "grep history",
             vec![("pattern", json!("LIMIT_LINE")), ("limit", json!(2))],
         )
@@ -4502,9 +4467,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_history_regex_pattern() {
-        run_command("echo 'error: something failed at line 42'").await;
+        let tool = shared_tool();
+        run_command_with(&tool, "echo 'error: something failed at line 42'").await;
 
-        let result = execute_op(
+        let result = execute_op_with(
+            &tool,
             "grep history",
             vec![("pattern", json!("error:.*line \\d+"))],
         )
@@ -4540,9 +4507,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_lines_retrieves_output() {
-        let cmd_id = run_command("echo 'GET_LINES_OUTPUT'").await;
+        let tool = shared_tool();
+        let cmd_id = run_command_with(&tool, "echo 'GET_LINES_OUTPUT'").await;
 
-        let result = execute_op("get lines", vec![("command_id", json!(cmd_id))]).await;
+        let result = execute_op_with(&tool, "get lines", vec![("command_id", json!(cmd_id))]).await;
         assert!(
             result.is_ok(),
             "get lines should succeed: {:?}",
@@ -4559,11 +4527,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_lines_with_range() {
+        let tool = shared_tool();
         // Run a command that produces multiple lines
-        let cmd_id = run_command("printf 'line1\\nline2\\nline3\\nline4\\nline5\\n'").await;
+        let cmd_id = run_command_with(&tool, "printf 'line1\\nline2\\nline3\\nline4\\nline5\\n'").await;
 
         // Get only lines 2-4
-        let result = execute_op(
+        let result = execute_op_with(
+            &tool,
             "get lines",
             vec![
                 ("command_id", json!(cmd_id)),
@@ -4603,9 +4573,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_lines_shows_line_numbers() {
-        let cmd_id = run_command("printf 'alpha\\nbeta\\ngamma\\n'").await;
+        let tool = shared_tool();
+        let cmd_id = run_command_with(&tool, "printf 'alpha\\nbeta\\ngamma\\n'").await;
 
-        let result = execute_op("get lines", vec![("command_id", json!(cmd_id))]).await;
+        let result = execute_op_with(&tool, "get lines", vec![("command_id", json!(cmd_id))]).await;
         let text = extract_text(&result.unwrap());
 
         // Should include line numbers in the output

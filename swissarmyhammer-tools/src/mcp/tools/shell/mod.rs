@@ -182,8 +182,8 @@ mod tests {
     use super::*;
     use crate::mcp::tool_registry::ToolRegistry;
 
-    #[test]
-    fn test_register_shell_tools() {
+    #[tokio::test]
+    async fn test_register_shell_tools() {
         let mut registry = ToolRegistry::new();
         register_shell_tools(&mut registry);
 
@@ -192,8 +192,8 @@ mod tests {
         assert_eq!(registry.len(), 1);
     }
 
-    #[test]
-    fn test_shell_tools_properties() {
+    #[tokio::test]
+    async fn test_shell_tools_properties() {
         let mut registry = ToolRegistry::new();
         register_shell_tools(&mut registry);
 
@@ -210,8 +210,8 @@ mod tests {
         assert!(!shell_execute_tool.input_schema.is_empty());
     }
 
-    #[test]
-    fn test_multiple_registrations() {
+    #[tokio::test]
+    async fn test_multiple_registrations() {
         let mut registry = ToolRegistry::new();
 
         // Register twice to ensure no conflicts
@@ -223,8 +223,8 @@ mod tests {
         assert!(registry.get_tool("shell").is_some());
     }
 
-    #[test]
-    fn test_shell_tool_name_uniqueness() {
+    #[tokio::test]
+    async fn test_shell_tool_name_uniqueness() {
         let mut registry = ToolRegistry::new();
         register_shell_tools(&mut registry);
 
