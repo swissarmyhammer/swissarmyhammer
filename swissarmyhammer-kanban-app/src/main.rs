@@ -59,6 +59,7 @@ fn main() {
             commands::get_entity,
             commands::get_board_data,
             commands::quit_app,
+            commands::reset_windows,
             commands::new_board_dialog,
             commands::open_board_dialog,
             commands::rebuild_menu_from_manifest,

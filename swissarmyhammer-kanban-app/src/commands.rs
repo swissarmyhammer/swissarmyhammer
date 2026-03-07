@@ -12,7 +12,7 @@ use swissarmyhammer_kanban::{
     OperationProcessor,
 };
 use tauri::menu::{ContextMenu, MenuBuilder};
-use tauri::{AppHandle, Emitter, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 /// A single menu item entry received from the frontend manifest.
 ///
@@ -428,6 +428,25 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
 #[tauri::command]
 pub async fn quit_app(app: AppHandle) -> Result<(), String> {
     app.exit(0);
+    Ok(())
+}
+
+/// Reset saved window positions/sizes and restart.
+#[tauri::command]
+pub async fn reset_windows(app: AppHandle) -> Result<(), String> {
+    // The window-state plugin stores its file in the app data dir.
+    if let Some(data_dir) = app.path().app_data_dir().ok() {
+        let state_file = data_dir.join(".window-state");
+        if state_file.exists() {
+            std::fs::remove_file(&state_file)
+                .map_err(|e| format!("Failed to remove window state: {e}"))?;
+            tracing::info!(?state_file, "Removed window state file");
+        }
+    }
+    // Restart the app so it picks up default positions.
+    // restart() does not return — the Ok(()) is unreachable but required by the signature.
+    app.restart();
+    #[allow(unreachable_code)]
     Ok(())
 }
 

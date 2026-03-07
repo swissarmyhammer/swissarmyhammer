@@ -200,6 +200,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         execute: () => setKeymapMode("emacs"),
       },
       {
+        id: "app.resetWindows",
+        name: "Reset Windows",
+        menuPlacement: { menu: "settings", group: 1, order: 0 },
+        execute: async () => {
+          await invoke("reset_windows");
+        },
+      },
+      {
         id: "file.newBoard",
         name: "New Board",
         keys: { cua: "Mod+N", vim: "Mod+N" },
