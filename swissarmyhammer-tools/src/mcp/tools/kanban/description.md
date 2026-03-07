@@ -112,10 +112,12 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 - `untag task` - Remove a tag from a task
   - Required: `id` (task), `tag` (tag ID)
 
-- `next task` - Get next actionable task (no incomplete dependencies)
+- `next task` - Get next actionable task from any non-done column (no incomplete dependencies)
+  - Optional: `tag`, `swimlane`, `assignee`
 
 - `list tasks` - List tasks with optional filters
   - Optional: `column`, `swimlane`, `tag`, `assignee`, `ready`
+  - **Tip**: Always combine filters to avoid huge results. Use `column` + `tag` together, or use `next task` with `tag` to get one card at a time.
 
 ### Tag Operations
 
