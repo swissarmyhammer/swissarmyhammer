@@ -125,6 +125,42 @@ pub async fn set_keymap_mode(
     Ok(json!({ "keymap_mode": mode }))
 }
 
+/// Get the persisted UI context (active view + inspector stack).
+///
+/// The frontend calls this on mount to restore state across hot reloads.
+#[tauri::command]
+pub async fn get_ui_context(state: State<'_, AppState>) -> Result<Value, String> {
+    let config = state.config.read().await;
+    Ok(json!({
+        "active_view_id": config.active_view_id,
+        "inspector_stack": config.inspector_stack,
+    }))
+}
+
+/// Persist the active view ID to config.
+#[tauri::command]
+pub async fn set_active_view(
+    state: State<'_, AppState>,
+    view_id: String,
+) -> Result<Value, String> {
+    let mut config = state.config.write().await;
+    config.active_view_id = Some(view_id.clone());
+    config.save().map_err(|e| e.to_string())?;
+    Ok(json!({ "active_view_id": view_id }))
+}
+
+/// Persist the inspector panel stack to config.
+#[tauri::command]
+pub async fn set_inspector_stack(
+    state: State<'_, AppState>,
+    stack: Vec<String>,
+) -> Result<Value, String> {
+    let mut config = state.config.write().await;
+    config.inspector_stack = stack.clone();
+    config.save().map_err(|e| e.to_string())?;
+    Ok(json!({ "inspector_stack": stack }))
+}
+
 /// Get the field+entity schema for a given entity type.
 ///
 /// Returns the EntityDef plus each resolved FieldDef, serialized as JSON.

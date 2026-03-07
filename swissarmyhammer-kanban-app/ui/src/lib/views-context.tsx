@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ViewDef } from "@/types/kanban";
@@ -14,19 +14,44 @@ const ViewsContext = createContext<ViewsContextValue | null>(null);
 
 export function ViewsProvider({ children }: { children: ReactNode }) {
   const [views, setViews] = useState<ViewDef[]>([]);
-  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const [activeViewId, setActiveViewIdState] = useState<string | null>(null);
+  const restoredRef = useRef(false);
+
+  // Persist active view to backend on change
+  const setActiveViewId = useCallback((id: string) => {
+    setActiveViewIdState(id);
+    invoke("set_active_view", { viewId: id }).catch(() => {});
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       const result = await invoke<ViewDef[]>("list_views");
       setViews(result);
-      // Auto-select first view if none is active
-      if (result.length > 0) {
-        setActiveViewId((prev) => {
-          if (prev && result.some((v) => v.id === prev)) return prev;
-          return result[0].id;
-        });
+
+      // On first load, restore persisted view; fall back to first view
+      if (!restoredRef.current) {
+        restoredRef.current = true;
+        try {
+          const ctx = await invoke<{ active_view_id: string | null }>("get_ui_context");
+          const persisted = ctx.active_view_id;
+          if (persisted && result.some((v) => v.id === persisted)) {
+            setActiveViewIdState(persisted);
+            return;
+          }
+        } catch {
+          // get_ui_context not available — fall through
+        }
+        if (result.length > 0) {
+          setActiveViewIdState(result[0].id);
+        }
+        return;
       }
+
+      // Subsequent refreshes: keep current if still valid, else fall back
+      setActiveViewIdState((prev) => {
+        if (prev && result.some((v) => v.id === prev)) return prev;
+        return result.length > 0 ? result[0].id : null;
+      });
     } catch (error) {
       console.error("Failed to load views:", error);
     }

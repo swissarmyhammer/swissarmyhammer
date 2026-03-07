@@ -68,6 +68,7 @@ function App() {
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
+  const inspectorRestoredRef = useRef(false);
 
   /** Open an inspector for any entity. Replaces the stack for primary entities, pushes for secondary. */
   const inspectEntity = useCallback((entityType: string, entityId: string) => {
@@ -116,6 +117,42 @@ function App() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Restore inspector stack from persisted config after initial data loads.
+  // Validates each moniker against loaded entities — drops missing ones.
+  useEffect(() => {
+    if (inspectorRestoredRef.current) return;
+    if (taskEntities.length === 0 && tagEntities.length === 0) return;
+    inspectorRestoredRef.current = true;
+
+    invoke<{ inspector_stack: string[] }>("get_ui_context")
+      .then(({ inspector_stack }) => {
+        if (!inspector_stack || inspector_stack.length === 0) return;
+        const allEntities = [...taskEntities, ...tagEntities];
+        const validated: PanelEntry[] = [];
+        for (const moniker of inspector_stack) {
+          const sep = moniker.indexOf(":");
+          if (sep < 0) continue;
+          const entityType = moniker.slice(0, sep);
+          const entityId = moniker.slice(sep + 1);
+          // Validate entity still exists
+          if (allEntities.some((e) => e.entity_type === entityType && e.id === entityId)) {
+            validated.push({ entityType, entityId });
+          }
+        }
+        if (validated.length > 0) {
+          setPanelStack(validated);
+        }
+      })
+      .catch(() => {});
+  }, [taskEntities, tagEntities]);
+
+  // Persist inspector stack whenever it changes
+  useEffect(() => {
+    if (!inspectorRestoredRef.current) return;
+    const monikers = panelStack.map((e) => `${e.entityType}:${e.entityId}`);
+    invoke("set_inspector_stack", { stack: monikers }).catch(() => {});
+  }, [panelStack]);
 
   // ---------------------------------------------------------------------------
   // Granular entity event listeners — patch local state surgically instead

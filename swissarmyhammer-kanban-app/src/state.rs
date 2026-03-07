@@ -89,6 +89,13 @@ pub struct AppConfig {
     pub recent_boards: Vec<RecentBoard>,
     #[serde(default = "default_keymap_mode")]
     pub keymap_mode: String,
+    /// Last active view ID — restored on reload, falls back to first view if invalid.
+    #[serde(default)]
+    pub active_view_id: Option<String>,
+    /// Inspector panel stack as monikers (e.g. ["task:01XYZ"]) — restored on reload,
+    /// entries that no longer resolve are silently dropped.
+    #[serde(default)]
+    pub inspector_stack: Vec<String>,
 }
 
 fn default_keymap_mode() -> String {
