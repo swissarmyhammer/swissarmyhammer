@@ -84,13 +84,10 @@ fn main() {
 
             // The window starts hidden (visible: false in tauri.conf.json).
             // Explicitly restore saved position/size/monitor, then show.
-            // The plugin's on_window_ready may have already done this, but
-            // calling it again is harmless and ensures it actually happens.
+            // The plugin's on_window_ready also calls restore_state, but
+            // calling it again here is harmless and ensures it happens.
             if let Some(win) = app.get_webview_window("main") {
-                match win.restore_state(StateFlags::all()) {
-                    Ok(()) => tracing::info!("Window state restored"),
-                    Err(e) => tracing::warn!(?e, "Failed to restore window state"),
-                }
+                let _ = win.restore_state(StateFlags::all());
                 let _ = win.show();
                 let _ = win.set_focus();
             }
