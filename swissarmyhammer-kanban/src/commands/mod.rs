@@ -20,7 +20,10 @@ use swissarmyhammer_commands::{Command, CommandError};
 use swissarmyhammer_operations::{Execute, OperationProcessor};
 
 /// Run a kanban operation through the processor, mapping errors to `CommandError`.
-pub(crate) async fn run_op<T>(op: &T, kanban: &KanbanContext) -> swissarmyhammer_commands::Result<Value>
+pub(crate) async fn run_op<T>(
+    op: &T,
+    kanban: &KanbanContext,
+) -> swissarmyhammer_commands::Result<Value>
 where
     T: Execute<KanbanContext, KanbanError> + Send + Sync,
 {
@@ -40,10 +43,7 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert("task.add".into(), Arc::new(task_commands::AddTaskCmd));
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
-    map.insert(
-        "task.delete".into(),
-        Arc::new(task_commands::DeleteTaskCmd),
-    );
+    map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
 
     // Entity commands
     map.insert(
@@ -56,10 +56,7 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     );
 
     // Tag commands
-    map.insert(
-        "tag.update".into(),
-        Arc::new(entity_commands::TagUpdateCmd),
-    );
+    map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
 
     // Attachment commands
     map.insert(
@@ -124,11 +121,7 @@ mod tests {
     use swissarmyhammer_commands::{CommandContext, UIState};
 
     /// Build a CommandContext with the given scope chain, target, and optional UIState.
-    fn ctx_with(
-        scope: &[&str],
-        target: Option<&str>,
-        ui: Option<Arc<UIState>>,
-    ) -> CommandContext {
+    fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {
         let mut ctx = CommandContext::new(
             "test",
             scope.iter().map(|s| s.to_string()).collect(),

@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swissarmyhammer_commands::{builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState};
+use swissarmyhammer_commands::{
+    builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
+};
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor};
 use tokio::sync::RwLock;
 
@@ -335,7 +337,10 @@ impl AppState {
         if user_sources.is_empty() {
             return;
         }
-        let refs: Vec<(&str, &str)> = user_sources.iter().map(|(n, c)| (n.as_str(), c.as_str())).collect();
+        let refs: Vec<(&str, &str)> = user_sources
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
 
         // Rebuild from scratch: builtins + user overrides
         let builtin = builtin_yaml_sources();

@@ -7,8 +7,8 @@
 //! Tags and progress are populated by `ComputeEngine` during `EntityContext::read()`.
 //! The functions here simply read those pre-computed fields.
 
-use std::collections::HashMap;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use swissarmyhammer_entity::Entity;
 
 use crate::types::Ordinal;
@@ -534,7 +534,8 @@ mod tests {
     #[test]
     fn test_enrich_all_task_entities_batch() {
         let dep = make_task("dep1", "Dep", "", "todo");
-        let mut blocker = make_task_computed("t1", "Test", "- [ ] a\n- [x] b", "todo", vec![], 2, 1);
+        let mut blocker =
+            make_task_computed("t1", "Test", "- [ ] a\n- [x] b", "todo", vec![], 2, 1);
         blocker.set("depends_on", json!(["dep1"]));
 
         let mut entities = vec![dep, blocker];
@@ -598,33 +599,36 @@ mod tests {
 
     #[test]
     fn test_compute_ordinal_append_at_end() {
-        let tasks = vec![
-            make_ordinal_task("t1", "a0"),
-            make_ordinal_task("t2", "a1"),
-        ];
+        let tasks = vec![make_ordinal_task("t1", "a0"), make_ordinal_task("t2", "a1")];
         let ordinal = compute_ordinal_for_drop(&tasks, 2);
-        assert!(ordinal.as_str() > "a1", "appended ordinal should be after last");
+        assert!(
+            ordinal.as_str() > "a1",
+            "appended ordinal should be after last"
+        );
     }
 
     #[test]
     fn test_compute_ordinal_insert_at_beginning() {
-        let tasks = vec![
-            make_ordinal_task("t1", "b0"),
-            make_ordinal_task("t2", "c0"),
-        ];
+        let tasks = vec![make_ordinal_task("t1", "b0"), make_ordinal_task("t2", "c0")];
         let ordinal = compute_ordinal_for_drop(&tasks, 0);
-        assert!(ordinal.as_str() < "b0", "prepended ordinal should be before first");
+        assert!(
+            ordinal.as_str() < "b0",
+            "prepended ordinal should be before first"
+        );
     }
 
     #[test]
     fn test_compute_ordinal_insert_between() {
-        let tasks = vec![
-            make_ordinal_task("t1", "a0"),
-            make_ordinal_task("t2", "c0"),
-        ];
+        let tasks = vec![make_ordinal_task("t1", "a0"), make_ordinal_task("t2", "c0")];
         let ordinal = compute_ordinal_for_drop(&tasks, 1);
-        assert!(ordinal.as_str() > "a0", "between ordinal should be after first");
-        assert!(ordinal.as_str() < "c0", "between ordinal should be before second");
+        assert!(
+            ordinal.as_str() > "a0",
+            "between ordinal should be after first"
+        );
+        assert!(
+            ordinal.as_str() < "c0",
+            "between ordinal should be before second"
+        );
     }
 
     #[test]

@@ -51,9 +51,7 @@ mod tests {
 
     #[test]
     fn error_display() {
-        let err = ViewsError::ViewNotFound {
-            id: "01ABC".into(),
-        };
+        let err = ViewsError::ViewNotFound { id: "01ABC".into() };
         assert_eq!(err.to_string(), "view not found: 01ABC");
     }
 }

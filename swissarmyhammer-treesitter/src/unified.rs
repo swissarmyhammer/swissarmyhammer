@@ -1120,10 +1120,7 @@ mod tests {
                 notify_clone.notify_waiters();
             }
         };
-        (
-            callback,
-            IndexCompleteHandle { completed, notify },
-        )
+        (callback, IndexCompleteHandle { completed, notify })
     }
 
     /// Open a workspace and wait for background indexing to complete.

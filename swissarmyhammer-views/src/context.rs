@@ -266,7 +266,7 @@ async fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ViewKind, ViewDef};
+    use crate::types::{ViewDef, ViewKind};
     use tempfile::TempDir;
 
     fn make_test_view(id: &str, name: &str) -> ViewDef {

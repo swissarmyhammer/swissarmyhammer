@@ -49,12 +49,8 @@ impl ViewChangeEntry {
             timestamp: Utc::now().to_rfc3339(),
             op,
             view_id,
-            previous: previous
-                .map(serde_json::to_value)
-                .transpose()?,
-            current: current
-                .map(serde_json::to_value)
-                .transpose()?,
+            previous: previous.map(serde_json::to_value).transpose()?,
+            current: current.map(serde_json::to_value).transpose()?,
         })
     }
 }
@@ -148,12 +144,8 @@ pub async fn undo_entry(
                 .ok_or(ViewsError::NothingToUndo)
                 .and_then(|v| serde_json::from_value(v.clone()).map_err(ViewsError::Json))?;
             ctx.write_view(&previous).await?;
-            let undo_entry = ViewChangeEntry::new(
-                ViewChangeOp::Create,
-                entry.view_id,
-                None,
-                Some(&previous),
-            )?;
+            let undo_entry =
+                ViewChangeEntry::new(ViewChangeOp::Create, entry.view_id, None, Some(&previous))?;
             let id = undo_entry.id.clone();
             append_changelog(changelog_path, &undo_entry).await?;
             Ok(id)
@@ -180,8 +172,7 @@ impl ViewsChangelog {
 
     /// Log a create operation.
     pub async fn log_create(&self, def: &ViewDef) -> Result<String> {
-        let entry =
-            ViewChangeEntry::new(ViewChangeOp::Create, def.id.clone(), None, Some(def))?;
+        let entry = ViewChangeEntry::new(ViewChangeOp::Create, def.id.clone(), None, Some(def))?;
         let id = entry.id.clone();
         append_changelog(&self.path, &entry).await?;
         Ok(id)
@@ -202,8 +193,7 @@ impl ViewsChangelog {
 
     /// Log a delete operation.
     pub async fn log_delete(&self, def: &ViewDef) -> Result<String> {
-        let entry =
-            ViewChangeEntry::new(ViewChangeOp::Delete, def.id.clone(), Some(def), None)?;
+        let entry = ViewChangeEntry::new(ViewChangeOp::Delete, def.id.clone(), Some(def), None)?;
         let id = entry.id.clone();
         append_changelog(&self.path, &entry).await?;
         Ok(id)
@@ -339,10 +329,7 @@ mod tests {
         );
 
         // Undo the compensating Delete (i.e. redo the original create)
-        changelog
-            .undo(&compensating.id, &mut ctx)
-            .await
-            .unwrap();
+        changelog.undo(&compensating.id, &mut ctx).await.unwrap();
         assert_eq!(ctx.all_views().len(), 1);
         assert_eq!(ctx.get_by_id("01A").unwrap().name, "Board");
     }

@@ -8,10 +8,7 @@
 
 use serde_json::json;
 use swissarmyhammer_kanban::{
-    board::InitBoard,
-    entity::UpdateEntityField,
-    task::AddTask,
-    task_helpers::enrich_task_entity,
+    board::InitBoard, entity::UpdateEntityField, task::AddTask, task_helpers::enrich_task_entity,
     KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
 use tempfile::TempDir;
@@ -101,7 +98,10 @@ async fn update_field_persists_body_change() {
 
     // Verify computed tags got re-derived
     let tags = entity.get_string_list("tags");
-    assert!(tags.contains(&"tag".to_string()), "tags should contain 'tag' after body update");
+    assert!(
+        tags.contains(&"tag".to_string()),
+        "tags should contain 'tag' after body update"
+    );
 }
 
 #[tokio::test]
@@ -122,12 +122,7 @@ async fn enriched_entity_has_computed_fields() {
     let blocked_id = r2["id"].as_str().unwrap().to_string();
 
     // Set dependency
-    let update = UpdateEntityField::new(
-        "task",
-        &blocked_id,
-        "depends_on",
-        json!([blocker_id]),
-    );
+    let update = UpdateEntityField::new("task", &blocked_id, "depends_on", json!([blocker_id]));
     processor.process(&update, &ctx).await.unwrap();
 
     // Read all tasks and enrich

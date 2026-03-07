@@ -96,9 +96,7 @@ impl UIState {
             return None;
         }
         inner.inspector_stack.pop();
-        Some(UIStateChange::InspectorStack(
-            inner.inspector_stack.clone(),
-        ))
+        Some(UIStateChange::InspectorStack(inner.inspector_stack.clone()))
     }
 
     /// Close all inspector entries.
@@ -110,9 +108,7 @@ impl UIState {
             return None;
         }
         inner.inspector_stack.clear();
-        Some(UIStateChange::InspectorStack(
-            inner.inspector_stack.clone(),
-        ))
+        Some(UIStateChange::InspectorStack(inner.inspector_stack.clone()))
     }
 
     /// Set the active view ID.
@@ -160,27 +156,46 @@ impl UIState {
 
     /// Get a clone of the current inspector stack.
     pub fn inspector_stack(&self) -> Vec<String> {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).inspector_stack.clone()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .inspector_stack
+            .clone()
     }
 
     /// Get the current active view ID.
     pub fn active_view_id(&self) -> String {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).active_view_id.clone()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .active_view_id
+            .clone()
     }
 
     /// Get whether the palette is open.
     pub fn palette_open(&self) -> bool {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).palette_open
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .palette_open
     }
 
     /// Get the current keymap mode.
     pub fn keymap_mode(&self) -> String {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).keymap_mode.clone()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .keymap_mode
+            .clone()
     }
 
     /// Get a clone of the current scope chain.
     pub fn scope_chain(&self) -> Vec<String> {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).scope_chain.clone()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .scope_chain
+            .clone()
     }
 }
 
@@ -219,10 +234,7 @@ mod tests {
         let state = UIState::new();
         state.inspect("task:01XYZ");
         state.inspect("tag:01TAG");
-        assert_eq!(
-            state.inspector_stack(),
-            vec!["task:01XYZ", "tag:01TAG"]
-        );
+        assert_eq!(state.inspector_stack(), vec!["task:01XYZ", "tag:01TAG"]);
     }
 
     #[test]
@@ -240,10 +252,7 @@ mod tests {
         state.inspect("task:01XYZ");
         state.inspect("tag:01A");
         state.inspect("tag:01B");
-        assert_eq!(
-            state.inspector_stack(),
-            vec!["task:01XYZ", "tag:01B"]
-        );
+        assert_eq!(state.inspector_stack(), vec!["task:01XYZ", "tag:01B"]);
     }
 
     #[test]
@@ -325,10 +334,7 @@ mod tests {
     fn set_scope_chain_stores() {
         let state = UIState::new();
         state.set_scope_chain(vec!["task:01XYZ".into(), "column:todo".into()]);
-        assert_eq!(
-            state.scope_chain(),
-            vec!["task:01XYZ", "column:todo"]
-        );
+        assert_eq!(state.scope_chain(), vec!["task:01XYZ", "column:todo"]);
     }
 
     #[test]
