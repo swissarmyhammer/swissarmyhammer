@@ -36,7 +36,7 @@ This is the recommended way for agents to establish themselves since it handles 
 | `add actor` | Register yourself (use ensure: true) | `op: "add actor", id: "assistant", name: "Assistant", type: "agent", ensure: true` |
 | `add task` | Create a new task | `op: "add task", title: "Fix login bug"` |
 | `list tasks` | View all tasks | `op: "list tasks"` or `op: "list tasks", column: "todo"` |
-| `next task` | Get next actionable task | `op: "next task"` |
+| `next task` | Get next actionable task (not done) | `op: "next task"` or `op: "next task", tag: "bug"` |
 | `complete task` | Move task to done | `op: "complete task", id: "<task_id>"` |
 | `assign task` | Assign task to an actor | `op: "assign task", id: "<task_id>", assignee: "assistant"` |
 | `move task` | Move to different column | `op: "move task", id: "<task_id>", column: "doing"` |
@@ -66,7 +66,7 @@ Tasks can depend on other tasks. A task is only "ready" when all its dependencie
 kanban op: "add task", title: "Deploy to production", depends_on: ["<build_task_id>", "<test_task_id>"]
 ```
 
-The `next task` operation automatically returns only ready tasks (those with no incomplete dependencies).
+The `next task` operation automatically returns only ready tasks (those with no incomplete dependencies) from any non-done column. It supports `tag`, `swimlane`, and `assignee` filters — use these to focus on specific work (e.g., `op: "next task", tag: "review-finding"`).
 
 ### Columns and Organization
 
