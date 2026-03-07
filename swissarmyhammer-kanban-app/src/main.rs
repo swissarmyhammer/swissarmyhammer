@@ -11,7 +11,7 @@ use clap::Parser;
 use cli::Cli;
 use state::AppState;
 use tauri::Manager;
-use tauri_plugin_window_state::StateFlags;
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 
 fn main() {
@@ -82,11 +82,17 @@ fn main() {
             let state = app.state::<AppState>();
             tauri::async_runtime::block_on(state.start_watchers(app_handle));
 
-            // The window starts hidden (visible: false in tauri.conf.json) so
-            // the window-state plugin can restore position/size before it
-            // appears. Show it now that everything is set up.
+            // The window starts hidden (visible: false in tauri.conf.json).
+            // Explicitly restore saved position/size/monitor, then show.
+            // The plugin's on_window_ready may have already done this, but
+            // calling it again is harmless and ensures it actually happens.
             if let Some(win) = app.get_webview_window("main") {
+                match win.restore_state(StateFlags::all()) {
+                    Ok(()) => tracing::info!("Window state restored"),
+                    Err(e) => tracing::warn!(?e, "Failed to restore window state"),
+                }
                 let _ = win.show();
+                let _ = win.set_focus();
             }
 
             Ok(())

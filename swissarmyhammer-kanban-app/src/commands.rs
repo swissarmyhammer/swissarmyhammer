@@ -439,8 +439,8 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
 /// plugin's save-on-exit, recreating the file we just deleted.
 #[tauri::command]
 pub async fn reset_windows(app: AppHandle) -> Result<(), String> {
-    if let Some(data_dir) = app.path().app_data_dir().ok() {
-        let state_file = data_dir.join(".window-state.json");
+    if let Some(config_dir) = app.path().app_config_dir().ok() {
+        let state_file = config_dir.join(".window-state.json");
         if state_file.exists() {
             std::fs::remove_file(&state_file)
                 .map_err(|e| format!("Failed to remove window state: {e}"))?;
