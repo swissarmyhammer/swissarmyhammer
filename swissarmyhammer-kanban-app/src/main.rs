@@ -82,6 +82,13 @@ fn main() {
             let state = app.state::<AppState>();
             tauri::async_runtime::block_on(state.start_watchers(app_handle));
 
+            // The window starts hidden (visible: false in tauri.conf.json) so
+            // the window-state plugin can restore position/size before it
+            // appears. Show it now that everything is set up.
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+            }
+
             Ok(())
         })
         .on_menu_event(menu::handle_menu_event)
