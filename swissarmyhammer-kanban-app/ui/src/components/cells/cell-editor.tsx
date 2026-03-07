@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
 import type { FieldDef } from "@/types/kanban";
 
 interface CellEditorProps {
@@ -9,8 +10,9 @@ interface CellEditorProps {
 }
 
 /**
- * Lightweight inline cell editor for grid view.
- * Uses a plain input for text/number/date fields and a select for select fields.
+ * Inline cell editor for grid view.
+ * Uses CM6 (via FieldPlaceholderEditor) for text/markdown fields,
+ * native select for select fields, and native inputs for number/date/color.
  * Commits on Enter/blur, cancels on Escape.
  */
 export function CellEditor({ field, value, onCommit, onCancel }: CellEditorProps) {
@@ -32,8 +34,14 @@ export function CellEditor({ field, value, onCommit, onCancel }: CellEditorProps
     return <InputCellEditor type="color" value={value} isColor onCommit={onCommit} onCancel={onCancel} />;
   }
 
-  // Default: text input (markdown, string, etc)
-  return <InputCellEditor type="text" value={value} onCommit={onCommit} onCancel={onCancel} />;
+  // Default: CM6 markdown editor for text/markdown/string fields
+  return (
+    <FieldPlaceholderEditor
+      value={toStr(value)}
+      onCommit={(text) => onCommit(text)}
+      onCancel={onCancel}
+    />
+  );
 }
 
 function InputCellEditor({

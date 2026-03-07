@@ -67,7 +67,7 @@ interface EditorProps {
   onCancel: () => void;
 }
 
-function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProps) {
+export function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProps) {
   const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());

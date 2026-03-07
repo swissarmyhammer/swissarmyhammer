@@ -1,7 +1,8 @@
 import type { FieldDef, Entity } from "@/types/kanban";
+import { TagPill } from "@/components/tag-pill";
+import { useEntityStore } from "@/lib/entity-store-context";
 import { TextCell } from "./text-cell";
 import { BadgeCell } from "./badge-cell";
-import { BadgeListCell } from "./badge-list-cell";
 import { DateCell } from "./date-cell";
 import { ColorSwatchCell } from "./color-swatch-cell";
 import { NumberCell } from "./number-cell";
@@ -19,10 +20,21 @@ export interface CellDisplayProps {
  * This is the grid-view counterpart of FieldDispatch in entity-inspector —
  * compact, non-editable renderers optimised for table cells.
  */
-export function CellDispatch({ field, value, entity: _entity }: CellDisplayProps) {
-  // Badge list (computed tags, etc)
+export function CellDispatch({ field, value, entity }: CellDisplayProps) {
+  const { getEntities } = useEntityStore();
+
+  // Badge list (tags) — reuse TagPill for colors + context menus
   if (field.display === "badge-list") {
-    return <BadgeListCell value={value} />;
+    const slugs = Array.isArray(value) ? (value as string[]) : [];
+    if (slugs.length === 0) return <span className="text-muted-foreground/50">-</span>;
+    const tags = getEntities("tag");
+    return (
+      <div className="flex flex-wrap gap-1">
+        {slugs.map((slug) => (
+          <TagPill key={slug} slug={slug} tags={tags} taskId={entity.id} />
+        ))}
+      </div>
+    );
   }
 
   // Single badge (select fields)

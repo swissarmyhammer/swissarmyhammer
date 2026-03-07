@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import { ArrowUp, ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useContextMenu } from "@/lib/context-menu";
 import { CellDispatch } from "@/components/cells";
 import type { UseGridReturn } from "@/hooks/use-grid";
 import type { Entity, FieldDef } from "@/types/kanban";
@@ -22,6 +23,8 @@ interface DataTableProps {
   rows: Entity[];
   grid: UseGridReturn;
   onCellClick?: (row: number, col: number) => void;
+  /** Right-click handler for a row's entity. */
+  onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
   /** Inline cell editor renderer. Called when grid.mode === "edit" for the cursor cell. */
   renderEditor?: (entity: Entity, field: FieldDef, onCommit: (value: unknown) => void, onCancel: () => void) => React.ReactNode;
 }
@@ -46,10 +49,11 @@ function compareValues(a: unknown, b: unknown, field: FieldDef): number {
   return String(a).localeCompare(String(b));
 }
 
-export function DataTable({ columns, rows, grid, onCellClick, renderEditor }: DataTableProps) {
+export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, renderEditor }: DataTableProps) {
   const tableRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
   const [sort, setSort] = useState<SortState | null>(null);
+  const contextMenuHandler = useContextMenu();
 
   // Sorted rows (ephemeral — doesn't mutate source)
   const sortedRows = useMemo(() => {
@@ -108,7 +112,7 @@ export function DataTable({ columns, rows, grid, onCellClick, renderEditor }: Da
   return (
     <div ref={tableRef} className="flex-1 overflow-auto min-h-0">
       <table className="w-full border-collapse text-sm">
-        <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm">
+        <thead className="sticky top-0 z-[1] bg-muted/80 backdrop-blur-sm">
           <tr>
             {columns.map((col, ci) => {
               const isSorted = sort?.fieldName === col.field.name;
@@ -143,6 +147,13 @@ export function DataTable({ columns, rows, grid, onCellClick, renderEditor }: Da
                 "border-b border-border/50 transition-colors",
                 ri === grid.cursor.row && grid.mode !== "edit" && "bg-accent/30",
               )}
+              onContextMenu={(e) => {
+                grid.setCursor(ri, grid.cursor.col);
+                if (onRowContextMenu) {
+                  onRowContextMenu(entity, e);
+                }
+                contextMenuHandler(e);
+              }}
             >
               {columns.map((col, ci) => {
                 const isCursor =

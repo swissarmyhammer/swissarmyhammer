@@ -5,6 +5,8 @@ import { useSchema } from "@/lib/schema-context";
 import { useKeymap } from "@/lib/keymap-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
+import { useInspect } from "@/lib/inspect-context";
+import { moniker } from "@/lib/moniker";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { CellEditor } from "@/components/cells/cell-editor";
@@ -43,6 +45,7 @@ export function GridView({ view, tasks }: GridViewProps) {
   const { mode: keymapMode } = useKeymap();
   const { mode: appMode } = useAppMode();
   const { updateField } = useFieldUpdate();
+  const inspectEntity = useInspect();
 
   // Keyboard handler
   useEffect(() => {
@@ -208,9 +211,36 @@ export function GridView({ view, tasks }: GridViewProps) {
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },
+      {
+        id: "entity.inspect",
+        name: "Inspect",
+        contextMenu: true,
+        execute: () => {
+          const row = gridRef.current.cursor.row;
+          if (row >= 0 && row < tasks.length) {
+            const entity = tasks[row];
+            inspectEntity(moniker(entity.entity_type, entity.id));
+          }
+        },
+      },
+      {
+        id: "task.archive",
+        name: "Archive",
+        contextMenu: true,
+        execute: () => {
+          const row = gridRef.current.cursor.row;
+          if (row >= 0 && row < tasks.length) {
+            const entity = tasks[row];
+            invoke("dispatch_command", {
+              cmd: "task.archive",
+              args: { id: entity.id },
+            }).catch((err) => console.error("Failed to archive:", err));
+          }
+        },
+      },
     ];
     return commands;
-  }, [tasks]);
+  }, [tasks, inspectEntity]);
 
   const handleCellClick = useCallback((row: number, col: number) => {
     grid.setCursor(row, col);

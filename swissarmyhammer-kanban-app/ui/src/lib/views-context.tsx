@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { ViewDef } from "@/types/kanban";
 
 interface ViewsContextValue {
@@ -33,6 +34,25 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     refresh();
+  }, [refresh]);
+
+  // Re-fetch views when view entities change (file watcher or commands)
+  useEffect(() => {
+    const unlisteners = [
+      listen<{ entity_type: string }>("entity-field-changed", (event) => {
+        if (event.payload.entity_type === "view") refresh();
+      }),
+      listen<{ entity_type: string }>("entity-created", (event) => {
+        if (event.payload.entity_type === "view") refresh();
+      }),
+      listen<{ entity_type: string }>("entity-removed", (event) => {
+        if (event.payload.entity_type === "view") refresh();
+      }),
+      listen("board-changed", () => refresh()),
+    ];
+    return () => {
+      for (const p of unlisteners) p.then((fn) => fn());
+    };
   }, [refresh]);
 
   const activeView = useMemo(
