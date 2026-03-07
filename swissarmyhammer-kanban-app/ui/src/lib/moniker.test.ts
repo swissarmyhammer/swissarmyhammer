@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { moniker, parseMoniker } from "./moniker";
+import { moniker, fieldMoniker, parseMoniker } from "./moniker";
 
 describe("moniker", () => {
   it("builds type:id string", () => {
@@ -12,6 +12,12 @@ describe("moniker", () => {
   });
 });
 
+describe("fieldMoniker", () => {
+  it("builds type:id.field string", () => {
+    expect(fieldMoniker("task", "abc", "title")).toBe("task:abc.title");
+  });
+});
+
 describe("parseMoniker", () => {
   it("splits correctly", () => {
     expect(parseMoniker("tag:xyz")).toEqual({ type: "tag", id: "xyz" });
@@ -19,6 +25,14 @@ describe("parseMoniker", () => {
 
   it("handles id with colons", () => {
     expect(parseMoniker("task:foo:bar")).toEqual({ type: "task", id: "foo:bar" });
+  });
+
+  it("parses field-level moniker", () => {
+    expect(parseMoniker("task:abc.title")).toEqual({ type: "task", id: "abc", field: "title" });
+  });
+
+  it("field-level with colons in id", () => {
+    expect(parseMoniker("task:foo:bar.title")).toEqual({ type: "task", id: "foo:bar", field: "title" });
   });
 
   it("throws on no colon", () => {

@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { ColorSwatchDisplay } from "@/components/fields/displays/color-swatch-display";
 import type { EditorProps } from "./markdown-editor";
 
-/** Grid-cell color editor — color dot that opens a HexColorPicker popover. */
+/** Color editor — renders the same ColorSwatchDisplay as trigger, popover with HexColorPicker. */
 export function ColorPaletteEditor({ value, onCommit, onCancel }: EditorProps) {
   const initial = typeof value === "string" ? value : "888888";
   const [draft, setDraft] = useState(initial);
@@ -30,11 +31,9 @@ export function ColorPaletteEditor({ value, onCommit, onCancel }: EditorProps) {
       }}
     >
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="w-4 h-4 rounded-full border border-border shrink-0 mx-auto cursor-pointer"
-          style={{ backgroundColor: `#${draft}` }}
-        />
+        <div className="cursor-pointer">
+          <ColorSwatchDisplay value={draft} />
+        </div>
       </PopoverTrigger>
       <PopoverContent
         align="start"

@@ -1,7 +1,5 @@
-import type { DisplayProps } from "./text-display";
-
 /** Color swatch display — circular swatch next to the hex code. */
-export function ColorSwatchDisplay({ value }: DisplayProps) {
+export function ColorSwatchDisplay({ value }: { value: unknown }) {
   const hex = typeof value === "string" ? value : "";
   if (!hex) return <span className="text-muted-foreground/50">-</span>;
   return (

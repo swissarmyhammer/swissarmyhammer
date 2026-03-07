@@ -243,7 +243,7 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                         ci === 0 && "pl-4",
                         isCursor && "ring-2 ring-primary ring-inset",
                         isSel && !isCursor && "bg-primary/10",
-                        isEditing && "p-0",
+                        isEditing && col.field.type.kind !== "color" && "p-0",
                       )}
                       onClick={() => handleCellClick(di, ci)}
                       onDoubleClick={() => {
