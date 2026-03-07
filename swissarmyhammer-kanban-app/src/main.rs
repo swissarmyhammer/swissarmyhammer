@@ -11,7 +11,7 @@ use clap::Parser;
 use cli::Cli;
 use state::AppState;
 use tauri::Manager;
-use tauri_plugin_window_state::{StateFlags, WindowExt};
+use tauri_plugin_window_state::StateFlags;
 
 
 fn main() {
@@ -39,6 +39,11 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all())
+                .build(),
+        )
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::dispatch_command,
@@ -70,22 +75,12 @@ fn main() {
             // send the full manifest via rebuild_menu_from_manifest once loaded.
             let config = crate::state::AppConfig::load();
             let _ = menu::build_menu_from_manifest(app.handle(), &[], &config.recent_boards);
-            app.handle().plugin(
-                tauri_plugin_window_state::Builder::default().build()
-            )?;
 
             // Start file watchers for boards opened during auto_open_board
             // (which ran before Tauri was ready, so didn't have an AppHandle).
             let app_handle = app.handle().clone();
             let state = app.state::<AppState>();
             tauri::async_runtime::block_on(state.start_watchers(app_handle));
-
-            #[cfg(all(debug_assertions, target_os = "macos"))]
-            {
-                let win = app.get_webview_window("main").unwrap();
-                win.restore_state(StateFlags::all())?;
-                let _ = win.show();
-            }
 
             Ok(())
         })
