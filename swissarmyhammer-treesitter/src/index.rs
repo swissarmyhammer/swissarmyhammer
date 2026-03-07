@@ -30,13 +30,12 @@ use crate::error::{Result, TreeSitterError};
 use crate::language::LanguageRegistry;
 use crate::parsed_file::ParsedFile;
 use ignore::WalkBuilder;
-use llama_embedding::{EmbeddingConfig, EmbeddingModel, TextEmbedder};
-use model_loader::ModelSource;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+use swissarmyhammer_embedding::{Embedder, TextEmbedder};
 
 /// Compute the content hash for a file without parsing it
 ///
@@ -64,25 +63,6 @@ pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Default parse timeout in milliseconds
 pub const DEFAULT_PARSE_TIMEOUT_MS: u64 = 5000;
 
-/// Configuration for embedding model
-#[derive(Debug, Clone)]
-pub struct EmbeddingModelConfig {
-    /// HuggingFace repo (default: "nomic-ai/nomic-embed-text-v1.5-GGUF")
-    pub repo: String,
-
-    /// Model filename (default: "nomic-embed-text-v1.5.Q4_K_M.gguf")
-    pub filename: String,
-}
-
-impl Default for EmbeddingModelConfig {
-    fn default() -> Self {
-        Self {
-            repo: "nomic-ai/nomic-embed-text-v1.5-GGUF".to_string(),
-            filename: "nomic-embed-text-v1.5.Q4_K_M.gguf".to_string(),
-        }
-    }
-}
-
 /// Configuration for the index
 #[derive(Debug, Clone)]
 pub struct IndexConfig {
@@ -95,8 +75,9 @@ pub struct IndexConfig {
     /// Whether to respect .gitignore patterns
     pub respect_gitignore: bool,
 
-    /// Embedding model configuration
-    pub embedding: EmbeddingModelConfig,
+    /// Embedding model name (resolved via swissarmyhammer-embedding).
+    /// Defaults to `swissarmyhammer_embedding::DEFAULT_MODEL_NAME` ("qwen-embedding").
+    pub embedding_model: String,
 }
 
 impl Default for IndexConfig {
@@ -105,7 +86,7 @@ impl Default for IndexConfig {
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             parse_timeout_ms: DEFAULT_PARSE_TIMEOUT_MS,
             respect_gitignore: true,
-            embedding: EmbeddingModelConfig::default(),
+            embedding_model: swissarmyhammer_embedding::DEFAULT_MODEL_NAME.to_string(),
         }
     }
 }
@@ -365,7 +346,7 @@ pub struct IndexContext {
     database: Option<Arc<IndexDatabase>>,
 
     /// Embedding model (lazy-loaded on first scan with embedding enabled)
-    embedding_model: Option<EmbeddingModel>,
+    embedding_model: Option<Embedder>,
 
     /// Last scan status (updated during and after scan)
     last_status: IndexStatus,
@@ -491,9 +472,8 @@ impl IndexContext {
 
         // Phase 3: embed chunks
         self.last_status.phase = IndexPhase::Embedding;
-        let embedding_config = self.config.embedding.clone();
-        self.run_embedding_phase(&embedding_config, &mut errors)
-            .await?;
+        let model_name = self.config.embedding_model.clone();
+        self.run_embedding_phase(&model_name, &mut errors).await?;
 
         // Send final status
         self.last_status.phase = IndexPhase::Complete;
@@ -514,7 +494,7 @@ impl IndexContext {
     /// Run the embedding phase for all parsed files (internal)
     async fn run_embedding_phase(
         &mut self,
-        config: &EmbeddingModelConfig,
+        model_name: &str,
         errors: &mut Vec<(PathBuf, String)>,
     ) -> Result<()> {
         let files_count = self.files.len();
@@ -523,7 +503,7 @@ impl IndexContext {
         }
 
         tracing::info!("Loading embedding model...");
-        self.ensure_embedding_model_loaded(config).await?;
+        self.ensure_embedding_model_loaded(model_name).await?;
 
         tracing::info!("Embedding {} parsed files...", files_count);
         let paths_to_embed: Vec<PathBuf> = self.files.keys().cloned().collect();
@@ -679,23 +659,12 @@ impl IndexContext {
     }
 
     /// Ensure the embedding model is loaded
-    async fn ensure_embedding_model_loaded(&mut self, config: &EmbeddingModelConfig) -> Result<()> {
+    async fn ensure_embedding_model_loaded(&mut self, model_name: &str) -> Result<()> {
         if self.embedding_model.is_some() {
             return Ok(());
         }
 
-        let embed_config = EmbeddingConfig {
-            model_source: ModelSource::HuggingFace {
-                repo: config.repo.clone(),
-                filename: Some(config.filename.clone()),
-                folder: None,
-            },
-            normalize_embeddings: true,
-            max_sequence_length: None, // Use model's context size
-            debug: false,
-        };
-
-        let model = EmbeddingModel::new(embed_config).await.map_err(|e| {
+        let model = Embedder::from_model_name(model_name).await.map_err(|e| {
             TreeSitterError::embedding_error(format!("Failed to create embedding model: {}", e))
         })?;
 
@@ -942,9 +911,8 @@ impl IndexContext {
         self.files.insert(path.to_path_buf(), parsed.clone());
 
         // Re-embed chunks (database cleanup happens in prepare_file_in_db)
-        let embedding_config = self.config.embedding.clone();
-        self.ensure_embedding_model_loaded(&embedding_config)
-            .await?;
+        let model_name = self.config.embedding_model.clone();
+        self.ensure_embedding_model_loaded(&model_name).await?;
         let mut errors = Vec::new();
         // Set up chunk tracking for this single file refresh
         self.last_status.chunks_total = chunk_file(parsed.clone()).len();
@@ -1025,8 +993,8 @@ impl IndexContext {
     ///
     /// Returns the embedding vector that can be used with `SimilarityQuery::embedding()`.
     pub async fn embed_text(&mut self, text: &str) -> Result<Vec<f32>> {
-        let config = self.config.embedding.clone();
-        self.ensure_embedding_model_loaded(&config).await?;
+        let model_name = self.config.embedding_model.clone();
+        self.ensure_embedding_model_loaded(&model_name).await?;
 
         let model = self
             .embedding_model
@@ -1060,10 +1028,11 @@ mod tests {
         assert_eq!(config.max_file_size, DEFAULT_MAX_FILE_SIZE);
         assert_eq!(config.parse_timeout_ms, DEFAULT_PARSE_TIMEOUT_MS);
         assert!(config.respect_gitignore);
-        // Embedding is always configured - verify it matches EmbeddingModelConfig defaults
-        let default_embed = EmbeddingModelConfig::default();
-        assert_eq!(config.embedding.repo, default_embed.repo);
-        assert_eq!(config.embedding.filename, default_embed.filename);
+        // Embedding model name defaults to the system default
+        assert_eq!(
+            config.embedding_model,
+            swissarmyhammer_embedding::DEFAULT_MODEL_NAME
+        );
     }
 
     #[test]

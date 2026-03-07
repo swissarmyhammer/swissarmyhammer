@@ -1,10 +1,18 @@
-//! Test that coreml-rs can load the converted .mlpackage and run inference.
+//! Test that objc2-core-ml can load the converted .mlpackage and run inference.
 //! Requires the .mlpackage to exist at var/data/models/qwen3-embedding-0.6b/
 
-use coreml_rs::mlarray::MLArray;
-use coreml_rs::{ComputePlatform, CoreMLModelOptions, CoreMLModelWithState};
-use ndarray::Array2;
 use std::path::PathBuf;
+use std::ptr;
+
+use block2::RcBlock;
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2::AnyThread;
+use objc2_core_ml::{
+    MLComputeUnits, MLDictionaryFeatureProvider, MLFeatureProvider, MLFeatureValue, MLModel,
+    MLModelConfiguration, MLMultiArray, MLMultiArrayDataType,
+};
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSURL};
 
 fn model_dir() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -35,12 +43,57 @@ fn load_tokenizer() -> tokenizers::Tokenizer {
         .unwrap_or_else(|e| panic!("Failed to load tokenizer at {}: {e}", tok_path.display()))
 }
 
-/// Tokenize text and produce i32 input arrays padded to `seq_len`.
+/// Load a CoreML model from a .mlpackage path using objc2-core-ml directly.
+/// Compiles the .mlpackage first, then loads the compiled model.
+unsafe fn load_model(path: &std::path::Path) -> Retained<MLModel> {
+    let path_str = NSString::from_str(&path.to_string_lossy());
+    let source_url = NSURL::fileURLWithPath_isDirectory(&path_str, true);
+
+    #[allow(deprecated)]
+    let compiled_url =
+        MLModel::compileModelAtURL_error(&source_url).expect("Failed to compile .mlpackage");
+
+    let config = MLModelConfiguration::new();
+    config.setComputeUnits(MLComputeUnits::CPUAndNeuralEngine);
+    MLModel::modelWithContentsOfURL_configuration_error(&compiled_url, &config)
+        .expect("Failed to load compiled model")
+}
+
+/// Create an Int32 MLMultiArray with the given shape and data.
+unsafe fn make_int32_array(shape: &[usize], data: &[i32]) -> Retained<MLMultiArray> {
+    let ns_shape: Vec<Retained<NSNumber>> = shape
+        .iter()
+        .map(|&d| NSNumber::new_isize(d as isize))
+        .collect();
+    let ns_shape = NSArray::from_retained_slice(&ns_shape);
+
+    let array = MLMultiArray::initWithShape_dataType_error(
+        MLMultiArray::alloc(),
+        &ns_shape,
+        MLMultiArrayDataType::Int32,
+    )
+    .expect("Failed to create MLMultiArray");
+
+    let src = data.as_ptr();
+    let len = data.len();
+    let block = RcBlock::new(
+        move |ptr: ptr::NonNull<std::ffi::c_void>,
+              _size: isize,
+              _strides: ptr::NonNull<NSArray<NSNumber>>| {
+            ptr::copy_nonoverlapping(src, ptr.as_ptr() as *mut i32, len);
+        },
+    );
+    array.getMutableBytesWithHandler(&block);
+
+    array
+}
+
+/// Tokenize text and produce padded i32 vectors.
 fn tokenize_to_i32(
     tokenizer: &tokenizers::Tokenizer,
     text: &str,
     seq_len: usize,
-) -> (ndarray::ArrayD<i32>, ndarray::ArrayD<i32>) {
+) -> (Vec<i32>, Vec<i32>) {
     let encoding = tokenizer.encode(text, true).expect("tokenization failed");
     let input_ids = encoding.get_ids();
     let attention_mask = encoding.get_attention_mask();
@@ -52,23 +105,36 @@ fn tokenize_to_i32(
         ids[i] = input_ids[i] as i32;
         mask[i] = attention_mask[i] as i32;
     }
-
-    let ids_array = Array2::from_shape_vec((1, seq_len), ids)
-        .unwrap()
-        .into_dyn();
-    let mask_array = Array2::from_shape_vec((1, seq_len), mask)
-        .unwrap()
-        .into_dyn();
-    (ids_array, mask_array)
+    (ids, mask)
 }
 
-/// Extract f32 values from an MLArray, handling both f32 and f16 outputs.
-fn mlarray_to_f32(array: MLArray) -> Vec<f32> {
-    match array {
-        MLArray::Float32Array(a) => a.into_raw_vec(),
-        MLArray::Float16Array(a) => a.into_raw_vec().iter().map(|v| v.to_f32()).collect(),
-        other => panic!("Unexpected output type, shape: {:?}", other.shape()),
+/// Extract f32 values from an MLMultiArray.
+unsafe fn extract_f32(array: &MLMultiArray) -> Vec<f32> {
+    let dtype = array.dataType();
+    let count = array.count() as usize;
+    let mut result: Vec<f32> = Vec::with_capacity(count);
+    let result_ptr = result.as_mut_ptr();
+
+    if dtype == MLMultiArrayDataType::Float32 {
+        let block = RcBlock::new(move |ptr: ptr::NonNull<std::ffi::c_void>, _size: isize| {
+            ptr::copy_nonoverlapping(ptr.as_ptr() as *const f32, result_ptr, count);
+        });
+        array.getBytesWithHandler(&block);
+        result.set_len(count);
+    } else if dtype == MLMultiArrayDataType::Float16 {
+        let block = RcBlock::new(move |ptr: ptr::NonNull<std::ffi::c_void>, _size: isize| {
+            let src = ptr.as_ptr() as *const u16;
+            for i in 0..count {
+                *result_ptr.add(i) = half::f16::from_bits(*src.add(i)).to_f32();
+            }
+        });
+        array.getBytesWithHandler(&block);
+        result.set_len(count);
+    } else {
+        panic!("Unsupported output dtype: {:?}", dtype);
     }
+
+    result
 }
 
 #[test]
@@ -77,16 +143,12 @@ fn test_coreml_load_model() {
         return;
     };
 
-    let opts = CoreMLModelOptions {
-        compute_platform: ComputePlatform::CpuAndANE,
-        ..Default::default()
-    };
-
-    let model = CoreMLModelWithState::new(path.to_string_lossy().to_string(), opts);
-    let model = model.load().expect("Failed to load .mlpackage");
-
-    let desc = model.description().expect("Failed to get description");
-    eprintln!("Model description: {:?}", desc);
+    unsafe {
+        let model = load_model(&path);
+        let desc = model.modelDescription();
+        let outputs = desc.outputDescriptionsByName();
+        eprintln!("Output keys: {:?}", outputs.allKeys());
+    }
 }
 
 #[test]
@@ -95,65 +157,65 @@ fn test_coreml_inference() {
         return;
     };
 
-    let opts = CoreMLModelOptions {
-        compute_platform: ComputePlatform::CpuAndANE,
-        ..Default::default()
-    };
+    unsafe {
+        let model = load_model(&path);
 
-    let model = CoreMLModelWithState::new(path.to_string_lossy().to_string(), opts);
-    let mut model = model.load().expect("Failed to load .mlpackage");
+        let tokenizer = load_tokenizer();
+        let seq_len = 128;
+        let (ids, mask) = tokenize_to_i32(&tokenizer, "Hello world", seq_len);
 
-    // Use the tokenizer to produce valid inputs, matching what
-    // AneEmbeddingModel does in production.
-    let tokenizer = load_tokenizer();
-    let seq_len = 128;
-    let (input_ids, attention_mask) = tokenize_to_i32(&tokenizer, "Hello world", seq_len);
+        let ids_array = make_int32_array(&[1, seq_len], &ids);
+        let mask_array = make_int32_array(&[1, seq_len], &mask);
 
-    eprintln!("Input shape: {:?}", input_ids.shape());
+        let ids_fv = MLFeatureValue::featureValueWithMultiArray(&ids_array);
+        let mask_fv = MLFeatureValue::featureValueWithMultiArray(&mask_array);
 
-    model
-        .add_input("input_ids", input_ids)
-        .expect("Failed to add input_ids");
-    model
-        .add_input("attention_mask", attention_mask)
-        .expect("Failed to add attention_mask");
+        let key_ids = NSString::from_str("input_ids");
+        let key_mask = NSString::from_str("attention_mask");
 
-    let output = model.predict().expect("Failed to predict");
+        let dict: Retained<NSDictionary<NSString, MLFeatureValue>> =
+            NSDictionary::from_retained_objects(&[&*key_ids, &*key_mask], &[ids_fv, mask_fv]);
 
-    eprintln!(
-        "Output keys: {:?}",
-        output.outputs.keys().collect::<Vec<_>>()
-    );
+        let provider = MLDictionaryFeatureProvider::initWithDictionary_error(
+            MLDictionaryFeatureProvider::alloc(),
+            &*((&*dict) as *const NSDictionary<NSString, MLFeatureValue>
+                as *const NSDictionary<NSString, objc2::runtime::AnyObject>),
+        )
+        .expect("Failed to create feature provider");
 
-    let embedding_array = output
-        .outputs
-        .into_iter()
-        .find(|(k, _)| k == "embedding")
-        .expect("No 'embedding' output found")
-        .1;
+        let provider = ProtocolObject::from_retained(provider);
 
-    let shape = embedding_array.shape().to_vec();
-    eprintln!("Embedding shape: {:?}", shape);
+        let output = model
+            .predictionFromFeatures_error(&provider)
+            .expect("Prediction failed");
 
-    let embedding_f32 = mlarray_to_f32(embedding_array);
+        let emb_key = NSString::from_str("embedding");
+        let emb_fv = output
+            .featureValueForName(&emb_key)
+            .expect("No 'embedding' output");
+        let ml_array = emb_fv
+            .multiArrayValue()
+            .expect("'embedding' is not multi-array");
 
-    eprintln!("Embedding length: {}", embedding_f32.len());
-    eprintln!(
-        "First 5 values: {:?}",
-        &embedding_f32[..5.min(embedding_f32.len())]
-    );
+        let embedding_f32 = extract_f32(&ml_array);
 
-    assert_eq!(
-        embedding_f32.len(),
-        1024,
-        "Expected 1024-dim embedding, got {}",
-        embedding_f32.len()
-    );
+        eprintln!("Embedding length: {}", embedding_f32.len());
+        eprintln!(
+            "First 5 values: {:?}",
+            &embedding_f32[..5.min(embedding_f32.len())]
+        );
 
-    // Verify finite, non-zero output
-    let nan_count = embedding_f32.iter().filter(|v| v.is_nan()).count();
-    assert_eq!(nan_count, 0, "Embedding should not contain NaN values");
+        assert_eq!(
+            embedding_f32.len(),
+            1024,
+            "Expected 1024-dim embedding, got {}",
+            embedding_f32.len()
+        );
 
-    let sum: f32 = embedding_f32.iter().sum();
-    assert!(sum.abs() > 0.0, "Embedding should not be all zeros");
+        let nan_count = embedding_f32.iter().filter(|v| v.is_nan()).count();
+        assert_eq!(nan_count, 0, "Embedding should not contain NaN values");
+
+        let sum: f32 = embedding_f32.iter().sum();
+        assert!(sum.abs() > 0.0, "Embedding should not be all zeros");
+    }
 }

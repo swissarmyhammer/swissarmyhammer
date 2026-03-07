@@ -43,7 +43,19 @@ enum EmbedderBackend {
     Ane(Box<AneEmbeddingModel>),
 }
 
+/// Default model name used by `Embedder::default()`.
+pub const DEFAULT_MODEL_NAME: &str = "qwen-embedding";
+
 impl Embedder {
+    /// Create an embedder using the default model (`qwen-embedding`).
+    ///
+    /// Equivalent to `Embedder::from_model_name("qwen-embedding")`.
+    /// The model is **not** loaded yet — call [`TextEmbedder::load`]
+    /// before embedding.
+    pub async fn default() -> Result<Self, EmbedderError> {
+        Self::from_model_name(DEFAULT_MODEL_NAME).await
+    }
+
     /// Create an embedder from a builtin or user model name.
     ///
     /// Resolves the name via `ModelManager`, selects the first executor
@@ -72,7 +84,7 @@ impl Embedder {
                 )
             }
             ModelExecutorConfig::AneEmbedding(cfg) => {
-                let max_seq = cfg.max_sequence_length.unwrap_or(128);
+                let max_seq = cfg.max_sequence_length.unwrap_or(256);
                 let normalize = cfg.normalize;
                 (
                     EmbedderBackend::Ane(Box::new(build_ane_model(cfg).await?)),
@@ -330,7 +342,7 @@ async fn build_llama_model(cfg: &EmbeddingModelConfig) -> Result<EmbeddingModel,
 }
 
 async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel, EmbeddingError> {
-    let seq_length = cfg.max_sequence_length.unwrap_or(128);
+    let seq_length = cfg.max_sequence_length.unwrap_or(256);
 
     // Derive model prefix from source.
     // Convention: HF repo "wballard/Foo-Bar-CoreML" → prefix "Foo-Bar"
@@ -344,22 +356,20 @@ async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel
         }
     };
 
-    // Use model-loader to resolve the .mlpackage file, which handles
-    // HuggingFace download + caching and local path resolution.
-    let mlpackage_filename = format!("{model_prefix}-seq{seq_length}.mlpackage");
+    // .mlpackage is a directory on HuggingFace containing multiple files.
+    // Use folder-based download to fetch all files inside it.
+    let mlpackage_name = format!("{model_prefix}-seq{seq_length}.mlpackage");
     let loader_source = match &cfg.source {
-        swissarmyhammer_config::ModelSource::HuggingFace { repo, folder, .. } => {
-            ModelSource::HuggingFace {
-                repo: repo.clone(),
-                filename: Some(mlpackage_filename),
-                folder: folder.clone(),
-            }
-        }
+        swissarmyhammer_config::ModelSource::HuggingFace { repo, .. } => ModelSource::HuggingFace {
+            repo: repo.clone(),
+            filename: None,
+            folder: Some(mlpackage_name.clone()),
+        },
         swissarmyhammer_config::ModelSource::Local { folder, .. } => {
             let dir = folder.clone().unwrap_or_default();
             ModelSource::Local {
                 folder: dir,
-                filename: Some(format!("{model_prefix}-seq{seq_length}.mlpackage")),
+                filename: Some(mlpackage_name.clone()),
             }
         }
     };
@@ -376,12 +386,33 @@ async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel
         .await
         .map_err(|e| EmbeddingError::model(format!("Failed to resolve ANE model: {e}")))?;
 
-    // The model directory is the parent of the resolved .mlpackage path
-    let model_dir = resolved
-        .path
+    // The resolved path points to a file inside the .mlpackage directory.
+    // Walk up until we find the .mlpackage directory, then its parent is model_dir.
+    let mut mlpackage_dir = resolved.path.clone();
+    while mlpackage_dir.extension().and_then(|e| e.to_str()) != Some("mlpackage") {
+        if !mlpackage_dir.pop() {
+            break;
+        }
+    }
+    let model_dir = mlpackage_dir
         .parent()
         .unwrap_or(&resolved.path)
         .to_path_buf();
+
+    // Also download tokenizer.json from the repo root (not inside .mlpackage).
+    // ANE embedding needs the tokenizer alongside the model.
+    if let swissarmyhammer_config::ModelSource::HuggingFace { repo, .. } = &cfg.source {
+        let tok_path = model_dir.join("tokenizer.json");
+        if !tok_path.exists() {
+            model_loader::download_hf_file(
+                repo,
+                "tokenizer.json",
+                &model_loader::RetryConfig::default(),
+            )
+            .await
+            .map_err(|e| EmbeddingError::model(format!("Failed to download tokenizer: {e}")))?;
+        }
+    }
 
     tracing::info!(
         model_dir = %model_dir.display(),

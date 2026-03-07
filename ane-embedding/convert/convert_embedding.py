@@ -3,11 +3,12 @@
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
 #     "torch>=2.7,<2.8",
-#     "transformers>=4.51",
+#     "transformers>=4.51,<4.52",
 #     "coremltools>=8.0,<10.0",
 #     "numpy",
 #     "peft>=0.11",
 #     "huggingface_hub>=0.20",
+#     "scikit-learn",
 # ]
 # ///
 """Convert embedding models to CoreML .mlpackage for Apple Neural Engine.
@@ -27,14 +28,13 @@ Supports post-training weight compression:
   --compression none        (fp16 weights, no compression -- default)
 
 Models:
-  qwen3-embedding-0.6b   Qwen/Qwen3-Embedding-0.6B (dim=1024)
-  nomic-embed-code-v2     nomic-ai/nomic-embed-code-v2 (dim=768)
-  jina-embeddings-v3      jinaai/jina-embeddings-v3 (dim=1024, LoRA merge)
+  qwen3-embedding-0.6b       Qwen/Qwen3-Embedding-0.6B (dim=1024, mean pooling)
+  nomic-embed-code            nomic-ai/nomic-embed-code (dim=3584, mean pooling, 7B — too large for ANE)
 
 Usage:
     uv run convert_embedding.py --model qwen3-embedding-0.6b
     uv run convert_embedding.py --model all --compression palettize4
-    uv run convert_embedding.py --model jina-embeddings-v3 --upload
+    uv run convert_embedding.py --model nomic-embed-code --upload
 """
 
 import argparse
@@ -47,7 +47,24 @@ import coremltools.optimize as cto
 import numpy as np
 import torch
 import torch.nn as nn
+from coremltools.converters.mil import Builder as mb
+from coremltools.converters.mil import register_torch_op
+from coremltools.converters.mil.frontend.torch.ops import _get_inputs
 from transformers import AutoModel, AutoTokenizer
+
+
+@register_torch_op
+def new_ones(context, node):
+    """Convert torch new_ones op to MIL (not natively supported by coremltools).
+
+    new_ones(self, size, dtype, layout, device, pin_memory) -> Tensor
+    """
+    inputs = _get_inputs(context, node, expected=6)
+    shape = inputs[1]
+    # Cast shape to int32 if needed (mb.fill requires int32 shape)
+    shape = mb.cast(x=shape, dtype="int32", name=node.name + "_shape")
+    result = mb.fill(shape=shape, value=1.0, name=node.name)
+    context.add(result)
 
 
 @dataclass
@@ -59,6 +76,7 @@ class ModelSpec:
     seq_lengths: list[int] = field(default_factory=lambda: [64, 128, 256, 512])
     hf_upload: str = ""
     special_handling: str = ""
+    pooling: str = "mean"  # "mean" or "last_token"
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
@@ -68,23 +86,22 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         seq_lengths=[64, 128, 256, 512],
         hf_upload="wballard/Qwen3-Embedding-0.6B-CoreML",
     ),
-    "nomic-embed-code-v2": ModelSpec(
-        repo="nomic-ai/nomic-embed-code-v2",
+    "nomic-embed-code": ModelSpec(
+        repo="nomic-ai/nomic-embed-code",
+        dim=3584,
+        seq_lengths=[64, 128, 256, 512],
+        hf_upload="wballard/nomic-embed-code-CoreML",
+    ),
+    "unixcoder-base": ModelSpec(
+        repo="microsoft/unixcoder-base",
         dim=768,
         seq_lengths=[64, 128, 256, 512],
-        hf_upload="wballard/nomic-embed-code-v2-CoreML",
-    ),
-    "jina-embeddings-v3": ModelSpec(
-        repo="jinaai/jina-embeddings-v3",
-        dim=1024,
-        seq_lengths=[64, 128, 256, 512],
-        hf_upload="wballard/jina-embeddings-v3-CoreML",
-        special_handling="merge_lora",
+        hf_upload="wballard/unixcoder-base-CoreML",
     ),
 }
 
 
-class EmbeddingWithPooling(nn.Module):
+class EmbeddingMeanPooling(nn.Module):
     """Wraps a transformer encoder to produce mean-pooled embeddings.
 
     Takes input_ids and attention_mask, runs through the encoder, and returns
@@ -96,22 +113,32 @@ class EmbeddingWithPooling(nn.Module):
         self.encoder = encoder
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        """Produce mean-pooled embedding from token inputs.
-
-        Args:
-            input_ids: Token IDs with shape (1, seq_len).
-            attention_mask: Attention mask with shape (1, seq_len).
-
-        Returns:
-            Float32 embedding tensor with shape (1, hidden_dim).
-        """
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         hidden = outputs.last_hidden_state
         mask_expanded = attention_mask.unsqueeze(-1).float()
         summed = (hidden * mask_expanded).sum(dim=1)
         counts = mask_expanded.sum(dim=1).clamp(min=1e-9)
-        # Cast to float32 for coreml-rs compatibility (doesn't support f16 outputs yet)
         return (summed / counts).float()
+
+
+class EmbeddingLastTokenPooling(nn.Module):
+    """Wraps a transformer encoder to produce last-token-pooled embeddings.
+
+    Used by models like jina-code-embeddings-0.5b that pool from the last
+    non-padding token rather than averaging all tokens.
+    """
+
+    def __init__(self, encoder: nn.Module):
+        super().__init__()
+        self.encoder = encoder
+
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        hidden = outputs.last_hidden_state
+        # Find last non-padding token index per batch element
+        seq_lens = attention_mask.sum(dim=1) - 1  # (batch,)
+        last_hidden = hidden[torch.arange(hidden.size(0)), seq_lens]
+        return last_hidden.float()
 
 
 def compress_model(mlmodel, compression: str):
@@ -173,6 +200,7 @@ def load_model(spec: ModelSpec) -> nn.Module:
         spec.repo,
         trust_remote_code=True,
         torch_dtype=torch.float32,
+        attn_implementation="eager",
     )
 
     if spec.special_handling == "merge_lora":
@@ -183,7 +211,7 @@ def load_model(spec: ModelSpec) -> nn.Module:
     return base_model
 
 
-def convert_model(model_key: str, spec: ModelSpec, output_dir: Path, compression: str):
+def convert_model(model_key: str, spec: ModelSpec, output_dir: Path, compression: str, compute_precision: str = "float16"):
     """Convert a single embedding model to CoreML .mlpackage format.
 
     Performs the full pipeline: load model, wrap with mean pooling, export
@@ -203,7 +231,10 @@ def convert_model(model_key: str, spec: ModelSpec, output_dir: Path, compression
     tokenizer = AutoTokenizer.from_pretrained(spec.repo, trust_remote_code=True)
     base_model = load_model(spec)
 
-    wrapper = EmbeddingWithPooling(base_model)
+    if spec.pooling == "last_token":
+        wrapper = EmbeddingLastTokenPooling(base_model)
+    else:
+        wrapper = EmbeddingMeanPooling(base_model)
     wrapper.eval().float()
 
     # Verify model output before conversion
@@ -225,8 +256,10 @@ def convert_model(model_key: str, spec: ModelSpec, output_dir: Path, compression
         "input_ids": {1: seq_dim},
         "attention_mask": {1: seq_dim},
     }
-    exported = torch.export.export(wrapper, example_inputs, dynamic_shapes=dynamic_shapes)
-    # Decompose high-level ops to ATEN dialect (required by coremltools)
+    exported = torch.export.export(
+        wrapper, example_inputs, dynamic_shapes=dynamic_shapes, strict=False
+    )
+    # Decompose to ATEN dialect (required by coremltools)
     exported = exported.run_decompositions({})
     print("torch.export succeeded")
 
@@ -236,7 +269,8 @@ def convert_model(model_key: str, spec: ModelSpec, output_dir: Path, compression
     print(f"EnumeratedShapes: {shapes} (default={default_shape})")
 
     # Convert ExportedProgram to CoreML with enumerated shapes
-    print("Converting to CoreML mlprogram format (float16 compute, float32 output, CPU_AND_NE)...")
+    ct_precision = ct.precision.FLOAT16 if compute_precision == "float16" else ct.precision.FLOAT32
+    print(f"Converting to CoreML mlprogram format ({compute_precision} compute, float32 output, CPU_AND_NE)...")
     mlmodel = ct.convert(
         exported,
         inputs=[
@@ -253,7 +287,7 @@ def convert_model(model_key: str, spec: ModelSpec, output_dir: Path, compression
         ],
         outputs=[ct.TensorType(name="embedding", dtype=np.float32)],
         convert_to="mlprogram",
-        compute_precision=ct.precision.FLOAT16,
+        compute_precision=ct_precision,
         compute_units=ct.ComputeUnit.CPU_AND_NE,
         minimum_deployment_target=ct.target.macOS15,
     )
@@ -363,6 +397,12 @@ def main():
         help="Post-training weight compression (default: palettize4)",
     )
     parser.add_argument(
+        "--compute-precision",
+        choices=["float16", "float32"],
+        default="float16",
+        help="CoreML compute precision (default: float16). Use float32 for models that produce NaN with float16.",
+    )
+    parser.add_argument(
         "--upload",
         action="store_true",
         help="Upload to HuggingFace Hub after conversion.",
@@ -381,7 +421,7 @@ def main():
         print(f"Converting: {model_key} ({spec.repo})")
         print(f"{'=' * 60}\n")
 
-        result_dir = convert_model(model_key, spec, args.output_dir, args.compression)
+        result_dir = convert_model(model_key, spec, args.output_dir, args.compression, args.compute_precision)
 
         if args.upload:
             upload_to_hub(model_key, spec, result_dir)

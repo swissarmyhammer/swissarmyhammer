@@ -4,8 +4,24 @@ use crate::multipart::{download_folder_model, download_multi_part_model};
 use crate::retry::download_with_retry;
 use crate::types::RetryConfig;
 use hf_hub::api::tokio::ApiBuilder;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+
+/// Download a single file from a HuggingFace repo without model extension validation.
+///
+/// Use this for companion files like `tokenizer.json` that live alongside model files.
+/// Returns the cached file path.
+pub async fn download_hf_file(
+    repo: &str,
+    filename: &str,
+    retry_config: &RetryConfig,
+) -> Result<PathBuf, ModelError> {
+    let api = ApiBuilder::new()
+        .build()
+        .map_err(|e| ModelError::Network(format!("Failed to create HF API: {e}")))?;
+    let repo_api = api.model(repo.to_string());
+    download_with_retry(&repo_api, filename, repo, retry_config).await
+}
 
 /// Loads a model from HuggingFace and returns path info for caching
 pub async fn load_huggingface_model_with_path(
@@ -49,6 +65,12 @@ pub async fn load_huggingface_model_with_path_and_folder(
         let model_path =
             download_folder_model(&repo_api, &folder_files, repo, retry_config).await?;
         info!("Folder-based model downloaded to: {}", model_path.display());
+
+        // HF cache uses symlinks (snapshot → blobs). Some frameworks like CoreML
+        // don't follow symlinks when compiling .mlpackage directories.
+        // Replace symlinks with hardlinks to the same blobs (no extra storage).
+        deref_folder_symlinks(&model_path, folder_name)?;
+
         // Extract just the filename from the first file (remove folder prefix)
         let filename = folder_files[0]
             .split('/')
@@ -113,6 +135,67 @@ pub fn get_all_parts(base_filename: &str) -> Option<Vec<String>> {
     } else {
         None
     }
+}
+
+/// Replace symlinks with hardlinks inside a downloaded folder.
+///
+/// HF cache stores blobs separately and creates symlinks in the snapshot tree.
+/// Some frameworks (notably CoreML's `compileModelAtURL`) don't follow symlinks
+/// when copying to temp dirs. Hardlinks reference the same inode — no extra disk
+/// space — but look like regular files to all tools.
+fn deref_folder_symlinks(any_file_in_folder: &Path, folder_name: &str) -> Result<(), ModelError> {
+    // Walk up from the downloaded file path to find the folder root
+    let mut folder_root = any_file_in_folder.to_path_buf();
+    loop {
+        if folder_root
+            .file_name()
+            .map(|n| n.to_string_lossy() == folder_name)
+            .unwrap_or(false)
+        {
+            break;
+        }
+        if !folder_root.pop() {
+            // Couldn't find the folder root — skip silently
+            return Ok(());
+        }
+    }
+
+    deref_dir_recursive(&folder_root)
+}
+
+fn deref_dir_recursive(dir: &Path) -> Result<(), ModelError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| ModelError::LoadingFailed(format!("{e}")))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| ModelError::LoadingFailed(format!("{e}")))?;
+        let path = entry.path();
+        let ft = entry
+            .file_type()
+            .map_err(|e| ModelError::LoadingFailed(format!("{e}")))?;
+
+        if ft.is_symlink() {
+            // Resolve the symlink target, remove the symlink, hardlink to the blob
+            let target = std::fs::canonicalize(&path)
+                .map_err(|e| ModelError::LoadingFailed(format!("symlink resolve: {e}")))?;
+            std::fs::remove_file(&path)
+                .map_err(|e| ModelError::LoadingFailed(format!("remove symlink: {e}")))?;
+            std::fs::hard_link(&target, &path).map_err(|e| {
+                ModelError::LoadingFailed(format!(
+                    "hardlink {} → {}: {e}",
+                    path.display(),
+                    target.display()
+                ))
+            })?;
+            info!(
+                "Dereferenced symlink: {} → {}",
+                path.display(),
+                target.display()
+            );
+        } else if ft.is_dir() {
+            deref_dir_recursive(&path)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

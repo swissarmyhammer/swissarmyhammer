@@ -1,7 +1,7 @@
 //! Timing harness: Qwen3-Embedding-0.6B on ANE (CoreML) vs CPU (llama.cpp).
 //!
 //! Same model, quantized:
-//! - ANE: Static-shape FP16 .mlpackage (seq128) for Apple Neural Engine
+//! - ANE: Static-shape FP16 .mlpackage (seq256) for Apple Neural Engine
 //! - CPU: GGUF Q8_0 from Qwen/Qwen3-Embedding-0.6B-GGUF (auto-downloaded)
 //!
 //! Reports: load time, first-embed latency, then min/mean/max/p50/p95 over N embeds.
@@ -128,7 +128,7 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     println!("Qwen3-Embedding-0.6B: ANE (FP16 CoreML) vs CPU (Q8_0 llama.cpp)");
-    println!("ANE uses static-shape seq128 — inputs padded/truncated to 128 tokens");
+    println!("ANE uses static-shape seq256 — inputs padded/truncated to 256 tokens");
     println!("N={N} embeds per config, cycling {} texts\n", TEXTS.len());
 
     // ANE (CoreML) — static-shape FP16 model
@@ -141,12 +141,9 @@ fn main() {
         });
         let load_time = t0.elapsed();
         let stats = bench_embedder(&rt, &model);
-        print_stats("ANE CoreML (FP16, static seq128)", load_time, &stats);
+        print_stats("ANE CoreML (FP16, static seq256)", load_time, &stats);
 
-        // Leak the model to avoid SIGABRT on CoreML teardown.
-        // This is a known coreml-rs issue — the Swift runtime crashes
-        // when MLModel is deallocated during process exit.
-        std::mem::forget(model);
+        drop(model);
     } else {
         println!(
             "  ANE CoreML: skipped (no .mlpackage at {})",

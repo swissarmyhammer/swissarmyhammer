@@ -1,18 +1,17 @@
 use std::time::Instant;
 
 use async_trait::async_trait;
-use coreml_rs::{ComputePlatform, CoreMLModelOptions, CoreMLModelWithState};
 use model_embedding::{EmbeddingResult, TextEmbedder};
-use ndarray::{Array2, ArrayD};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
+use crate::coreml::CoreMLModel;
 use crate::error::EmbeddingError;
 use crate::types::AneEmbeddingConfig;
 
 struct Inner {
-    model: Option<CoreMLModelWithState>,
+    model: Option<CoreMLModel>,
     tokenizer: Option<Tokenizer>,
     embedding_dim: Option<usize>,
 }
@@ -26,7 +25,7 @@ pub struct AneEmbeddingModel {
     config: AneEmbeddingConfig,
 }
 
-// Safety: CoreMLModelWithState is thread-safe for inference.
+// Safety: CoreMLModel wraps an MLModel which is thread-safe for prediction per Apple docs.
 // Access is serialized by Mutex.
 unsafe impl Send for Inner {}
 unsafe impl Sync for Inner {}
@@ -109,37 +108,12 @@ impl AneEmbeddingModel {
             )));
         }
 
-        let opts = CoreMLModelOptions {
-            compute_platform: ComputePlatform::CpuAndANE,
-            ..Default::default()
-        };
+        let coreml_model = CoreMLModel::load(&model_path)?;
 
-        let model_path_str = model_path.to_string_lossy().to_string();
-        let coreml_model = CoreMLModelWithState::new(model_path_str, opts);
-        let mut coreml_model = coreml_model
-            .load()
-            .map_err(|e| EmbeddingError::coreml(format!("Failed to load .mlpackage: {e}")))?;
-
-        // Detect embedding dimension with a dummy inference
-        let sl = self.config.seq_length;
-        let dummy_ids = Array2::<i32>::zeros((1, sl)).into_dyn();
-        let dummy_mask = Array2::<i32>::zeros((1, sl)).into_dyn();
-
-        coreml_model
-            .add_input("input_ids", dummy_ids)
-            .map_err(|e| EmbeddingError::coreml(format!("Failed to add dummy input: {e}")))?;
-        coreml_model
-            .add_input("attention_mask", dummy_mask)
-            .map_err(|e| EmbeddingError::coreml(format!("Failed to add dummy mask: {e}")))?;
-
-        if let Ok(output) = coreml_model.predict() {
-            if let Some((_, arr)) = output.outputs.into_iter().find(|(k, _)| k == "embedding") {
-                let dim = *arr.shape().last().unwrap_or(&0);
-                if dim > 0 {
-                    inner.embedding_dim = Some(dim);
-                    info!(embedding_dim = dim, "Detected embedding dimension");
-                }
-            }
+        // Detect embedding dimension from model description
+        if let Ok(Some(dim)) = coreml_model.embedding_dim() {
+            inner.embedding_dim = Some(dim);
+            info!(embedding_dim = dim, "Detected embedding dimension");
         }
 
         inner.model = Some(coreml_model);
@@ -153,7 +127,7 @@ impl AneEmbeddingModel {
     /// Embed a single text string. Pads or truncates to the fixed seq_length.
     async fn embed_impl(&self, text: &str) -> crate::error::Result<EmbeddingResult> {
         let start = Instant::now();
-        let mut inner = self.inner.lock().await;
+        let inner = self.inner.lock().await;
         let t_lock = start.elapsed();
 
         if inner.model.is_none() {
@@ -186,51 +160,19 @@ impl AneEmbeddingModel {
             ids_padded[i] = input_ids[i] as i32;
             mask_padded[i] = attention_mask[i] as i32;
         }
-
-        let ids_array: ArrayD<i32> = Array2::from_shape_vec((1, padded_len), ids_padded)
-            .map_err(|e| EmbeddingError::text_processing(format!("Shape error: {e}")))?
-            .into_dyn();
-        let mask_array: ArrayD<i32> = Array2::from_shape_vec((1, padded_len), mask_padded)
-            .map_err(|e| EmbeddingError::text_processing(format!("Shape error: {e}")))?
-            .into_dyn();
         let t_tensors = t0.elapsed();
 
-        let model = inner.model.as_mut().unwrap();
-
-        let t0 = Instant::now();
-        model
-            .add_input("input_ids", ids_array)
-            .map_err(|e| EmbeddingError::coreml(format!("Failed to add input_ids: {e}")))?;
-        model
-            .add_input("attention_mask", mask_array)
-            .map_err(|e| EmbeddingError::coreml(format!("Failed to add attention_mask: {e}")))?;
-        let t_add_input = t0.elapsed();
+        let model = inner.model.as_ref().unwrap();
 
         // Run inference
         let t0 = Instant::now();
-        let output = model
-            .predict()
-            .map_err(|e| EmbeddingError::coreml(format!("Prediction failed: {e}")))?;
+        let output = model.predict_embedding(&ids_padded, &mask_padded, padded_len)?;
         let t_predict = t0.elapsed();
 
-        let t0 = Instant::now();
-        let embedding_array = output
-            .outputs
-            .into_iter()
-            .find(|(k, _)| k == "embedding")
-            .ok_or_else(|| EmbeddingError::text_processing("No 'embedding' output found"))?
-            .1;
-
-        let embedding = mlarray_to_f32(embedding_array);
-        let t_extract = t0.elapsed();
+        let embedding = output.embedding;
 
         if embedding.is_empty() {
             return Err(EmbeddingError::text_processing("Empty embedding output"));
-        }
-
-        let dim = embedding.len();
-        if inner.embedding_dim.is_none() {
-            inner.embedding_dim = Some(dim);
         }
 
         let total = start.elapsed();
@@ -240,9 +182,7 @@ impl AneEmbeddingModel {
             lock_us = t_lock.as_micros(),
             tokenize_us = t_tokenize.as_micros(),
             tensors_us = t_tensors.as_micros(),
-            add_input_us = t_add_input.as_micros(),
             predict_us = t_predict.as_micros(),
-            extract_us = t_extract.as_micros(),
             total_us = total.as_micros(),
             "embed_impl timing breakdown"
         );
@@ -262,19 +202,6 @@ impl AneEmbeddingModel {
     }
 }
 
-/// Extract f32 values from an MLArray, handling both f32 and f16 outputs.
-fn mlarray_to_f32(array: coreml_rs::mlarray::MLArray) -> Vec<f32> {
-    use coreml_rs::mlarray::MLArray;
-    match array {
-        MLArray::Float32Array(a) => a.into_raw_vec(),
-        MLArray::Float16Array(a) => a.into_raw_vec().iter().map(|v| v.to_f32()).collect(),
-        other => {
-            tracing::warn!("Unexpected output type, shape: {:?}", other.shape());
-            vec![]
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +212,6 @@ mod tests {
         let model = AneEmbeddingModel::new(config);
         assert!(!model.is_loaded());
         assert_eq!(model.embedding_dimension(), None);
-        assert_eq!(model.seq_length(), 128);
+        assert_eq!(model.seq_length(), 256);
     }
 }

@@ -1,7 +1,7 @@
 //! Timing harness: nomic-embed-code on ANE (CoreML) vs CPU (llama.cpp).
 //!
 //! Same model, quantized:
-//! - ANE: Static-shape palettize4 .mlpackage (seq128) for Apple Neural Engine
+//! - ANE: Static-shape palettize4 .mlpackage (seq256) for Apple Neural Engine
 //! - CPU: GGUF Q8_0 from nomic-ai/nomic-embed-code-GGUF (auto-downloaded)
 //!
 //! Reports: load time, first-embed latency, then min/mean/max/p50/p95 over N embeds.
@@ -49,7 +49,7 @@ fn ane_config() -> ane_embedding::AneEmbeddingConfig {
         model_dir: dir,
         model_prefix: "nomic-embed-code".to_string(),
         normalize_embeddings: true,
-        seq_length: 128,
+        seq_length: 256,
         debug: false,
     }
 }
@@ -131,7 +131,7 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     println!("nomic-embed-code (7B): ANE (palettize4 CoreML) vs CPU (Q8_0 llama.cpp)");
-    println!("ANE uses static-shape seq128 — inputs padded/truncated to 128 tokens");
+    println!("ANE uses static-shape seq256 — inputs padded/truncated to 256 tokens");
     println!("N={N} embeds per config, cycling {} texts\n", TEXTS.len());
 
     // ANE (CoreML) — static-shape palettize4 model
@@ -144,10 +144,9 @@ fn main() {
         });
         let load_time = t0.elapsed();
         let stats = bench_embedder(&rt, &model);
-        print_stats("ANE CoreML (palettize4, static seq128)", load_time, &stats);
+        print_stats("ANE CoreML (palettize4, static seq256)", load_time, &stats);
 
-        // Leak the model to avoid SIGABRT on CoreML teardown.
-        std::mem::forget(model);
+        drop(model);
     } else {
         println!(
             "  ANE CoreML: skipped (no .mlpackage at {})",

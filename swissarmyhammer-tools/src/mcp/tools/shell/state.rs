@@ -19,7 +19,7 @@ use rusqlite::Connection;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
-use llama_embedding::{EmbeddingConfig, EmbeddingModel, TextEmbedder};
+use swissarmyhammer_embedding::{Embedder, TextEmbedder};
 
 const CHUNK_SIZE: usize = 15; // lines per embedding chunk
 const BYTES_PER_F32: usize = 4;
@@ -466,9 +466,8 @@ pub async fn search(
 ) -> anyhow::Result<Vec<SearchResult>> {
     let limit = limit.unwrap_or(10);
 
-    // Create a temporary embedding model for the query
-    let config = EmbeddingConfig::default();
-    let model = EmbeddingModel::new(config)
+    // Create an embedding model for the query using the platform-aware Embedder
+    let model = Embedder::default()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create embedding model: {}", e))?;
     model
@@ -545,7 +544,7 @@ pub struct SearchResult {
 /// then computes and stores embeddings.
 async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connection>>) {
     // Lazy-init the model on first chunk
-    let mut model: Option<EmbeddingModel> = None;
+    let mut model: Option<Embedder> = None;
 
     while let Some(job) = rx.recv().await {
         // Step 1: INSERT the chunk text into DB (even if embedding fails, text is stored)
@@ -561,8 +560,7 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
 
         // Step 2: Initialize embedding model on first use
         if model.is_none() {
-            let config = EmbeddingConfig::default();
-            match EmbeddingModel::new(config).await {
+            match Embedder::default().await {
                 Ok(m) => {
                     if let Err(e) = m.load().await {
                         tracing::warn!(

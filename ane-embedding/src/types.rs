@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Default max sequence length for ANE embedding.
-pub const DEFAULT_SEQ_LENGTH: usize = 128;
+pub const DEFAULT_SEQ_LENGTH: usize = 256;
 
 /// Default model name prefix for .mlpackage files.
 pub const DEFAULT_MODEL_PREFIX: &str = "Qwen3-Embedding-0.6B";
@@ -61,7 +61,7 @@ mod tests {
     fn test_default_config() {
         let config = AneEmbeddingConfig::default();
         assert!(config.normalize_embeddings);
-        assert_eq!(config.seq_length, 128);
+        assert_eq!(config.seq_length, 256);
         assert_eq!(config.model_prefix, "Qwen3-Embedding-0.6B");
         assert!(!config.debug);
     }
@@ -82,7 +82,7 @@ mod tests {
         assert_eq!(
             config.model_path(),
             PathBuf::from(
-                "var/data/models/qwen3-embedding-0.6b/Qwen3-Embedding-0.6B-seq128.mlpackage"
+                "var/data/models/qwen3-embedding-0.6b/Qwen3-Embedding-0.6B-seq256.mlpackage"
             )
         );
     }

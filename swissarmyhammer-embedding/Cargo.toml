@@ -17,3 +17,6 @@ swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 async-trait = "0.1"
 thiserror = "2"
 tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

@@ -24,7 +24,7 @@
 
 mod embedder;
 
-pub use embedder::Embedder;
+pub use embedder::{Embedder, DEFAULT_MODEL_NAME};
 pub use model_embedding::{
     BatchConfig, BatchProcessor, BatchStats, EmbeddingError, EmbeddingResult, TextEmbedder,
 };

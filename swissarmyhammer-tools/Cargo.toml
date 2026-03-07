@@ -86,8 +86,8 @@ rand = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
 
-# Embedding model for semantic search
-llama-embedding = { workspace = true }
+# Embedding model for semantic search (platform-aware: ANE on Apple Silicon, llama.cpp elsewhere)
+swissarmyhammer-embedding = { path = "../swissarmyhammer-embedding" }
 
 # SQLite for embedding storage
 rusqlite = { workspace = true }

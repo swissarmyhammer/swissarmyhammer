@@ -10,7 +10,7 @@ executors:
         source: !HuggingFace
           repo: "wballard/Qwen3-Embedding-0.6B-CoreML"
         normalize: true
-        max_sequence_length: 128
+        max_sequence_length: 256
   - executor:
       type: llama-embedding
       config:

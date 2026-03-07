@@ -26,8 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("index_bench=info".parse()?)
                 .add_directive("swissarmyhammer_treesitter=info".parse()?)
-                .add_directive("llama_embedding=info".parse()?)
-                .add_directive("model_loader=info".parse()?),
+                .add_directive("swissarmyhammer_embedding=info".parse()?),
         )
         .with_target(true)
         .with_timer(tracing_subscriber::fmt::time::uptime())

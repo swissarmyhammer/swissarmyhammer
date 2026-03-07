@@ -89,7 +89,11 @@ pub async fn auto_detect_hf_model_file_with_folder(
     }
 }
 
-/// Gets all model files from a specific folder in a HuggingFace repository
+/// Gets all files from a specific folder in a HuggingFace repository.
+///
+/// Downloads ALL files in the folder, not just model files. This is important
+/// for directory-based formats like `.mlpackage` that contain metadata files
+/// (e.g. `Manifest.json`) alongside model weights.
 pub async fn get_folder_files(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     folder: &str,
@@ -100,25 +104,19 @@ pub async fn get_folder_files(
             let folder_prefix = format!("{}/", folder);
 
             for sibling in repo_info.siblings {
-                if sibling.rfilename.starts_with(&folder_prefix)
-                    && has_model_extension(&sibling.rfilename)
-                {
+                if sibling.rfilename.starts_with(&folder_prefix) {
                     folder_files.push(sibling.rfilename);
                 }
             }
 
             if folder_files.is_empty() {
                 Err(ModelError::NotFound(format!(
-                    "No model files found in folder '{}' in HuggingFace repository",
+                    "No files found in folder '{}' in HuggingFace repository",
                     folder
                 )))
             } else {
                 folder_files.sort();
-                info!(
-                    "Found {} model files in folder '{}'",
-                    folder_files.len(),
-                    folder
-                );
+                info!("Found {} files in folder '{}'", folder_files.len(), folder);
                 Ok(folder_files)
             }
         }
