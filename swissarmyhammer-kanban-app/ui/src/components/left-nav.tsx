@@ -1,4 +1,4 @@
-import { Kanban, List, Calendar, Clock, LayoutGrid, Table2 } from "lucide-react";
+import { Kanban, List, Calendar, Clock, LayoutGrid, Table2, Tag } from "lucide-react";
 import { useViews } from "@/lib/views-context";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -19,6 +19,8 @@ function viewIcon(view: ViewDef) {
     case "table":
     case "grid":
       return <Table2 className="h-4 w-4" />;
+    case "tag":
+      return <Tag className="h-4 w-4" />;
     default:
       return <LayoutGrid className="h-4 w-4" />;
   }

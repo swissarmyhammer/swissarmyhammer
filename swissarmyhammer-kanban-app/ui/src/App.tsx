@@ -344,7 +344,6 @@ function ActiveViewRenderer({
     return (
       <GridView
         view={activeView}
-        tasks={tasks}
       />
     );
   }

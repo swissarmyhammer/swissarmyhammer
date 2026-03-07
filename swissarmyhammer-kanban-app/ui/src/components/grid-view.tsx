@@ -5,6 +5,7 @@ import { useSchema } from "@/lib/schema-context";
 import { useKeymap } from "@/lib/keymap-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
+import { useEntityStore } from "@/lib/entity-store-context";
 import { useInspect } from "@/lib/inspect-context";
 import { moniker } from "@/lib/moniker";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
@@ -14,12 +15,14 @@ import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
 
 interface GridViewProps {
   view: ViewDef;
-  tasks: Entity[];
 }
 
-export function GridView({ view, tasks }: GridViewProps) {
+export function GridView({ view }: GridViewProps) {
+  const { getEntities } = useEntityStore();
+  const entityType = view.entity_type ?? "task";
+  const entities = getEntities(entityType);
   const { getSchema } = useSchema();
-  const schema = getSchema(view.entity_type ?? "task");
+  const schema = getSchema(entityType);
   const fields = schema?.fields ?? [];
 
   // Build columns from view's card_fields (or all visible fields)
@@ -38,7 +41,7 @@ export function GridView({ view, tasks }: GridViewProps) {
       .map((f) => ({ field: f }));
   }, [view.card_fields, fields]);
 
-  const grid = useGrid({ rowCount: tasks.length, colCount: columns.length });
+  const grid = useGrid({ rowCount: entities.length, colCount: columns.length });
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
@@ -180,10 +183,10 @@ export function GridView({ view, tasks }: GridViewProps) {
         name: "Delete Row",
         execute: () => {
           const row = gridRef.current.cursor.row;
-          if (row >= 0 && row < tasks.length) {
-            const entity = tasks[row];
+          if (row >= 0 && row < entities.length) {
+            const entity = entities[row];
             invoke("dispatch_command", {
-              cmd: "task.archive",
+              cmd: `${entityType}.archive`,
               args: { id: entity.id },
             }).catch((err) => console.error("Failed to delete row:", err));
           }
@@ -195,8 +198,8 @@ export function GridView({ view, tasks }: GridViewProps) {
         keys: { vim: "o", cua: "Mod+Enter" },
         execute: () => {
           invoke("dispatch_command", {
-            cmd: "task.add",
-            args: { title: "New task" },
+            cmd: `${entityType}.add`,
+            args: { title: `New ${entityType}` },
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },
@@ -206,8 +209,8 @@ export function GridView({ view, tasks }: GridViewProps) {
         keys: { vim: "O", cua: "Mod+Shift+Enter" },
         execute: () => {
           invoke("dispatch_command", {
-            cmd: "task.add",
-            args: { title: "New task" },
+            cmd: `${entityType}.add`,
+            args: { title: `New ${entityType}` },
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },
@@ -217,22 +220,22 @@ export function GridView({ view, tasks }: GridViewProps) {
         contextMenu: true,
         execute: () => {
           const row = gridRef.current.cursor.row;
-          if (row >= 0 && row < tasks.length) {
-            const entity = tasks[row];
+          if (row >= 0 && row < entities.length) {
+            const entity = entities[row];
             inspectEntity(moniker(entity.entity_type, entity.id));
           }
         },
       },
       {
-        id: "task.archive",
+        id: `${entityType}.archive`,
         name: "Archive",
         contextMenu: true,
         execute: () => {
           const row = gridRef.current.cursor.row;
-          if (row >= 0 && row < tasks.length) {
-            const entity = tasks[row];
+          if (row >= 0 && row < entities.length) {
+            const entity = entities[row];
             invoke("dispatch_command", {
-              cmd: "task.archive",
+              cmd: `${entityType}.archive`,
               args: { id: entity.id },
             }).catch((err) => console.error("Failed to archive:", err));
           }
@@ -240,7 +243,7 @@ export function GridView({ view, tasks }: GridViewProps) {
       },
     ];
     return commands;
-  }, [tasks, inspectEntity]);
+  }, [entities, entityType, inspectEntity]);
 
   const handleCellClick = useCallback((row: number, col: number) => {
     grid.setCursor(row, col);
@@ -268,12 +271,12 @@ export function GridView({ view, tasks }: GridViewProps) {
     <CommandScopeProvider commands={gridCommands}>
       <main className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
-          <span>{tasks.length} rows</span>
+          <span>{entities.length} rows</span>
           <span className="text-muted-foreground/50">|</span>
           <span>
             {grid.mode === "edit" ? "EDIT" : grid.mode === "visual" ? "VISUAL" : "NORMAL"}
           </span>
-          {tasks.length > 0 && (
+          {entities.length > 0 && (
             <>
               <span className="text-muted-foreground/50">|</span>
               <span>
@@ -284,7 +287,7 @@ export function GridView({ view, tasks }: GridViewProps) {
         </div>
         <DataTable
           columns={columns}
-          rows={tasks}
+          rows={entities}
           grid={grid}
           onCellClick={handleCellClick}
           renderEditor={renderEditor}
