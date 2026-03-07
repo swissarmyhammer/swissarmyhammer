@@ -24,7 +24,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
 
 /// Default shell configuration providing hardcoded sensible defaults
@@ -1667,6 +1666,12 @@ pub struct ShellExecuteTool {
     state: Arc<Mutex<ShellState>>,
 }
 
+impl Default for ShellExecuteTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShellExecuteTool {
     /// Creates a new instance of the ShellExecuteTool with in-memory state.
     pub fn new() -> Self {
@@ -1894,10 +1899,8 @@ impl McpTool for ShellExecuteTool {
                         }
                         let start_line = lines.first().map(|(n, _)| *n).unwrap_or(0);
                         let end_line = lines.last().map(|(n, _)| *n).unwrap_or(0);
-                        let mut output = format!(
-                            "[cmd {}, lines {}-{}]\n",
-                            command_id, start_line, end_line
-                        );
+                        let mut output =
+                            format!("[cmd {}, lines {}-{}]\n", command_id, start_line, end_line);
                         for (num, text) in &lines {
                             output.push_str(&format!("{}: {}\n", num, text));
                         }
@@ -2001,11 +2004,7 @@ impl McpTool for ShellExecuteTool {
                         let stderr_lines: Vec<String> =
                             result.stderr.lines().map(String::from).collect();
                         if let Err(e) = guard.append_lines(cmd_id, &stderr_lines) {
-                            tracing::warn!(
-                                "Failed to store stderr for command {}: {}",
-                                cmd_id,
-                                e
-                            );
+                            tracing::warn!("Failed to store stderr for command {}: {}", cmd_id, e);
                         }
                     }
                     guard.complete_command(cmd_id, Some(result.exit_code));
@@ -4444,8 +4443,11 @@ mod tests {
     async fn test_grep_history_with_limit() {
         let tool = shared_tool();
         // Run a command with multiple matching lines
-        run_command_with(&tool, "printf 'LIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\n'")
-            .await;
+        run_command_with(
+            &tool,
+            "printf 'LIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\nLIMIT_LINE\\n'",
+        )
+        .await;
 
         let result = execute_op_with(
             &tool,
@@ -4529,7 +4531,8 @@ mod tests {
     async fn test_get_lines_with_range() {
         let tool = shared_tool();
         // Run a command that produces multiple lines
-        let cmd_id = run_command_with(&tool, "printf 'line1\\nline2\\nline3\\nline4\\nline5\\n'").await;
+        let cmd_id =
+            run_command_with(&tool, "printf 'line1\\nline2\\nline3\\nline4\\nline5\\n'").await;
 
         // Get only lines 2-4
         let result = execute_op_with(
