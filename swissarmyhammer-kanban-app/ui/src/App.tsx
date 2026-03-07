@@ -287,7 +287,7 @@ function App() {
 
           {/* Backdrop — visible when any panel is open */}
           <div
-            className={`fixed inset-0 bg-black/20 transition-opacity duration-200 ${
+            className={`fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 ${
               panelStack.length > 0 ? "opacity-100" : "opacity-0 pointer-events-none"
             }`}
             onClick={closeAll}

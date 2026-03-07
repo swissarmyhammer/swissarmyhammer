@@ -20,7 +20,7 @@ export function SlidePanel({ open, onClose, style, children }: SlidePanelProps) 
   return (
     <div
       ref={panelRef}
-      className={`fixed top-0 h-full w-[420px] max-w-[85vw] bg-background border-l border-border shadow-xl flex flex-col transition-transform duration-200 ease-out ${
+      className={`fixed top-0 z-30 h-full w-[420px] max-w-[85vw] bg-background border-l border-border shadow-xl flex flex-col transition-transform duration-200 ease-out ${
         open ? "translate-x-0" : "translate-x-full"
       }`}
       style={style}
