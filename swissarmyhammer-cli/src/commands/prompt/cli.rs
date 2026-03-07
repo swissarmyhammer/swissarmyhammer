@@ -79,7 +79,7 @@ pub enum PromptCommand {
 /// A PromptCommand enum variant containing the parsed command and its arguments
 ///
 /// # Example
-/// ```rust
+/// ```text
 /// let command = parse_prompt_command(&matches);
 /// match command {
 ///     PromptCommand::List(_) => println!("Listing prompts"),

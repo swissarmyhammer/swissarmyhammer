@@ -142,7 +142,7 @@ impl AgentServer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// // In ACP server implementation:
     /// let client_caps = initialize_request.client_capabilities;
     /// agent_server.set_client_capabilities(client_caps).await;
@@ -275,7 +275,7 @@ impl AgentServer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// use serde_json::json;
     ///
     /// let result = agent_server
@@ -342,7 +342,7 @@ impl AgentServer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// // In an ACP server implementation with capability checking:
     /// pub async fn ext_method(
     ///     &self,
@@ -747,8 +747,13 @@ impl AgentServer {
     }
 
     /// Get metadata about the currently loaded model
-    pub async fn get_model_metadata(&self) -> Option<llama_loader::ModelMetadata> {
-        self.model_manager.get_metadata().await
+    pub async fn get_model_metadata(&self) -> Option<model_loader::ModelMetadata> {
+        self.model_manager.metadata().await
+    }
+
+    /// Get the context size from the loaded model.
+    pub async fn get_context_size(&self) -> Option<usize> {
+        self.model_manager.get_context_size().await
     }
 }
 
@@ -1349,16 +1354,15 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// use llama_agent::{Agent, CompactionConfig};
+    /// ```ignore
+    /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let agent = Agent::initialize(Default::default()).await?;
+    /// let agent = AgentServer::initialize(AgentConfig::default()).await?;
     /// let session = agent.create_session().await?;
     ///
     /// let config = CompactionConfig {
     ///     threshold: 0.8,
-    ///     context_limit: 4096,
     ///     preserve_recent: 2,
     ///     custom_prompt: None,
     /// };
@@ -1398,11 +1402,11 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// use llama_agent::{Agent, CompactionConfig};
+    /// ```ignore
+    /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let agent = Agent::initialize(Default::default()).await?;
+    /// let agent = AgentServer::initialize(AgentConfig::default()).await?;
     /// let session = agent.create_session().await?;
     ///
     /// let config = CompactionConfig::default();
@@ -1427,10 +1431,10 @@ impl AgentAPI for AgentServer {
             })?;
 
         let context_size = self
-            .get_model_metadata()
+            .model_manager
+            .get_context_size()
             .await
-            .map(|metadata| metadata.context_size)
-            .unwrap_or(DEFAULT_CONTEXT_SIZE); // Default fallback if metadata not available
+            .unwrap_or(DEFAULT_CONTEXT_SIZE); // Default fallback if model not loaded
 
         Ok(session.should_compact(context_size, config.threshold))
     }
@@ -1450,11 +1454,11 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// use llama_agent::{Agent, CompactionConfig};
+    /// ```ignore
+    /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let agent = Agent::initialize(Default::default()).await?;
+    /// let agent = AgentServer::initialize(AgentConfig::default()).await?;
     ///
     /// let config = CompactionConfig::default();
     /// let summary = agent.auto_compact_sessions(&config).await?;
@@ -1472,13 +1476,8 @@ impl AgentAPI for AgentServer {
         let generate_summary =
             Self::create_summary_generator(self.model_manager.clone(), self.chat_template.clone());
 
-        // Get model context size from model metadata
-        let model_context_size = self
-            .model_manager
-            .get_metadata()
-            .await
-            .map(|metadata| metadata.context_size)
-            .unwrap_or(4096); // Fallback to 4096 if metadata unavailable
+        // Get model context size from loaded model
+        let model_context_size = self.model_manager.get_context_size().await.unwrap_or(4096); // Fallback to 4096 if model not loaded
 
         self.session_manager
             .auto_compact_sessions(config, model_context_size, generate_summary)
@@ -1505,7 +1504,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, SessionId};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -1513,7 +1512,7 @@ impl AgentAPI for AgentServer {
     /// let agent = AgentServer::initialize(config).await?;
     ///
     /// // Load an existing session
-    /// let session_id = SessionId::parse("01ARZ3NDEKTSV4RRFFQ69G5FAV")?;
+    /// let session_id: SessionId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse()?;
     /// let session = agent.load_session(&session_id).await?;
     ///
     /// println!("Loaded session with {} messages", session.messages.len());

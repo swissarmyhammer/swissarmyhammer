@@ -137,19 +137,19 @@ fn test_embedding_result_normalization() {
     );
 
     // Before normalization
-    let original_magnitude: f32 = result.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let original_magnitude: f32 = result.embedding().iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!((original_magnitude - 5.0).abs() < 1e-6);
 
     // Apply normalization
     result.normalize();
 
     // After normalization - should have unit magnitude
-    let normalized_magnitude: f32 = result.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let normalized_magnitude: f32 = result.embedding().iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!((normalized_magnitude - 1.0).abs() < 1e-6);
 
     // Check specific values
-    assert!((result.embedding[0] - 0.6).abs() < 1e-6);
-    assert!((result.embedding[1] - 0.8).abs() < 1e-6);
+    assert!((result.embedding()[0] - 0.6).abs() < 1e-6);
+    assert!((result.embedding()[1] - 0.8).abs() < 1e-6);
     assert_eq!(result.dimension(), 2);
 }
 
@@ -161,7 +161,7 @@ fn test_embedding_result_zero_vector() {
     // Normalize zero vector (should remain zero)
     result.normalize();
 
-    for value in &result.embedding {
+    for value in result.embedding() {
         assert_eq!(*value, 0.0);
     }
 }
@@ -187,11 +187,11 @@ fn test_md5_hash_consistency() {
         );
 
         // Hash should be the same for the same text, regardless of embedding
-        assert_eq!(result1.text_hash, result2.text_hash);
+        assert_eq!(result1.text_hash(), result2.text_hash());
 
         // Hash should match direct MD5 computation
         let expected_hash = format!("{:x}", md5::compute(text));
-        assert_eq!(result1.text_hash, expected_hash);
+        assert_eq!(result1.text_hash(), expected_hash);
     }
 }
 
@@ -199,8 +199,8 @@ fn test_md5_hash_consistency() {
 fn test_error_type_coverage() {
     // Test all error variants to ensure they work correctly
 
-    // ModelLoader error (from conversion)
-    let loader_error = llama_loader::ModelError::InvalidConfig("test".to_string());
+    // ModelResolver error (from conversion)
+    let loader_error = model_loader::ModelError::InvalidConfig("test".to_string());
     let embedding_error: EmbeddingError = loader_error.into();
     match embedding_error {
         EmbeddingError::ModelLoader(_) => {} // Expected

@@ -32,7 +32,7 @@ use crate::types::{MCPError, MCPServerConfig, Session};
 ///
 /// # Usage
 ///
-/// ```rust
+/// ```text
 /// use crate::validation::{MCPValidator, Validator};
 /// use crate::types::{MCPServerConfig, Session};
 ///

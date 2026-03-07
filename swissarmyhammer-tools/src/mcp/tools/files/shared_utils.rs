@@ -962,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(cwd)]
     fn test_validate_file_path_relative() {
         use std::fs;
         use tempfile::TempDir;
@@ -1131,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(cwd)]
     fn test_file_path_validator_relative_paths() {
         // Use validator without workspace restrictions for basic testing
         let validator = FilePathValidator::new();
@@ -1177,7 +1177,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(cwd)]
     fn test_file_path_validator_relative_with_workspace() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
@@ -1385,7 +1385,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(cwd)]
     fn test_secure_file_access_read_relative_paths() {
         // Use default secure access without workspace restrictions for simple testing
         let secure_access = SecureFileAccess::default_secure();

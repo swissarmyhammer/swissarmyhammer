@@ -192,6 +192,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_prompt_resolver_loads_local_prompts() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -273,8 +274,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_user_prompt_overrides_builtin_source_tracking() {
-        // Skip isolated test environment setup for now
         let temp_dir = TempDir::new().unwrap();
         let user_prompts_dir = temp_dir.path().join(".prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
@@ -294,9 +295,8 @@ This is a user-defined debug/error prompt that should override the builtin one.
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();
 
-        // Store original HOME value to restore later
-
-        // Temporarily change home directory for test
+        // Save and restore HOME so we don't pollute other tests
+        let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", temp_dir.path());
 
         // Load builtin prompts first
@@ -307,6 +307,11 @@ This is a user-defined debug/error prompt that should override the builtin one.
 
         // Load user prompts (should override the builtin if it exists, or just add it if not)
         resolver.load_all_prompts(&mut library).unwrap();
+
+        // Restore HOME before asserting
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        }
 
         // Now it should be tracked as a user prompt
         assert_eq!(
@@ -321,8 +326,6 @@ This is a user-defined debug/error prompt that should override the builtin one.
             prompt.template.contains("user-defined"),
             "Prompt should contain user-defined content"
         );
-
-        // HOME is automatically restored when _guard goes out of scope
 
         // If we had a builtin debug/error, verify it was actually overridden
         if has_builtin_debug_error {

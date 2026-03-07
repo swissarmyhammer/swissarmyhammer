@@ -1,0 +1,27 @@
+[package]
+name = "model-loader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Generic model source resolution, download, and caching — runtime-agnostic"
+
+[dependencies]
+llama-common = { workspace = true }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+hf-hub = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+regex = { workspace = true }
+dirs = { workspace = true }
+sha2 = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tracing-test = { workspace = true }
+serial_test = { workspace = true }

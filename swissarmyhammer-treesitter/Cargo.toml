@@ -78,9 +78,8 @@ swissarmyhammer-leader-election = { workspace = true }
 # SIMD-accelerated vector operations
 simsimd = { workspace = true }
 
-# Embedding support
-llama-embedding = { path = "../llama-embedding" }
-llama-loader = { path = "../llama-loader" }
+# Embedding support (platform-aware: ANE on Apple Silicon, llama.cpp elsewhere)
+swissarmyhammer-embedding = { path = "../swissarmyhammer-embedding" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

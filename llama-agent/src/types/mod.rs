@@ -15,8 +15,9 @@ pub mod sessions;
 pub mod streaming;
 pub mod tools;
 
-// Re-export model types from llama-loader
-pub use llama_loader::{ModelConfig, ModelError, ModelSource, RetryConfig};
+// Re-export model types from model-loader (ModelConfig is our local version)
+pub use configs::ModelConfig;
+pub use model_loader::{ModelError, ModelSource, RetryConfig};
 
 // Re-export compaction types from session module (will be re-exported via lib.rs)
 pub use crate::session::{CompactionResult, CompactionSummary};

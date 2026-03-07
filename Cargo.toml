@@ -24,7 +24,11 @@ members = [
     "llama-agent",
     "llama-common",
     "llama-embedding",
-    "llama-loader",
+    "model-loader",
+    "model-embedding",
+    "ane-embedding",
+    "swissarmyhammer-embedding",
+    # "onnxruntime-coreml-sys",  # excluded: builds onnxruntime from source via CMake, not yet used
 
     "acp-conformance",
     "claude-agent",
@@ -48,6 +52,7 @@ members = [
     "swissarmyhammer-entity",
     "swissarmyhammer-views",
     "swissarmyhammer-commands",
+    "benches/embedding_benchmark",
 ]
 resolver = "2"
 
@@ -196,7 +201,7 @@ llama-cpp-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs", feature
 llama-agent = { path = "llama-agent" }
 llama-common = { path = "llama-common" }
 llama-embedding = { path = "llama-embedding" }
-llama-loader = { path = "llama-loader" }
+model-loader = { path = "model-loader" }
 
 # Leader election
 swissarmyhammer-leader-election = { path = "swissarmyhammer-leader-election" }

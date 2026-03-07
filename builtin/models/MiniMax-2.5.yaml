@@ -1,0 +1,11 @@
+---
+description: "MiniMax 2.5: 357B MoE, top coding, 200K context"
+---
+quiet: false
+executor:
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/MiniMax-M2.5-GGUF"
+        folder: "IQ4_NL"

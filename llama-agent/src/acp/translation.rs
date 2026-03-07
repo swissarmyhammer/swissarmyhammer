@@ -26,7 +26,7 @@ use super::session::AcpSessionState;
 /// * `Err(TranslationError)` - If unsupported content is encountered
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use agent_client_protocol::ContentBlock;
 /// use llama_agent::acp::translation::acp_to_llama_messages;
 ///
@@ -476,7 +476,7 @@ impl ToJsonRpcError for agent_client_protocol::Error {
 /// * `Err(TranslationError)` - If the ACP SessionId is not a valid ULID
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use agent_client_protocol::SessionId as AcpSessionId;
 /// use llama_agent::acp::translation::acp_to_llama_session_id;
 /// use std::sync::Arc;
@@ -503,7 +503,7 @@ pub fn acp_to_llama_session_id(acp_id: AcpSessionId) -> Result<LlamaSessionId, T
 /// * `AcpSessionId` - Converted session ID
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use llama_agent::types::ids::SessionId as LlamaSessionId;
 /// use llama_agent::acp::translation::llama_to_acp_session_id;
 ///
@@ -527,7 +527,7 @@ pub fn llama_to_acp_session_id(llama_id: LlamaSessionId) -> AcpSessionId {
 /// * `Vec<ContentBlock>` - Translated content blocks
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use llama_agent::types::{Message, MessageRole};
 /// use llama_agent::acp::translation::llama_to_acp_content;
 /// use std::time::SystemTime;
@@ -566,7 +566,7 @@ pub fn llama_to_acp_content(messages: Vec<Message>) -> Vec<ContentBlock> {
 /// * `agent_client_protocol::SessionNotification` - Notification with the chunk content
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use agent_client_protocol::SessionId;
 /// use llama_agent::acp::translation::llama_chunk_to_acp_notification;
 /// use llama_agent::types::StreamChunk;
@@ -623,7 +623,7 @@ pub fn llama_chunk_to_acp_notification(
 /// ```
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use llama_agent::acp::translation::tool_definition_to_acp_format;
 /// use llama_agent::types::ToolDefinition;
 ///
@@ -670,7 +670,7 @@ pub fn tool_definition_to_acp_format(tool_def: &ToolDefinition) -> serde_json::V
 /// * `serde_json::Value` - JSON array containing all tool definitions
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use llama_agent::acp::translation::tool_definitions_to_acp_format;
 /// use llama_agent::types::ToolDefinition;
 ///
@@ -728,7 +728,7 @@ pub fn tool_definitions_to_acp_format(tool_defs: &[ToolDefinition]) -> serde_jso
 /// - Everything else → `ToolKind::Other`
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use llama_agent::acp::translation::tool_call_to_acp;
 /// use llama_agent::types::{ToolCall, ToolDefinition};
 /// use llama_agent::types::ids::ToolCallId;
@@ -919,13 +919,13 @@ pub fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::ToolKind {
 /// - If `tool_result.error` is `Some(msg)`: Status is `Failed` with error in content
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use llama_agent::acp::translation::tool_result_to_acp_update;
 /// use llama_agent::types::ToolResult;
 ///
 /// // Success case
 /// let result = ToolResult {
-///     call_id: "call_123".to_string(),
+///     call_id: ToolCallId::new(),
 ///     result: serde_json::json!({"status": "ok", "data": "file content"}),
 ///     error: None,
 /// };
@@ -935,7 +935,7 @@ pub fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::ToolKind {
 ///
 /// // Error case
 /// let result = ToolResult {
-///     call_id: "call_456".to_string(),
+///     call_id: ToolCallId::new(),
 ///     result: serde_json::Value::Null,
 ///     error: Some("File not found".to_string()),
 /// };
@@ -1113,13 +1113,13 @@ pub fn needs_permission(tool_name: &str) -> bool {
 /// will integrate with ACP client to request user approval.
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use llama_agent::acp::translation::handle_tool_call;
 /// use llama_agent::types::ToolCall;
 /// use std::sync::Arc;
 ///
 /// let tool_call = ToolCall {
-///     id: "call_123".to_string(),
+///     id: ToolCallId::new(),
 ///     name: "fs_read".to_string(),
 ///     arguments: serde_json::json!({"path": "/tmp/test.txt"}),
 /// };
@@ -1238,12 +1238,12 @@ pub async fn handle_tool_call(
 /// * `Err(String)` - Permission request failed
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use llama_agent::acp::translation::request_permission;
 /// use llama_agent::types::ToolCall;
 ///
 /// let tool_call = ToolCall {
-///     id: "call_123".to_string(),
+///     id: ToolCallId::new(),
 ///     name: "fs_write".to_string(),
 ///     arguments: serde_json::json!({"path": "/tmp/test.txt", "content": "data"}),
 /// };

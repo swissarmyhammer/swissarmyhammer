@@ -4,7 +4,7 @@
 //! with comprehensive error categorization and user-friendly messages.
 
 use llama_common::error::{ErrorCategory, LlamaError};
-use llama_loader::ModelError;
+use model_loader::ModelError;
 use std::time::Duration;
 use thiserror::Error;
 

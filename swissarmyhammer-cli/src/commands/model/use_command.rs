@@ -283,16 +283,24 @@ mod tests {
         }
     }
 
+    /// RAII guard that restores CWD on drop (panic-safe).
+    struct DirGuard(std::path::PathBuf);
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            let _ = env::set_current_dir(&self.0);
+        }
+    }
+
     #[tokio::test]
     #[serial_test::serial]
     async fn test_execute_use_command_with_temp_config() {
         // Create a temporary directory for testing
         let temp_dir = TempDir::new().unwrap();
-        let temp_path = temp_dir.path();
+        let temp_path = temp_dir.path().to_path_buf();
 
-        // Change to temp directory so config gets created there
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(temp_path).unwrap();
+        // Change to temp directory so config gets created there (guard restores on drop/panic)
+        let _guard = DirGuard(env::current_dir().unwrap());
+        env::set_current_dir(&temp_path).unwrap();
 
         let context = create_test_context().await;
 
@@ -311,8 +319,10 @@ mod tests {
         // This should succeed or fail only due to permission/config issues
         match result {
             Ok(()) => {
-                // Check that config file was created in .swissarmyhammer directory
-                let config_path = temp_path
+                // Config file may be at the canonicalized path (macOS /var -> /private/var).
+                // Use canonicalize to find the real path.
+                let canonical_temp = temp_path.canonicalize().unwrap_or(temp_path.clone());
+                let config_path = canonical_temp
                     .join(SwissarmyhammerDirectory::dir_name())
                     .join("sah.yaml");
                 assert!(
@@ -341,9 +351,6 @@ mod tests {
                 assert!(!error_msg.contains("not found"));
             }
         }
-
-        // Restore original directory
-        env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]

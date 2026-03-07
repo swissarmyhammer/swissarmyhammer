@@ -13,7 +13,7 @@
 //!
 //! # Usage
 //!
-//! ```rust
+//! ```text
 //! use llama_agent::test_models::{TEST_MODEL_REPO, TEST_MODEL_FILE};
 //! use llama_agent::types::{ModelConfig, ModelSource};
 //!
@@ -55,7 +55,7 @@ pub const TEST_MODEL_FILE: &str = "Qwen3-0.6B-IQ4_NL.gguf";
 /// **Size**: ~1.2GB
 /// **Output**: 1024-dimensional embeddings
 ///
-/// This is the canonical model for all llama-agent embedding tests.
+/// Matches the llama-embedding source in the builtin `qwen-embedding` config.
 pub const TEST_EMBEDDING_MODEL_REPO: &str = "Qwen/Qwen3-Embedding-0.6B-GGUF";
 
 /// Default embedding model filename

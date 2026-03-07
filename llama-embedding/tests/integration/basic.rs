@@ -1,5 +1,5 @@
 use llama_embedding::{EmbeddingConfig, EmbeddingError, EmbeddingResult};
-use llama_loader::ModelSource;
+use model_loader::ModelSource;
 
 #[test]
 fn test_embedding_config_default() {
@@ -31,15 +31,15 @@ fn test_embedding_result_creation() {
         processing_time_ms,
     );
 
-    assert_eq!(result.text, text);
-    assert_eq!(result.embedding, embedding);
-    assert_eq!(result.sequence_length, sequence_length);
-    assert_eq!(result.processing_time_ms, processing_time_ms);
-    assert!(!result.text_hash.is_empty());
+    assert_eq!(result.text(), text);
+    assert_eq!(result.embedding(), embedding.as_slice());
+    assert_eq!(result.sequence_length(), sequence_length);
+    assert_eq!(result.processing_time_ms(), processing_time_ms);
+    assert!(!result.text_hash().is_empty());
 
     // Verify MD5 hash is consistent
     let expected_hash = format!("{:x}", md5::compute(&text));
-    assert_eq!(result.text_hash, expected_hash);
+    assert_eq!(result.text_hash(), expected_hash);
 }
 
 #[test]

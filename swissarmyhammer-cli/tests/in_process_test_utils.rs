@@ -340,6 +340,7 @@ fn can_run_in_process(cli: &Cli) -> bool {
         Some(Commands::Validate { .. })
             | Some(Commands::Completion { .. })
             | Some(Commands::Prompt { .. })
+            | Some(Commands::Agent { .. })
             | None
     )
 }
@@ -548,6 +549,22 @@ async fn execute_cli_command_with_capture(
         }
 
         Some(Commands::Completion { shell }) => handle_completion_command(shell),
+
+        Some(Commands::Agent { subcommand }) => {
+            match subcommand {
+                Some(_) => {
+                    // Agent subcommands parse successfully but require runtime infrastructure
+                    // (model loading, MCP server, etc.) — just confirm parsing succeeded
+                    (String::new(), String::new(), EXIT_SUCCESS)
+                }
+                None => (
+                    String::new(),
+                    "No subcommand provided. Use 'sah agent --help' to see available subcommands."
+                        .to_string(),
+                    swissarmyhammer_cli::exit_codes::EXIT_ERROR,
+                ),
+            }
+        }
 
         None => (String::new(), String::new(), EXIT_SUCCESS),
 

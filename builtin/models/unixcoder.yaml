@@ -1,0 +1,13 @@
+---
+description: "UniXcoder: 768d code embedding model (126M, RoBERTa encoder)"
+---
+quiet: false
+executors:
+  - platform: macos-arm64
+    executor:
+      type: ane-embedding
+      config:
+        source: !HuggingFace
+          repo: "Wballard/unixcoder-base-CoreML"
+        normalize: true
+        max_sequence_length: 256

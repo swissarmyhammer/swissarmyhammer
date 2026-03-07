@@ -15,7 +15,7 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```text
 //! use llama_agent::generation::{TextGenerator, GenerationConfig, LlamaCppGenerator};
 //!
 //! let config = GenerationConfig {

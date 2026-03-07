@@ -204,6 +204,47 @@ impl ModelPaths {
     }
 }
 
+/// Runtime platform for executor selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Platform {
+    MacosArm64,
+    MacosX86_64,
+    LinuxX86_64,
+    LinuxAarch64,
+}
+
+impl Platform {
+    /// Detect the current compile-time platform
+    pub fn current() -> Self {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            Platform::MacosArm64
+        }
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        {
+            Platform::MacosX86_64
+        }
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            Platform::LinuxX86_64
+        }
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        {
+            Platform::LinuxAarch64
+        }
+        #[cfg(not(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "aarch64"),
+        )))]
+        {
+            Platform::LinuxX86_64
+        } // fallback
+    }
+}
+
 /// Model executor type enumeration
 ///
 /// Defines the available model executor types with system default being Claude Code
@@ -216,19 +257,109 @@ pub enum ModelExecutorType {
     ClaudeCode,
     /// Use local LlamaAgent with in-process execution
     LlamaAgent,
-    /// Use local embedding model for semantic search
+    /// Use local embedding model for semantic search via llama.cpp
     LlamaEmbedding,
+    /// Use Apple Neural Engine for embedding inference
+    AneEmbedding,
+}
+
+/// An executor entry with optional platform constraint for multi-executor configs.
+///
+/// YAML format:
+/// ```yaml
+/// executors:
+///   - platform: macos-arm64
+///     executor:
+///       type: ane-embedding
+///       config:
+///         source: ...
+///   - executor:
+///       type: llama-embedding
+///       config:
+///         source: ...
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutorEntry {
+    /// Optional platform constraint. If None, this executor is a universal fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<Platform>,
+    /// The executor configuration.
+    pub executor: ModelExecutorConfig,
 }
 
 /// Complete model configuration with executor-specific settings
 ///
-/// Combines executor configuration with global model settings like quiet mode.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Supports both the legacy singular `executor:` format (backward-compatible) and
+/// the new `executors:` list format with platform-based selection. The first
+/// compatible executor in the list is selected at runtime.
+#[derive(Debug, Clone, Serialize)]
 pub struct ModelConfig {
-    /// Agent executor configuration with associated data
-    pub executor: ModelExecutorConfig,
+    /// Ordered list of executor entries; first compatible match wins.
+    pub executors: Vec<ExecutorEntry>,
     /// Global quiet mode
     pub quiet: bool,
+}
+
+impl<'de> serde::Deserialize<'de> for ModelConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{MapAccess, Visitor};
+
+        struct ModelConfigVisitor;
+
+        impl<'de> Visitor<'de> for ModelConfigVisitor {
+            type Value = ModelConfig;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a model config with executor or executors field")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut executors: Option<Vec<ExecutorEntry>> = None;
+                let mut executor: Option<ModelExecutorConfig> = None;
+                let mut quiet = false;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "executors" => {
+                            executors = Some(map.next_value()?);
+                        }
+                        "executor" => {
+                            executor = Some(map.next_value()?);
+                        }
+                        "quiet" => {
+                            quiet = map.next_value()?;
+                        }
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                let executors = if let Some(list) = executors {
+                    list
+                } else if let Some(single) = executor {
+                    vec![ExecutorEntry {
+                        platform: None,
+                        executor: single,
+                    }]
+                } else {
+                    return Err(serde::de::Error::custom(
+                        "model config must have either 'executors' or 'executor' field",
+                    ));
+                };
+
+                Ok(ModelConfig { executors, quiet })
+            }
+        }
+
+        deserializer.deserialize_map(ModelConfigVisitor)
+    }
 }
 
 /// Tagged union of agent executor configurations
@@ -244,6 +375,8 @@ pub enum ModelExecutorConfig {
     LlamaAgent(LlamaAgentConfig),
     #[serde(rename = "llama-embedding")]
     LlamaEmbedding(EmbeddingModelConfig),
+    #[serde(rename = "ane-embedding")]
+    AneEmbedding(EmbeddingModelConfig),
 }
 
 /// Configuration for Claude Code CLI execution
@@ -379,7 +512,10 @@ impl Default for ModelConfig {
     fn default() -> Self {
         // System default is always Claude Code
         Self {
-            executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
+            executors: vec![ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
+            }],
             quiet: crate::DEFAULT_QUIET_MODE,
         }
     }
@@ -421,19 +557,44 @@ impl Default for RepetitionDetectionConfig {
 }
 
 impl ModelConfig {
+    /// Select the first executor compatible with the current platform.
+    ///
+    /// Returns `None` if no executor matches (e.g., all entries have
+    /// platform constraints that don't match the current platform).
+    pub fn select_executor(&self) -> Option<&ModelExecutorConfig> {
+        let current = Platform::current();
+        self.executors
+            .iter()
+            .find(|e| e.platform.is_none() || e.platform == Some(current))
+            .map(|e| &e.executor)
+    }
+
+    /// Convenience accessor: returns the selected executor for the current platform.
+    ///
+    /// Backward-compatible replacement for the old `config.executor` field.
+    /// Panics if no executor matches — use `select_executor()` for fallible access.
+    pub fn executor(&self) -> &ModelExecutorConfig {
+        self.select_executor()
+            .expect("no compatible executor for current platform")
+    }
+
     /// Get the executor type from the configuration
     pub fn executor_type(&self) -> ModelExecutorType {
-        match &self.executor {
+        match self.executor() {
             ModelExecutorConfig::ClaudeCode(_) => ModelExecutorType::ClaudeCode,
             ModelExecutorConfig::LlamaAgent(_) => ModelExecutorType::LlamaAgent,
             ModelExecutorConfig::LlamaEmbedding(_) => ModelExecutorType::LlamaEmbedding,
+            ModelExecutorConfig::AneEmbedding(_) => ModelExecutorType::AneEmbedding,
         }
     }
 
     /// Create configuration for Claude Code execution
     pub fn claude_code() -> Self {
         Self {
-            executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
+            executors: vec![ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
+            }],
             quiet: crate::DEFAULT_QUIET_MODE,
         }
     }
@@ -441,7 +602,10 @@ impl ModelConfig {
     /// Create configuration for LlamaAgent execution
     pub fn llama_agent(config: LlamaAgentConfig) -> Self {
         Self {
-            executor: ModelExecutorConfig::LlamaAgent(config),
+            executors: vec![ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::LlamaAgent(config),
+            }],
             quiet: crate::DEFAULT_QUIET_MODE,
         }
     }
@@ -1748,8 +1912,14 @@ impl ModelManager {
                 ModelError::IoError(e)
             })?;
 
-            Ok(serde_yaml::from_str(&content)
-                .unwrap_or(serde_yaml::Value::Mapping(Default::default())))
+            let value: serde_yaml::Value = serde_yaml::from_str(&content)
+                .unwrap_or(serde_yaml::Value::Mapping(Default::default()));
+            // Empty YAML files parse as Null, not Mapping — normalize to empty mapping
+            if value.is_null() {
+                Ok(serde_yaml::Value::Mapping(Default::default()))
+            } else {
+                Ok(value)
+            }
         } else {
             tracing::debug!(
                 "Config file does not exist, creating new: {}",
@@ -1950,7 +2120,7 @@ mod tests {
         assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
         assert!(!config.quiet);
 
-        match config.executor {
+        match config.executor() {
             ModelExecutorConfig::ClaudeCode(claude_config) => {
                 assert!(claude_config.claude_path.is_none());
                 assert!(claude_config.args.is_empty());
@@ -1967,7 +2137,7 @@ mod tests {
         assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
         assert!(!config.quiet);
 
-        match config.executor {
+        match config.executor() {
             ModelExecutorConfig::LlamaAgent(agent_config) => {
                 assert_eq!(agent_config.mcp_server.timeout_seconds, 30); // Test timeout (DEFAULT_TEST_MCP_TIMEOUT_SECONDS)
             }
@@ -2589,6 +2759,7 @@ quiet: false"#;
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_load_project_models() {
         let result = ModelManager::load_project_models();
 
@@ -2606,6 +2777,7 @@ quiet: false"#;
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_agent_manager_list_agents_precedence() {
         // This test verifies the complete agent discovery hierarchy with precedence
         let result = ModelManager::list_agents();
@@ -3417,5 +3589,167 @@ model: qwen-coder
                 "claude-code"
             );
         }
+    }
+
+    // ========================================================================
+    // Multi-executor and platform selection tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_old_executor_format_backward_compat() {
+        let yaml = r#"
+executor:
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
+      filename: "Qwen3-Embedding-0.6B-Q8_0.gguf"
+    normalize: true
+    max_sequence_length: 512
+quiet: false
+"#;
+        let config: ModelConfig = serde_yaml::from_str(yaml).expect("old format should parse");
+        assert_eq!(config.executors.len(), 1);
+        assert!(config.executors[0].platform.is_none());
+        assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
+    }
+
+    #[test]
+    fn test_parse_new_executors_list_format() {
+        let yaml = r#"
+executors:
+  - platform: macos-arm64
+    executor:
+      type: ane-embedding
+      config:
+        source: !HuggingFace
+          repo: "wballard/Qwen3-Embedding-0.6B-CoreML"
+        normalize: true
+  - executor:
+      type: llama-embedding
+      config:
+        source: !HuggingFace
+          repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
+          filename: "Qwen3-Embedding-0.6B-Q8_0.gguf"
+        normalize: true
+        max_sequence_length: 512
+quiet: false
+"#;
+        let config: ModelConfig = serde_yaml::from_str(yaml).expect("new format should parse");
+        assert_eq!(config.executors.len(), 2);
+        assert_eq!(config.executors[0].platform, Some(Platform::MacosArm64));
+        assert!(config.executors[1].platform.is_none());
+    }
+
+    #[test]
+    fn test_platform_selection_prefers_platform_match() {
+        let config = ModelConfig {
+            executors: vec![
+                ExecutorEntry {
+                    platform: Some(Platform::current()),
+                    executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
+                        source: ModelSource::HuggingFace {
+                            repo: "test/ane".to_string(),
+                            filename: None,
+                            folder: None,
+                        },
+                        normalize: true,
+                        max_sequence_length: None,
+                    }),
+                },
+                ExecutorEntry {
+                    platform: None,
+                    executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
+                        source: ModelSource::HuggingFace {
+                            repo: "test/llama".to_string(),
+                            filename: None,
+                            folder: None,
+                        },
+                        normalize: true,
+                        max_sequence_length: None,
+                    }),
+                },
+            ],
+            quiet: false,
+        };
+        // First entry matches current platform, so it should be selected
+        assert_eq!(config.executor_type(), ModelExecutorType::AneEmbedding);
+    }
+
+    #[test]
+    fn test_platform_selection_falls_back_to_universal() {
+        // Use a platform that doesn't match current
+        let non_matching_platform = if Platform::current() == Platform::MacosArm64 {
+            Platform::LinuxX86_64
+        } else {
+            Platform::MacosArm64
+        };
+
+        let config = ModelConfig {
+            executors: vec![
+                ExecutorEntry {
+                    platform: Some(non_matching_platform),
+                    executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
+                        source: ModelSource::HuggingFace {
+                            repo: "test/ane".to_string(),
+                            filename: None,
+                            folder: None,
+                        },
+                        normalize: true,
+                        max_sequence_length: None,
+                    }),
+                },
+                ExecutorEntry {
+                    platform: None,
+                    executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
+                        source: ModelSource::HuggingFace {
+                            repo: "test/llama".to_string(),
+                            filename: None,
+                            folder: None,
+                        },
+                        normalize: true,
+                        max_sequence_length: None,
+                    }),
+                },
+            ],
+            quiet: false,
+        };
+        // First entry doesn't match, second is universal fallback
+        assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
+    }
+
+    #[test]
+    fn test_ane_embedding_round_trip() {
+        let config = ModelConfig {
+            executors: vec![ExecutorEntry {
+                platform: Some(Platform::MacosArm64),
+                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
+                    source: ModelSource::HuggingFace {
+                        repo: "wballard/test".to_string(),
+                        filename: None,
+                        folder: None,
+                    },
+                    normalize: true,
+                    max_sequence_length: Some(512),
+                }),
+            }],
+            quiet: false,
+        };
+
+        let yaml = serde_yaml::to_string(&config).expect("serialize");
+        assert!(yaml.contains("ane-embedding"));
+        assert!(yaml.contains("macos-arm64"));
+
+        let deserialized: ModelConfig = serde_yaml::from_str(&yaml).expect("deserialize");
+        assert_eq!(deserialized.executors.len(), 1);
+        assert_eq!(
+            deserialized.executors[0].platform,
+            Some(Platform::MacosArm64)
+        );
+    }
+
+    #[test]
+    fn test_platform_current_is_stable() {
+        assert_eq!(Platform::current(), Platform::current());
     }
 }

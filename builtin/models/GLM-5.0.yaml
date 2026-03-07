@@ -1,0 +1,11 @@
+---
+description: "GLM 5.0: 357B MoE, top coding, 200K context"
+---
+quiet: false
+executor:
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/GLM-5.0-GGUF"
+        folder: "IQ4_NL"

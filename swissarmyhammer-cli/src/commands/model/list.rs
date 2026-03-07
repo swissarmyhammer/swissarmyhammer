@@ -194,7 +194,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// let result = capitalize_first("hello");
 /// assert_eq!(result, "Hello");
 ///
@@ -231,7 +231,7 @@ fn capitalize_first(s: &str) -> String {
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// use serde_json::json;
 ///
 /// let string_val = json!("hello");
@@ -282,7 +282,7 @@ fn format_json_value(v: &serde_json::Value) -> String {
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// use serde_json::json;
 ///
 /// let items = json!([
@@ -374,7 +374,7 @@ fn add_json_rows(
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// #[derive(Serialize)]
 /// struct Person {
 ///     name: String,
@@ -427,7 +427,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// #[derive(Serialize)]
 /// struct Config {
 ///     name: String,
@@ -484,7 +484,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// #[derive(Serialize)]
 /// struct Config {
 ///     name: String,
@@ -539,7 +539,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// #[derive(Serialize)]
 /// struct Item {
 ///     id: u32,

@@ -53,7 +53,7 @@ pub enum QueueOperation {
 ///
 /// # Usage
 ///
-/// ```rust
+/// ```text
 /// use crate::validation::{QueueValidator, QueueLimits, QueueOperation};
 ///
 /// let limits = QueueLimits {

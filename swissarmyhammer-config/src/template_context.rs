@@ -1065,7 +1065,10 @@ version = "1.0.0"
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_with_template_vars() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
         let mut template_vars = HashMap::new();
         template_vars.insert("template_var1".to_string(), json!("template_value1"));
         template_vars.insert("template_var2".to_string(), json!(42));
@@ -1115,27 +1118,23 @@ version = "1.0.0"
         let mut context = TemplateContext::new();
 
         // Set up agent config directly under the "agent" key (sah.yaml style)
-        let agent_config = ModelConfig {
-            quiet: false,
-            executor: ModelExecutorConfig::LlamaAgent(LlamaAgentConfig {
-                model: LlmModelConfig {
-                    source: ModelSource::HuggingFace {
-                        repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
-                        filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
-                        folder: None,
-                    },
-                    batch_size: 256,
-                    use_hf_params: true,
-                    debug: false,
+        let agent_config = ModelConfig::llama_agent(LlamaAgentConfig {
+            model: LlmModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
+                    filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
+                    folder: None,
                 },
-                mcp_server: McpServerConfig {
-                    port: 0,
-                    timeout_seconds: 30,
-                },
-
-                repetition_detection: Default::default(),
-            }),
-        };
+                batch_size: 256,
+                use_hf_params: true,
+                debug: false,
+            },
+            mcp_server: McpServerConfig {
+                port: 0,
+                timeout_seconds: 30,
+            },
+            repetition_detection: Default::default(),
+        });
 
         context.set(
             "agent".to_string(),
@@ -1146,7 +1145,7 @@ version = "1.0.0"
         let retrieved_config = context.get_agent_config(None);
 
         // Verify it's the correct config type and not the default
-        match retrieved_config.executor {
+        match retrieved_config.executor() {
             ModelExecutorConfig::LlamaAgent(llama_config) => match &llama_config.model.source {
                 ModelSource::HuggingFace { repo, filename, .. } => {
                     assert!(
@@ -1466,6 +1465,7 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_with_template_vars_sets_default_variables() {
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));
@@ -1488,6 +1488,7 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_with_template_vars_user_model_override() {
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));

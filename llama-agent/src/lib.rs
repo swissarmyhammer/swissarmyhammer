@@ -28,32 +28,21 @@
 //!
 //! ### Basic Agent with MCP Server
 //! ```rust
-//! use llama_agent::{Agent, AgentConfig, MCPServerConfig, ProcessServerConfig};
+//! use llama_agent::{AgentConfig, MCPServerConfig, ProcessServerConfig};
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Configure an in-process Python MCP server
-//!     let mcp_config = MCPServerConfig::InProcess(ProcessServerConfig {
-//!         name: "filesystem".to_string(),
-//!         command: "python".to_string(),
-//!         args: vec!["-m".to_string(), "mcp_server.filesystem".to_string()],
-//!         timeout_secs: Some(30),
-//!     });
+//! // Configure an in-process Python MCP server
+//! let mcp_config = MCPServerConfig::InProcess(ProcessServerConfig {
+//!     name: "filesystem".to_string(),
+//!     command: "python".to_string(),
+//!     args: vec!["-m".to_string(), "mcp_server.filesystem".to_string()],
+//!     timeout_secs: Some(30),
+//! });
 //!
-//!     // Create agent with MCP server
-//!     let config = AgentConfig {
-//!         mcp_servers: vec![mcp_config],
-//!         ..Default::default()
-//!     };
-//!
-//!     let mut agent = Agent::new(config).await?;
-//!
-//!     // Generate response with tool access
-//!     let response = agent.generate("List files in the current directory").await?;
-//!     println!("{}", response);
-//!
-//!     Ok(())
-//! }
+//! // Create agent config with MCP server
+//! let config = AgentConfig {
+//!     mcp_servers: vec![mcp_config],
+//!     ..Default::default()
+//! };
 //! ```
 //!
 //! ### HTTP MCP Server
@@ -75,12 +64,11 @@
 //!
 //! let config = CompactionConfig {
 //!     threshold: 0.8,
-//!     context_limit: 4096,
 //!     preserve_recent: 2,
 //!     custom_prompt: Some(CompactionPrompt::custom(
 //!         "Focus on technical details and code examples",
-//!         "Summarize: {conversation_history}"
-//!     )?),
+//!         "Summarize: {conversation_history}",
+//!     ).expect("valid compaction prompt")),
 //! };
 //! ```
 //!
@@ -90,6 +78,8 @@
 //! The MCP configuration has changed from struct-based to enum-based:
 //!
 //! ```rust
+//! use llama_agent::{MCPServerConfig, ProcessServerConfig};
+//!
 //! // Before (no longer supported)
 //! // let config = MCPServerConfig {
 //! //     name: "server".to_string(),

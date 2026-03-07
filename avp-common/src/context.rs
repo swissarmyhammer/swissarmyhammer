@@ -296,7 +296,7 @@ impl AvpContext {
     fn resolve_model_config() -> ModelConfig {
         match ModelManager::resolve_agent_config(&ModelPaths::avp()) {
             Ok(config) => {
-                tracing::debug!("Resolved model config: {:?}", config.executor);
+                tracing::debug!("Resolved model config: {:?}", config.executor());
                 config
             }
             Err(e) => {
@@ -331,7 +331,7 @@ impl AvpContext {
         if guard.is_none() {
             tracing::debug!(
                 "Creating {:?} agent for validator execution...",
-                self.model_config.executor
+                self.model_config.executor()
             );
             let start = std::time::Instant::now();
 
@@ -971,9 +971,9 @@ mod tests {
 
         // Default should be claude-code
         assert!(
-            matches!(config.executor, ModelExecutorConfig::ClaudeCode(_)),
+            matches!(config.executor(), ModelExecutorConfig::ClaudeCode(_)),
             "Default model config should be ClaudeCode, got {:?}",
-            config.executor
+            config.executor()
         );
 
         std::env::set_current_dir(&original_dir).unwrap();
@@ -986,7 +986,7 @@ mod tests {
         // When no config file exists, resolve should return claude-code default
         let config = AvpContext::resolve_model_config();
         assert!(matches!(
-            config.executor,
+            config.executor(),
             ModelExecutorConfig::ClaudeCode(_)
         ));
     }

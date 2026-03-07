@@ -1,0 +1,16 @@
+---
+description: "Nomic Embed Code: 3584d code embedding model (7B, Qwen2.5-based)"
+---
+quiet: false
+executors:
+  # No ANE executor — at 7B params, CoreML palettize4 (~1.85s/embed) is ~28x
+  # slower than llama.cpp Q8_0 (~66ms/embed). ANE overhead dominates at this scale.
+  # Uses llama.cpp GGUF on all platforms.
+  - executor:
+      type: llama-embedding
+      config:
+        source: !HuggingFace
+          repo: "nomic-ai/nomic-embed-code-GGUF"
+          filename: "nomic-embed-code.Q8_0.gguf"
+        normalize: true
+        max_sequence_length: 512

@@ -19,7 +19,7 @@ use rusqlite::Connection;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
-use llama_embedding::{EmbeddingConfig, EmbeddingModel};
+use swissarmyhammer_embedding::{Embedder, TextEmbedder};
 
 const CHUNK_SIZE: usize = 15; // lines per embedding chunk
 const BYTES_PER_F32: usize = 4;
@@ -93,9 +93,14 @@ pub struct ShellState {
 }
 
 impl ShellState {
-    /// Create a new ShellState using a session-scoped temp directory.
+    /// Create a new ShellState, initializing the .shell/ directory, log file, SQLite DB,
+    /// and background embedding worker.
+    ///
+    /// Resolves `.shell/` to an absolute path at creation time so all stored
+    /// paths remain valid even if the process CWD changes later.
     pub fn new() -> anyhow::Result<Self> {
-        Self::new_in_dir(PathBuf::from(".shell"))
+        let cwd = std::env::current_dir()?;
+        Self::new_in_dir(cwd.join(".shell"))
     }
 
     /// Create a new ShellState with an explicit base directory for the .shell/ data.
@@ -464,13 +469,12 @@ pub async fn search(
 ) -> anyhow::Result<Vec<SearchResult>> {
     let limit = limit.unwrap_or(10);
 
-    // Create a temporary embedding model for the query
-    let config = EmbeddingConfig::default();
-    let mut model = EmbeddingModel::new(config)
+    // Create an embedding model for the query using the platform-aware Embedder
+    let model = Embedder::default()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create embedding model: {}", e))?;
     model
-        .load_model()
+        .load()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load embedding model: {}", e))?;
 
@@ -478,7 +482,7 @@ pub async fn search(
         .embed_text(query)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to embed query: {}", e))?;
-    let query_embedding = &query_result.embedding;
+    let query_embedding = query_result.embedding();
 
     // Load stored chunks with embeddings
     let conn = db.lock().await;
@@ -543,7 +547,7 @@ pub struct SearchResult {
 /// then computes and stores embeddings.
 async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connection>>) {
     // Lazy-init the model on first chunk
-    let mut model: Option<EmbeddingModel> = None;
+    let mut model: Option<Embedder> = None;
 
     while let Some(job) = rx.recv().await {
         // Step 1: INSERT the chunk text into DB (even if embedding fails, text is stored)
@@ -559,10 +563,9 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
 
         // Step 2: Initialize embedding model on first use
         if model.is_none() {
-            let config = EmbeddingConfig::default();
-            match EmbeddingModel::new(config).await {
-                Ok(mut m) => {
-                    if let Err(e) = m.load_model().await {
+            match Embedder::default().await {
+                Ok(m) => {
+                    if let Err(e) = m.load().await {
                         tracing::warn!(
                             "Failed to load embedding model: {}. Embeddings disabled.",
                             e
@@ -589,7 +592,7 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
             match m.embed_text(&job.text).await {
                 Ok(mut result) => {
                     result.normalize();
-                    let embedding_bytes = encode_embedding(&result.embedding);
+                    let embedding_bytes = encode_embedding(result.embedding());
                     let conn = db.lock().await;
                     if let Err(e) = conn.execute(
                         "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",

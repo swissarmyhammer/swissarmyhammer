@@ -5,7 +5,7 @@ use llama_cpp_2::{
     model::LlamaModel,
     send_logs_to_tracing, LogOptions,
 };
-use llama_loader::{ModelLoader, ModelMetadata};
+use model_loader::{ModelMetadata, ModelResolver};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,17 +22,12 @@ static GLOBAL_BACKEND: OnceLock<Result<Arc<LlamaBackend>, String>> = OnceLock::n
 
 /// Get or initialize the global LlamaBackend singleton.
 ///
-/// This is the canonical way to obtain a `LlamaBackend` reference. All code
-/// within the process should use this function rather than calling
-/// `LlamaBackend::init()` directly, because the llama.cpp C backend can only
-/// be initialized once per process. Going through this function ensures that
-/// every caller shares the same `Arc<LlamaBackend>` stored in `GLOBAL_BACKEND`,
-/// preventing "Backend already initialized" errors when tests or other code
-/// paths race to initialize the backend.
+/// llama.cpp can only be initialized once per process. This function ensures
+/// all callers share the same `Arc<LlamaBackend>` via `OnceLock`, preventing
+/// "Backend already initialized" errors.
 ///
-/// Uses `OnceLock::get_or_init` to guarantee that exactly one thread performs
-/// initialization, eliminating TOCTOU races between checking the lock and
-/// calling `LlamaBackend::init()`.
+/// Note: `llama-embedding` has a parallel implementation (`get_global_backend`).
+/// Both are kept separate to avoid pulling `llama-cpp-2` into `llama-common`.
 pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, ModelError> {
     let result = GLOBAL_BACKEND.get_or_init(|| {
         LlamaBackend::init()
@@ -86,7 +81,7 @@ pub struct ModelManager {
     model: Arc<RwLock<Option<LlamaModel>>>,
     backend: Arc<LlamaBackend>,
     config: ModelConfig,
-    loader: RwLock<Option<ModelLoader>>,
+    resolver: RwLock<Option<ModelResolver>>,
     metadata: RwLock<Option<ModelMetadata>>,
     memory_usage_bytes: Arc<std::sync::atomic::AtomicU64>,
     // Session state tracking for KV cache optimization
@@ -117,7 +112,7 @@ impl ModelManager {
             model: Arc::new(RwLock::new(None)),
             backend,
             config,
-            loader: RwLock::new(None),
+            resolver: RwLock::new(None),
             metadata: RwLock::new(None),
             memory_usage_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_sequence_ids: Arc::new(RwLock::new(HashMap::new())),
@@ -126,11 +121,23 @@ impl ModelManager {
         Ok(manager)
     }
 
-    /// Initialize the ModelLoader (must be called after construction)
-    pub async fn initialize_loader(&self) -> Result<(), ModelError> {
-        let loader = ModelLoader::new(self.backend.clone());
-        *self.loader.write().await = Some(loader);
+    /// Initialize the ModelResolver (must be called after construction)
+    pub async fn initialize_resolver(&self) -> Result<(), ModelError> {
+        let resolver = ModelResolver::new();
+        *self.resolver.write().await = Some(resolver);
         Ok(())
+    }
+
+    /// Creates default model parameters optimized for GPU offloading
+    fn default_model_params() -> llama_cpp_2::model::params::LlamaModelParams {
+        let gpu_layers: u32 = std::env::var("LLAMA_N_GPU_LAYERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(i32::MAX as u32);
+
+        llama_cpp_2::model::params::LlamaModelParams::default()
+            .with_n_gpu_layers(gpu_layers)
+            .with_use_mlock(true)
     }
 
     pub async fn load_model(&self) -> Result<(), ModelError> {
@@ -139,12 +146,12 @@ impl ModelManager {
         // Validate config before proceeding
         self.config.validate()?;
 
-        // Ensure loader is initialized
+        // Ensure resolver is initialized
         {
-            let loader_guard = self.loader.read().await;
-            if loader_guard.is_none() {
-                drop(loader_guard);
-                self.initialize_loader().await?;
+            let resolver_guard = self.resolver.read().await;
+            if resolver_guard.is_none() {
+                drop(resolver_guard);
+                self.initialize_resolver().await?;
             }
         }
 
@@ -152,14 +159,39 @@ impl ModelManager {
         let memory_before = Self::get_process_memory_mb().unwrap_or(0);
         debug!("Memory usage before model loading: {} MB", memory_before);
 
-        // Load model using ModelLoader
-        let loaded_model = {
-            let mut loader_guard = self.loader.write().await;
-            loader_guard
-                .as_mut()
+        // Resolve model source to a local file path using the slim resolver config
+        let resolved = {
+            let resolver_config = self.config.resolver_config();
+            let resolver_guard = self.resolver.read().await;
+            resolver_guard
+                .as_ref()
                 .unwrap()
-                .load_model(&self.config)
+                .resolve(&resolver_config)
                 .await?
+        };
+
+        // Verify the resolved file is a .gguf model (llama-cpp-2 only supports GGUF)
+        if resolved.path.extension().and_then(|e| e.to_str()) != Some("gguf") {
+            return Err(ModelError::LoadingFailed(format!(
+                "llama-cpp-2 only supports .gguf models, got: {}",
+                resolved.path.display()
+            )));
+        }
+
+        // Load the model into llama-cpp-2 from the resolved path.
+        // Scope model_params so it is dropped before any .await (LlamaModelParams
+        // contains raw pointers and is not Send).
+        let model = {
+            let model_params = Self::default_model_params();
+            LlamaModel::load_from_file(&self.backend, &resolved.path, &model_params).map_err(
+                |e| {
+                    ModelError::LoadingFailed(format!(
+                        "Failed to load model from {}: {}",
+                        resolved.path.display(),
+                        e
+                    ))
+                },
+            )?
         };
 
         let memory_after = Self::get_process_memory_mb().unwrap_or(0);
@@ -173,15 +205,15 @@ impl ModelManager {
 
         info!(
             "Model loaded successfully in {:?} (Memory: +{} MB, Total: {} MB)",
-            loaded_model.metadata.load_time, memory_used, memory_after
+            resolved.metadata.resolve_time, memory_used, memory_after
         );
 
         // Store model and metadata
         {
             let mut model_lock = self.model.write().await;
-            *model_lock = Some(loaded_model.model);
+            *model_lock = Some(model);
         }
-        *self.metadata.write().await = Some(loaded_model.metadata);
+        *self.metadata.write().await = Some(resolved.metadata);
 
         Ok(())
     }
@@ -393,13 +425,22 @@ impl ModelManager {
         let metadata_guard = self.metadata.read().await;
         metadata_guard.as_ref().map(|meta| {
             let memory_bytes = self.get_memory_usage_bytes();
-            (meta.load_time, memory_bytes)
+            (meta.resolve_time, memory_bytes)
         })
     }
 
     /// Get model metadata
-    pub async fn get_metadata(&self) -> Option<ModelMetadata> {
+    pub async fn metadata(&self) -> Option<ModelMetadata> {
         self.metadata.read().await.clone()
+    }
+
+    /// Get the context size from the loaded model.
+    ///
+    /// Reads `n_ctx_train` from the loaded LlamaModel. Returns `None` if the
+    /// model is not loaded.
+    pub async fn get_context_size(&self) -> Option<usize> {
+        let model_lock = self.model.read().await;
+        model_lock.as_ref().map(|m| m.n_ctx_train() as usize)
     }
 
     /// Clean up session context resources when a session is deleted

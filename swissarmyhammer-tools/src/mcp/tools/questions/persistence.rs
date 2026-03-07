@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(cwd)]
     fn test_save_question_answer() {
         let (_temp, _orig_dir) = setup_test_env();
 
@@ -176,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(cwd)]
     fn test_load_all_questions_empty_dir() {
         let (_temp, _orig_dir) = setup_test_env();
 
@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(cwd)]
     fn test_load_all_questions() {
         let (_temp, _orig_dir) = setup_test_env();
 
@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(cwd)]
     fn test_save_with_special_characters() {
         let (_temp, _orig_dir) = setup_test_env();
 

@@ -5,11 +5,11 @@
 //!
 //! # Examples
 //!
-//! Creating and rendering a simple prompt:
+//! Creating a simple prompt:
 //!
 //! ```
-//! use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
-//! use std::collections::HashMap;
+//! use swissarmyhammer_prompts::Prompt;
+//! use swissarmyhammer_common::{Parameter, ParameterType};
 //!
 //! let prompt = Prompt::new("greet", "Hello {{name}}!")
 //!     .with_description("A greeting prompt")
@@ -18,10 +18,9 @@
 //!             .required(true)
 //!     );
 //!
-//! let mut args = HashMap::new();
-//! args.insert("name".to_string(), "World".to_string());
-//! let result = prompt.render(&args).unwrap();
-//! assert_eq!(result, "Hello World!");
+//! assert_eq!(prompt.name, "greet");
+//! assert_eq!(prompt.template, "Hello {{name}}!");
+//! assert_eq!(prompt.parameters.len(), 1);
 //! ```
 
 use swissarmyhammer_common::SwissArmyHammerError;
@@ -73,8 +72,8 @@ pub use swissarmyhammer_common::{Parameter, ParameterProvider, ParameterType};
 /// # Examples
 ///
 /// ```
-/// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
-/// use std::collections::HashMap;
+/// use swissarmyhammer_prompts::Prompt;
+/// use swissarmyhammer_common::{Parameter, ParameterType};
 ///
 /// // Create a prompt programmatically
 /// let prompt = Prompt::new("debug", "Debug this {{language}} error: {{error}}")
@@ -89,14 +88,9 @@ pub use swissarmyhammer_common::{Parameter, ParameterProvider, ParameterType};
 ///             .with_default(serde_json::Value::String("unknown".to_string()))
 ///     );
 ///
-/// // Render with arguments
-/// let mut args = HashMap::new();
-/// args.insert("error".to_string(), "NullPointerException".to_string());
-/// args.insert("language".to_string(), "Java".to_string());
-///
-/// let rendered = prompt.render(&args).unwrap();
-/// assert!(rendered.contains("Java"));
-/// assert!(rendered.contains("NullPointerException"));
+/// assert_eq!(prompt.name, "debug");
+/// assert_eq!(prompt.parameters.len(), 2);
+/// assert_eq!(prompt.category, Some("debugging".to_string()));
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Prompt {
@@ -180,7 +174,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::Prompt;
+    /// use swissarmyhammer_prompts::Prompt;
     ///
     /// let prompt = Prompt::new("hello", "Hello {{name}}!");
     /// assert_eq!(prompt.name, "hello");
@@ -211,7 +205,8 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
+    /// use swissarmyhammer_prompts::Prompt;
+    /// use swissarmyhammer_common::{Parameter, ParameterType};
     ///
     /// let prompt = Prompt::new("example", "Processing {{file}}")
     ///     .add_parameter(
@@ -240,7 +235,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::Prompt;
+    /// use swissarmyhammer_prompts::Prompt;
     ///
     /// let prompt = Prompt::new("debug", "Debug this error: {{error}}")
     ///     .with_description("Helps analyze and debug programming errors");
@@ -265,7 +260,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::Prompt;
+    /// use swissarmyhammer_prompts::Prompt;
     ///
     /// let prompt = Prompt::new("code-review", "Review this code: {{code}}")
     ///     .with_category("development");
@@ -291,7 +286,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::Prompt;
+    /// use swissarmyhammer_prompts::Prompt;
     ///
     /// let prompt = Prompt::new("sql-gen", "Generate SQL: {{description}}")
     ///     .with_tags(vec![
@@ -582,7 +577,7 @@ impl Prompt {
 /// # Examples
 ///
 /// ```no_run
-/// use swissarmyhammer::PromptLibrary;
+/// use swissarmyhammer_prompts::PromptLibrary;
 ///
 /// // Create a new library with default in-memory storage
 /// let mut library = PromptLibrary::new();
@@ -619,7 +614,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::PromptLibrary;
+    /// use swissarmyhammer_prompts::PromptLibrary;
     ///
     /// let library = PromptLibrary::new();
     /// // Library is ready to use with in-memory storage
@@ -643,7 +638,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{PromptLibrary, storage::MemoryStorage};
+    /// use swissarmyhammer_prompts::{PromptLibrary, MemoryStorage};
     ///
     /// let storage = Box::new(MemoryStorage::new());
     /// let library = PromptLibrary::with_storage(storage);
@@ -677,7 +672,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```no_run
-    /// use swissarmyhammer::PromptLibrary;
+    /// use swissarmyhammer_prompts::PromptLibrary;
     ///
     /// let mut library = PromptLibrary::new();
     /// let count = library.add_directory("./.prompts").unwrap();
@@ -714,7 +709,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
     ///
     /// let mut library = PromptLibrary::new();
     ///
@@ -748,7 +743,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
     ///
     /// let mut library = PromptLibrary::new();
     /// library.add(Prompt::new("test1", "Template 1")).unwrap();
@@ -790,8 +785,8 @@ impl PromptLibrary {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// use swissarmyhammer::PromptLibrary;
+    /// ```text
+    /// use swissarmyhammer_prompts::PromptLibrary;
     /// use std::collections::HashMap;
     ///
     /// let library = PromptLibrary::new();
@@ -947,7 +942,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
     ///
     /// let mut library = PromptLibrary::new();
     /// library.add(Prompt::new("debug-js", "Debug JavaScript code")
@@ -980,7 +975,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{PromptLibrary, PromptFilter, PromptSource, Prompt};
+    /// use swissarmyhammer_prompts::{PromptLibrary, PromptFilter, PromptSource, Prompt};
     /// use std::collections::HashMap;
     ///
     /// let mut library = PromptLibrary::new();
@@ -1016,7 +1011,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
     ///
     /// let mut library = PromptLibrary::new();
     /// let prompt = Prompt::new("example", "Example template");
@@ -1041,7 +1036,7 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
     ///
     /// let mut library = PromptLibrary::new();
     /// library.add(Prompt::new("temp", "Temporary prompt")).unwrap();

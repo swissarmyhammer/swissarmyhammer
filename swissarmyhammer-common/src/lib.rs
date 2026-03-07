@@ -21,7 +21,6 @@
 
 pub mod constants;
 pub mod directory;
-pub mod id_types;
 pub mod editor;
 pub mod env_loader;
 pub mod error;
@@ -31,6 +30,7 @@ pub mod frontmatter;
 pub mod fs_utils;
 pub mod glob_utils;
 pub mod health;
+pub mod id_types;
 pub mod interactive_prompts;
 pub mod parameter_conditions;
 pub mod parameters;

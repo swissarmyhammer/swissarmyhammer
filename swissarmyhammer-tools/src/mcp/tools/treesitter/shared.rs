@@ -178,6 +178,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_resolve_workspace_path_fallback() {
         let context = create_test_context().await;
         let result = resolve_workspace_path(None, &context);

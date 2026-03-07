@@ -285,7 +285,7 @@ pub async fn create_agent_with_options(
             ("Claude", handle)
         }
         ModelExecutorType::LlamaAgent => {
-            let llama_config = match &config.executor {
+            let llama_config = match config.executor() {
                 ModelExecutorConfig::LlamaAgent(cfg) => cfg.clone(),
                 _ => {
                     return Err(AcpError::ConfigurationError(
@@ -296,7 +296,7 @@ pub async fn create_agent_with_options(
             let handle = create_llama_agent(llama_config, mcp_config).await?;
             ("Llama", handle)
         }
-        ModelExecutorType::LlamaEmbedding => {
+        ModelExecutorType::LlamaEmbedding | ModelExecutorType::AneEmbedding => {
             return Err(AcpError::ConfigurationError(
                 "Embedding models cannot be used as agents".to_string(),
             ))

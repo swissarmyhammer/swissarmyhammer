@@ -145,5 +145,10 @@ mirdan-lock.json
 
 .github/copilot/
 
+# Model conversion output (large .mlpackage files, tokenizers, weights)
+var/data/models/
+ane-embedding/convert/output/
+
 # Claude Code local settings
 .claude/settings.local.json
+.claude/plans/

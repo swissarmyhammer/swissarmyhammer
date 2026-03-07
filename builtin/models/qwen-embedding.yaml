@@ -2,11 +2,20 @@
 description: "Qwen3 Embedding 0.6B: Compact semantic embedding model"
 ---
 quiet: false
-executor:
-  type: llama-embedding
-  config:
-    source: !HuggingFace
-      repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
-      filename: "Qwen3-Embedding-0.6B-Q8_0.gguf"
-    normalize: true
-    max_sequence_length: 512
+executors:
+  - platform: macos-arm64
+    executor:
+      type: ane-embedding
+      config:
+        source: !HuggingFace
+          repo: "wballard/Qwen3-Embedding-0.6B-CoreML"
+        normalize: true
+        max_sequence_length: 256
+  - executor:
+      type: llama-embedding
+      config:
+        source: !HuggingFace
+          repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
+          filename: "Qwen3-Embedding-0.6B-Q8_0.gguf"
+        normalize: true
+        max_sequence_length: 512

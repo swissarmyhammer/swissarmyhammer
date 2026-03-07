@@ -6,7 +6,7 @@
 //!
 //! ## Features
 //!
-//! - **Model Loading**: Integration with `llama-loader` for unified model management
+//! - **Model Loading**: Integration with `model-loader` for unified model management
 //! - **Single Text Embedding**: Generate embeddings for individual texts
 //! - **Batch Processing**: Efficient processing of multiple texts
 //! - **File Processing**: Stream processing of large text files
@@ -16,12 +16,11 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use llama_embedding::{EmbeddingModel, EmbeddingConfig};
-//! use llama_loader::ModelSource;
+//! use llama_embedding::{EmbeddingModel, EmbeddingConfig, TextEmbedder};
+//! use model_loader::ModelSource;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Configure the embedding model
 //!     let config = EmbeddingConfig {
 //!         model_source: ModelSource::HuggingFace {
 //!             repo: "Qwen/Qwen3-Embedding-0.6B-GGUF".to_string(),
@@ -33,14 +32,12 @@
 //!         debug: false,
 //!     };
 //!
-//!     // Create and load the model
-//!     let mut model = EmbeddingModel::new(config).await?;
-//!     model.load_model().await?;
+//!     let model = EmbeddingModel::new(config).await?;
+//!     model.load().await?;
 //!
-//!     // Generate embedding for a single text
 //!     let result = model.embed_text("Hello, world!").await?;
 //!     println!("Embedding dimension: {}", result.dimension());
-//!     println!("Processing time: {}ms", result.processing_time_ms);
+//!     println!("Processing time: {}ms", result.processing_time_ms());
 //!
 //!     Ok(())
 //! }
@@ -49,19 +46,16 @@
 //! ## Batch Processing
 //!
 //! ```rust,no_run
-//! use llama_embedding::{EmbeddingModel, BatchProcessor, EmbeddingConfig};
+//! use llama_embedding::{EmbeddingModel, BatchProcessor, EmbeddingConfig, TextEmbedder};
 //! use std::path::Path;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let config = EmbeddingConfig::default();
-//!     let mut model = EmbeddingModel::new(config).await?;
-//!     model.load_model().await?;
+//!     let model = EmbeddingModel::new(config).await?;
+//!     model.load().await?;
 //!
-//!     // Create batch processor
-//!     let mut processor = BatchProcessor::new(&mut model, 32);
-//!
-//!     // Process a file containing texts (one per line)
+//!     let mut processor = BatchProcessor::new(&model, 32);
 //!     let results = processor.process_file(Path::new("texts.txt")).await?;
 //!     println!("Generated {} embeddings", results.len());
 //!
@@ -75,13 +69,16 @@ pub mod model;
 pub mod types;
 
 // Re-export main types for convenience
-pub use batch::{BatchConfig, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo};
-pub use error::{EmbeddingError, EmbeddingResult as Result};
+pub use batch::{
+    BatchConfig, BatchFailure, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo,
+};
+pub use error::{EmbedResult as Result, EmbeddingError};
 pub use model::EmbeddingModel;
 pub use types::{EmbeddingConfig, EmbeddingResult};
 
 // Re-export commonly used types from dependencies
-pub use llama_loader::ModelSource;
+pub use model_embedding::TextEmbedder;
+pub use model_loader::ModelSource;
 
 #[cfg(test)]
 mod tests {
@@ -89,23 +86,18 @@ mod tests {
 
     #[test]
     fn test_public_api_availability() {
-        // Verify that all main types are accessible
         let _config: Option<EmbeddingConfig> = None;
         let _error: Option<EmbeddingError> = None;
         let _result: Option<EmbeddingResult> = None;
-
-        // Test passes if this compiles
+        let _trait: Option<&dyn TextEmbedder> = None;
     }
 
     #[test]
     fn test_model_source_reexport() {
-        // Verify ModelSource is properly re-exported
         let _source = ModelSource::HuggingFace {
             repo: "test/repo".to_string(),
             filename: None,
             folder: None,
         };
-
-        // Test passes if this compiles
     }
 }

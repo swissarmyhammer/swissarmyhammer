@@ -16,7 +16,7 @@ use crate::types::{Session, SessionError};
 ///
 /// # Usage
 ///
-/// ```rust
+/// ```text
 /// use crate::validation::{AgentValidator, Validator};
 /// use crate::types::Session;
 ///

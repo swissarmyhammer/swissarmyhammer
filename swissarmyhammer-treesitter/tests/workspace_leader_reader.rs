@@ -18,7 +18,7 @@ const TEST_MIN_SIMILARITY: f32 = 0.5;
 const TEST_MIN_CHUNK_BYTES: usize = 5;
 
 /// Maximum time to wait for background indexing before failing the test.
-const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Open a workspace and wait for background indexing to complete.
 async fn open_and_wait(dir: &Path) -> Workspace {

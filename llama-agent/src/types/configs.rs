@@ -3,9 +3,11 @@
 //! This module contains the main configuration structures used to set up
 //! and configure agent behavior, request queuing, and session management.
 
-use llama_loader::ModelConfig;
+use model_loader::{ModelSource, RetryConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,6 +15,102 @@ use crate::types::errors::{AgentError, MCPError, QueueError, SessionError};
 use crate::types::mcp::MCPServerConfig;
 use crate::types::sessions::CompactionConfig;
 use crate::types::tools::ParallelConfig;
+
+/// Configuration for model loading and runtime parameters.
+///
+/// Extends `model_loader::ModelConfig` with llama-specific runtime fields
+/// (batch size, thread counts, etc.) that the generic resolver does not need.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    /// The source from which to load the model
+    pub source: ModelSource,
+    /// Batch size for model operations
+    pub batch_size: u32,
+    /// Maximum number of sequences for concurrent processing
+    pub n_seq_max: u32,
+    /// Number of threads for processing
+    pub n_threads: i32,
+    /// Number of threads for batch processing
+    pub n_threads_batch: i32,
+    /// Whether to use HuggingFace parameters
+    pub use_hf_params: bool,
+    /// Configuration for retry logic
+    pub retry_config: RetryConfig,
+    /// Enable debug output
+    pub debug: bool,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            source: ModelSource::HuggingFace {
+                repo: "microsoft/DialoGPT-medium".to_string(),
+                filename: None,
+                folder: None,
+            },
+            batch_size: 512,
+            n_seq_max: 8,
+            n_threads: 1,
+            n_threads_batch: 1,
+            use_hf_params: true,
+            retry_config: RetryConfig::default(),
+            debug: false,
+        }
+    }
+}
+
+impl ModelConfig {
+    /// Validate the model configuration
+    pub fn validate(&self) -> Result<(), model_loader::ModelError> {
+        self.source.validate()?;
+
+        if self.batch_size == 0 {
+            return Err(model_loader::ModelError::InvalidConfig(
+                "Batch size must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.batch_size > 8192 {
+            return Err(model_loader::ModelError::InvalidConfig(
+                "Batch size should not exceed 8192 for most models".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Compute a hash of the model source for creating unique cache directories
+    pub fn compute_model_hash(&self) -> String {
+        let mut hasher = DefaultHasher::new();
+
+        match &self.source {
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
+                repo.hash(&mut hasher);
+                filename.hash(&mut hasher);
+                folder.hash(&mut hasher);
+            }
+            ModelSource::Local { folder, filename } => {
+                folder.hash(&mut hasher);
+                filename.hash(&mut hasher);
+            }
+        }
+
+        format!("{:x}", hasher.finish())
+    }
+
+    /// Build a slim `model_loader::ModelConfig` for passing to the resolver
+    pub fn resolver_config(&self) -> model_loader::ModelConfig {
+        model_loader::ModelConfig {
+            source: self.source.clone(),
+            retry_config: self.retry_config.clone(),
+            debug: self.debug,
+        }
+    }
+}
 
 /// Main configuration for an agent instance.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

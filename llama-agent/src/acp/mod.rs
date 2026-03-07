@@ -126,7 +126,7 @@
 //!
 //! # Usage Example
 //!
-//! ```rust,no_run
+//! ```text
 //! use llama_agent::acp::{AcpServer, AcpConfig};
 //! use llama_agent::AgentServer;
 //! use std::sync::Arc;
@@ -135,16 +135,16 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Load ACP configuration
 //!     let config = AcpConfig::from_file("acp-config.yaml")?;
-//!     
+//!
 //!     // Create underlying llama-agent server
 //!     let agent_server = Arc::new(AgentServer::new(/* ... */).await?);
-//!     
+//!
 //!     // Create ACP server
 //!     let acp_server = AcpServer::new(agent_server, config);
-//!     
+//!
 //!     // Start JSON-RPC server on stdio
 //!     acp_server.start_stdio().await?;
-//!     
+//!
 //!     Ok(())
 //! }
 //! ```

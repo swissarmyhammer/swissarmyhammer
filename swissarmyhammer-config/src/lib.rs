@@ -199,9 +199,10 @@ pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;
 pub use error::{ConfigurationError, ConfigurationResult};
 pub use model::{
-    parse_model_config, parse_model_description, ClaudeCodeConfig, LlamaAgentConfig,
-    LlmModelConfig, McpServerConfig, ModelConfig, ModelConfigSource, ModelError,
-    ModelExecutorConfig, ModelExecutorType, ModelInfo, ModelManager, ModelPaths, ModelSource,
+    parse_model_config, parse_model_description, ClaudeCodeConfig, EmbeddingModelConfig,
+    ExecutorEntry, LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig,
+    ModelConfigSource, ModelError, ModelExecutorConfig, ModelExecutorType, ModelInfo, ModelManager,
+    ModelPaths, ModelSource, Platform,
 };
 pub use provider::ConfigurationProvider;
 pub use template_context::TemplateContext;
@@ -381,14 +382,10 @@ pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-0.6B-IQ4_NL.gguf";
 ///
 /// This constant specifies the embedding model used for all semantic search
 /// and embedding-related tests. BGE-small-en-v1.5 is selected because it:
-/// - Generates 384-dimensional embeddings (manageable size for tests)
-/// - Provides good semantic understanding for English text
-/// - Has fast inference speed suitable for test environments
-/// - Maintains consistent behavior across different platforms
-///
-/// All embedding tests use this model to ensure consistent vector dimensions
-/// and semantic behavior across the test suite.
-pub const DEFAULT_TEST_EMBEDDING_MODEL: &str = "BAAI/bge-small-en-v1.5";
+/// Default embedding model name for tests.
+/// References the builtin `qwen-embedding` config, which selects ANE on Apple Silicon
+/// and llama.cpp elsewhere via `Embedder::from_model_name()`.
+pub const DEFAULT_TEST_EMBEDDING_MODEL: &str = "qwen-embedding";
 
 // Model configuration constants
 

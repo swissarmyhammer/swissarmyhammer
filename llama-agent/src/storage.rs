@@ -100,7 +100,7 @@ struct SessionMetadata {
 /// All write operations are atomic using temporary files and rename operations.
 ///
 /// # File Structure
-/// ```
+/// ```text
 /// .llama-sessions/
 /// ├── {session_id_1}.json    # Session data
 /// ├── {session_id_2}.json

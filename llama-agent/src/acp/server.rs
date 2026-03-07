@@ -125,7 +125,7 @@ impl AcpServer {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// use llama_agent::acp::{AcpServer, AcpConfig};
     /// use llama_agent::AgentServer;
     /// use std::sync::Arc;
@@ -921,7 +921,7 @@ impl AcpServer {
     /// * `None` if the session is not found in the in-memory cache
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let session = server.get_session_by_id(&session_id).await;
     /// if let Some(session) = session {
     ///     println!("Found session: {}", session.session_id.0);
@@ -1419,12 +1419,7 @@ impl agent_client_protocol::Agent for AcpServer {
 
         loop {
             // Calculate max_tokens based on available context space
-            let model_context_size = self
-                .agent_server
-                .get_model_metadata()
-                .await
-                .map(|metadata| metadata.context_size)
-                .unwrap_or(4096); // Default fallback
+            let model_context_size = self.agent_server.get_context_size().await.unwrap_or(4096); // Default fallback
 
             // Get current token usage from session
             let current_tokens = self

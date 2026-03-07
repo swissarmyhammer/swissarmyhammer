@@ -1,0 +1,2 @@
+# No special linker flags needed — objc2-core-ml uses direct ObjC FFI,
+# no Swift runtime dependency.

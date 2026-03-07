@@ -59,7 +59,7 @@ futures = { workspace = true }
 hf-hub = { workspace = true }
 
 # Shared model loading
-llama-loader = { workspace = true }
+model-loader = { workspace = true }
 
 # Shared common utilities
 llama-common = { workspace = true }

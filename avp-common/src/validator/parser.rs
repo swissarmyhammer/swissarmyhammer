@@ -366,7 +366,7 @@ pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
 ///
 /// # Directory Structure
 ///
-/// ```
+/// ```text
 /// ruleset-name/
 /// ├── VALIDATOR.md      (required: manifest)
 /// └── rules/            (required directory)

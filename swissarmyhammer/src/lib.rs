@@ -14,7 +14,6 @@
 //!
 //! ```rust,no_run
 //! use swissarmyhammer::PromptLibrary;
-//! use std::collections::HashMap;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a new prompt library
@@ -27,8 +26,8 @@
 //!
 //! // Render a prompt
 //! let mut context = swissarmyhammer::TemplateContext::new();
-//! context.insert("language".to_string(), "rust".into());
-//! context.insert("file".to_string(), "main.rs".into());
+//! context.set("language".to_string(), serde_json::json!("rust"));
+//! context.set("file".to_string(), serde_json::json!("main.rs"));
 //! let rendered = library.render("code-review", &context)?;
 //!
 //! println!("{}", rendered);
@@ -61,6 +60,9 @@ pub use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptLoader};
 
 /// Template engine and rendering functionality (re-exported from swissarmyhammer-templating)
 pub use swissarmyhammer_templating::{Template, TemplateEngine};
+
+/// Template context for prompt rendering
+pub use swissarmyhammer_config::TemplateContext;
 
 pub use swissarmyhammer_common::*;
 
