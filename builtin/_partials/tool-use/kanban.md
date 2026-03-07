@@ -120,9 +120,9 @@ Assistant thinking:
 ```
 kanban op: "add actor", id: "assistant", name: "Assistant", type: "agent", ensure: true
 
-kanban op: "add task", title: "Design auth architecture", description: "## What\nDecide on JWT vs session, storage strategy\n\n## Acceptance Criteria\n- [ ] Auth strategy documented in card comments\n- [ ] Token format and expiry policy decided\n\n## Tests\n- [ ] No code tests — this is a design card"
-kanban op: "add task", title: "Create user model", description: "## What\nAdd User table with email, password_hash, created_at in src/models/user.rs\n\n## Acceptance Criteria\n- [ ] User struct with email, password_hash, created_at fields\n- [ ] Migration creates users table\n\n## Tests\n- [ ] Unit test in src/models/user.rs for User creation\n- [ ] cargo test --lib models::user passes"
-kanban op: "add task", title: "Implement login endpoint", description: "## What\nPOST /api/login with email/password in src/routes/auth.rs\n\n## Acceptance Criteria\n- [ ] Returns JWT on valid credentials\n- [ ] Returns 401 on invalid credentials\n\n## Tests\n- [ ] Integration test in tests/auth.rs for login success and failure\n- [ ] cargo test auth::login passes"
+kanban op: "add task", title: "Design auth architecture", description: "What: Decide on JWT vs session, storage strategy. Acceptance Criteria: Auth strategy documented in card comments; Token format and expiry policy decided. Tests: No code tests — this is a design card."
+kanban op: "add task", title: "Create user model", description: "What: Add User table with email, password_hash, created_at in src/models/user.rs. Acceptance Criteria: User struct with email, password_hash, created_at fields; Migration creates users table. Tests: Unit test in src/models/user.rs for User creation; cargo test --lib models::user passes."
+kanban op: "add task", title: "Implement login endpoint", description: "What: POST /api/login with email/password in src/routes/auth.rs. Acceptance Criteria: Returns JWT on valid credentials; Returns 401 on invalid credentials. Tests: Integration test in tests/auth.rs for login success and failure; cargo test auth::login passes."
 
 kanban op: "assign task", id: "<task1_id>", assignee: "assistant"
 ```
