@@ -54,20 +54,30 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
   }, [open]);
 
-  // Auto-enter insert mode in vim when the palette opens
+  // Auto-enter insert mode in vim when the palette opens.
+  // Retries until getCM() returns a value — the vim extension may take
+  // a few frames to initialize after mount.
   useEffect(() => {
     if (!open || mode !== "vim") return;
-    // Small delay to let CM6 mount and the vim extension initialize
-    const timer = setTimeout(() => {
+    let cancelled = false;
+    let attempts = 0;
+    const tryEnterInsert = () => {
+      if (cancelled || attempts > 20) return;
+      attempts++;
       const view = editorRef.current?.view;
-      if (!view) return;
-      const cm = getCM(view);
-      if (cm) {
-        // Send "i" to enter insert mode
-        (cm as any).handleKey("i");
+      if (!view) {
+        requestAnimationFrame(tryEnterInsert);
+        return;
       }
-    }, 10);
-    return () => clearTimeout(timer);
+      const cm = getCM(view);
+      if (!cm) {
+        requestAnimationFrame(tryEnterInsert);
+        return;
+      }
+      (cm as any).handleKey("i");
+    };
+    requestAnimationFrame(tryEnterInsert);
+    return () => { cancelled = true; };
   }, [open, mode]);
 
   // Filter and sort commands by fuzzy match score
