@@ -431,23 +431,24 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Reset saved window positions/sizes and restart.
+/// Reset saved window positions/sizes and exit.
+///
+/// Deletes the plugin's `.window-state.json` then hard-exits via
+/// `std::process::exit` so the plugin's shutdown hook can't re-save.
+/// The user needs to relaunch — `app.restart()` would trigger the
+/// plugin's save-on-exit, recreating the file we just deleted.
 #[tauri::command]
 pub async fn reset_windows(app: AppHandle) -> Result<(), String> {
-    // The window-state plugin stores its file in the app data dir.
     if let Some(data_dir) = app.path().app_data_dir().ok() {
-        let state_file = data_dir.join(".window-state");
+        let state_file = data_dir.join(".window-state.json");
         if state_file.exists() {
             std::fs::remove_file(&state_file)
                 .map_err(|e| format!("Failed to remove window state: {e}"))?;
             tracing::info!(?state_file, "Removed window state file");
         }
     }
-    // Restart the app so it picks up default positions.
-    // restart() does not return — the Ok(()) is unreachable but required by the signature.
-    app.restart();
-    #[allow(unreachable_code)]
-    Ok(())
+    // Hard-exit — bypasses plugin shutdown hooks that would re-save the state.
+    std::process::exit(0);
 }
 
 /// Open a folder picker to create a new board.
