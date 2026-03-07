@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
@@ -41,7 +41,11 @@ export function GridView({ view }: GridViewProps) {
       .map((f) => ({ field: f }));
   }, [view.card_fields, fields]);
 
-  const grid = useGrid({ rowCount: entities.length, colCount: columns.length });
+  // Visible row count may differ from entities.length when groups are collapsed
+  const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
+  useEffect(() => { setVisibleRowCount(entities.length); }, [entities.length]);
+
+  const grid = useGrid({ rowCount: visibleRowCount, colCount: columns.length });
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
@@ -291,6 +295,7 @@ export function GridView({ view }: GridViewProps) {
           grid={grid}
           onCellClick={handleCellClick}
           renderEditor={renderEditor}
+          onVisibleRowCount={setVisibleRowCount}
         />
       </main>
     </CommandScopeProvider>

@@ -2,9 +2,23 @@ import { useState, useCallback, useMemo, useRef } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { EditableMarkdown } from "@/components/editable-markdown";
-import { FieldPlaceholder } from "@/components/fields/field-placeholder";
 import { SubtaskProgress } from "@/components/subtask-progress";
-import { TagPill } from "@/components/tag-pill";
+import {
+  resolveDisplay,
+  BadgeListDisplay,
+  BadgeDisplay,
+  ColorSwatchDisplay,
+  DateDisplay,
+  NumberDisplay,
+  TextDisplay,
+} from "@/components/fields/displays";
+import {
+  resolveEditor,
+  MarkdownEditor,
+  SelectEditor,
+  NumberEditor,
+  DateEditor,
+} from "@/components/fields/editors";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
@@ -194,7 +208,7 @@ function FieldDispatch({
   onCommit: (value: unknown) => void;
   onCancel: () => void;
 }) {
-  // Markdown fields — EditableMarkdown with optional tag decorations
+  // Markdown fields — EditableMarkdown handles its own display/edit toggle
   if (field.type.kind === "markdown") {
     const text = typeof value === "string" ? value : "";
     const multiline = !field.type.single_line;
@@ -211,41 +225,66 @@ function FieldDispatch({
     );
   }
 
-  // Computed: tags — render as pill list
-  if (field.display === "badge-list" && field.type.kind === "computed") {
-    const slugs = Array.isArray(value) ? (value as string[]) : [];
-    if (slugs.length === 0) return <span className="text-sm text-muted-foreground italic">None</span>;
-    return (
-      <div className="flex flex-wrap gap-1">
-        {slugs.map((slug) => (
-          <TagPill key={slug} slug={slug} tags={tags} taskId={entity.id} />
-        ))}
-      </div>
-    );
-  }
-
   // Computed: progress — render as SubtaskProgress bar using the body field
   if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-progress") {
     const bodyText = bodyFieldName ? getStr(entity, bodyFieldName) || undefined : undefined;
     return <SubtaskProgress description={bodyText} />;
   }
 
-  // Color fields — palette + picker
+  // Color fields — palette + picker (always interactive)
   if (field.type.kind === "color") {
     const hex = typeof value === "string" ? value : "888888";
     return <ColorField value={hex} onCommit={(v) => onCommit(v)} />;
   }
 
-  // Default fallback
+  // Editing: dispatch to shared editor components
+  if (editing) {
+    const editor = resolveEditor(field);
+    const editorProps = { value, onCommit, onCancel, mode: "full" as const };
+
+    switch (editor) {
+      case "select":
+        return <SelectEditor {...editorProps} field={field} />;
+      case "number":
+        return <NumberEditor {...editorProps} />;
+      case "date":
+        return <DateEditor {...editorProps} />;
+      case "markdown":
+      default:
+        return (
+          <MarkdownEditor
+            {...editorProps}
+            placeholder={`Add ${field.name.replace(/_/g, " ")}...`}
+          />
+        );
+    }
+  }
+
+  // Read-only: use shared display components in full mode
+  const display = resolveDisplay(field);
+  const displayProps = { field, value, entity, mode: "full" as const };
+
+  const rendered = (() => {
+    switch (display) {
+      case "badge-list":
+        return <BadgeListDisplay {...displayProps} />;
+      case "badge":
+        return <BadgeDisplay {...displayProps} />;
+      case "color-swatch":
+        return <ColorSwatchDisplay {...displayProps} />;
+      case "date":
+        return <DateDisplay {...displayProps} />;
+      case "number":
+        return <NumberDisplay {...displayProps} />;
+      default:
+        return <TextDisplay {...displayProps} />;
+    }
+  })();
+
   return (
-    <FieldPlaceholder
-      field={field}
-      value={value}
-      editing={editing}
-      onEdit={onEdit}
-      onCommit={onCommit}
-      onCancel={onCancel}
-    />
+    <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
+      {rendered}
+    </div>
   );
 }
 
