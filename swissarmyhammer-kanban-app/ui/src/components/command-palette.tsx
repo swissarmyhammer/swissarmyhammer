@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
-import { getCM } from "@replit/codemirror-vim";
+import { getCM, Vim } from "@replit/codemirror-vim";
 import { useAvailableCommands, collectAvailableCommands, type CommandAtDepth } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap } from "@/lib/keymap-context";
@@ -74,7 +74,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         requestAnimationFrame(tryEnterInsert);
         return;
       }
-      (cm as any).handleKey("i");
+      Vim.handleKey(cm as any, "i", "mapping");
     };
     requestAnimationFrame(tryEnterInsert);
     return () => { cancelled = true; };

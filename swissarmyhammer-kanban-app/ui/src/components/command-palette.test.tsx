@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
-// Track getCM mock for vim insert mode tests
-const handleKeyMock = vi.fn();
-
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve("cua")),
@@ -12,26 +9,25 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-// Mock getCM from codemirror-vim
-// NOTE: vi.mock factories are hoisted, so we can't assign to variables declared
-// with let/const at module level. Instead, import getCM after mocking and use
-// vi.mocked() to access the mock.
+// Mock codemirror-vim: getCM returns a cm object, Vim.handleKey is the spy
 vi.mock("@replit/codemirror-vim", async () => {
   const actual = await vi.importActual<typeof import("@replit/codemirror-vim")>("@replit/codemirror-vim");
   return {
     ...actual,
-    getCM: vi.fn(() => ({ state: { vim: {} }, handleKey: handleKeyMock })),
+    getCM: vi.fn(() => ({ state: { vim: {} } })),
+    Vim: { ...actual.Vim, handleKey: vi.fn(), exitInsertMode: vi.fn() },
   };
 });
 
 import { invoke } from "@tauri-apps/api/core";
-import { getCM } from "@replit/codemirror-vim";
+import { getCM, Vim } from "@replit/codemirror-vim";
 import { CommandPalette } from "./command-palette";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { KeymapProvider } from "@/lib/keymap-context";
 
 const getCMMock = vi.mocked(getCM);
+const handleKeyMock = vi.mocked(Vim.handleKey);
 
 const TEST_COMMANDS: CommandDef[] = [
   {
@@ -58,7 +54,7 @@ beforeEach(() => {
   handleKeyMock.mockClear();
   getCMMock.mockClear();
   // Restore default getCM behavior
-  getCMMock.mockReturnValue({ state: { vim: {} }, handleKey: handleKeyMock } as any);
+  getCMMock.mockReturnValue({ state: { vim: {} } } as any);
 });
 
 function renderPalette(open: boolean, onClose = vi.fn()) {
@@ -161,7 +157,7 @@ describe("CommandPalette vim insert mode", () => {
     });
 
     expect(getCMMock).toHaveBeenCalled();
-    expect(handleKeyMock).toHaveBeenCalledWith("i");
+    expect(handleKeyMock).toHaveBeenCalledWith(expect.anything(), "i", "mapping");
   });
 
   it("does NOT enter insert mode in CUA mode", async () => {
@@ -194,7 +190,7 @@ describe("CommandPalette vim insert mode", () => {
     getCMMock.mockImplementation(() => {
       callCount++;
       if (callCount <= 3) return null;
-      return { state: { vim: {} }, handleKey: handleKeyMock };
+      return { state: { vim: {} } };
     });
 
     await act(async () => {
@@ -207,7 +203,7 @@ describe("CommandPalette vim insert mode", () => {
     });
 
     expect(callCount).toBeGreaterThan(3);
-    expect(handleKeyMock).toHaveBeenCalledWith("i");
+    expect(handleKeyMock).toHaveBeenCalledWith(expect.anything(), "i", "mapping");
   });
 
   it("stops retrying after cancellation (palette closes)", async () => {
