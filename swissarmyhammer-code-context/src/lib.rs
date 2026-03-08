@@ -39,6 +39,12 @@ pub use ts_callgraph::{
 };
 pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
 pub use ops::find_symbol::{find_symbol, symbol_kind_name, SymbolLocation};
+pub use ops::get_blastradius::{
+    get_blastradius, AffectedSymbol, BlastRadius, BlastRadiusOptions, HopLevel,
+};
+pub use ops::get_callgraph::{
+    get_callgraph, CallGraph, CallGraphDirection, CallGraphEdge, CallGraphNode, CallGraphOptions,
+};
 pub use ops::get_symbol::{
     get_symbol, GetSymbolOptions, GetSymbolResult, MatchTier, SymbolMatch,
 };
