@@ -775,7 +775,7 @@ pub trait McpTool: Doctorable + Send + Sync {
 /// 1. Implement this trait
 /// 2. Override `is_agent_tool()` to return `true` in the `McpTool` impl
 ///
-/// Domain-specific tools (kanban, flow, git, shell, treesitter, etc.)
+/// Domain-specific tools (kanban, flow, git, shell, etc.)
 /// should NOT implement this trait — they are always available.
 ///
 /// # Example

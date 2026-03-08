@@ -302,14 +302,14 @@ pub fn execute_file_diff(
     // Read content for right side
     let right_content = read_file_content(right_path, right_ref, working_dir)?;
 
+    // Always use right_path as the canonical file path for entity extraction.
+    // When two different paths are provided, the user wants a content comparison,
+    // not move/rename detection. Setting old_file_path would cause entity IDs to
+    // diverge (they include the file path), preventing semantic matching.
     let file_change = FileChange {
         file_path: right_path.to_string(),
         status: FileStatus::Modified,
-        old_file_path: if left_path != right_path {
-            Some(left_path.to_string())
-        } else {
-            None
-        },
+        old_file_path: None,
         before_content: Some(left_content),
         after_content: Some(right_content),
     };

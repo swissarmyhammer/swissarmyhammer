@@ -33,6 +33,9 @@ brew install swissarmyhammer/tap/swissarmyhammer-cli
 
 # Add sah as an MCP server and check setup
 sah init
+
+# Remove sah from your agent
+sah deinit
 ```
 
 ## sah -- Skills and Tools for Any Agent
@@ -46,7 +49,6 @@ sah init
 - **Kanban** -- file-backed task boards with cards, subtasks, dependencies
 - **Code Search** -- tree-sitter powered semantic search across 25+ languages
 - **Web** -- fetch pages, search the web
-- **Workflows** -- state machine orchestration defined in markdown
 - **JavaScript** -- embedded JS expression evaluation
 - **Questions** -- elicitation-based Q&A for capturing decisions
 
@@ -54,11 +56,51 @@ sah init
 - **plan** -- turn specs into implementation plans on a kanban board
 - **kanban** -- pick up and execute the next task
 - **implement** -- work through all remaining tasks autonomously
-- **commit** -- create well-structured conventional commits
+- **review** -- code review workflow with findings as kanban cards
 - **test** -- run the test suite and analyze results
+- **coverage** -- analyze test coverage gaps on changed code
+- **commit** -- create well-structured conventional commits
 - **tdd** -- strict test-driven development discipline
+- **code-context** -- semantic code search and symbol lookup
+- **deduplicate** -- find and refactor duplicate code
+- **shell** -- shell command execution with history, semantic search, and context/token management
 
 See the [sah README](swissarmyhammer-cli/) for full details.
+
+## Agent/Skill/Tool Model
+
+SwissArmyHammer implements a three-layer architecture that enables every stage of the SDLC to work with the same quality and autonomy as Plan mode:
+
+### The Triple Pattern
+
+Each major SDLC stage is built on the same foundation:
+
+- **Tool** -- Low-level MCP capability (git, kanban, code search, test runners, etc.)
+- **Skill** -- User-facing interface with structured workflow
+- **Agent** -- Specialized autonomous executor optimized for that specific stage
+
+This pattern means every SDLC stage—not just planning—gets the benefits of focused workflow design and specialized agent autonomy:
+
+| SDLC Stage | Tool | Skill | Agent | What It Does |
+|------------|------|-------|-------|--------------|
+| **Planning** | Kanban, Code Search | `/plan` | planner | Break specs into tasks on a kanban board |
+| **Implementation** | Git, Files, Kanban | `/implement` | implementer | Execute all remaining tasks autonomously |
+| **Testing** | Test runners, Coverage | `/test` | tester | Run tests, find failures, fix them |
+| **Test Coverage** | Code Search, Coverage | `/coverage` | tester | Find untested code, create test cards |
+| **Code Review** | Code Search, Diff, Kanban | `/review` | reviewer | Review code, create findings as cards |
+| **Git Workflow** | Git, Diff | `/commit` | committer | Create well-structured conventional commits |
+| **Test-Driven Dev** | Test runners, Files | `/tdd` | implementer | Enforce write-test-first discipline |
+| **Code Exploration** | Code Search, Tree-sitter | `/code-context` | explore | Semantic search and symbol lookup |
+| **Deduplication** | Code Search | `/deduplicate` | implementer | Find and refactor duplicate code |
+| **Shell Commands** | Shell, History | `/shell` | default | Safe execution with context management (keeps verbose output separate, saves tokens) |
+
+### Integrated Pipelines
+
+Stages connect naturally:
+
+- **Spec → Plan → Implement → Review → Fix**: Use `/plan` for specs, `/implement` for tasks, `/review` for findings (creates cards), then `/implement fix_review` to fix them
+- **Coverage-Driven Testing**: Use `/coverage` to find untested code, which creates kanban cards that `/test` picks up
+- **Quality Gates**: Use `/review`, `/test`, and `/tdd` as quality checkpoints at each stage, each feeding findings back to the implementation stage
 
 ## [avp](https://agentvalidatorprotocol.com) -- Agent Validator Protocol
 

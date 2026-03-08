@@ -45,5 +45,4 @@ pub mod kanban;
 pub mod questions;
 pub mod shell;
 pub mod skill;
-pub mod treesitter;
 pub mod web;
