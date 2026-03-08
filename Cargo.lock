@@ -8124,6 +8124,7 @@ dependencies = [
 name = "swissarmyhammer-code-context"
 version = "0.8.0"
 dependencies = [
+ "fuzzy-matcher",
  "ignore",
  "lsp-types",
  "rayon",

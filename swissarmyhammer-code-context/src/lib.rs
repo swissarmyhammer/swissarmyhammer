@@ -38,5 +38,8 @@ pub use ts_callgraph::{
     write_ts_edges, CallSite, ResolvedCallee,
 };
 pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
+pub use ops::get_symbol::{
+    get_symbol, GetSymbolOptions, GetSymbolResult, MatchTier, SymbolMatch,
+};
 pub use ops::grep_code::{grep_code, GrepMatch, GrepOptions, GrepResult, MatchPosition};
 pub use workspace::{CodeContextWorkspace, WorkspaceMode};
