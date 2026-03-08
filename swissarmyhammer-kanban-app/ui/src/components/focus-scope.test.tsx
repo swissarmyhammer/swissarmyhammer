@@ -216,6 +216,73 @@ describe("FocusScope", () => {
     expect(invoke).not.toHaveBeenCalledWith("show_context_menu", expect.anything());
   });
 
+  it("double-click executes entity.inspect command", () => {
+    const execute = vi.fn();
+    const { getByText } = renderWithFocus(
+      <FocusScope
+        moniker="task:abc"
+        commands={[{ id: "entity.inspect", name: "Inspect", contextMenu: true, execute }]}
+      >
+        <span>card</span>
+      </FocusScope>,
+    );
+    fireEvent.doubleClick(getByText("card"));
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("double-click on INPUT does not trigger entity.inspect", () => {
+    const execute = vi.fn();
+    const { getByRole } = renderWithFocus(
+      <FocusScope
+        moniker="task:abc"
+        commands={[{ id: "entity.inspect", name: "Inspect", contextMenu: true, execute }]}
+      >
+        <input type="text" />
+      </FocusScope>,
+    );
+    fireEvent.doubleClick(getByRole("textbox"));
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("double-click propagation stops at innermost FocusScope", () => {
+    const outerExec = vi.fn();
+    const innerExec = vi.fn();
+    const { getByText } = renderWithFocus(
+      <FocusScope
+        moniker="task:abc"
+        commands={[{ id: "entity.inspect", name: "Inspect task", contextMenu: true, execute: outerExec }]}
+      >
+        <span>card</span>
+        <FocusScope
+          moniker="tag:xyz"
+          commands={[{ id: "entity.inspect", name: "Inspect tag", contextMenu: true, execute: innerExec }]}
+        >
+          <span>tag</span>
+        </FocusScope>
+      </FocusScope>,
+    );
+    fireEvent.doubleClick(getByText("tag"));
+    // Inner scope's entity.inspect fires (resolveCommand finds nearest)
+    expect(innerExec).toHaveBeenCalledTimes(1);
+    // Outer does NOT fire because stopPropagation prevents the event from reaching it
+    expect(outerExec).not.toHaveBeenCalled();
+  });
+
+  it("double-click does nothing when no entity.inspect command exists", () => {
+    const execute = vi.fn();
+    const { getByText } = renderWithFocus(
+      <FocusScope
+        moniker="task:abc"
+        commands={[{ id: "other.command", name: "Other", contextMenu: true, execute }]}
+      >
+        <span>card</span>
+      </FocusScope>,
+    );
+    // Should not throw
+    fireEvent.doubleClick(getByText("card"));
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("data-focused attribute set when focused", () => {
     const { container, getByText } = renderWithFocus(
       <FocusScope moniker="task:abc" commands={[]}>

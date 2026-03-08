@@ -3,10 +3,17 @@
  *
  * Resolves actor from EntityStore by ID. Falls back to initials + deterministic
  * color if no avatar image is available.
+ *
+ * Wrapped in FocusScope so right-click and double-click open the inspector.
  */
 
+import { useMemo, useRef } from "react";
+import { FocusScope } from "@/components/focus-scope";
 import { useEntityStore } from "@/lib/entity-store-context";
+import { useInspect } from "@/lib/inspect-context";
+import { moniker } from "@/lib/moniker";
 import { deriveActorColor } from "@/lib/actor-colors";
+import type { CommandDef } from "@/lib/command-scope";
 import { getStr } from "@/types/kanban";
 
 const SIZES = {
@@ -32,6 +39,7 @@ function initials(name: string): string {
 
 export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   const { getEntity } = useEntityStore();
+  const inspectEntity = useInspect();
   const actor = getEntity("actor", actorId);
 
   const name = actor ? getStr(actor, "name") || actorId : actorId;
@@ -39,19 +47,30 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   const avatar = actor ? getStr(actor, "avatar") : undefined;
 
   const sizeClass = SIZES[size];
+  const scopeMoniker = moniker("actor", actorId);
 
-  if (avatar) {
-    return (
-      <img
-        src={avatar}
-        alt={name}
-        title={name}
-        className={`${sizeClass} rounded-full object-cover shrink-0 ${className ?? ""}`}
-      />
-    );
-  }
+  // Keep a ref so execute always uses the latest moniker
+  const monikerRef = useRef(scopeMoniker);
+  monikerRef.current = scopeMoniker;
 
-  return (
+  const commands = useMemo<CommandDef[]>(() => [
+    {
+      id: "entity.inspect",
+      name: "Inspect Actor",
+      target: scopeMoniker,
+      contextMenu: true,
+      execute: () => inspectEntity(monikerRef.current),
+    },
+  ], [scopeMoniker, inspectEntity]);
+
+  const inner = avatar ? (
+    <img
+      src={avatar}
+      alt={name}
+      title={name}
+      className={`${sizeClass} rounded-full object-cover shrink-0 ${className ?? ""}`}
+    />
+  ) : (
     <span
       title={name}
       className={`${sizeClass} rounded-full shrink-0 inline-flex items-center justify-center font-medium leading-none ${className ?? ""}`}
@@ -62,5 +81,11 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
     >
       {initials(name)}
     </span>
+  );
+
+  return (
+    <FocusScope moniker={scopeMoniker} commands={commands} className="inline-block">
+      {inner}
+    </FocusScope>
   );
 }
