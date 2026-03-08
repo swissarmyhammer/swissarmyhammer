@@ -107,10 +107,12 @@ pub struct DiffSummary {
     pub renamed: usize,
 }
 
-/// A single semantic change entry in the diff output
+/// A single semantic change entry in the diff output.
+///
+/// Fields are ordered so that identifying info (what changed, where, how)
+/// appears before content blobs, making the output scannable.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChangeEntry {
-    pub entity_id: String,
     pub change_type: String,
     pub entity_type: String,
     pub entity_name: String,
@@ -118,25 +120,26 @@ pub struct ChangeEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub old_file_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub structural_change: Option<bool>,
+    pub entity_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub before_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after_content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub structural_change: Option<bool>,
 }
 
 /// Converts a `SemanticChange` from sem-core into our output `ChangeEntry`.
 fn to_change_entry(sc: &SemanticChange) -> ChangeEntry {
     ChangeEntry {
-        entity_id: sc.entity_id.clone(),
         change_type: sc.change_type.to_string(),
         entity_type: sc.entity_type.clone(),
         entity_name: sc.entity_name.clone(),
         file_path: sc.file_path.clone(),
         old_file_path: sc.old_file_path.clone(),
+        structural_change: sc.structural_change,
+        entity_id: sc.entity_id.clone(),
         before_content: sc.before_content.clone(),
         after_content: sc.after_content.clone(),
-        structural_change: sc.structural_change,
     }
 }
 
