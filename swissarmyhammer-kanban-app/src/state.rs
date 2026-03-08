@@ -56,12 +56,16 @@ impl BoardHandle {
         let username = whoami::username();
         let realname = whoami::realname();
         let color = deterministic_color(&username);
-        let avatar = initials_svg_avatar(&realname, &color);
 
-        let cmd = AddActor::new(username.as_str(), realname.as_str())
+        let mut cmd = AddActor::new(username.as_str(), realname.as_str())
             .with_ensure()
-            .with_color(&color)
-            .with_avatar(avatar);
+            .with_color(&color);
+
+        // Only set avatar if we have a real profile picture.
+        // Initials are rendered client-side as fallback.
+        if let Some(photo) = macos_profile_picture(&username) {
+            cmd = cmd.with_avatar(photo);
+        }
 
         match cmd.execute(&self.ctx).await.into_result() {
             Ok(result) => {
@@ -483,34 +487,66 @@ fn deterministic_color(username: &str) -> String {
     ACTOR_COLORS[(hash as usize) % ACTOR_COLORS.len()].to_string()
 }
 
-/// Generate an initials-based SVG avatar as a data URI.
-fn initials_svg_avatar(name: &str, color: &str) -> String {
+/// Try to load the macOS user profile picture as a data URI.
+///
+/// macOS stores user pictures at `/Users/<username>/Library/Caches/com.apple.user-picture/`
+/// or via the DSCL directory services. We try the simplest approach: read the JPEG
+/// from the standard DS picture path.
+#[cfg(target_os = "macos")]
+fn macos_profile_picture(username: &str) -> Option<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    let initials: String = name
-        .split_whitespace()
-        .filter_map(|w| w.chars().next())
-        .take(2)
-        .flat_map(|c| c.to_uppercase())
-        .collect();
-    let initials = if initials.is_empty() {
-        "?".to_string()
-    } else {
-        initials
-    };
+    // macOS stores user profile pictures via dscl; the actual file is at:
+    // /var/db/dslocal/nodes/Default/users/<username>.plist (needs root)
+    // But a more accessible copy often exists at:
+    let home = std::env::var("HOME").ok()?;
+    let candidates = [
+        format!("{home}/Library/Caches/com.apple.user-picture/user-picture.jpeg"),
+        format!("{home}/Library/Caches/com.apple.user-picture/user-picture.png"),
+        format!("{home}/.face"),
+        format!("{home}/.face.icon"),
+    ];
 
-    let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\" viewBox=\"0 0 64 64\">\
-         <circle cx=\"32\" cy=\"32\" r=\"32\" fill=\"#{color}\"/>\
-         <text x=\"32\" y=\"32\" text-anchor=\"middle\" dy=\".35em\" fill=\"white\" \
-         font-family=\"system-ui,sans-serif\" font-size=\"24\" font-weight=\"600\">\
-         {initials}</text></svg>",
-    );
+    for path in &candidates {
+        if let Ok(data) = std::fs::read(path) {
+            if data.is_empty() {
+                continue;
+            }
+            let mime = if path.ends_with(".png") {
+                "image/png"
+            } else {
+                "image/jpeg"
+            };
+            return Some(format!("data:{mime};base64,{}", STANDARD.encode(&data)));
+        }
+    }
 
-    format!(
-        "data:image/svg+xml;base64,{}",
-        STANDARD.encode(svg.as_bytes())
-    )
+    // Try dscl as a fallback — reads the JPEGPhoto attribute
+    let output = std::process::Command::new("dscl")
+        .args([".", "-read", &format!("/Users/{username}"), "JPEGPhoto"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        // dscl output has a header line then hex-encoded data
+        // The binary data starts after the first newline + space
+        let stdout = output.stdout;
+        // Find the actual JPEG data — look for JPEG magic bytes (FF D8)
+        if let Some(pos) = stdout.windows(2).position(|w| w == [0xFF, 0xD8]) {
+            let jpeg_data = &stdout[pos..];
+            return Some(format!(
+                "data:image/jpeg;base64,{}",
+                STANDARD.encode(jpeg_data)
+            ));
+        }
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_profile_picture(_username: &str) -> Option<String> {
+    None
 }
 
 /// Get the path to the app config file.
@@ -741,33 +777,4 @@ mod tests {
         assert_ne!(c1, c2);
     }
 
-    #[test]
-    fn test_initials_svg_avatar_format() {
-        let avatar = initials_svg_avatar("Alice Smith", "e53e3e");
-        assert!(avatar.starts_with("data:image/svg+xml;base64,"));
-        // Decode and check SVG content
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        let b64 = avatar.strip_prefix("data:image/svg+xml;base64,").unwrap();
-        let svg = String::from_utf8(STANDARD.decode(b64).unwrap()).unwrap();
-        assert!(svg.contains("AS")); // initials
-        assert!(svg.contains("#e53e3e")); // color
-    }
-
-    #[test]
-    fn test_initials_svg_single_name() {
-        let avatar = initials_svg_avatar("Alice", "3182ce");
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        let b64 = avatar.strip_prefix("data:image/svg+xml;base64,").unwrap();
-        let svg = String::from_utf8(STANDARD.decode(b64).unwrap()).unwrap();
-        assert!(svg.contains(">A<")); // single initial
-    }
-
-    #[test]
-    fn test_initials_svg_empty_name() {
-        let avatar = initials_svg_avatar("", "3182ce");
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        let b64 = avatar.strip_prefix("data:image/svg+xml;base64,").unwrap();
-        let svg = String::from_utf8(STANDARD.decode(b64).unwrap()).unwrap();
-        assert!(svg.contains("?"));
-    }
 }

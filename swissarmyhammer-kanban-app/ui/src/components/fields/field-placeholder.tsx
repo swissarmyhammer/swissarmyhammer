@@ -168,6 +168,7 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProp
       onBlur={() => commitAndExitRef.current()}
       onCreateEditor={handleCreateEditor}
       extensions={extensions}
+      theme="none"
       basicSetup={{
         lineNumbers: false,
         foldGutter: false,

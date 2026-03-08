@@ -386,6 +386,7 @@ export function EditableMarkdown({
         onBlur={commitAndExit}
         onCreateEditor={handleCreateEditor}
         extensions={extensions}
+        theme="none"
         basicSetup={{
           lineNumbers: false,
           foldGutter: false,

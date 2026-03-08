@@ -938,13 +938,12 @@ impl McpServer {
 
         let actor_id = slugify(client_name);
         let color = agent_deterministic_color(&actor_id);
-        let avatar = agent_svg_avatar(&actor_id, &color);
 
+        // No stored avatar — frontend renders initials as fallback
         let ctx = KanbanContext::new(kanban_dir);
         let cmd = AddActor::new(actor_id.as_str(), client_name)
             .with_ensure()
-            .with_color(&color)
-            .with_avatar(avatar);
+            .with_color(&color);
 
         match cmd.execute(&ctx).await.into_result() {
             Ok(result) => {
@@ -991,24 +990,6 @@ fn agent_deterministic_color(id: &str) -> String {
     AGENT_COLORS[(hash as usize) % AGENT_COLORS.len()].to_string()
 }
 
-/// Generate a geometric SVG avatar for an agent actor (diamond shape).
-fn agent_svg_avatar(id: &str, color: &str) -> String {
-    // Use first char of ID for the label
-    let label = id.chars().next().unwrap_or('?').to_ascii_uppercase();
-    let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\" viewBox=\"0 0 64 64\">\
-         <rect x=\"8\" y=\"8\" width=\"48\" height=\"48\" rx=\"12\" fill=\"#{color}\"/>\
-         <text x=\"32\" y=\"32\" text-anchor=\"middle\" dy=\".35em\" fill=\"white\" \
-         font-family=\"system-ui,sans-serif\" font-size=\"24\" font-weight=\"600\">\
-         {label}</text></svg>",
-    );
-
-    use base64::{engine::general_purpose::STANDARD, Engine};
-    format!(
-        "data:image/svg+xml;base64,{}",
-        STANDARD.encode(svg.as_bytes())
-    )
-}
 
 impl ServerHandler for McpServer {
     async fn initialize(
@@ -1199,9 +1180,4 @@ mod tests {
         assert_eq!(c1.len(), 6);
     }
 
-    #[test]
-    fn test_agent_svg_avatar_format() {
-        let avatar = agent_svg_avatar("claude-code", "5a67d8");
-        assert!(avatar.starts_with("data:image/svg+xml;base64,"));
-    }
 }
