@@ -11,7 +11,7 @@ use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
     register_file_tools, register_git_tools, register_js_tools, register_kanban_tools,
-    register_questions_tools, register_shell_tools, register_treesitter_tools, register_web_tools,
+    register_questions_tools, register_shell_tools, register_web_tools,
 };
 
 /// Health checker for prompt directories and YAML front matter
@@ -166,7 +166,6 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
     register_shell_tools(&mut tool_registry);
     register_kanban_tools(&mut tool_registry);
     register_questions_tools(&mut tool_registry);
-    register_treesitter_tools(&mut tool_registry);
     register_web_tools(&mut tool_registry);
 
     // Register skill tools with a default library

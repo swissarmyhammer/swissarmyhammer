@@ -22,7 +22,7 @@ use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_file_tools, register_git_tools, register_js_tools, register_kanban_tools,
     register_code_context_tools, register_questions_tools, register_shell_tools,
-    register_treesitter_tools, register_web_tools, ToolContext, ToolRegistry,
+    register_web_tools, ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -397,7 +397,6 @@ impl McpServer {
         register_kanban_tools(tool_registry);
         register_questions_tools(tool_registry);
         register_web_tools(tool_registry);
-        register_treesitter_tools(tool_registry);
         register_code_context_tools(tool_registry);
         register_js_tools(tool_registry);
         register_shell_tools(tool_registry);

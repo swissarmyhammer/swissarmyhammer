@@ -16,7 +16,7 @@ use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
     register_code_context_tools, register_file_tools, register_git_tools, register_js_tools,
     register_kanban_tools, register_questions_tools, register_shell_tools,
-    register_treesitter_tools, register_web_tools,
+    register_web_tools,
 };
 use tokio::sync::RwLock;
 
@@ -188,7 +188,6 @@ impl CliToolContext {
         register_kanban_tools(&mut tool_registry);
         register_questions_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
-        register_treesitter_tools(&mut tool_registry);
         register_web_tools(&mut tool_registry);
         tool_registry
     }

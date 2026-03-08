@@ -676,7 +676,6 @@ pub trait McpTool: Doctorable + Send + Sync {
             "git" => Some("git"),
             "cel" => Some("cel"),
             "question" => Some("question"),
-            "treesitter" => Some("treesitter"),
             _ => None,
         }
     }
@@ -1739,11 +1738,6 @@ register_tool_category!(
     "Register all web-related tools with the registry"
 );
 register_tool_category!(
-    register_treesitter_tools,
-    treesitter,
-    "Register all tree-sitter code analysis tools with the registry"
-);
-register_tool_category!(
     register_code_context_tools,
     code_context,
     "Register all code context tools with the registry"
@@ -1768,7 +1762,6 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_questions_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
-    register_treesitter_tools(&mut registry);
     register_code_context_tools(&mut registry);
     register_web_tools(&mut registry);
 

@@ -634,12 +634,11 @@ SwissArmyHammer - The only coding assistant you'll ever need
 
 Commands are organized into two types:
 - Static commands (serve, init, deinit, doctor, validate, model, prompt, agent)
-- Tool commands (treesitter, git, kanban, shell, web, js, questions)
+- Tool commands (git, kanban, shell, web, js, questions)
 
 Examples:
   sah serve                    Run as MCP server
   sah doctor                   Diagnose configuration
-  sah tool treesitter          Use treesitter tools
   sah tool git                 Use git tools
 ";
 
