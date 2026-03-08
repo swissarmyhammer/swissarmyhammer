@@ -11,7 +11,7 @@
 ///
 /// # Arguments
 ///
-/// * `operation` - The operation name (e.g. `"get_status"`, `"find_symbol"`).
+/// * `operation` - The operation name (e.g. `"get_status"`, `"get_symbol"`).
 ///
 /// # Returns
 ///
@@ -27,9 +27,6 @@ pub fn hint_for_operation(operation: &str) -> &'static str {
         "clear_status" => {
             "Index has been wiped. Run 'build_status' to trigger a full re-index, or wait for the leader to re-index automatically."
         }
-        "find_symbol" => {
-            "Use 'get_symbol' with the qualified path to retrieve full source text, or 'get_callgraph' to see callers/callees."
-        }
         "get_symbol" => {
             "Use 'get_callgraph' to explore call relationships, or 'get_blastradius' to see downstream impact."
         }
@@ -40,13 +37,13 @@ pub fn hint_for_operation(operation: &str) -> &'static str {
             "Review affected symbols and consider running tests for impacted files. Use 'get_symbol' to inspect specific symbols."
         }
         "grep_code" => {
-            "Use 'find_symbol' to locate exact definitions, or 'get_symbol' to retrieve source text for a match."
+            "Use 'get_symbol' to locate definitions and retrieve source text for a match."
         }
         "list_symbols" => {
-            "Use 'find_symbol' with a specific name for exact lookup, or 'search_symbol' for fuzzy matching."
+            "Use 'get_symbol' with a specific name for exact lookup, or 'search_symbol' for fuzzy matching."
         }
         "search_symbol" => {
-            "Use 'find_symbol' for exact lookup, or 'get_symbol' to retrieve the full source of a match."
+            "Use 'get_symbol' to retrieve the full source of a match, or 'get_callgraph' to trace callers/callees."
         }
         _ => "Run 'get_status' to check index health, or 'list_symbols' to explore the codebase.",
     }
@@ -66,7 +63,6 @@ mod tests {
             "get_status",
             "build_status",
             "clear_status",
-            "find_symbol",
             "get_symbol",
             "get_callgraph",
             "get_blastradius",

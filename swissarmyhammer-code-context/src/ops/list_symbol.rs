@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 
 use crate::error::CodeContextError;
-use crate::ops::find_symbol::{symbol_kind_name, SymbolLocation};
+use crate::ops::get_symbol::{symbol_kind_name, SymbolLocation};
 
 // ---------------------------------------------------------------------------
 // Core function

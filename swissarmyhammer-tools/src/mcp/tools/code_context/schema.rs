@@ -6,7 +6,7 @@ use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
 /// Generate the MCP schema for the code_context tool from operation metadata.
 pub fn generate_code_context_schema(operations: &[&dyn Operation]) -> Value {
     let config = SchemaConfig::new(
-        "Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis. Use 'find symbol' for exact name lookup, 'get symbol' for source text retrieval, 'search symbol' for fuzzy search, 'list symbols' for file-level listing, 'grep code' for regex search, 'get callgraph' for call graph traversal, 'get blastradius' for impact analysis, and status operations for index management.",
+        "Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis. Use 'get symbol' for symbol lookup with locations and source text, 'search symbol' for fuzzy search, 'list symbols' for file-level listing, 'grep code' for regex search, 'get callgraph' for call graph traversal, 'get blastradius' for impact analysis, and status operations for index management.",
     )
     .with_examples(generate_code_context_examples());
 
@@ -16,11 +16,7 @@ pub fn generate_code_context_schema(operations: &[&dyn Operation]) -> Value {
 fn generate_code_context_examples() -> Vec<Value> {
     vec![
         json!({
-            "description": "Find symbol locations by name",
-            "value": {"op": "find symbol", "name": "process_request"}
-        }),
-        json!({
-            "description": "Get symbol source text with fuzzy matching",
+            "description": "Get symbol locations and source text with fuzzy matching",
             "value": {"op": "get symbol", "query": "MyStruct::new", "max_results": 5}
         }),
         json!({
@@ -62,13 +58,12 @@ fn generate_code_context_examples() -> Vec<Value> {
 mod tests {
     use super::*;
     use crate::mcp::tools::code_context::{
-        BuildStatus, ClearStatus, FindSymbol, GetBlastradius, GetCallgraph, GetCodeStatus,
+        BuildStatus, ClearStatus, GetBlastradius, GetCallgraph, GetCodeStatus,
         GetSymbol, GrepCode, ListSymbols, SearchSymbol,
     };
 
     fn test_operations() -> Vec<&'static dyn Operation> {
         vec![
-            &FindSymbol as &dyn Operation,
             &GetSymbol as &dyn Operation,
             &SearchSymbol as &dyn Operation,
             &ListSymbols as &dyn Operation,
@@ -102,8 +97,7 @@ mod tests {
         let op_enum = schema["properties"]["op"]["enum"]
             .as_array()
             .expect("op should have enum");
-        assert_eq!(op_enum.len(), 10);
-        assert!(op_enum.contains(&json!("find symbol")));
+        assert_eq!(op_enum.len(), 9);
         assert!(op_enum.contains(&json!("get symbol")));
         assert!(op_enum.contains(&json!("search symbol")));
         assert!(op_enum.contains(&json!("list symbols")));
@@ -123,7 +117,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 10);
+        assert_eq!(op_schemas.len(), 9);
     }
 
     #[test]
@@ -132,7 +126,6 @@ mod tests {
         let schema = generate_code_context_schema(&ops);
 
         let props = schema["properties"].as_object().unwrap();
-        assert!(props.contains_key("name"));
         assert!(props.contains_key("query"));
         assert!(props.contains_key("file_path"));
         assert!(props.contains_key("pattern"));
@@ -153,7 +146,7 @@ mod tests {
         let schema = generate_code_context_schema(&ops);
 
         assert!(schema["examples"].is_array());
-        assert_eq!(schema["examples"].as_array().unwrap().len(), 10);
+        assert_eq!(schema["examples"].as_array().unwrap().len(), 9);
     }
 
     #[test]

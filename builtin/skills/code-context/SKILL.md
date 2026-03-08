@@ -24,46 +24,29 @@ Check if the index is ready before running queries. Always do this first if you'
 
 Returns: file counts, TS/LSP indexed percentages, chunk/edge counts, dirty file count.
 
-### find symbol
-
-Find exact symbol locations by name. Returns file path, line, and character coordinates. Use this when you know the symbol name and want to jump to it.
-
-```json
-{"op": "find symbol", "name": "process_request"}
-```
-
-```json
-{"op": "find symbol", "name": "AuthService::new"}
-```
-
-**Parameters:**
-- `name` (required): Symbol name or qualified path (e.g., `"MyStruct"`, `"auth::AuthService::new"`)
-
-**When to use:**
-- Jumping to a definition you know the name of
-- Finding where a struct, function, or method is defined
-- Locating symbols from error messages or stack traces
-
 ### get symbol
 
-Get full symbol source text with multi-tier fuzzy matching. Tries exact match first, then suffix, case-insensitive, and finally fuzzy. Use this when you want to read the implementation.
+Get symbol locations and full source text with multi-tier fuzzy matching. Queries both LSP and tree-sitter indices and merges results. Tries exact match first, then suffix, case-insensitive, and finally fuzzy. Use this when you want to find a symbol and read its implementation.
 
 ```json
 {"op": "get symbol", "query": "MyStruct::new"}
 ```
 
 ```json
-{"op": "get symbol", "query": "process_request", "max_results": 5, "include_source": true}
+{"op": "get symbol", "query": "process_request", "max_results": 5}
 ```
 
 **Parameters:**
 - `query` (required): Symbol name or partial match
 - `max_results`: Maximum results (default: 10)
-- `include_source`: Include source text in results (default: true)
+
+**Returns:** For each match: file path, line/char coordinates, source text, symbol kind (from LSP), detail string, match tier, and source provenance (`"lsp"`, `"treesitter"`, or `"merged"`).
 
 **When to use:**
+- Jumping to a definition you know the name of
 - Reading the implementation of a function or method
-- Understanding what a type looks like
+- Finding where a struct, function, or method is defined
+- Locating symbols from error messages or stack traces
 - Getting source code for review or analysis
 
 ### search symbol
@@ -222,15 +205,14 @@ This returns entity-level changes (Added, Modified, Deleted, Moved, Renamed) rat
 
 ### Understanding a function before changing it
 
-1. `find symbol` to locate it
-2. `get symbol` to read its source
-3. `get callgraph` with `direction: "inbound"` to see all callers
-4. `get blastradius` to understand the impact of changes
+1. `get symbol` to locate it and read its source
+2. `get callgraph` with `direction: "inbound"` to see all callers
+3. `get blastradius` to understand the impact of changes
 
 ### Investigating a bug
 
 1. `grep code` to find relevant error messages or patterns
-2. `find symbol` on suspicious functions
+2. `get symbol` on suspicious functions
 3. `get callgraph` with `direction: "both"` to trace data flow
 4. `get symbol` on each function in the chain
 

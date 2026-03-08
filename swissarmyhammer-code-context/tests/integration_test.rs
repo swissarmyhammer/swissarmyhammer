@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tree_sitter::Language;
 
 use swissarmyhammer_code_context::{
-    check_blocking_status, clear_status, ensure_ts_symbols, find_symbol, generate_ts_call_edges,
+    check_blocking_status, clear_status, ensure_ts_symbols, generate_ts_call_edges,
     get_blastradius, get_callgraph, get_status, get_symbol, grep_code, hint_for_operation,
     list_symbols, search_symbol, startup_cleanup, write_ts_edges, BlockingStatus, BlastRadiusOptions,
     BuildLayer, CallGraphDirection, CallGraphOptions, CodeContextWorkspace, GetSymbolOptions,
@@ -305,37 +305,39 @@ fn test_get_status_after_population() {
 }
 
 #[test]
-fn test_find_symbol_operations() {
+fn test_get_symbol_operations() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     populate_index(ws.db(), dir.path());
     let conn = ws.db();
+    let opts = GetSymbolOptions::default();
 
-    // Find "Server" -- should find the struct or impl chunk.
-    let results = find_symbol(conn, "Server").unwrap();
+    // Get "Server" -- should find the struct or impl chunk.
+    let result = get_symbol(conn, "Server", &opts).unwrap();
     assert!(
-        !results.is_empty(),
+        !result.symbols.is_empty(),
         "expected results for 'Server', got empty"
     );
     assert!(
-        results.iter().any(|r| r.file_path == "src/server.rs"),
+        result.symbols.iter().any(|r| r.file_path == "src/server.rs"),
         "expected Server in src/server.rs, got: {:?}",
-        results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        result.symbols.iter().map(|r| &r.file_path).collect::<Vec<_>>()
     );
 
-    // Find "validate" -- should match AuthService::validate.
-    let results = find_symbol(conn, "validate").unwrap();
-    assert!(!results.is_empty(), "expected results for 'validate'");
+    // Get "validate" -- should match AuthService::validate.
+    let result = get_symbol(conn, "validate", &opts).unwrap();
+    assert!(!result.symbols.is_empty(), "expected results for 'validate'");
     assert!(
-        results.iter().any(|r| r.file_path == "src/auth.rs"),
+        result.symbols.iter().any(|r| r.file_path == "src/auth.rs"),
         "expected validate in src/auth.rs"
     );
 
-    // Find "handle_request" -- should match Server::handle_request.
-    let results = find_symbol(conn, "handle_request").unwrap();
-    assert!(!results.is_empty(), "expected results for 'handle_request'");
+    // Get "handle_request" -- should match Server::handle_request.
+    let result = get_symbol(conn, "handle_request", &opts).unwrap();
+    assert!(!result.symbols.is_empty(), "expected results for 'handle_request'");
     assert!(
-        results
+        result
+            .symbols
             .iter()
             .any(|r| r.file_path == "src/server.rs"),
         "expected handle_request in src/server.rs"
@@ -737,7 +739,6 @@ fn test_hints_for_all_operations() {
         "get_status",
         "build_status",
         "clear_status",
-        "find_symbol",
         "get_symbol",
         "get_callgraph",
         "get_blastradius",
@@ -820,10 +821,10 @@ fn test_end_to_end_full_pipeline() {
     assert!(status.ts_chunk_count > 0);
     assert!(status.call_edge_count > 0);
 
-    // 3. Find a symbol.
-    let locs = find_symbol(conn, "greet").unwrap();
-    assert!(!locs.is_empty(), "expected to find 'greet'");
-    assert_eq!(locs[0].file_path, "src/lib.rs");
+    // 3. Get a symbol (location + source text).
+    let result = get_symbol(conn, "greet", &GetSymbolOptions::default()).unwrap();
+    assert!(!result.symbols.is_empty(), "expected to find 'greet'");
+    assert_eq!(result.symbols[0].file_path, "src/lib.rs");
 
     // 4. Get symbol with source text.
     let result = get_symbol(conn, "greet", &GetSymbolOptions::default()).unwrap();

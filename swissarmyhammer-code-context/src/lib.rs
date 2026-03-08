@@ -40,7 +40,6 @@ pub use ts_callgraph::{
     write_ts_edges, CallSite, ResolvedCallee,
 };
 pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
-pub use ops::find_symbol::{find_symbol, symbol_kind_name, SymbolLocation};
 pub use ops::get_blastradius::{
     get_blastradius, AffectedSymbol, BlastRadius, BlastRadiusOptions, HopLevel,
 };
@@ -48,7 +47,8 @@ pub use ops::get_callgraph::{
     get_callgraph, CallGraph, CallGraphDirection, CallGraphEdge, CallGraphNode, CallGraphOptions,
 };
 pub use ops::get_symbol::{
-    get_symbol, GetSymbolOptions, GetSymbolResult, MatchTier, SymbolMatch,
+    get_symbol, symbol_kind_name, GetSymbolOptions, GetSymbolResult, MatchTier, SymbolLocation,
+    SymbolMatch,
 };
 pub use ops::grep_code::{grep_code, GrepMatch, GrepOptions, GrepResult, MatchPosition};
 pub use ops::list_symbol::list_symbols;

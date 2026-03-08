@@ -10,7 +10,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use rusqlite::Connection;
 
 use crate::error::CodeContextError;
-use crate::ops::find_symbol::symbol_kind_name;
+use crate::ops::get_symbol::symbol_kind_name;
 
 // ---------------------------------------------------------------------------
 // Public types

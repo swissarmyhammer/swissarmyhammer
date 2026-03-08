@@ -1,8 +1,7 @@
 //! Unified code context tool for MCP operations
 //!
 //! This module provides a single `code_context` tool that dispatches between operations:
-//! - `find symbol`: Exact symbol location lookup
-//! - `get symbol`: Symbol source text with fuzzy matching
+//! - `get symbol`: Symbol lookup with source text, locations, and multi-tier fuzzy matching
 //! - `search symbol`: Fuzzy search across all indexed symbols
 //! - `list symbols`: List all symbols in a specific file
 //! - `grep code`: Regex search across stored code chunks
@@ -33,30 +32,6 @@ use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 // Operation structs with Operation trait impls
 // ---------------------------------------------------------------------------
 
-/// Operation metadata for finding symbols by exact name.
-#[derive(Debug, Default)]
-pub struct FindSymbol;
-
-static FIND_SYMBOL_PARAMS: &[ParamMeta] = &[ParamMeta::new("name")
-    .description("The symbol name to search for")
-    .param_type(ParamType::String)
-    .required()];
-
-impl Operation for FindSymbol {
-    fn verb(&self) -> &'static str {
-        "find"
-    }
-    fn noun(&self) -> &'static str {
-        "symbol"
-    }
-    fn description(&self) -> &'static str {
-        "Find symbol locations by exact name match"
-    }
-    fn parameters(&self) -> &'static [ParamMeta] {
-        FIND_SYMBOL_PARAMS
-    }
-}
-
 /// Operation metadata for getting symbol source text with fuzzy matching.
 #[derive(Debug, Default)]
 pub struct GetSymbol;
@@ -79,7 +54,7 @@ impl Operation for GetSymbol {
         "symbol"
     }
     fn description(&self) -> &'static str {
-        "Get symbol source text with multi-tier fuzzy matching"
+        "Get symbol locations and source text from both LSP and tree-sitter indices with multi-tier fuzzy matching"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
         GET_SYMBOL_PARAMS
@@ -303,7 +278,6 @@ impl Operation for ClearStatus {
 }
 
 // Static operation instances for schema generation
-static FIND_SYMBOL_OP: Lazy<FindSymbol> = Lazy::new(FindSymbol::default);
 static GET_SYMBOL_OP: Lazy<GetSymbol> = Lazy::new(GetSymbol::default);
 static SEARCH_SYMBOL_OP: Lazy<SearchSymbol> = Lazy::new(SearchSymbol::default);
 static LIST_SYMBOLS_OP: Lazy<ListSymbols> = Lazy::new(ListSymbols::default);
@@ -316,7 +290,6 @@ static CLEAR_STATUS_OP: Lazy<ClearStatus> = Lazy::new(ClearStatus::default);
 
 static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
-        &*FIND_SYMBOL_OP as &dyn Operation,
         &*GET_SYMBOL_OP as &dyn Operation,
         &*SEARCH_SYMBOL_OP as &dyn Operation,
         &*LIST_SYMBOLS_OP as &dyn Operation,
@@ -379,7 +352,6 @@ impl McpTool for CodeContextTool {
         let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
         match op_str {
-            "find symbol" => execute_find_symbol(&arguments, context),
             "get symbol" => execute_get_symbol(&arguments, context),
             "search symbol" => execute_search_symbol(&arguments, context),
             "list symbols" => execute_list_symbols(&arguments, context),
@@ -390,12 +362,12 @@ impl McpTool for CodeContextTool {
             "build status" => execute_build_status(&arguments, context),
             "clear status" => execute_clear_status(context),
             "" => Err(McpError::invalid_params(
-                "Missing 'op' field. Valid operations: 'find symbol', 'get symbol', 'search symbol', 'list symbols', 'grep code', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'.",
+                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'.",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'find symbol', 'get symbol', 'search symbol', 'list symbols', 'grep code', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'",
+                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'",
                     other
                 ),
                 None,
@@ -453,25 +425,6 @@ fn context_err(e: swissarmyhammer_code_context::CodeContextError) -> McpError {
 // ---------------------------------------------------------------------------
 // Operation handlers
 // ---------------------------------------------------------------------------
-
-/// Execute the "find symbol" operation.
-///
-/// Looks up symbol locations by exact name match and returns
-/// file, line, char coordinates.
-fn execute_find_symbol(
-    args: &serde_json::Map<String, serde_json::Value>,
-    context: &ToolContext,
-) -> Result<CallToolResult, McpError> {
-    let name = args
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'name'", None))?;
-
-    let ws = open_workspace(context)?;
-    let results =
-        swissarmyhammer_code_context::find_symbol(ws.db(), name).map_err(context_err)?;
-    json_result(&results)
-}
 
 /// Execute the "get symbol" operation.
 ///
@@ -740,8 +693,7 @@ mod tests {
     fn test_code_context_tool_has_operations() {
         let tool = CodeContextTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 10);
-        assert!(ops.iter().any(|o| o.op_string() == "find symbol"));
+        assert_eq!(ops.len(), 9);
         assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
@@ -764,7 +716,6 @@ mod tests {
         let op_enum = schema["properties"]["op"]["enum"]
             .as_array()
             .expect("op should have enum");
-        assert!(op_enum.contains(&serde_json::json!("find symbol")));
         assert!(op_enum.contains(&serde_json::json!("get symbol")));
         assert!(op_enum.contains(&serde_json::json!("search symbol")));
         assert!(op_enum.contains(&serde_json::json!("list symbols")));
@@ -784,7 +735,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 10);
+        assert_eq!(op_schemas.len(), 9);
     }
 
     #[tokio::test]

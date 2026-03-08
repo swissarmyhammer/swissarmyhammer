@@ -29,7 +29,7 @@ pub enum CallGraphDirection {
 /// Options for [`get_callgraph`].
 #[derive(Debug, Clone)]
 pub struct CallGraphOptions {
-    /// Symbol identifier -- either a name (matched via `find_symbol` logic)
+    /// Symbol identifier -- either a name (matched via `get_symbol` logic)
     /// or a `file:line:char` locator.
     pub symbol: String,
     /// Traversal direction.

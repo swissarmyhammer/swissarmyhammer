@@ -2,8 +2,7 @@ Code context operations for symbol lookup, search, grep, call graph, and blast r
 
 ## Operations
 
-- **find symbol**: Find symbol locations by exact name match (file, line, char coordinates)
-- **get symbol**: Get symbol source text with multi-tier fuzzy matching
+- **get symbol**: Get symbol locations and source text from both LSP and tree-sitter indices with multi-tier fuzzy matching
 - **search symbol**: Fuzzy search across all indexed symbols with optional kind filter
 - **list symbols**: List all symbols in a specific file
 - **grep code**: Regex search across stored code chunks
@@ -14,10 +13,6 @@ Code context operations for symbol lookup, search, grep, call graph, and blast r
 - **clear status**: Wipe all index data and return stats about what was cleared
 
 ## Examples
-
-```json
-{"op": "find symbol", "name": "process_request"}
-```
 
 ```json
 {"op": "get symbol", "query": "MyStruct::new", "max_results": 5}
@@ -36,7 +31,7 @@ Code context operations for symbol lookup, search, grep, call graph, and blast r
 ```
 
 ```json
-{"op": "get callgraph", "symbol": "process_request", "direction": "outbound", "max_depth": 3}
+{"op": "get callgraph", "symbol": "process_request", "direction": "outbound"}
 ```
 
 ```json
