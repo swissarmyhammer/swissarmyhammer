@@ -1743,6 +1743,11 @@ register_tool_category!(
     treesitter,
     "Register all tree-sitter code analysis tools with the registry"
 );
+register_tool_category!(
+    register_code_context_tools,
+    code_context,
+    "Register all code context tools with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -1764,6 +1769,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_treesitter_tools(&mut registry);
+    register_code_context_tools(&mut registry);
     register_web_tools(&mut registry);
 
     registry

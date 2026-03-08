@@ -8597,6 +8597,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer-agents",
+ "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-embedding",

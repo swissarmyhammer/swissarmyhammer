@@ -36,6 +36,7 @@
 //! - **Type Safety**: Strong typing through schema validation and Rust's type system
 
 pub mod agent;
+pub mod code_context;
 pub mod files;
 
 pub mod git;
