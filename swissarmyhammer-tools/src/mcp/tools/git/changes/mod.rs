@@ -21,6 +21,7 @@ use swissarmyhammer_operations::{
 };
 
 use crate::mcp::tool_registry::{McpTool, ToolContext};
+use super::diff;
 
 /// Request structure for git changes operation
 #[derive(Debug, Deserialize, Serialize)]
@@ -97,9 +98,10 @@ impl Operation for GetChanges {
 
 // Static operation instances for schema generation
 static GET_CHANGES: Lazy<GetChanges> = Lazy::new(GetChanges::default);
+static GET_DIFF: Lazy<diff::GetDiff> = Lazy::new(diff::GetDiff::default);
 
 pub static GIT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> =
-    Lazy::new(|| vec![&*GET_CHANGES as &dyn Operation]);
+    Lazy::new(|| vec![&*GET_CHANGES as &dyn Operation, &*GET_DIFF as &dyn Operation]);
 
 /// Tool for listing changed files on a git branch
 #[derive(Default)]
@@ -108,6 +110,132 @@ pub struct GitChangesTool;
 impl GitChangesTool {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Executes the "get diff" operation.
+    ///
+    /// Dispatches to one of three modes based on parameters:
+    /// 1. Inline text mode: `left_text` + `right_text` + `language`
+    /// 2. File mode: `left` and/or `right` with optional `file@ref` syntax
+    /// 3. Auto-detect mode: no parameters -- detects dirty/staged files
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - The operation arguments (with "op" already removed)
+    /// * `context` - The tool context providing git ops and working directory
+    ///
+    /// # Returns
+    ///
+    /// A `CallToolResult` containing the semantic diff as JSON
+    async fn execute_diff(
+        &self,
+        args: serde_json::Map<String, serde_json::Value>,
+        context: &ToolContext,
+    ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
+        let left_text = args.get("left_text").and_then(|v| v.as_str());
+        let right_text = args.get("right_text").and_then(|v| v.as_str());
+        let language = args.get("language").and_then(|v| v.as_str());
+        let left = args.get("left").and_then(|v| v.as_str());
+        let right = args.get("right").and_then(|v| v.as_str());
+
+        let response_json = if left_text.is_some() || right_text.is_some() {
+            // Inline text mode
+            let lt = left_text.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "Both 'left_text' and 'right_text' are required for inline mode",
+                    None,
+                )
+            })?;
+            let rt = right_text.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "Both 'left_text' and 'right_text' are required for inline mode",
+                    None,
+                )
+            })?;
+            let lang = language.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "'language' is required when using 'left_text'/'right_text'",
+                    None,
+                )
+            })?;
+
+            diff::execute_inline_diff(lt, rt, lang).map_err(|e| {
+                rmcp::ErrorData::internal_error(e, None)
+            })?
+        } else if left.is_some() || right.is_some() {
+            // File mode
+            let l = left.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "Both 'left' and 'right' are required for file mode",
+                    None,
+                )
+            })?;
+            let r = right.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "Both 'left' and 'right' are required for file mode",
+                    None,
+                )
+            })?;
+
+            // Determine working directory
+            let working_dir = self.resolve_working_dir(context).await?;
+
+            diff::execute_file_diff(l, r, &working_dir).map_err(|e| {
+                rmcp::ErrorData::internal_error(e, None)
+            })?
+        } else {
+            // Auto-detect mode
+            let working_dir = self.resolve_working_dir(context).await?;
+
+            diff::execute_auto_diff(&working_dir).map_err(|e| {
+                rmcp::ErrorData::internal_error(e, None)
+            })?
+        };
+
+        Ok(CallToolResult {
+            content: vec![rmcp::model::Annotated::new(
+                rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                    text: response_json,
+                    meta: None,
+                }),
+                None,
+            )],
+            is_error: Some(false),
+            structured_content: None,
+            meta: None,
+        })
+    }
+
+    /// Resolves the working directory from the tool context.
+    ///
+    /// Tries, in order:
+    /// 1. The explicit `working_dir` from the context
+    /// 2. The git operations work directory
+    /// 3. Falls back to `std::env::current_dir()`
+    ///
+    /// # Returns
+    ///
+    /// The resolved working directory path
+    async fn resolve_working_dir(
+        &self,
+        context: &ToolContext,
+    ) -> std::result::Result<std::path::PathBuf, rmcp::ErrorData> {
+        if let Some(ref wd) = context.working_dir {
+            return Ok(wd.clone());
+        }
+
+        let git_ops_guard = context.git_ops.lock().await;
+        if let Some(ref git_ops) = *git_ops_guard {
+            return Ok(git_ops.work_dir().to_path_buf());
+        }
+        drop(git_ops_guard);
+
+        std::env::current_dir().map_err(|e| {
+            rmcp::ErrorData::internal_error(
+                format!("Failed to determine working directory: {e}"),
+                None,
+            )
+        })
     }
 }
 
@@ -126,7 +254,7 @@ impl McpTool for GitChangesTool {
 
     fn schema(&self) -> serde_json::Value {
         let config = SchemaConfig::new(
-            "Git operations for analyzing branch changes. Lists files changed on a branch relative to its parent, including uncommitted changes.",
+            "Git operations for analyzing branch changes and semantic diffs. Lists files changed on a branch, and provides entity-level semantic diffing.",
         );
         generate_mcp_schema(&GIT_OPERATIONS, config)
     }
@@ -155,12 +283,15 @@ impl McpTool for GitChangesTool {
 
         match op_str {
             "get changes" | "" => {
-                // Default: get changes (only operation)
+                // Default: get changes -- fall through to existing logic
+            }
+            "get diff" => {
+                return self.execute_diff(args, context).await;
             }
             other => {
                 return Err(rmcp::ErrorData::invalid_params(
                     format!(
-                        "Unknown operation '{}'. Valid operations: 'get changes'",
+                        "Unknown operation '{}'. Valid operations: 'get changes', 'get diff'",
                         other
                     ),
                     None,
@@ -274,8 +405,9 @@ mod tests {
     fn test_git_tool_has_operations() {
         let tool = GitChangesTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 1);
+        assert_eq!(ops.len(), 2);
         assert!(ops.iter().any(|o| o.op_string() == "get changes"));
+        assert!(ops.iter().any(|o| o.op_string() == "get diff"));
     }
 
     #[test]

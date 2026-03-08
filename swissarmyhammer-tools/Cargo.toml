@@ -96,6 +96,9 @@ rusqlite = { workspace = true }
 # Operations pattern
 swissarmyhammer-operations = { workspace = true }
 
+# Semantic diffing
+sem-core = { workspace = true }
+
 # HTTP server dependencies
 axum = { workspace = true }
 tower = { workspace = true }

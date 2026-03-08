@@ -16,6 +16,7 @@
 //! - **changes**: List files that have changed on a branch relative to its parent
 
 pub mod changes;
+pub mod diff;
 
 use crate::mcp::tool_registry::ToolRegistry;
 
