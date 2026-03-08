@@ -16,6 +16,8 @@ thiserror = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
 sha2 = { workspace = true }
+lsp-types = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

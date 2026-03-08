@@ -8125,8 +8125,10 @@ name = "swissarmyhammer-code-context"
 version = "0.8.0"
 dependencies = [
  "ignore",
+ "lsp-types",
  "rayon",
  "rusqlite",
+ "serde_json",
  "sha2",
  "swissarmyhammer-leader-election",
  "tempfile",
