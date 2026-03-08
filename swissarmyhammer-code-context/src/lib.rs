@@ -16,9 +16,11 @@
 //! let _conn = ws.db(); // read or write depending on mode
 //! ```
 
+pub mod blocking;
 pub mod cleanup;
 pub mod db;
 pub mod error;
+pub mod hints;
 pub mod invalidation;
 pub mod lsp_indexer;
 pub mod ops;
@@ -51,4 +53,10 @@ pub use ops::get_symbol::{
 pub use ops::grep_code::{grep_code, GrepMatch, GrepOptions, GrepResult, MatchPosition};
 pub use ops::list_symbol::list_symbols;
 pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
+pub use blocking::{check_blocking_status, BlockingStatus, IndexLayer};
+pub use hints::hint_for_operation;
+pub use ops::status::{
+    build_status, clear_status, get_status, BuildLayer, BuildStatusResult, ClearStatusResult,
+    StatusReport,
+};
 pub use workspace::{CodeContextWorkspace, WorkspaceMode};

@@ -7,3 +7,4 @@ pub mod get_symbol;
 pub mod grep_code;
 pub mod list_symbol;
 pub mod search_symbol;
+pub mod status;
