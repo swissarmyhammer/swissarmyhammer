@@ -3,6 +3,7 @@
  */
 
 import {
+  createMentionCompletionSource,
   createMentionAutocomplete,
   syncSearchFromMap,
 } from "@/lib/cm-mention-autocomplete";
@@ -12,5 +13,5 @@ import {
  * Pass tag colors as a Map<slug, hexColor> (without #).
  */
 export function tagAutocomplete(colors: Map<string, string>) {
-  return createMentionAutocomplete("#", syncSearchFromMap(colors));
+  return createMentionAutocomplete([createMentionCompletionSource("#", syncSearchFromMap(colors))]);
 }

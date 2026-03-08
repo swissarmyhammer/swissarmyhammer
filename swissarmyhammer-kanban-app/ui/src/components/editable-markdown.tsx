@@ -13,7 +13,7 @@ import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
-import { createMentionAutocomplete, type MentionSearchResult } from "@/lib/cm-mention-autocomplete";
+import { createMentionCompletionSource, createMentionAutocomplete, type MentionSearchResult } from "@/lib/cm-mention-autocomplete";
 import { createDebouncedSearch } from "@/lib/debounced-search";
 import { createMentionTooltips, type MentionMeta } from "@/lib/cm-mention-tooltip";
 import { remarkMentions } from "@/lib/remark-mentions";
@@ -265,17 +265,23 @@ export function EditableMarkdown({
     });
   }, [multiline, mentionableTypes, getEntities]);
 
-  // Build CM6 extensions for all mention types
+  // Build CM6 extensions for all mention types.
+  // IMPORTANT: All completion sources must be collected into a single
+  // autocompletion() call to avoid CM6 "Config merge conflict for field override".
   const mentionExtensions = useMemo((): Extension[] => {
     if (!multiline) return [];
     const exts: Extension[] = [];
+    const completionSources: Array<ReturnType<typeof createMentionCompletionSource>> = [];
     for (const md of mentionData) {
       if (md.colorMap.size === 0) continue;
       const decoInfra = getDecoInfra(md.prefix, md.entityType);
       exts.push(decoInfra.extension(md.colorMap));
-      exts.push(createMentionAutocomplete(md.prefix, buildAsyncSearch(md.entityType)));
+      completionSources.push(createMentionCompletionSource(md.prefix, buildAsyncSearch(md.entityType)));
       const tooltipInfraInstance = getTooltipInfra(md.prefix, md.entityType);
       exts.push(tooltipInfraInstance.extension(md.metaMap));
+    }
+    if (completionSources.length > 0) {
+      exts.push(createMentionAutocomplete(completionSources));
     }
     return exts;
   }, [multiline, mentionData]);

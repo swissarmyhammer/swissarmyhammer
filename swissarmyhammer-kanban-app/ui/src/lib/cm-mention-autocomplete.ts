@@ -24,20 +24,20 @@ export type MentionSearchSync = (query: string) => MentionSearchResult[];
 export type MentionSearchAsync = (query: string) => Promise<MentionSearchResult[]>;
 
 /**
- * Create a mention autocomplete extension for a given prefix.
+ * Create a completion source for a given prefix. Returns just the source
+ * function — callers must combine all sources into a single `autocompletion()`
+ * extension to avoid CM6 config merge conflicts.
  *
  * @param prefix - The mention prefix character (e.g. `#`, `@`)
  * @param search - Sync or async search function
  */
-export function createMentionAutocomplete(
+export function createMentionCompletionSource(
   prefix: string,
   search: MentionSearchSync | MentionSearchAsync,
-) {
+): (context: CompletionContext) => CompletionResult | null | Promise<CompletionResult | null> {
   const prefixRegex = new RegExp(`\\${prefix}\\S*`);
 
-  function completionSource(
-    context: CompletionContext,
-  ): CompletionResult | null | Promise<CompletionResult | null> {
+  return (context: CompletionContext) => {
     const word = context.matchBefore(prefixRegex);
     if (!word) return null;
     if (word.text === prefix && !context.explicit) return null;
@@ -74,10 +74,19 @@ export function createMentionAutocomplete(
       return result.then(buildResult);
     }
     return buildResult(result);
-  }
+  };
+}
 
+/**
+ * Create a single autocompletion extension from multiple completion sources.
+ * This avoids the CM6 "Config merge conflict for field override" error that
+ * occurs when multiple `autocompletion()` calls are combined.
+ */
+export function createMentionAutocomplete(
+  sources: Array<(context: CompletionContext) => CompletionResult | null | Promise<CompletionResult | null>>,
+) {
   return autocompletion({
-    override: [completionSource],
+    override: sources,
     activateOnTyping: true,
     activateOnTypingDelay: 150,
   });
