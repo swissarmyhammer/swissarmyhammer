@@ -19,6 +19,7 @@ pub mod schema;
 
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
 use rmcp::ErrorData as McpError;
 use std::path::Path;
@@ -26,6 +27,307 @@ use swissarmyhammer_code_context::{
     BlastRadiusOptions, BuildLayer, CallGraphDirection, CallGraphOptions, CodeContextWorkspace,
     GetSymbolOptions, GrepOptions, SearchSymbolOptions,
 };
+use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+
+// ---------------------------------------------------------------------------
+// Operation structs with Operation trait impls
+// ---------------------------------------------------------------------------
+
+/// Operation metadata for finding symbols by exact name.
+#[derive(Debug, Default)]
+pub struct FindSymbol;
+
+static FIND_SYMBOL_PARAMS: &[ParamMeta] = &[ParamMeta::new("name")
+    .description("The symbol name to search for")
+    .param_type(ParamType::String)
+    .required()];
+
+impl Operation for FindSymbol {
+    fn verb(&self) -> &'static str {
+        "find"
+    }
+    fn noun(&self) -> &'static str {
+        "symbol"
+    }
+    fn description(&self) -> &'static str {
+        "Find symbol locations by exact name match"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        FIND_SYMBOL_PARAMS
+    }
+}
+
+/// Operation metadata for getting symbol source text with fuzzy matching.
+#[derive(Debug, Default)]
+pub struct GetSymbol;
+
+static GET_SYMBOL_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("query")
+        .description("The symbol name or qualified path to search for")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("max_results")
+        .description("Maximum number of results to return")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GetSymbol {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "symbol"
+    }
+    fn description(&self) -> &'static str {
+        "Get symbol source text with multi-tier fuzzy matching"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_SYMBOL_PARAMS
+    }
+}
+
+/// Operation metadata for fuzzy symbol search.
+#[derive(Debug, Default)]
+pub struct SearchSymbol;
+
+static SEARCH_SYMBOL_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("query")
+        .description("The text to fuzzy-match against symbol names")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("kind")
+        .description("Filter by symbol kind: function, method, struct, class, interface, module, etc.")
+        .param_type(ParamType::String),
+    ParamMeta::new("max_results")
+        .description("Maximum number of results to return")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for SearchSymbol {
+    fn verb(&self) -> &'static str {
+        "search"
+    }
+    fn noun(&self) -> &'static str {
+        "symbol"
+    }
+    fn description(&self) -> &'static str {
+        "Fuzzy search across all indexed symbols with optional kind filter"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SEARCH_SYMBOL_PARAMS
+    }
+}
+
+/// Operation metadata for listing symbols in a file.
+#[derive(Debug, Default)]
+pub struct ListSymbols;
+
+static LIST_SYMBOLS_PARAMS: &[ParamMeta] = &[ParamMeta::new("file_path")
+    .description("Path to the file to list symbols from")
+    .param_type(ParamType::String)
+    .required()];
+
+impl Operation for ListSymbols {
+    fn verb(&self) -> &'static str {
+        "list"
+    }
+    fn noun(&self) -> &'static str {
+        "symbols"
+    }
+    fn description(&self) -> &'static str {
+        "List all symbols in a specific file, sorted by start line"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        LIST_SYMBOLS_PARAMS
+    }
+}
+
+/// Operation metadata for regex search across code chunks.
+#[derive(Debug, Default)]
+pub struct GrepCode;
+
+static GREP_CODE_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("pattern")
+        .description("Regex pattern to search for")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("language")
+        .description("Only search chunks from files with these extensions (e.g. [\"rs\", \"py\"])")
+        .param_type(ParamType::Array),
+    ParamMeta::new("files")
+        .description("Only search chunks from these specific file paths")
+        .param_type(ParamType::Array),
+    ParamMeta::new("max_results")
+        .description("Maximum number of matching chunks to return")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GrepCode {
+    fn verb(&self) -> &'static str {
+        "grep"
+    }
+    fn noun(&self) -> &'static str {
+        "code"
+    }
+    fn description(&self) -> &'static str {
+        "Regex search across stored code chunks"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GREP_CODE_PARAMS
+    }
+}
+
+/// Operation metadata for call graph traversal.
+#[derive(Debug, Default)]
+pub struct GetCallgraph;
+
+static GET_CALLGRAPH_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("symbol")
+        .description("Symbol identifier -- either a name or a file:line:char locator")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("direction")
+        .description("Traversal direction: inbound, outbound, or both (default: outbound)")
+        .param_type(ParamType::String),
+    ParamMeta::new("max_depth")
+        .description("Maximum traversal depth, 1-5 (default: 2)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GetCallgraph {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "callgraph"
+    }
+    fn description(&self) -> &'static str {
+        "Traverse call graph from a starting symbol"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_CALLGRAPH_PARAMS
+    }
+}
+
+/// Operation metadata for blast radius analysis.
+#[derive(Debug, Default)]
+pub struct GetBlastradius;
+
+static GET_BLASTRADIUS_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("File path to analyze")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("symbol")
+        .description("Optional symbol name within the file to narrow the starting set")
+        .param_type(ParamType::String),
+    ParamMeta::new("max_hops")
+        .description("Maximum number of hops to follow, 1-10 (default: 3)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GetBlastradius {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "blastradius"
+    }
+    fn description(&self) -> &'static str {
+        "Analyze blast radius of changes to a file or symbol"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_BLASTRADIUS_PARAMS
+    }
+}
+
+/// Operation metadata for index status checking.
+#[derive(Debug, Default)]
+pub struct GetCodeStatus;
+
+impl Operation for GetCodeStatus {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "status"
+    }
+    fn description(&self) -> &'static str {
+        "Health report with file counts, indexing progress, chunk/edge counts"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        &[]
+    }
+}
+
+/// Operation metadata for triggering re-indexing.
+#[derive(Debug, Default)]
+pub struct BuildStatus;
+
+static BUILD_STATUS_PARAMS: &[ParamMeta] = &[ParamMeta::new("layer")
+    .description("Which indexing layer to reset: treesitter, lsp, or both (default: both)")
+    .param_type(ParamType::String)];
+
+impl Operation for BuildStatus {
+    fn verb(&self) -> &'static str {
+        "build"
+    }
+    fn noun(&self) -> &'static str {
+        "status"
+    }
+    fn description(&self) -> &'static str {
+        "Mark files for re-indexing by resetting indexed flags"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        BUILD_STATUS_PARAMS
+    }
+}
+
+/// Operation metadata for clearing all index data.
+#[derive(Debug, Default)]
+pub struct ClearStatus;
+
+impl Operation for ClearStatus {
+    fn verb(&self) -> &'static str {
+        "clear"
+    }
+    fn noun(&self) -> &'static str {
+        "status"
+    }
+    fn description(&self) -> &'static str {
+        "Wipe all index data and return stats"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        &[]
+    }
+}
+
+// Static operation instances for schema generation
+static FIND_SYMBOL_OP: Lazy<FindSymbol> = Lazy::new(FindSymbol::default);
+static GET_SYMBOL_OP: Lazy<GetSymbol> = Lazy::new(GetSymbol::default);
+static SEARCH_SYMBOL_OP: Lazy<SearchSymbol> = Lazy::new(SearchSymbol::default);
+static LIST_SYMBOLS_OP: Lazy<ListSymbols> = Lazy::new(ListSymbols::default);
+static GREP_CODE_OP: Lazy<GrepCode> = Lazy::new(GrepCode::default);
+static GET_CALLGRAPH_OP: Lazy<GetCallgraph> = Lazy::new(GetCallgraph::default);
+static GET_BLASTRADIUS_OP: Lazy<GetBlastradius> = Lazy::new(GetBlastradius::default);
+static GET_CODE_STATUS_OP: Lazy<GetCodeStatus> = Lazy::new(GetCodeStatus::default);
+static BUILD_STATUS_OP: Lazy<BuildStatus> = Lazy::new(BuildStatus::default);
+static CLEAR_STATUS_OP: Lazy<ClearStatus> = Lazy::new(ClearStatus::default);
+
+static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
+    vec![
+        &*FIND_SYMBOL_OP as &dyn Operation,
+        &*GET_SYMBOL_OP as &dyn Operation,
+        &*SEARCH_SYMBOL_OP as &dyn Operation,
+        &*LIST_SYMBOLS_OP as &dyn Operation,
+        &*GREP_CODE_OP as &dyn Operation,
+        &*GET_CALLGRAPH_OP as &dyn Operation,
+        &*GET_BLASTRADIUS_OP as &dyn Operation,
+        &*GET_CODE_STATUS_OP as &dyn Operation,
+        &*BUILD_STATUS_OP as &dyn Operation,
+        &*CLEAR_STATUS_OP as &dyn Operation,
+    ]
+});
 
 /// Unified code context tool providing symbol lookup, search, and graph operations.
 #[derive(Default)]
@@ -51,11 +353,22 @@ impl McpTool for CodeContextTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        schema::generate_code_context_schema()
+        schema::generate_code_context_schema(&CODE_CONTEXT_OPERATIONS)
     }
 
     fn cli_category(&self) -> Option<&'static str> {
         Some("code_context")
+    }
+
+    fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
+        let ops: &[&'static dyn Operation] = &CODE_CONTEXT_OPERATIONS;
+        // SAFETY: CODE_CONTEXT_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
+        unsafe {
+            std::mem::transmute::<
+                &[&dyn Operation],
+                &'static [&'static dyn swissarmyhammer_operations::Operation],
+            >(ops)
+        }
     }
 
     async fn execute(
@@ -421,6 +734,23 @@ mod tests {
     fn test_code_context_tool_has_description() {
         let tool = CodeContextTool::new();
         assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_code_context_tool_has_operations() {
+        let tool = CodeContextTool::new();
+        let ops = tool.operations();
+        assert_eq!(ops.len(), 10);
+        assert!(ops.iter().any(|o| o.op_string() == "find symbol"));
+        assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
+        assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
+        assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
+        assert!(ops.iter().any(|o| o.op_string() == "grep code"));
+        assert!(ops.iter().any(|o| o.op_string() == "get callgraph"));
+        assert!(ops.iter().any(|o| o.op_string() == "get blastradius"));
+        assert!(ops.iter().any(|o| o.op_string() == "get status"));
+        assert!(ops.iter().any(|o| o.op_string() == "build status"));
+        assert!(ops.iter().any(|o| o.op_string() == "clear status"));
     }
 
     #[test]

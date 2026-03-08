@@ -14,8 +14,9 @@ use swissarmyhammer_tools::mcp::server::McpServer;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server_with_options, McpServerMode};
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
-    register_file_tools, register_git_tools, register_js_tools, register_kanban_tools,
-    register_questions_tools, register_shell_tools, register_treesitter_tools, register_web_tools,
+    register_code_context_tools, register_file_tools, register_git_tools, register_js_tools,
+    register_kanban_tools, register_questions_tools, register_shell_tools,
+    register_treesitter_tools, register_web_tools,
 };
 use tokio::sync::RwLock;
 
@@ -180,6 +181,7 @@ impl CliToolContext {
     /// This should mirror the registration in `swissarmyhammer_tools::mcp::server::register_all_tools`
     async fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
+        register_code_context_tools(&mut tool_registry);
         register_js_tools(&mut tool_registry);
         register_file_tools(&mut tool_registry).await;
         register_git_tools(&mut tool_registry);
