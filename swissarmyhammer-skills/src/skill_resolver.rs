@@ -180,6 +180,10 @@ impl SkillResolver {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                // Skip directories without a SKILL.md — namespace prefixes, not skills.
+                if !path.join("SKILL.md").exists() {
+                    continue;
+                }
                 if let Err(e) = load_skill_from_dir(&path, source.clone()) {
                     let skill_name = path
                         .file_name()
@@ -290,6 +294,11 @@ impl SkillResolver {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                // Skip directories without a SKILL.md — they are namespace
+                // prefixes (e.g. user/repo/skill), not skills themselves.
+                if !path.join("SKILL.md").exists() {
+                    continue;
+                }
                 match load_skill_from_dir(&path, source.clone()) {
                     Ok(skill) => {
                         tracing::debug!(
