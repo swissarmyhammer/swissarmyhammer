@@ -38,8 +38,11 @@ pub use ts_callgraph::{
     write_ts_edges, CallSite, ResolvedCallee,
 };
 pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
+pub use ops::find_symbol::{find_symbol, symbol_kind_name, SymbolLocation};
 pub use ops::get_symbol::{
     get_symbol, GetSymbolOptions, GetSymbolResult, MatchTier, SymbolMatch,
 };
 pub use ops::grep_code::{grep_code, GrepMatch, GrepOptions, GrepResult, MatchPosition};
+pub use ops::list_symbol::list_symbols;
+pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
 pub use workspace::{CodeContextWorkspace, WorkspaceMode};
