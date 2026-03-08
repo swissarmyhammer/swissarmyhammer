@@ -19,12 +19,14 @@
 pub mod cleanup;
 pub mod db;
 pub mod error;
+pub mod invalidation;
 pub mod lsp_indexer;
 pub mod watcher;
 pub mod workspace;
 
 pub use cleanup::{startup_cleanup, CleanupStats};
 pub use error::CodeContextError;
+pub use invalidation::{reextract_file, refresh_edges, InvalidationAction};
 pub use lsp_indexer::{
     build_qualified_path, build_symbol_id, flatten_symbols, mark_lsp_indexed, write_edges,
     write_symbols, CallEdge, FlatSymbol,
