@@ -13,6 +13,9 @@ swissarmyhammer-leader-election = { workspace = true }
 rusqlite = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+ignore = { workspace = true }
+rayon = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

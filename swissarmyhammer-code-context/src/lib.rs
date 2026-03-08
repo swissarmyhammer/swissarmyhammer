@@ -16,9 +16,13 @@
 //! let _conn = ws.db(); // read or write depending on mode
 //! ```
 
+pub mod cleanup;
 pub mod db;
 pub mod error;
+pub mod watcher;
 pub mod workspace;
 
+pub use cleanup::{startup_cleanup, CleanupStats};
 pub use error::CodeContextError;
+pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
 pub use workspace::{CodeContextWorkspace, WorkspaceMode};

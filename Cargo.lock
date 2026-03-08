@@ -8124,7 +8124,10 @@ dependencies = [
 name = "swissarmyhammer-code-context"
 version = "0.8.0"
 dependencies = [
+ "ignore",
+ "rayon",
  "rusqlite",
+ "sha2",
  "swissarmyhammer-leader-election",
  "tempfile",
  "thiserror 1.0.69",
