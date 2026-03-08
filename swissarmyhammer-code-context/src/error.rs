@@ -16,4 +16,8 @@ pub enum CodeContextError {
     /// Leader election failed
     #[error("election error")]
     Election(#[from] ElectionError),
+
+    /// Invalid regex pattern
+    #[error("invalid regex pattern: {0}")]
+    Pattern(String),
 }

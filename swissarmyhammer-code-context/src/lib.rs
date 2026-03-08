@@ -21,6 +21,7 @@ pub mod db;
 pub mod error;
 pub mod invalidation;
 pub mod lsp_indexer;
+pub mod ops;
 pub mod ts_callgraph;
 pub mod watcher;
 pub mod workspace;
@@ -37,4 +38,5 @@ pub use ts_callgraph::{
     write_ts_edges, CallSite, ResolvedCallee,
 };
 pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
+pub use ops::grep_code::{grep_code, GrepMatch, GrepOptions, GrepResult, MatchPosition};
 pub use workspace::{CodeContextWorkspace, WorkspaceMode};
