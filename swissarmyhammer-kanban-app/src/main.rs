@@ -61,6 +61,7 @@ fn main() {
             commands::get_entity_schema,
             commands::list_entities,
             commands::get_entity,
+            commands::search_mentions,
             commands::get_board_data,
             commands::quit_app,
             commands::reset_windows,

@@ -191,6 +191,12 @@ pub struct EntityDef {
     pub fields: Vec<FieldName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
+    /// Single-character prefix for mentions in markdown (e.g. "#" for tags, "@" for actors).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_prefix: Option<String>,
+    /// Which field to display in mentions (e.g. "tag_name", "name").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_display_field: Option<FieldName>,
 }
 
 #[cfg(test)]
@@ -353,6 +359,8 @@ mod tests {
                 "body".into(),
             ],
             validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
         };
         let yaml = serde_yaml::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml::from_str(&yaml).unwrap();
@@ -366,6 +374,8 @@ mod tests {
             body_field: None,
             fields: vec!["tag_name".into(), "color".into(), "description".into()],
             validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
         };
         let yaml = serde_yaml::to_string(&entity).unwrap();
         assert!(!yaml.contains("body_field"));

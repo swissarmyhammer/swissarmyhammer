@@ -48,6 +48,12 @@ pub struct AddActor {
     /// If true, return existing actor instead of error if ID exists (idempotent)
     #[serde(default)]
     pub ensure: bool,
+    /// Optional display color (6-char hex without #)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Optional avatar (data URI or URL)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
 }
 
 impl AddActor {
@@ -58,6 +64,8 @@ impl AddActor {
             name: name.into(),
             actor_type: ActorType::Human,
             ensure: false,
+            color: None,
+            avatar: None,
         }
     }
 
@@ -68,12 +76,26 @@ impl AddActor {
             name: name.into(),
             actor_type: ActorType::Agent,
             ensure: false,
+            color: None,
+            avatar: None,
         }
     }
 
     /// Make this registration idempotent (return existing if found)
     pub fn with_ensure(mut self) -> Self {
         self.ensure = true;
+        self
+    }
+
+    /// Set the display color (6-char hex without #)
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    /// Set the avatar (data URI or URL)
+    pub fn with_avatar(mut self, avatar: impl Into<String>) -> Self {
+        self.avatar = Some(avatar.into());
         self
     }
 }
@@ -88,13 +110,37 @@ impl Execute<KanbanContext, KanbanError> for AddActor {
             let ectx = ctx.entity_context().await?;
 
             // Check if actor already exists
-            if let Ok(existing) = ectx.read("actor", self.id.as_str()).await {
+            if let Ok(mut existing) = ectx.read("actor", self.id.as_str()).await {
                 if self.ensure {
-                    // Idempotent mode: return existing actor
+                    // Idempotent mode: update any changed mutable fields, then return
+                    let mut updated = false;
+                    let current_name = existing.get_str("name").unwrap_or("").to_string();
+                    if current_name != self.name {
+                        existing.set("name", json!(self.name));
+                        updated = true;
+                    }
+                    if let Some(ref color) = self.color {
+                        let current = existing.get_str("color").map(|s| s.to_string());
+                        if current.as_deref() != Some(color.as_str()) {
+                            existing.set("color", json!(color));
+                            updated = true;
+                        }
+                    }
+                    if let Some(ref avatar) = self.avatar {
+                        let current = existing.get_str("avatar").map(|s| s.to_string());
+                        if current.as_deref() != Some(avatar.as_str()) {
+                            existing.set("avatar", json!(avatar));
+                            updated = true;
+                        }
+                    }
+                    if updated {
+                        ectx.write(&existing).await?;
+                    }
                     return Ok(json!({
                         "actor": actor_entity_to_json(&existing),
                         "created": false,
-                        "message": "Actor already exists"
+                        "updated": updated,
+                        "message": if updated { "Actor updated" } else { "Actor already exists" }
                     }));
                 }
                 return Err(KanbanError::duplicate_id("actor", self.id.to_string()));
@@ -108,6 +154,12 @@ impl Execute<KanbanContext, KanbanError> for AddActor {
             let mut entity = Entity::new("actor", self.id.as_str());
             entity.set("name", json!(self.name));
             entity.set("actor_type", json!(type_str));
+            if let Some(ref color) = self.color {
+                entity.set("color", json!(color));
+            }
+            if let Some(ref avatar) = self.avatar {
+                entity.set("avatar", json!(avatar));
+            }
 
             ectx.write(&entity).await?;
 
@@ -225,8 +277,8 @@ mod tests {
 
         assert_eq!(result1["created"], true);
 
-        // Second add with ensure - should return existing
-        let result2 = AddActor::agent("assistant", "Different Name")
+        // Second add with ensure and same name - should return existing without update
+        let result2 = AddActor::agent("assistant", "AI Assistant")
             .with_ensure()
             .execute(&ctx)
             .await
@@ -234,6 +286,86 @@ mod tests {
             .unwrap();
 
         assert_eq!(result2["created"], false);
-        assert_eq!(result2["actor"]["name"], "AI Assistant"); // Original name preserved
+        assert_eq!(result2["updated"], false);
+        assert_eq!(result2["actor"]["name"], "AI Assistant");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_updates_changed_name() {
+        let (_temp, ctx) = setup().await;
+
+        // First add
+        AddActor::agent("assistant", "AI Assistant")
+            .with_ensure()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Second add with ensure and different name - should update
+        let result = AddActor::agent("assistant", "New Name")
+            .with_ensure()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["created"], false);
+        assert_eq!(result["updated"], true);
+        assert_eq!(result["actor"]["name"], "New Name");
+        assert_eq!(result["message"], "Actor updated");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_updates_changed_color() {
+        let (_temp, ctx) = setup().await;
+
+        // First add with color
+        AddActor::human("alice", "Alice")
+            .with_ensure()
+            .with_color("ff0000")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Second add with different color - should update
+        let result = AddActor::human("alice", "Alice")
+            .with_ensure()
+            .with_color("00ff00")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["created"], false);
+        assert_eq!(result["updated"], true);
+        assert_eq!(result["message"], "Actor updated");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_updates_changed_avatar() {
+        let (_temp, ctx) = setup().await;
+
+        // First add with avatar
+        AddActor::human("alice", "Alice")
+            .with_ensure()
+            .with_avatar("data:image/svg+xml;base64,old")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Second add with different avatar - should update
+        let result = AddActor::human("alice", "Alice")
+            .with_ensure()
+            .with_avatar("data:image/svg+xml;base64,new")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["created"], false);
+        assert_eq!(result["updated"], true);
     }
 }

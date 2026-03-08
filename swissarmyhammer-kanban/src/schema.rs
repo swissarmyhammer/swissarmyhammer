@@ -40,12 +40,12 @@ fn generate_kanban_examples() -> Vec<Value> {
             "value": {"title": "Fix login bug"}
         }),
         json!({
-            "description": "Register as an actor",
-            "value": {"op": "add actor", "id": "assistant", "name": "Assistant", "actor_type": "agent", "ensure": true}
+            "description": "Register an actor",
+            "value": {"op": "add actor", "id": "alice", "name": "Alice Smith", "actor_type": "human"}
         }),
         json!({
-            "description": "Assign task to yourself",
-            "value": {"op": "assign task", "id": "01ABC...", "assignee": "assistant"}
+            "description": "Assign task to an actor",
+            "value": {"op": "assign task", "id": "01ABC...", "assignee": "alice"}
         }),
         json!({
             "description": "Move task - explicit",
@@ -61,7 +61,7 @@ fn generate_kanban_examples() -> Vec<Value> {
         }),
         json!({
             "description": "List my assigned tasks",
-            "value": {"op": "list tasks", "assignee": "assistant", "exclude_done": true}
+            "value": {"op": "list tasks", "assignee": "alice", "exclude_done": true}
         }),
         json!({
             "description": "Add attachment to a task",

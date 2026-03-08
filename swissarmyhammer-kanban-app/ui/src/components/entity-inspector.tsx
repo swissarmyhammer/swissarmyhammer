@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { ACTOR_COLORS } from "@/lib/actor-colors";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { SubtaskProgress } from "@/components/subtask-progress";
 import {
@@ -10,6 +11,7 @@ import {
   ColorSwatchDisplay,
   DateDisplay,
   NumberDisplay,
+  AvatarDisplay,
   TextDisplay,
 } from "@/components/fields/displays";
 import {
@@ -18,9 +20,9 @@ import {
   SelectEditor,
   NumberEditor,
   DateEditor,
+  MultiSelectEditor,
 } from "@/components/fields/editors";
 import { useSchema } from "@/lib/schema-context";
-import { useEntityStore } from "@/lib/entity-store-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import type { FieldDef, Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
@@ -44,9 +46,7 @@ interface EntityInspectorProps {
 export function EntityInspector({ entity }: EntityInspectorProps) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const { getSchema } = useSchema();
-  const { getEntities } = useEntityStore();
   const { updateField } = useFieldUpdate();
-  const tags = getEntities("tag");
   const schema = getSchema(entity.entity_type);
   const bodyFieldName = schema?.entity.body_field;
   const fields = schema?.fields ?? [];
@@ -96,8 +96,6 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
       entity={entity}
       editing={editingField === field.name}
       editable={isEditable(field)}
-      isBodyField={field.name === bodyFieldName}
-      tags={tags}
       bodyFieldName={bodyFieldName}
       showLabel={showLabel}
       onEdit={() => handleEdit(field.name)}
@@ -139,8 +137,6 @@ interface FieldRowProps {
   entity: Entity;
   editing: boolean;
   editable: boolean;
-  isBodyField?: boolean;
-  tags: Entity[];
   bodyFieldName?: string;
   showLabel?: boolean;
   onEdit: () => void;
@@ -154,8 +150,6 @@ function FieldRow({
   entity,
   editing,
   editable,
-  isBodyField,
-  tags,
   bodyFieldName,
   showLabel = true,
   onEdit,
@@ -174,8 +168,6 @@ function FieldRow({
         value={value}
         entity={entity}
         editing={editing && editable}
-        isBodyField={isBodyField}
-        tags={tags}
         bodyFieldName={bodyFieldName}
         onEdit={onEdit}
         onCommit={onCommit}
@@ -190,8 +182,6 @@ function FieldDispatch({
   value,
   entity,
   editing,
-  isBodyField,
-  tags,
   bodyFieldName,
   onEdit,
   onCommit,
@@ -201,14 +191,13 @@ function FieldDispatch({
   value: unknown;
   entity: Entity;
   editing: boolean;
-  isBodyField?: boolean;
-  tags: Entity[];
   bodyFieldName?: string;
   onEdit: () => void;
   onCommit: (value: unknown) => void;
   onCancel: () => void;
 }) {
   // Markdown fields — EditableMarkdown handles its own display/edit toggle
+  // Mentions (tags, actors, etc.) are read from context automatically.
   if (field.type.kind === "markdown") {
     const text = typeof value === "string" ? value : "";
     const multiline = !field.type.single_line;
@@ -217,7 +206,6 @@ function FieldDispatch({
         value={text}
         onCommit={(v) => onCommit(v)}
         multiline={multiline}
-        tags={isBodyField ? tags : undefined}
         className="text-sm leading-relaxed cursor-text"
         inputClassName="text-sm leading-relaxed bg-transparent w-full"
         placeholder={`Add ${field.name.replace(/_/g, " ")}...`}
@@ -249,6 +237,8 @@ function FieldDispatch({
         return <NumberEditor {...editorProps} />;
       case "date":
         return <DateEditor {...editorProps} />;
+      case "multi-select":
+        return <MultiSelectEditor {...editorProps} field={field} />;
       case "markdown":
       default:
         return (
@@ -276,6 +266,8 @@ function FieldDispatch({
         return <DateDisplay {...displayProps} />;
       case "number":
         return <NumberDisplay {...displayProps} />;
+      case "avatar":
+        return <AvatarDisplay {...displayProps} />;
       default:
         return <TextDisplay {...displayProps} />;
     }
@@ -288,13 +280,8 @@ function FieldDispatch({
   );
 }
 
-/** 16-color palette matching Rust auto_color */
-const COLOR_PALETTE = [
-  "d73a4a", "e36209", "f9c513", "0e8a16",
-  "006b75", "1d76db", "0075ca", "5319e7",
-  "b60205", "d93f0b", "fbca04", "0e8a16",
-  "006b75", "1d76db", "6f42c1", "e4e669",
-];
+/** Palette for the color-picker grid — uses the canonical actor palette. */
+const COLOR_PALETTE = ACTOR_COLORS;
 
 function ColorField({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
   const [selected, setSelected] = useState(value);

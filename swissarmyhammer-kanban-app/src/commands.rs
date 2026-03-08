@@ -280,6 +280,70 @@ pub async fn get_entity(
     Ok(entity.to_json())
 }
 
+/// Search entities by display field for mention autocomplete.
+///
+/// Searches entities of the given type by their `mention_display_field`
+/// (from the entity definition). Returns matches with id, display_name,
+/// color, and avatar for CM6 autocomplete rendering.
+///
+/// Returns `[{id, display_name, color, avatar}]`.
+#[tauri::command]
+pub async fn search_mentions(
+    state: State<'_, AppState>,
+    entity_type: String,
+    query: String,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Look up the mention_display_field for this entity type
+    let fields_ctx = ectx.fields();
+    let entity_def = fields_ctx
+        .get_entity(&entity_type)
+        .ok_or_else(|| format!("Unknown entity type: {}", entity_type))?;
+
+    let display_field = entity_def
+        .mention_display_field
+        .as_ref()
+        .map(|f| f.as_str())
+        .unwrap_or("name");
+
+    let entities = ectx
+        .list(&entity_type)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let query_lower = query.to_lowercase();
+    let matches: Vec<Value> = entities
+        .iter()
+        .filter(|e| {
+            if query_lower.is_empty() {
+                return true;
+            }
+            // Match on display field or entity ID
+            let display = e.get_str(display_field).unwrap_or("");
+            let id = e.id.as_str();
+            display.to_lowercase().contains(&query_lower)
+                || id.to_lowercase().contains(&query_lower)
+        })
+        .take(20)
+        .map(|e| {
+            json!({
+                "id": e.id,
+                "display_name": e.get_str(display_field).unwrap_or(""),
+                "color": e.get_str("color"),
+                "avatar": e.get_str("avatar"),
+            })
+        })
+        .collect();
+
+    Ok(json!(matches))
+}
+
 /// Get the board data with all entities as raw entity bags.
 ///
 /// Columns, swimlanes, and tags are returned as `Entity::to_json()` with

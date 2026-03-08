@@ -479,6 +479,8 @@ mod tests {
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into()],
             validate: Some("if (!ctx.fields.title) throw new Error('title required');".into()),
+            mention_prefix: None,
+            mention_display_field: None,
         };
         let yaml = serde_yaml::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml::from_str(&yaml).unwrap();
@@ -493,6 +495,8 @@ mod tests {
             body_field: None,
             fields: vec!["title".into()],
             validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Hello"));
@@ -517,6 +521,8 @@ mod tests {
                 "#
                 .to_string(),
             ),
+            mention_prefix: None,
+            mention_display_field: None,
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("My Task"));
@@ -534,6 +540,8 @@ mod tests {
             body_field: None,
             fields: vec!["title".into()],
             validate: Some(r#"throw new Error("entity validation failed");"#.to_string()),
+            mention_prefix: None,
+            mention_display_field: None,
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Test"));
@@ -608,6 +616,8 @@ mod tests {
             body_field: None,
             fields: vec!["title".into()],
             validate: Some("return ctx.fields;".to_string()),
+            mention_prefix: None,
+            mention_display_field: None,
         };
 
         let adversarial = r#"}})(); globalThis.__pwned3 = true; (function(){"#;

@@ -365,6 +365,8 @@ mod tests {
             body_field: Some("body".into()),
             fields: vec!["title".into(), "body".into()],
             validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
         }
     }
 
@@ -374,6 +376,8 @@ mod tests {
             body_field: None,
             fields: vec!["tag_name".into(), "color".into()],
             validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
         }
     }
 

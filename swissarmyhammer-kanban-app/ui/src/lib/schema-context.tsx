@@ -1,17 +1,26 @@
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { EntitySchema, FieldDef } from "@/types/kanban";
+
+/** Describes an entity type that supports prefix-based mentions (e.g. #tag, @actor). */
+export interface MentionableType {
+  entityType: string;
+  prefix: string;
+  displayField: string;
+}
 
 interface SchemaContextValue {
   getSchema: (entityType: string) => EntitySchema | undefined;
   getFieldDef: (entityType: string, fieldName: string) => FieldDef | undefined;
+  /** Entity types that have mention_prefix defined — for CM6 decorations/autocomplete. */
+  mentionableTypes: MentionableType[];
   loading: boolean;
 }
 
 const SchemaContext = createContext<SchemaContextValue | null>(null);
 
 /** Entity types to pre-load schemas for on mount. */
-const PRELOAD_TYPES = ["task", "column", "tag", "board", "swimlane"];
+const PRELOAD_TYPES = ["task", "column", "tag", "board", "swimlane", "actor"];
 
 /**
  * Provides cached EntitySchema lookups to the component tree.
@@ -69,8 +78,23 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
     [schemas]
   );
 
+  const mentionableTypes = useMemo(() => {
+    const result: MentionableType[] = [];
+    for (const schema of schemas.values()) {
+      const { mention_prefix, mention_display_field } = schema.entity;
+      if (mention_prefix && mention_display_field) {
+        result.push({
+          entityType: schema.entity.name,
+          prefix: mention_prefix,
+          displayField: mention_display_field,
+        });
+      }
+    }
+    return result;
+  }, [schemas]);
+
   return (
-    <SchemaContext.Provider value={{ getSchema, getFieldDef, loading }}>
+    <SchemaContext.Provider value={{ getSchema, getFieldDef, mentionableTypes, loading }}>
       {children}
     </SchemaContext.Provider>
   );

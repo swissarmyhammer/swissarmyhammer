@@ -3,7 +3,12 @@ import { render, screen, fireEvent } from "@testing-library/react";
 
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve("cua")),
+  invoke: vi.fn((cmd: string) => {
+    if (cmd === "get_keymap_mode") return Promise.resolve("cua");
+    if (cmd === "get_entity_schema") return Promise.resolve({ entity: { name: "unknown", fields: [] }, fields: [] });
+    if (cmd === "search_mentions") return Promise.resolve([]);
+    return Promise.resolve(null);
+  }),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -11,9 +16,17 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { EditableMarkdown } from "./editable-markdown";
 import { KeymapProvider } from "@/lib/keymap-context";
+import { SchemaProvider } from "@/lib/schema-context";
+import { EntityStoreProvider } from "@/lib/entity-store-context";
 
 function renderWithProvider(ui: React.ReactElement) {
-  return render(<KeymapProvider>{ui}</KeymapProvider>);
+  return render(
+    <SchemaProvider>
+      <EntityStoreProvider entities={{ tag: [], actor: [] }}>
+        <KeymapProvider>{ui}</KeymapProvider>
+      </EntityStoreProvider>
+    </SchemaProvider>
+  );
 }
 
 describe("EditableMarkdown", () => {

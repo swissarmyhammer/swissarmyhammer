@@ -11,6 +11,9 @@ use swissarmyhammer_commands::{
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor};
 use tokio::sync::RwLock;
 
+use swissarmyhammer_kanban::actor::AddActor;
+use swissarmyhammer_kanban::Execute;
+
 use crate::watcher::{self, BoardWatcher, EntityCache};
 
 const MAX_RECENT_BOARDS: usize = 20;
@@ -43,6 +46,36 @@ impl BoardHandle {
             entity_cache,
             _watcher: None,
         })
+    }
+
+    /// Ensure an actor entity exists for the current OS user.
+    ///
+    /// Uses `whoami` to detect username/realname, derives a deterministic color,
+    /// and generates an initials-based SVG avatar. Idempotent via `ensure: true`.
+    pub async fn ensure_os_actor(&self) {
+        let username = whoami::username();
+        let realname = whoami::realname();
+        let color = deterministic_color(&username);
+        let avatar = initials_svg_avatar(&realname, &color);
+
+        let cmd = AddActor::human(username.as_str(), realname.as_str())
+            .with_ensure()
+            .with_color(&color)
+            .with_avatar(avatar);
+
+        match cmd.execute(&self.ctx).await.into_result() {
+            Ok(result) => {
+                let created = result["created"].as_bool().unwrap_or(false);
+                if created {
+                    tracing::info!(id = %username, name = %realname, "created OS user actor");
+                } else {
+                    tracing::debug!(id = %username, "OS user actor already exists");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to ensure OS user actor");
+            }
+        }
     }
 
     /// Start the file watcher, emitting entity-level events on the given AppHandle.
@@ -209,6 +242,9 @@ impl AppState {
         }
 
         let mut handle = BoardHandle::open(kanban_path).await?;
+
+        // Ensure OS user actor exists
+        handle.ensure_os_actor().await;
 
         // Start file watcher if we have an app handle
         if let Some(app) = app_handle {
@@ -434,6 +470,49 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     Ok(child)
 }
 
+/// Curated palette of visually distinct colors for actor avatars.
+const ACTOR_COLORS: &[&str] = &[
+    "e53e3e", "dd6b20", "d69e2e", "38a169", "319795",
+    "3182ce", "5a67d8", "805ad5", "d53f8c", "2b6cb0",
+    "c05621", "2f855a", "2c7a7b", "6b46c1", "b83280",
+];
+
+/// Derive a deterministic hex color from a username.
+fn deterministic_color(username: &str) -> String {
+    let hash: u64 = username.bytes().fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    ACTOR_COLORS[(hash as usize) % ACTOR_COLORS.len()].to_string()
+}
+
+/// Generate an initials-based SVG avatar as a data URI.
+fn initials_svg_avatar(name: &str, color: &str) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let initials: String = name
+        .split_whitespace()
+        .filter_map(|w| w.chars().next())
+        .take(2)
+        .flat_map(|c| c.to_uppercase())
+        .collect();
+    let initials = if initials.is_empty() {
+        "?".to_string()
+    } else {
+        initials
+    };
+
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\" viewBox=\"0 0 64 64\">\
+         <circle cx=\"32\" cy=\"32\" r=\"32\" fill=\"#{color}\"/>\
+         <text x=\"32\" y=\"32\" text-anchor=\"middle\" dy=\".35em\" fill=\"white\" \
+         font-family=\"system-ui,sans-serif\" font-size=\"24\" font-weight=\"600\">\
+         {initials}</text></svg>",
+    );
+
+    format!(
+        "data:image/svg+xml;base64,{}",
+        STANDARD.encode(svg.as_bytes())
+    )
+}
+
 /// Get the path to the app config file.
 fn config_file_path() -> PathBuf {
     dirs::config_dir()
@@ -641,5 +720,54 @@ mod tests {
         // boards map should contain the handle
         let boards = state.boards.read().await;
         assert!(boards.contains_key(&canonical));
+    }
+
+    #[test]
+    fn test_deterministic_color_is_stable() {
+        let c1 = deterministic_color("alice");
+        let c2 = deterministic_color("alice");
+        assert_eq!(c1, c2);
+        // Should be a valid 6-char hex
+        assert_eq!(c1.len(), 6);
+        assert!(c1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_deterministic_color_varies() {
+        let c1 = deterministic_color("alice");
+        let c2 = deterministic_color("bob");
+        // Different usernames should (usually) get different colors
+        // Not guaranteed but very likely with a 15-color palette
+        assert_ne!(c1, c2);
+    }
+
+    #[test]
+    fn test_initials_svg_avatar_format() {
+        let avatar = initials_svg_avatar("Alice Smith", "e53e3e");
+        assert!(avatar.starts_with("data:image/svg+xml;base64,"));
+        // Decode and check SVG content
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let b64 = avatar.strip_prefix("data:image/svg+xml;base64,").unwrap();
+        let svg = String::from_utf8(STANDARD.decode(b64).unwrap()).unwrap();
+        assert!(svg.contains("AS")); // initials
+        assert!(svg.contains("#e53e3e")); // color
+    }
+
+    #[test]
+    fn test_initials_svg_single_name() {
+        let avatar = initials_svg_avatar("Alice", "3182ce");
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let b64 = avatar.strip_prefix("data:image/svg+xml;base64,").unwrap();
+        let svg = String::from_utf8(STANDARD.decode(b64).unwrap()).unwrap();
+        assert!(svg.contains(">A<")); // single initial
+    }
+
+    #[test]
+    fn test_initials_svg_empty_name() {
+        let avatar = initials_svg_avatar("", "3182ce");
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let b64 = avatar.strip_prefix("data:image/svg+xml;base64,").unwrap();
+        let svg = String::from_utf8(STANDARD.decode(b64).unwrap()).unwrap();
+        assert!(svg.contains("?"));
     }
 }

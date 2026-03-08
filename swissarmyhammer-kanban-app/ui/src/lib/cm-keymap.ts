@@ -14,7 +14,7 @@ import { emacs } from "@replit/codemirror-emacs";
 export const minimalTheme = EditorView.theme({
   "&": { backgroundColor: "transparent" },
   ".cm-gutters": { display: "none" },
-  ".cm-content": { padding: "0" },
+  ".cm-content": { padding: "0", fontFamily: "inherit" },
   "&.cm-focused": { outline: "none" },
   ".cm-line": { padding: "0" },
   ".cm-scroller": { overflow: "auto" },

@@ -17,13 +17,16 @@ pub struct AddTaskCmd;
 impl Command for AddTaskCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
         ctx.has_in_scope("column")
+            || ctx.arg("column").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
+        // Column from scope chain, or fallback to args.column
         let column_id = ctx
             .resolve_entity_id("column")
+            .or_else(|| ctx.arg("column").and_then(|v| v.as_str()))
             .ok_or_else(|| CommandError::MissingScope("column".into()))?;
 
         let title = ctx
@@ -56,13 +59,16 @@ pub struct MoveTaskCmd;
 impl Command for MoveTaskCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
         ctx.has_in_scope("task")
+            || ctx.arg("id").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
+        // Task ID from scope chain, or fallback to args.id
         let task_id = ctx
             .resolve_entity_id("task")
+            .or_else(|| ctx.arg("id").and_then(|v| v.as_str()))
             .ok_or_else(|| CommandError::MissingScope("task".into()))?;
 
         // Column from target moniker or from args
@@ -142,13 +148,14 @@ impl Command for UntagTaskCmd {
 
 /// Delete a task.
 ///
-/// Requires `task` in the scope chain.
+/// Requires `task` in the scope chain or `id` in args.
 pub struct DeleteTaskCmd;
 
 #[async_trait]
 impl Command for DeleteTaskCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
         ctx.has_in_scope("task")
+            || ctx.arg("id").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -156,6 +163,7 @@ impl Command for DeleteTaskCmd {
 
         let task_id = ctx
             .resolve_entity_id("task")
+            .or_else(|| ctx.arg("id").and_then(|v| v.as_str()))
             .ok_or_else(|| CommandError::MissingScope("task".into()))?;
 
         let op = crate::task::DeleteTask::new(task_id);

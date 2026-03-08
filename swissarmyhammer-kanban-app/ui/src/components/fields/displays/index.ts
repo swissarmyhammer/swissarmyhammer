@@ -6,6 +6,7 @@ export { ColorSwatchDisplay } from "./color-swatch-display";
 export { DateDisplay } from "./date-display";
 export { NumberDisplay } from "./number-display";
 export { MarkdownDisplay } from "./markdown-display";
+export { AvatarDisplay } from "./avatar-display";
 
 import type { FieldDef } from "@/types/kanban";
 

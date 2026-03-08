@@ -1,4 +1,8 @@
 name: actor
+mention_prefix: "@"
+mention_display_field: name
 fields:
   - name
   - actor_type
+  - color
+  - avatar

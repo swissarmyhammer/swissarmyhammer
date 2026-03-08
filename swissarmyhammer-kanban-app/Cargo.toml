@@ -31,6 +31,8 @@ notify = { workspace = true }
 sha2 = { workspace = true }
 tauri-plugin-log = "2.8.0"
 tauri-plugin-window-state = "2.4.1"
+whoami = "1"
+base64 = { workspace = true }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
