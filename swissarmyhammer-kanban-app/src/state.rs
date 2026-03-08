@@ -58,7 +58,7 @@ impl BoardHandle {
         let color = deterministic_color(&username);
         let avatar = initials_svg_avatar(&realname, &color);
 
-        let cmd = AddActor::human(username.as_str(), realname.as_str())
+        let cmd = AddActor::new(username.as_str(), realname.as_str())
             .with_ensure()
             .with_color(&color)
             .with_avatar(avatar);

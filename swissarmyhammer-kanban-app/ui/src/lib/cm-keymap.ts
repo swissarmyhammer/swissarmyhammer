@@ -12,9 +12,9 @@ import { emacs } from "@replit/codemirror-emacs";
 
 /** Minimal CM6 theme — transparent background, no chrome. */
 export const minimalTheme = EditorView.theme({
-  "&": { backgroundColor: "transparent" },
+  "&": { backgroundColor: "transparent", fontFamily: "inherit", fontSize: "inherit" },
   ".cm-gutters": { display: "none" },
-  ".cm-content": { padding: "0", fontFamily: "inherit" },
+  ".cm-content": { padding: "0" },
   "&.cm-focused": { outline: "none" },
   ".cm-line": { padding: "0" },
   ".cm-scroller": { overflow: "auto" },

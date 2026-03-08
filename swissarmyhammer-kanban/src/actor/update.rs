@@ -110,7 +110,7 @@ mod tests {
     async fn test_update_actor_name() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice")
+        AddActor::new("alice", "Alice")
             .execute(&ctx)
             .await
             .into_result()
@@ -124,7 +124,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["name"], "Alice Smith");
-        assert_eq!(result["type"], "human"); // Type preserved
     }
 
     #[tokio::test]

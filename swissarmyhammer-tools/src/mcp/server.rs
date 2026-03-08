@@ -941,7 +941,7 @@ impl McpServer {
         let avatar = agent_svg_avatar(&actor_id, &color);
 
         let ctx = KanbanContext::new(kanban_dir);
-        let cmd = AddActor::agent(actor_id.as_str(), client_name)
+        let cmd = AddActor::new(actor_id.as_str(), client_name)
             .with_ensure()
             .with_color(&color)
             .with_avatar(avatar);

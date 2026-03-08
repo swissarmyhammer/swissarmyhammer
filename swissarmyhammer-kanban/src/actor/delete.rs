@@ -112,7 +112,7 @@ mod tests {
     async fn test_delete_actor() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice")
+        AddActor::new("alice", "Alice")
             .execute(&ctx)
             .await
             .into_result()
@@ -149,7 +149,7 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Create actor
-        AddActor::agent("assistant", "Assistant")
+        AddActor::new("assistant", "Assistant")
             .execute(&ctx)
             .await
             .into_result()

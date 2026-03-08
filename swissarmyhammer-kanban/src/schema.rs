@@ -41,7 +41,7 @@ fn generate_kanban_examples() -> Vec<Value> {
         }),
         json!({
             "description": "Register an actor",
-            "value": {"op": "add actor", "id": "alice", "name": "Alice Smith", "actor_type": "human"}
+            "value": {"op": "add actor", "id": "alice", "name": "Alice Smith"}
         }),
         json!({
             "description": "Assign task to an actor",
@@ -105,7 +105,7 @@ mod tests {
             Box::leak(Box::new(AddTask::new(""))) as &dyn Operation,
             Box::leak(Box::new(AssignTask::new("", ""))) as &dyn Operation,
             Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
-            Box::leak(Box::new(AddActor::human("", ""))) as &dyn Operation,
+            Box::leak(Box::new(AddActor::new("", ""))) as &dyn Operation,
             Box::leak(Box::new(ListActors::default())) as &dyn Operation,
             Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
         ]

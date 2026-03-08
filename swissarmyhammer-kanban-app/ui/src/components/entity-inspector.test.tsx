@@ -25,11 +25,10 @@ const TAG_SCHEMA = {
 };
 
 const ACTOR_SCHEMA = {
-  entity: { name: "actor", fields: ["name", "actor_type", "color"], mention_prefix: "@", mention_display_field: "name" },
+  entity: { name: "actor", fields: ["name", "color"], mention_prefix: "@", mention_display_field: "name" },
   fields: [
     { id: "a1", name: "name", type: { kind: "text", single_line: true }, section: "header" },
-    { id: "a2", name: "actor_type", type: { kind: "select", options: ["human", "agent"] }, section: "body" },
-    { id: "a3", name: "color", type: { kind: "color" }, section: "body" },
+    { id: "a2", name: "color", type: { kind: "color" }, section: "body" },
   ],
 };
 

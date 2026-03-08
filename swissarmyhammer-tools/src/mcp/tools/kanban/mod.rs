@@ -59,7 +59,7 @@ static UPDATE_SWIMLANE: Lazy<UpdateSwimlane> = Lazy::new(|| UpdateSwimlane::new(
 static DELETE_SWIMLANE: Lazy<DeleteSwimlane> = Lazy::new(|| DeleteSwimlane::new(""));
 static LIST_SWIMLANES: Lazy<ListSwimlanes> = Lazy::new(ListSwimlanes::default);
 
-static ADD_ACTOR: Lazy<AddActor> = Lazy::new(|| AddActor::human("", ""));
+static ADD_ACTOR: Lazy<AddActor> = Lazy::new(|| AddActor::new("", ""));
 static GET_ACTOR: Lazy<GetActor> = Lazy::new(|| GetActor::new(""));
 static UPDATE_ACTOR: Lazy<UpdateActor> = Lazy::new(|| UpdateActor::new(""));
 static DELETE_ACTOR: Lazy<DeleteActor> = Lazy::new(|| DeleteActor::new(""));
@@ -695,17 +695,12 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let name = op
                 .get_string("name")
                 .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
-            let actor_type = op.get_string("type").unwrap_or("human");
             let ensure = op
                 .get_param("ensure")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let mut cmd = if actor_type == "agent" {
-                AddActor::agent(id, name)
-            } else {
-                AddActor::human(id, name)
-            };
+            let mut cmd = AddActor::new(id, name);
 
             if ensure {
                 cmd = cmd.with_ensure();
@@ -2459,7 +2454,6 @@ mod tests {
         add_args.insert("op".to_string(), json!("add actor"));
         add_args.insert("id".to_string(), json!("alice"));
         add_args.insert("name".to_string(), json!("Alice"));
-        add_args.insert("actor_type".to_string(), json!("human"));
         add_args.insert("ensure".to_string(), json!(false));
 
         let result = tool.execute(add_args, &context).await.unwrap();

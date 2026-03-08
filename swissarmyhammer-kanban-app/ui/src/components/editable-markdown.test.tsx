@@ -53,7 +53,7 @@ const TAG_ENTITIES: Entity[] = [
   { entity_type: "tag", id: "01TAG2", fields: { tag_name: "feature", color: "00ff00" } },
 ];
 const ACTOR_ENTITIES: Entity[] = [
-  { entity_type: "actor", id: "wballard", fields: { name: "wballard", color: "3366cc", actor_type: "human" } },
+  { entity_type: "actor", id: "wballard", fields: { name: "wballard", color: "3366cc" } },
 ];
 
 function renderWithProvider(ui: React.ReactElement, entities?: Record<string, Entity[]>) {
