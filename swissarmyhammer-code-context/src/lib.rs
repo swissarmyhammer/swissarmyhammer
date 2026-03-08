@@ -21,6 +21,7 @@ pub mod db;
 pub mod error;
 pub mod invalidation;
 pub mod lsp_indexer;
+pub mod ts_callgraph;
 pub mod watcher;
 pub mod workspace;
 
@@ -30,6 +31,10 @@ pub use invalidation::{reextract_file, refresh_edges, InvalidationAction};
 pub use lsp_indexer::{
     build_qualified_path, build_symbol_id, flatten_symbols, mark_lsp_indexed, write_edges,
     write_symbols, CallEdge, FlatSymbol,
+};
+pub use ts_callgraph::{
+    ensure_ts_symbols, extract_call_names, generate_ts_call_edges, resolve_callees,
+    write_ts_edges, CallSite, ResolvedCallee,
 };
 pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
 pub use workspace::{CodeContextWorkspace, WorkspaceMode};
