@@ -41,6 +41,8 @@ members = [
     "swissarmyhammer-treesitter",
     "swissarmyhammer-leader-election",
     "swissarmyhammer-kanban",
+    "swissarmyhammer-lsp",
+    "swissarmyhammer-code-context",
     "swissarmyhammer-operations",
     "swissarmyhammer-operations-macros",
     "swissarmyhammer-skills",
@@ -53,6 +55,7 @@ members = [
     "swissarmyhammer-views",
     "swissarmyhammer-commands",
     "benches/embedding_benchmark",
+    "vendor/sem/crates/sem-core",
 ]
 resolver = "2"
 
@@ -205,6 +208,13 @@ model-loader = { path = "model-loader" }
 
 # Leader election
 swissarmyhammer-leader-election = { path = "swissarmyhammer-leader-election" }
+
+# LSP
+swissarmyhammer-lsp = { path = "swissarmyhammer-lsp" }
+lsp-types = "0.97"
+
+# Semantic diff (vendored fork of Ataraxy-Labs/sem)
+sem-core = { path = "vendor/sem/crates/sem-core" }
 
 # Operations
 swissarmyhammer-operations = { path = "swissarmyhammer-operations" }

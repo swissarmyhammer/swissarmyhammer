@@ -3,7 +3,7 @@ name: kanban
 description: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item.
 metadata:
   author: "swissarmyhammer"
-  version: "1.1"
+  version: "1.2"
 ---
 
 # Do
@@ -18,17 +18,33 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 
 ## Process
 
-1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable card
+1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable card. This searches all non-done columns for ready tasks.
+   - To filter by tag: `op: "next task"`, `tag: "<tag-id>"`
+   - To filter by assignee: `op: "next task"`, `assignee: "<actor-id>"`
 2. Move it to doing: use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
 3. Read the task details: use `kanban` with `op: "get task"`, `id: "<task-id>"` to see description and subtasks
 4. Work through each subtask:
    - Implement what the subtask describes
-   - Mark it complete: use `kanban` with `op: "complete subtask"`, `task_id: "<task-id>"`, `id: "<subtask-id>"`
+   - Mark it complete: use `kanban` with `op: "update task"`, `id: "<task-id>"`, and update the `description` to change `- [ ]` to `- [x]` for the completed subtask
 5. **Complete the card**: when ALL subtasks are done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
 
-## Tagging
+## Filtering Work
 
-Use tags to categorize and filter tasks. Tags should be created early when setting up a board, then applied consistently as tasks are added.
+### By Tag
+
+Use `next task` with a `tag` filter to pick up specific kinds of work one card at a time:
+
+```json
+{"op": "next task", "tag": "review-finding"}
+```
+
+This is the preferred way to work through tagged cards — it returns one ready card at a time and excludes done cards automatically.
+
+**Avoid** using `list tasks` with only a `tag` filter — this returns every matching card across all columns (including done) and can produce huge results. If you must list, always combine `tag` with `column`:
+
+```json
+{"op": "list tasks", "tag": "bug", "column": "todo"}
+```
 
 ### Setting Up Tags
 
@@ -52,14 +68,6 @@ Tag tasks when you create them or as you learn more about the work:
 {"op": "untag task", "id": "<task-id>", "tag": "chore"}
 ```
 
-### Filtering by Tag
-
-Use tags to focus on specific kinds of work:
-
-```json
-{"op": "list tasks", "tag": "bug"}
-```
-
 ### Managing Tags
 
 You can list, update, or delete tags as the project evolves:
@@ -71,13 +79,6 @@ You can list, update, or delete tags as the project evolves:
 ```
 
 Deleting a tag automatically removes it from all tasks.
-
-### When to Tag
-
-- **Board setup**: Create a standard set of tags when initializing the board
-- **Task creation**: Apply relevant tags as you add tasks — use the `tags` field on `add task`
-- **Triage**: When reviewing work, tag untagged tasks so nothing falls through the cracks
-- **Filtering**: Before picking up work, filter by tag to focus on what matters (e.g., `"tag": "bug"` to prioritize fixes)
 
 ## Guidelines
 
