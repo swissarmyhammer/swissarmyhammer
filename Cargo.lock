@@ -8385,8 +8385,10 @@ name = "swissarmyhammer-lsp"
 version = "0.8.0"
 dependencies = [
  "lsp-types",
+ "once_cell",
  "serde",
  "serde_json",
+ "serde_yaml",
  "swissarmyhammer-project-detection",
  "thiserror 1.0.69",
  "tokio",

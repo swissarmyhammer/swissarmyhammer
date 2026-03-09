@@ -13,7 +13,7 @@ use tracing::{info, warn};
 use crate::daemon::LspDaemon;
 use crate::error::LspError;
 use crate::registry::servers_for_project;
-use crate::types::{DaemonStatus, LspDaemonState};
+use crate::types::{DaemonStatus, LspDaemonState, OwnedLspServerSpec};
 
 /// Manages all LSP daemons for a single workspace.
 pub struct LspSupervisorManager {
@@ -67,24 +67,25 @@ impl LspSupervisorManager {
         );
 
         // Collect unique server specs (dedupe by command name)
-        let mut specs_by_command: HashMap<&str, &'static crate::types::LspServerSpec> =
-            HashMap::new();
+        let mut specs_by_command: HashMap<String, OwnedLspServerSpec> = HashMap::new();
         for project in &projects {
             for spec in servers_for_project(project.project_type) {
-                specs_by_command.entry(spec.command).or_insert(spec);
+                specs_by_command
+                    .entry(spec.command.clone())
+                    .or_insert(spec);
             }
         }
 
         // Start a daemon for each unique server
         let mut results = Vec::new();
-        for (command, spec) in &specs_by_command {
-            if self.daemons.contains_key(*command) {
+        for (command, spec) in specs_by_command {
+            if self.daemons.contains_key(&command) {
                 // Already running — skip
                 continue;
             }
             let mut daemon = LspDaemon::new(spec, self.workspace_root.clone());
             let outcome = daemon.start().await;
-            self.daemons.insert(command.to_string(), daemon);
+            self.daemons.insert(command, daemon);
             results.push(outcome);
         }
 

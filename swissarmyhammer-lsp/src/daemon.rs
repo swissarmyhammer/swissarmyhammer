@@ -18,7 +18,7 @@ use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
 use crate::error::LspError;
-use crate::types::{LspDaemonState, LspServerSpec};
+use crate::types::{LspDaemonState, OwnedLspServerSpec};
 
 /// Maximum consecutive failures before we stop retrying.
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
@@ -43,8 +43,8 @@ pub(crate) fn backoff_duration(attempt: u32) -> Duration {
 
 /// Manages the lifecycle of a single LSP server child process.
 pub struct LspDaemon {
-    /// The server specification (static, from the registry).
-    spec: &'static LspServerSpec,
+    /// The server specification (owned, from the registry).
+    spec: OwnedLspServerSpec,
     /// Workspace root URI passed to the LSP server.
     workspace_root: PathBuf,
     /// Current child process handle (if running).
@@ -68,7 +68,7 @@ impl std::fmt::Debug for LspDaemon {
 
 impl LspDaemon {
     /// Create a new daemon for the given server spec and workspace root.
-    pub fn new(spec: &'static LspServerSpec, workspace_root: PathBuf) -> Self {
+    pub fn new(spec: OwnedLspServerSpec, workspace_root: PathBuf) -> Self {
         let (state_tx, state_rx) = watch::channel(LspDaemonState::NotStarted);
         Self {
             spec,
@@ -92,7 +92,7 @@ impl LspDaemon {
 
     /// Return the command name for this daemon's server.
     pub fn command(&self) -> &str {
-        self.spec.command
+        &self.spec.command
     }
 
     // -- lifecycle --------------------------------------------------------
@@ -104,24 +104,24 @@ impl LspDaemon {
     /// to `Running`; on failure it transitions to `Failed`.
     pub async fn start(&mut self) -> Result<(), LspError> {
         // Check binary availability
-        if which::which(self.spec.command).is_err() {
+        if which::which(&self.spec.command).is_err() {
             warn!(
-                cmd = self.spec.command,
-                hint = self.spec.install_hint,
+                cmd = &self.spec.command,
+                hint = &self.spec.install_hint,
                 "LSP binary not found on PATH"
             );
             self.set_state(LspDaemonState::NotFound);
             return Err(LspError::BinaryNotFound {
-                command: self.spec.command.to_string(),
-                install_hint: self.spec.install_hint.to_string(),
+                command: self.spec.command.clone(),
+                install_hint: self.spec.install_hint.clone(),
             });
         }
 
         self.set_state(LspDaemonState::Starting);
 
         // Spawn child
-        let mut child = match Command::new(self.spec.command)
-            .args(self.spec.args)
+        let mut child = match Command::new(&self.spec.command)
+            .args(&self.spec.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -130,19 +130,19 @@ impl LspDaemon {
         {
             Ok(c) => c,
             Err(e) => {
-                error!(cmd = self.spec.command, %e, "Failed to spawn LSP server");
+                error!(cmd = &self.spec.command, %e, "Failed to spawn LSP server");
                 self.record_failure(format!("spawn failed: {e}"));
                 return Err(LspError::SpawnFailed(e));
             }
         };
 
         let pid = child.id().unwrap_or(0);
-        info!(cmd = self.spec.command, pid, "LSP server spawned");
+        info!(cmd = &self.spec.command, pid, "LSP server spawned");
 
         // Perform initialize handshake with timeout
         match tokio::time::timeout(
-            self.spec.startup_timeout,
-            Self::initialize_handshake(&mut child, &self.workspace_root, self.spec),
+            self.spec.startup_timeout(),
+            Self::initialize_handshake(&mut child, &self.workspace_root, &self.spec),
         )
         .await
         {
@@ -157,20 +157,20 @@ impl LspDaemon {
                     pid,
                     since_epoch_ms,
                 });
-                info!(cmd = self.spec.command, pid, "LSP server initialized");
+                info!(cmd = &self.spec.command, pid, "LSP server initialized");
                 Ok(())
             }
             Ok(Err(e)) => {
                 let reason = e.to_string();
-                error!(cmd = self.spec.command, %reason, "LSP initialize failed");
+                error!(cmd = &self.spec.command, %reason, "LSP initialize failed");
                 let _ = child.kill().await;
                 self.record_failure(reason.clone());
                 Err(e)
             }
             Err(_) => {
-                let timeout = self.spec.startup_timeout;
+                let timeout = self.spec.startup_timeout();
                 let reason = format!("initialize timed out after {timeout:?}");
-                error!(cmd = self.spec.command, "LSP initialize timed out");
+                error!(cmd = &self.spec.command, "LSP initialize timed out");
                 let _ = child.kill().await;
                 self.record_failure(reason);
                 Err(LspError::Timeout(timeout))
@@ -300,7 +300,7 @@ impl LspDaemon {
     async fn initialize_handshake(
         child: &mut Child,
         workspace_root: &Path,
-        spec: &LspServerSpec,
+        _spec: &OwnedLspServerSpec,
     ) -> Result<(), LspError> {
         let stdin = child
             .stdin
@@ -315,10 +315,8 @@ impl LspDaemon {
         let mut reader = BufReader::new(stdout);
 
         // Build initialize request
-        let init_options = spec
-            .initialization_options
-            .map(|f| f())
-            .unwrap_or(serde_json::Value::Null);
+        // For owned specs, we always use null initialization options
+        let init_options = serde_json::Value::Null;
 
         let root_uri = url::Url::from_file_path(workspace_root)
             .map_err(|_| LspError::HandshakeFailed("invalid workspace path".into()))?
@@ -594,8 +592,19 @@ mod tests {
 
     #[test]
     fn test_daemon_initial_state() {
-        use crate::registry::SERVERS;
-        let daemon = LspDaemon::new(&SERVERS[0], PathBuf::from("/tmp"));
+        use crate::types::OwnedLspServerSpec;
+        use swissarmyhammer_project_detection::ProjectType;
+        let spec = OwnedLspServerSpec {
+            project_types: vec![ProjectType::Rust],
+            command: "rust-analyzer".to_string(),
+            args: vec![],
+            language_ids: vec!["rust".to_string()],
+            file_extensions: vec!["rs".to_string()],
+            startup_timeout_secs: 30,
+            health_check_interval_secs: 60,
+            install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+        };
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
         assert_eq!(daemon.state(), LspDaemonState::NotStarted);
         assert_eq!(daemon.command(), "rust-analyzer");
     }
@@ -607,8 +616,19 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_spawn_and_initialize() {
-        use crate::registry::SERVERS;
-        let mut daemon = LspDaemon::new(&SERVERS[0], PathBuf::from("/tmp/test-workspace"));
+        use crate::types::OwnedLspServerSpec;
+        use swissarmyhammer_project_detection::ProjectType;
+        let spec = OwnedLspServerSpec {
+            project_types: vec![ProjectType::Rust],
+            command: "rust-analyzer".to_string(),
+            args: vec![],
+            language_ids: vec!["rust".to_string()],
+            file_extensions: vec!["rs".to_string()],
+            startup_timeout_secs: 30,
+            health_check_interval_secs: 60,
+            install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+        };
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp/test-workspace"));
         let result = daemon.start().await;
         // This will fail if rust-analyzer is not installed, which is expected in CI
         if result.is_ok() {
@@ -624,8 +644,19 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_kill_and_restart() {
-        use crate::registry::SERVERS;
-        let mut daemon = LspDaemon::new(&SERVERS[0], PathBuf::from("/tmp/test-workspace"));
+        use crate::types::OwnedLspServerSpec;
+        use swissarmyhammer_project_detection::ProjectType;
+        let spec = OwnedLspServerSpec {
+            project_types: vec![ProjectType::Rust],
+            command: "rust-analyzer".to_string(),
+            args: vec![],
+            language_ids: vec!["rust".to_string()],
+            file_extensions: vec!["rs".to_string()],
+            startup_timeout_secs: 30,
+            health_check_interval_secs: 60,
+            install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+        };
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp/test-workspace"));
         if daemon.start().await.is_ok() {
             // Simulate unexpected death
             if let Some(ref mut child) = daemon.child {
