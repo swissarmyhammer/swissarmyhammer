@@ -111,14 +111,17 @@ export function MultiSelectEditor({
       if (!clean) return;
 
       if (isComputedTags && entity) {
-        // Tags: use tag task command (modifies body)
+        // Tags: modify the body field directly to add #tagname
         if (selectedIdsRef.current.some((id) => {
           const name = idToDisplay.get(id)?.toLowerCase();
           return name === clean || id.toLowerCase() === clean;
         })) return;
         try {
-          await invoke("execute_command", {
-            command: JSON.stringify({ op: "tag task", id: entity.id, tag: clean }),
+          const currentBody = getStr(entity, "body") || "";
+          const newBody = currentBody ? `${currentBody} #${clean}` : `#${clean}`;
+          await invoke("dispatch_command", {
+            cmd: "entity.update_field",
+            args: { entity_type: "task", id: entity.id, field_name: "body", value: newBody },
           });
           // Find or create the ID for this tag
           const id = displayToId.get(clean) ?? clean;
@@ -143,8 +146,13 @@ export function MultiSelectEditor({
       if (isComputedTags && entity) {
         const slug = idToDisplay.get(id) ?? id;
         try {
-          await invoke("execute_command", {
-            command: JSON.stringify({ op: "untag task", id: entity.id, tag: slug }),
+          const currentBody = getStr(entity, "body") || "";
+          // Remove #tagname pattern, cleaning up surrounding whitespace
+          const tagPattern = new RegExp(`\\s*#${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+          const newBody = currentBody.replace(tagPattern, "").trim();
+          await invoke("dispatch_command", {
+            cmd: "entity.update_field",
+            args: { entity_type: "task", id: entity.id, field_name: "body", value: newBody },
           });
           setSelectedIds((prev) => prev.filter((x) => x !== id));
         } catch (e) {
@@ -157,15 +165,28 @@ export function MultiSelectEditor({
     [isComputedTags, entity, idToDisplay],
   );
 
-  // Commit (for reference fields — tags commit individually)
+  // Commit (for reference fields — tags commit individually).
+  // Always process any remaining text in the CM6 editor before committing,
+  // so that autocomplete selections that replaced text are captured.
   const commit = useCallback(() => {
+    const text = editorRef.current?.view?.state.doc.toString().trim();
+    if (text) {
+      // Synchronously resolve the display name to an ID and add it
+      const clean = text.replace(new RegExp(`^\\${prefix}`), "").trim().toLowerCase();
+      if (clean) {
+        const id = displayToId.get(clean);
+        if (id && !selectedIdsRef.current.includes(id)) {
+          selectedIdsRef.current = [...selectedIdsRef.current, id];
+        }
+      }
+    }
     if (!isComputedTags) {
       onCommit(selectedIdsRef.current);
     } else {
-      // Tags already committed via commands — just exit
+      // Tags already committed via body field updates — just exit
       onCancel();
     }
-  }, [isComputedTags, onCommit, onCancel]);
+  }, [isComputedTags, onCommit, onCancel, prefix, displayToId]);
 
   const commitRef = useRef(commit);
   commitRef.current = commit;

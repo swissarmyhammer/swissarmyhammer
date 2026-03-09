@@ -65,6 +65,9 @@ function MultiSelectPopover({ field, entity, value, onCommit, onCancel }: CellEd
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen) {
+        // Closing the popover = done editing; let MultiSelectEditor's
+        // onCommit handle saving (it fires before this via Escape/blur).
+        // Only cancel if commit didn't already fire.
         onCancel();
       }
       setOpen(nextOpen);

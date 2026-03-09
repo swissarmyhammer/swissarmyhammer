@@ -4,7 +4,7 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
-import { useAvailableCommands, collectAvailableCommands, type CommandAtDepth } from "@/lib/command-scope";
+import { useAvailableCommands, collectAvailableCommands, dispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap } from "@/lib/keymap-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
@@ -106,7 +106,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     const entry = filtered[selectedIndex];
     if (entry) {
       onClose();
-      entry.command.execute?.();
+      dispatchCommand(entry.command);
     }
   }, [filtered, selectedIndex, onClose]);
 
@@ -279,7 +279,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
                   onClick={() => {
                     onClose();
-                    entry.command.execute?.();
+                    dispatchCommand(entry.command);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >

@@ -33,18 +33,15 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
 
   /** Execute a command, preferring the focused scope when available. */
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
-    console.debug(`[dispatch] executeCommand("${id}")`);
     const scope = focusedScopeRef.current;
     if (scope) {
       const cmd = resolveCommand(scope, id);
       if (cmd) {
-        console.debug(`[dispatch] resolved from focused scope: ${id}`, cmd.execute ? "(has execute)" : "(dispatch to Rust)");
         await dispatchCommand(cmd);
         return true;
       }
     }
     // Fall back to root scope
-    console.debug(`[dispatch] falling back to root scope for: ${id}`);
     return rootExecuteRef.current(id);
   }, []);
 

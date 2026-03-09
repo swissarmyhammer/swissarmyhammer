@@ -1,5 +1,6 @@
 import { Kanban, List, Calendar, Clock, LayoutGrid, Table2, Tag } from "lucide-react";
 import { useViews } from "@/lib/views-context";
+import { useExecuteCommand } from "@/lib/command-scope";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ViewDef } from "@/types/kanban";
@@ -27,7 +28,8 @@ function viewIcon(view: ViewDef) {
 }
 
 export function LeftNav() {
-  const { views, activeView, setActiveViewId } = useViews();
+  const { views, activeView } = useViews();
+  const executeCommand = useExecuteCommand();
 
   if (views.length === 0) return null;
 
@@ -39,7 +41,7 @@ export function LeftNav() {
           <Tooltip key={view.id}>
             <TooltipTrigger asChild>
               <button
-                onClick={() => setActiveViewId(view.id)}
+                onClick={() => executeCommand(`nav.view.${view.id}`)}
                 className={cn(
                   "flex items-center justify-center rounded-md p-1.5 transition-colors",
                   isActive
