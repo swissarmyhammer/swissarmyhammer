@@ -4,16 +4,7 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { ACTOR_COLORS } from "@/lib/actor-colors";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { SubtaskProgress } from "@/components/subtask-progress";
-import {
-  resolveDisplay,
-  BadgeListDisplay,
-  BadgeDisplay,
-  ColorSwatchDisplay,
-  DateDisplay,
-  NumberDisplay,
-  AvatarDisplay,
-  TextDisplay,
-} from "@/components/fields/displays";
+import { CellDispatch } from "@/components/cells";
 import {
   resolveEditor,
   MarkdownEditor,
@@ -256,32 +247,10 @@ function FieldDispatch({
     }
   }
 
-  // Read-only: use shared display components in full mode
-  const display = resolveDisplay(field);
-  const displayProps = { field, value, entity, mode: "full" as const };
-
-  const rendered = (() => {
-    switch (display) {
-      case "badge-list":
-        return <BadgeListDisplay {...displayProps} />;
-      case "badge":
-        return <BadgeDisplay {...displayProps} />;
-      case "color-swatch":
-        return <ColorSwatchDisplay {...displayProps} />;
-      case "date":
-        return <DateDisplay {...displayProps} />;
-      case "number":
-        return <NumberDisplay {...displayProps} />;
-      case "avatar":
-        return <AvatarDisplay {...displayProps} />;
-      default:
-        return <TextDisplay {...displayProps} />;
-    }
-  })();
-
+  // Read-only: use the same CellDispatch as the grid — single rendering path
   return (
     <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
-      {rendered}
+      <CellDispatch field={field} value={value} entity={entity} />
     </div>
   );
 }
