@@ -89,11 +89,15 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
             let filtered: Vec<Value> = all_tasks
                 .iter()
                 .filter(|t| {
-                    // Filter by column
+                    // Filter by column — when no column is specified, exclude done
+                    // (terminal) column by default. Listing all tasks including done
+                    // produces huge results and is almost never what you want.
                     if let Some(ref col) = self.column {
                         if t.get_str("position_column") != Some(col.as_str()) {
                             return false;
                         }
+                    } else if t.get_str("position_column") == Some(terminal_column) {
+                        return false;
                     }
 
                     // Filter by swimlane
@@ -231,6 +235,87 @@ mod tests {
             .unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["title"], "Another todo");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_excludes_done_by_default() {
+        let (_temp, ctx) = setup().await;
+
+        AddTask::new("Still todo")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let r2 = AddTask::new("In progress")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let r3 = AddTask::new("Finished")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id2 = r2["id"].as_str().unwrap();
+        let id3 = r3["id"].as_str().unwrap();
+
+        // Move one to doing, one to done
+        MoveTask::to_column(id2, "doing")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        MoveTask::to_column(id3, "done")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // No filters → should exclude done, return only todo + doing
+        let result = ListTasks::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(result["count"], 2);
+        let titles: Vec<&str> = result["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["title"].as_str().unwrap())
+            .collect();
+        assert!(titles.contains(&"Still todo"));
+        assert!(titles.contains(&"In progress"));
+        assert!(!titles.contains(&"Finished"));
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_explicit_done_column_returns_done() {
+        let (_temp, ctx) = setup().await;
+
+        let r1 = AddTask::new("Finished task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id1 = r1["id"].as_str().unwrap();
+        AddTask::new("Open task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        MoveTask::to_column(id1, "done")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Explicit column: "done" → should return only done tasks
+        let result = ListTasks::new()
+            .with_column("done")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Finished task");
     }
 
     #[tokio::test]

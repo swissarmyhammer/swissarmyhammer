@@ -115,9 +115,9 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 - `next task` - Get next actionable task from any non-done column (no incomplete dependencies)
   - Optional: `tag`, `swimlane`, `assignee`
 
-- `list tasks` - List tasks with optional filters
+- `list tasks` - List tasks with optional filters (excludes done tasks by default)
   - Optional: `column`, `swimlane`, `tag`, `assignee`, `ready`
-  - **Tip**: Always combine filters to avoid huge results. Use `column` + `tag` together, or use `next task` with `tag` to get one card at a time.
+  - **Important**: Never call with no parameters — always provide at least one filter. Done tasks are automatically excluded unless you explicitly pass `column: "done"`. Prefer `next task` to get one actionable card at a time.
 
 ### Tag Operations
 
@@ -318,6 +318,21 @@ Tag a task:
 
 ### Query tasks
 
+Get next actionable task (preferred — returns one card at a time):
+```json
+{
+  "op": "next task"
+}
+```
+
+List tasks in a column:
+```json
+{
+  "op": "list tasks",
+  "column": "todo"
+}
+```
+
 List ready tasks:
 ```json
 {
@@ -331,13 +346,6 @@ List tasks by assignee:
 {
   "op": "list tasks",
   "assignee": "alice"
-}
-```
-
-Get next actionable task:
-```json
-{
-  "op": "next task"
 }
 ```
 

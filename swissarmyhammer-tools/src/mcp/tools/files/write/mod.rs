@@ -373,7 +373,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial(cwd)]
+    #[serial(cwd)]
     async fn test_write_relative_path_acceptance() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();
