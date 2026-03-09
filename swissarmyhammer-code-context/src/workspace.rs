@@ -97,6 +97,10 @@ impl CodeContextWorkspace {
                 db::configure_connection(&db)?;
                 db::create_schema(&db)?;
 
+                // Populate indexed_files table by scanning the workspace
+                // This must happen before spawning the indexing worker so it has files to process
+                crate::startup_cleanup(&db, workspace_root)?;
+
                 // Spawn background indexing worker thread in the leader process
                 // The worker runs in parallel and updates indexed flags as it completes files
                 spawn_indexing_worker(
