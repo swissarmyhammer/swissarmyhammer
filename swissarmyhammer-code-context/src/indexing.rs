@@ -76,48 +76,47 @@ fn run_indexing_worker(
     let db = Connection::open(db_path)?;
     db.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
 
-    // Work queue loop: process dirty files until none remain
+    // Work queue loop: keep checking for dirty files indefinitely
+    // This allows the worker to index files that are discovered after startup
     loop {
         // Query dirty files (ts_indexed = 0) in batches
         let dirty_files = query_dirty_files(&db, config.batch_size)?;
 
-        if dirty_files.is_empty() {
-            debug!("No more dirty files to index");
-            break;
-        }
+        if !dirty_files.is_empty() {
+            debug!("Found {} dirty files to index", dirty_files.len());
 
-        debug!("Found {} dirty files to index", dirty_files.len());
+            // Process files in parallel using rayon
+            // Note: The treesitter module handles actual tree-sitter parsing and writes
+            // chunks to ts_chunks table. Here we just mark files as indexed for now.
+            let results: Vec<_> = dirty_files
+                .par_iter()
+                .with_max_len(config.max_parallel_tasks)
+                .map(|file_path| {
+                    // Validate file exists
+                    let full_path = workspace_root.join(file_path);
+                    if full_path.exists() {
+                        (file_path.clone(), true)
+                    } else {
+                        warn!("File not found: {}", file_path);
+                        (file_path.clone(), false)
+                    }
+                })
+                .collect();
 
-        // Process files in parallel using rayon
-        // Note: The treesitter module handles actual tree-sitter parsing and writes
-        // chunks to ts_chunks table. Here we just mark files as indexed for now.
-        let results: Vec<_> = dirty_files
-            .par_iter()
-            .with_max_len(config.max_parallel_tasks)
-            .map(|file_path| {
-                // Validate file exists
-                let full_path = workspace_root.join(file_path);
-                if full_path.exists() {
-                    (file_path.clone(), true)
-                } else {
-                    warn!("File not found: {}", file_path);
-                    (file_path.clone(), false)
-                }
-            })
-            .collect();
-
-        // Write results back to database
-        for (file_path, exists) in results {
-            if exists {
-                if let Err(e) = mark_ts_indexed(&db, &file_path) {
-                    warn!("Failed to mark {} as indexed: {}", file_path, e);
-                } else {
-                    debug!("Marked {} as ts_indexed", file_path);
+            // Write results back to database
+            for (file_path, exists) in results {
+                if exists {
+                    if let Err(e) = mark_ts_indexed(&db, &file_path) {
+                        warn!("Failed to mark {} as indexed: {}", file_path, e);
+                    } else {
+                        debug!("Marked {} as ts_indexed", file_path);
+                    }
                 }
             }
         }
 
-        // Small delay to avoid busy-looping
+        // Sleep before next iteration (allows new files to be discovered)
+        // In production, this would be longer; in tests we use shorter intervals
         thread::sleep(Duration::from_millis(100));
     }
 

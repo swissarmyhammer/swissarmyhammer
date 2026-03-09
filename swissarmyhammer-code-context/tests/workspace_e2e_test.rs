@@ -339,3 +339,57 @@ fn test_get_status_reflects_file_counts() {
     assert_eq!(status.ts_indexed_percent, 0.0);
     assert_eq!(status.lsp_indexed_percent, 0.0);
 }
+
+// ---------------------------------------------------------------------------
+// Test 7: Indexing worker marks files as indexed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_indexing_worker_marks_files_indexed() {
+    use std::thread;
+    use std::time::Duration;
+
+    let project = create_test_project();
+    let root = project.path();
+
+    // Open workspace (spawns indexing worker in leader)
+    let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
+    assert!(ws.is_leader(), "Should be leader");
+
+    // Populate dirty files
+    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
+        .expect("startup_cleanup failed");
+    println!("startup_cleanup: added={}, removed={}, dirty={}, unchanged={}",
+        cleanup_stats.files_added, cleanup_stats.files_removed, cleanup_stats.files_dirty, cleanup_stats.files_unchanged);
+
+    // Verify files are in DB before indexing
+    let before = swissarmyhammer_code_context::get_status(ws.db())
+        .expect("get_status failed");
+    println!("Before indexing: total={}, ts_indexed={}, lsp_indexed={}",
+        before.total_files, before.ts_indexed_files, before.lsp_indexed_files);
+    assert_eq!(before.total_files, 4, "Should have 4 files in database");
+    assert_eq!(before.ts_indexed_files, 0, "No files should be indexed initially");
+
+    // Give indexing worker time to run (it's in a background thread)
+    // Worker processes in batches with 100ms delay between batches
+    thread::sleep(Duration::from_secs(2));
+
+    // Check status after indexing worker runs
+    let after = swissarmyhammer_code_context::get_status(ws.db())
+        .expect("get_status failed");
+    println!("After indexing: total={}, ts_indexed={}, lsp_indexed={}",
+        after.total_files, after.ts_indexed_files, after.lsp_indexed_files);
+
+    // Indexing worker should have marked files as indexed
+    // Even if tree-sitter parsing is placeholder, files should be marked ts_indexed=1
+    if after.ts_indexed_files == 0 {
+        panic!("Indexing worker did not mark any files as indexed!");
+    }
+
+    // Should have indexed all 4 files
+    assert_eq!(
+        after.ts_indexed_files, 4,
+        "All 4 files should be marked as indexed"
+    );
+    assert_eq!(after.ts_indexed_percent, 100.0, "All files should be 100% indexed");
+}
