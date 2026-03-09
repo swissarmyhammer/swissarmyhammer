@@ -18,6 +18,7 @@ pub mod check_names {
     pub const IN_PATH: &str = "swissarmyhammer in PATH";
     pub const CLAUDE_CONFIG: &str = "Claude Code MCP configuration";
     pub const FILE_PERMISSIONS: &str = "File permissions";
+    pub const RUST_ANALYZER: &str = "Rust Analyzer (LSP)";
 }
 
 /// Check installation method and binary integrity
@@ -291,6 +292,39 @@ pub fn check_file_permissions(checks: &mut Vec<Check>) -> Result<()> {
     Ok(())
 }
 
+/// Check LSP server availability
+///
+/// Verifies that language servers are available on the system.
+/// Currently checks for rust-analyzer for Rust projects.
+pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
+    use swissarmyhammer_code_context::detect_rust_analyzer;
+
+    // Check for rust-analyzer
+    match detect_rust_analyzer() {
+        Some(path) => {
+            let path_display = path.display().to_string();
+            checks.push(Check {
+                name: check_names::RUST_ANALYZER.to_string(),
+                status: CheckStatus::Ok,
+                message: format!("Available at {}", path_display),
+                fix: None,
+            });
+        }
+        None => {
+            checks.push(Check {
+                name: check_names::RUST_ANALYZER.to_string(),
+                status: CheckStatus::Warning,
+                message: "rust-analyzer not found in PATH".to_string(),
+                fix: Some(
+                    "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,5 +383,33 @@ mod tests {
         assert!(!claude_check
             .message
             .contains("Claude Code command not found in PATH"));
+    }
+
+    #[test]
+    fn test_lsp_servers_check() {
+        let mut checks = Vec::new();
+        let result = check_lsp_servers(&mut checks);
+
+        assert!(result.is_ok());
+        assert!(!checks.is_empty());
+
+        // Should have a check for rust-analyzer
+        let rust_analyzer_check = checks
+            .iter()
+            .find(|c| c.name == check_names::RUST_ANALYZER)
+            .unwrap();
+
+        // Check should have a status (Ok or Warning)
+        match rust_analyzer_check.status {
+            CheckStatus::Ok => {
+                // rust-analyzer was found
+                assert!(rust_analyzer_check.message.contains("Available at"));
+            }
+            CheckStatus::Warning => {
+                // rust-analyzer was not found
+                assert!(rust_analyzer_check.message.contains("not found in PATH"));
+            }
+            _ => panic!("Unexpected check status"),
+        }
     }
 }

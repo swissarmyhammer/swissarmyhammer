@@ -30,6 +30,7 @@ path = "src/generate_docs.rs"
 swissarmyhammer = { path = "../swissarmyhammer" }
 swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
+swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }

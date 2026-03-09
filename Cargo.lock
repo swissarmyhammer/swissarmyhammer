@@ -8102,6 +8102,7 @@ dependencies = [
  "swissarmyhammer",
  "swissarmyhammer-agent",
  "swissarmyhammer-agents",
+ "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-doctor",

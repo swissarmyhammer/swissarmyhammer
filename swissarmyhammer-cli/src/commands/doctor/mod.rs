@@ -89,6 +89,7 @@ impl Doctor {
         checks::check_installation(&mut self.checks)?;
         checks::check_in_path(&mut self.checks)?;
         checks::check_file_permissions(&mut self.checks)?;
+        checks::check_lsp_servers(&mut self.checks)?;
         Ok(())
     }
 
