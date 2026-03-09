@@ -646,21 +646,158 @@ async fn index_discovered_files_async(workspace_root: &Path) {
             );
 
             // Extract parsed files from tree-sitter index
-            let files = ts_index.files();
-            tracing::debug!("Extracted {} files from tree-sitter index", files.len());
+            let file_paths = ts_index.files();
+            tracing::debug!("Extracted {} files from tree-sitter index", file_paths.len());
 
-            // TODO: For each parsed file, extract symbols and write to code-context DB:
-            // 1. Get the ParsedFile for each path in files
-            // 2. Extract symbols using ensure_ts_symbols()
-            // 3. Generate call edges using generate_ts_call_edges()
-            // 4. Write edges using write_ts_edges()
-            // 5. Mark file as ts_indexed using appropriate DB update
-            //
-            // This requires:
-            // - Opening each ParsedFile from ts_index
-            // - Using code-context functions to write results
-            // - Handling database transactions to avoid corruption
-            // - Reporting progress back to get_status queries
+            let db = _ws.db();
+            let lang_registry = swissarmyhammer_treesitter::LanguageRegistry::global();
+
+            // For each parsed file, extract chunks and write to code-context DB
+            for file_path in file_paths {
+                let relative_path = match file_path.strip_prefix(workspace_root) {
+                    Ok(p) => p.to_string_lossy().to_string(),
+                    Err(_) => file_path.to_string_lossy().to_string(),
+                };
+
+                // Get the parsed file from the index
+                let parsed_file = match ts_index.get(&file_path) {
+                    Some(pf) => pf,
+                    None => {
+                        tracing::warn!("Could not retrieve parsed file for {}", relative_path);
+                        continue;
+                    }
+                };
+
+                // 1. Extract semantic chunks using tree-sitter
+                use swissarmyhammer_treesitter::chunk::chunk_file;
+                use std::sync::Arc;
+                let chunks = chunk_file(Arc::new(parsed_file.clone()));
+                tracing::debug!(
+                    "Extracted {} chunks from {}",
+                    chunks.len(),
+                    relative_path
+                );
+
+                // 2. Write chunks to ts_chunks table
+                for chunk in &chunks {
+                    if let Some(content) = chunk.source.content() {
+                        // Extract byte range from chunk source
+                        let (start_byte, end_byte) = match &chunk.source {
+                            swissarmyhammer_treesitter::ChunkSource::Parsed {
+                                start_byte,
+                                end_byte,
+                                ..
+                            } => (*start_byte, *end_byte),
+                            _ => continue,
+                        };
+
+                        // Convert bytes to line numbers
+                        let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
+                        let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
+
+                        let symbol_path = chunk.symbol_path();
+
+                        let res = db.execute(
+                            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path)
+                             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            rusqlite::params![
+                                &relative_path,
+                                start_byte as i32,
+                                end_byte as i32,
+                                start_line,
+                                end_line,
+                                content,
+                                &symbol_path,
+                            ],
+                        );
+
+                        if let Err(e) = res {
+                            tracing::warn!(
+                                "Failed to insert chunk for {}: {}",
+                                relative_path,
+                                e
+                            );
+                        }
+                    }
+                }
+
+                // 3. Extract symbols from chunks
+                if let Err(e) = swissarmyhammer_code_context::ensure_ts_symbols(
+                    db,
+                    &relative_path,
+                ) {
+                    tracing::warn!(
+                        "Failed to extract symbols for {}: {}",
+                        relative_path,
+                        e
+                    );
+                }
+
+                // 4. Generate and write call edges
+                let source = parsed_file.source.as_str();
+                let language = match lang_registry.detect_language(&file_path) {
+                    Some(config) => config.language(),
+                    None => {
+                        tracing::debug!(
+                            "Language not detected for {}, skipping call graph extraction",
+                            relative_path
+                        );
+                        // Skip call edge generation for unsupported languages
+                        if let Err(e) = db.execute(
+                            "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
+                            rusqlite::params![&relative_path],
+                        ) {
+                            tracing::warn!(
+                                "Failed to mark {} as ts_indexed: {}",
+                                relative_path,
+                                e
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                match swissarmyhammer_code_context::generate_ts_call_edges(
+                    db,
+                    &relative_path,
+                    source,
+                    language,
+                ) {
+                    Ok(edges) => {
+                        match swissarmyhammer_code_context::write_ts_edges(db, &relative_path, &edges) {
+                            Ok(count) => {
+                                tracing::debug!("Wrote {} call edges for {}", count, relative_path);
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to write call edges for {}: {}",
+                                    relative_path,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to generate call edges for {}: {}",
+                            relative_path,
+                            e
+                        );
+                    }
+                }
+
+                // 5. Mark file as ts_indexed
+                if let Err(e) = db.execute(
+                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
+                    rusqlite::params![&relative_path],
+                ) {
+                    tracing::warn!(
+                        "Failed to mark {} as ts_indexed: {}",
+                        relative_path,
+                        e
+                    );
+                }
+            }
         }
         Err(e) => {
             tracing::warn!("Tree-sitter indexing failed: {}", e);
