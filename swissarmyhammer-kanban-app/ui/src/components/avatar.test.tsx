@@ -53,7 +53,6 @@ function makeActor(
     id,
     fields: {
       name,
-      actor_type: "human",
       ...overrides,
     },
   };
