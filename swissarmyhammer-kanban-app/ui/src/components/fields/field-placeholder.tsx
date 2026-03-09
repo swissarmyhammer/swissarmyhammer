@@ -8,7 +8,7 @@ import { getCM, Vim } from "@replit/codemirror-vim";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useKeymap } from "@/lib/keymap-context";
-import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
+import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import type { FieldDef } from "@/types/kanban";
 
 interface FieldPlaceholderProps {
@@ -122,7 +122,6 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProp
 
   const extensions = useMemo(
     () => [
-      minimalTheme,
       keymapCompartment.current.of(keymapExtension(mode)),
       EditorView.lineWrapping,
       markdown({ base: markdownLanguage, codeLanguages: languages }),
@@ -168,7 +167,7 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProp
       onBlur={() => commitAndExitRef.current()}
       onCreateEditor={handleCreateEditor}
       extensions={extensions}
-      theme="none"
+      theme={shadcnTheme}
       basicSetup={{
         lineNumbers: false,
         foldGutter: false,

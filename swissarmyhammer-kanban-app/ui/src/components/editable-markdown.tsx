@@ -9,7 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { invoke } from "@tauri-apps/api/core";
 import { useKeymap } from "@/lib/keymap-context";
-import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
+import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
@@ -288,7 +288,6 @@ export function EditableMarkdown({
 
   const extensions = useMemo(
     () => [
-      minimalTheme,
       keymapCompartment.current.of(keymapExtension(mode)),
       EditorView.lineWrapping,
       // Vim mode: intercept Escape at the DOM level to check vim state
@@ -386,7 +385,7 @@ export function EditableMarkdown({
         onBlur={commitAndExit}
         onCreateEditor={handleCreateEditor}
         extensions={extensions}
-        theme="none"
+        theme={shadcnTheme}
         basicSetup={{
           lineNumbers: false,
           foldGutter: false,
