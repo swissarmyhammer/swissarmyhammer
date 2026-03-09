@@ -32,8 +32,9 @@ fn main() {
     }
 
     // Otherwise, launch the Tauri GUI — tauri-plugin-log owns the `log` crate logger.
-    // Bridge tracing→log so all tracing::info!() calls reach tauri-plugin-log's output.
-    tracing_log::LogTracer::init().expect("Failed to init LogTracer");
+    // The `tracing` crate's "log" feature (enabled in workspace Cargo.toml) makes
+    // tracing::info!() automatically emit log::info!() records, which tauri-plugin-log
+    // picks up. No explicit bridge needed.
 
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());

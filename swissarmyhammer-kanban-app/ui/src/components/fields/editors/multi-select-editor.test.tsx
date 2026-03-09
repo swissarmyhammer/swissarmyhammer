@@ -334,7 +334,7 @@ describe("MultiSelectEditor", () => {
       expect(container.textContent).toContain("bug");
     });
 
-    it("Escape calls onCancel for tags (already committed via body updates)", async () => {
+    it("Escape commits tag slugs via onCommit", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -348,12 +348,12 @@ describe("MultiSelectEditor", () => {
         fireEvent.keyDown(cmContent, { key: "Escape" });
       });
 
-      // Tags commit via body updates, so on close we call onCancel (not onCommit)
-      expect(onCancel).toHaveBeenCalled();
-      expect(onCommit).not.toHaveBeenCalled();
+      // Tags now commit via onCommit with display names (slugs)
+      expect(onCommit).toHaveBeenCalledWith(["bug"]);
+      expect(onCancel).not.toHaveBeenCalled();
     });
 
-    it("Enter calls onCancel for tags (already committed via body updates)", async () => {
+    it("Enter commits tag slugs via onCommit", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -367,38 +367,38 @@ describe("MultiSelectEditor", () => {
         fireEvent.keyDown(cmContent, { key: "Enter" });
       });
 
-      expect(onCancel).toHaveBeenCalled();
-      expect(onCommit).not.toHaveBeenCalled();
+      expect(onCommit).toHaveBeenCalledWith(["bug"]);
+      expect(onCancel).not.toHaveBeenCalled();
     });
 
-    it("remove button dispatches body update to remove tag", async () => {
+    it("remove button removes tag from selection", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        { field: TAGS_FIELD, value: ["tag-bug", "tag-feat"], onCommit, onCancel, entity: taskEntity },
         { tag: TAG_ENTITIES },
       );
       await settle();
-      mockInvoke.mockClear();
 
-      // Find and click the remove button
-      const removeBtn = container.querySelector("button");
-      expect(removeBtn).toBeTruthy();
+      // Should have two tag pills
+      expect(container.textContent).toContain("bug");
+      expect(container.textContent).toContain("feature");
+
+      // Find and click the first remove button (×)
+      const removeButtons = Array.from(container.querySelectorAll("button")).filter(
+        (b) => b.textContent?.includes("×"),
+      );
+      expect(removeButtons.length).toBe(2);
 
       await act(async () => {
-        fireEvent.click(removeBtn!);
+        fireEvent.click(removeButtons[0]);
       });
 
-      // Should dispatch body update removing #bug
-      const call = mockInvoke.mock.calls.find(
-        (c) => c[0] === "dispatch_command" && (c[1] as Record<string, unknown>)?.cmd === "entity.update_field",
+      // After removing first tag, only one should remain
+      const remainingBtns = Array.from(container.querySelectorAll("button")).filter(
+        (b) => b.textContent?.includes("×"),
       );
-      expect(call).toBeTruthy();
-      const args = (call![1] as Record<string, unknown>).args as Record<string, unknown>;
-      expect(args.field_name).toBe("body");
-      // Body should have #bug removed
-      const newBody = args.value as string;
-      expect(newBody).not.toContain("#bug");
+      expect(remainingBtns.length).toBe(1);
     });
   });
 

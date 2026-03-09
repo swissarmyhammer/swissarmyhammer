@@ -3,7 +3,8 @@
  *
  * Works for any field that selects from a set of entities:
  * - Reference fields (assignees, depends_on): commits array of IDs
- * - Computed tag fields: commits via tag/untag task commands
+ * - Computed fields (tags): commits array of IDs — backend DeriveHandler
+ *   translates the desired state into body mutations server-side
  *
  * Uses CM6 with prefix autocomplete (e.g. `@` for actors, `#` for tags).
  * Selected items display as pills above the editor.
@@ -31,7 +32,7 @@ import type { EditorProps } from "./markdown-editor";
 
 interface MultiSelectEditorProps extends EditorProps {
   field: FieldDef;
-  /** The entity being edited — needed for tag commands. */
+  /** The entity being edited (optional, for context). */
   entity?: Entity;
 }
 
@@ -39,8 +40,6 @@ export function MultiSelectEditor({
   field,
   value,
   onCommit,
-  onCancel,
-  entity,
 }: MultiSelectEditorProps) {
   const { mode } = useKeymap();
   const { mentionableTypes } = useSchema();
@@ -51,11 +50,15 @@ export function MultiSelectEditor({
   // Determine target entity type and mention config
   const isComputedTags =
     field.type.kind === "computed" &&
-    (field.type as Record<string, unknown>).derive === "parse-body-tags";
+    field.type.derive === "parse-body-tags";
 
   const targetEntityType = isComputedTags
     ? "tag"
-    : ((field.type as Record<string, unknown>).entity as string | undefined);
+    : (field.type.entity as string | undefined);
+
+  // For computed tag fields, use display name (tag_name) as the committed value
+  // since the backend DeriveHandler works with tag slugs, not entity IDs.
+  const commitDisplayNames = isComputedTags;
 
   const mentionConfig = useMemo(
     () => mentionableTypes.find((mt) => mt.entityType === targetEntityType),
@@ -106,100 +109,39 @@ export function MultiSelectEditor({
     setTimeout(() => editorRef.current?.view?.focus(), 0);
   }, []);
 
-  // Add an item
-  const addItem = useCallback(
-    async (displayName: string) => {
-      const clean = displayName.replace(new RegExp(`^\\${prefix}`), "").trim().toLowerCase();
-      if (!clean) return;
-
-      if (isComputedTags && entity) {
-        // Tags: modify the body field directly to add #tagname
-        if (selectedIdsRef.current.some((id) => {
-          const name = idToDisplay.get(id)?.toLowerCase();
-          return name === clean || id.toLowerCase() === clean;
-        })) return;
-        try {
-          const currentBody = getStr(entity, "body") || "";
-          const newBody = currentBody ? `${currentBody} #${clean}` : `#${clean}`;
-          await invoke("dispatch_command", {
-            cmd: "entity.update_field",
-            args: { entity_type: "task", id: entity.id, field_name: "body", value: newBody },
-          });
-          // Find or create the ID for this tag
-          const id = displayToId.get(clean) ?? clean;
-          setSelectedIds((prev) => prev.includes(id) ? prev : [...prev, id]);
-        } catch (e) {
-          console.error("Failed to tag task:", e);
-        }
-      } else {
-        // Reference field: just add to selection
-        const id = displayToId.get(clean);
-        if (id && !selectedIdsRef.current.includes(id)) {
-          setSelectedIds((prev) => [...prev, id]);
-        }
-      }
-    },
-    [isComputedTags, entity, prefix, idToDisplay, displayToId],
-  );
-
-  // Remove an item
+  // Remove an item from the selection
   const removeItem = useCallback(
-    async (id: string) => {
-      if (isComputedTags && entity) {
-        const slug = idToDisplay.get(id) ?? id;
-        try {
-          const currentBody = getStr(entity, "body") || "";
-          // Remove #tagname pattern, cleaning up surrounding whitespace
-          const tagPattern = new RegExp(`\\s*#${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
-          const newBody = currentBody.replace(tagPattern, "").trim();
-          await invoke("dispatch_command", {
-            cmd: "entity.update_field",
-            args: { entity_type: "task", id: entity.id, field_name: "body", value: newBody },
-          });
-          setSelectedIds((prev) => prev.filter((x) => x !== id));
-        } catch (e) {
-          console.error("Failed to untag task:", e);
-        }
-      } else {
-        setSelectedIds((prev) => prev.filter((x) => x !== id));
-      }
+    (id: string) => {
+      setSelectedIds((prev) => prev.filter((x) => x !== id));
     },
-    [isComputedTags, entity, idToDisplay],
+    [],
   );
 
-  // Commit (for reference fields — tags commit individually).
-  // Always process any remaining text in the CM6 editor before committing,
-  // so that autocomplete selections that replaced text are captured.
+  // Commit: process any remaining text, then call onCommit with the full selection.
+  // Both reference and computed fields use the same path — the backend DeriveHandler
+  // handles body mutation for computed fields.
   const commit = useCallback(() => {
     const text = editorRef.current?.view?.state.doc.toString().trim();
     if (text) {
       const clean = text.replace(new RegExp(`^\\${prefix}`), "").trim().toLowerCase();
       if (clean) {
-        if (isComputedTags) {
-          // Tags: process remaining text through addItem (async body mutation)
-          // then exit. addItem handles dedup and invoke.
-          addItemRef.current(text).then(() => onCancel());
-          return;
-        }
-        // Reference fields: synchronously resolve display name to ID
-        const id = displayToId.get(clean);
+        const id = displayToId.get(clean) ?? (commitDisplayNames ? clean : undefined);
         if (id && !selectedIdsRef.current.includes(id)) {
           selectedIdsRef.current = [...selectedIdsRef.current, id];
         }
       }
     }
-    if (!isComputedTags) {
-      onCommit(selectedIdsRef.current);
+    // For computed tags, commit display names (slugs) instead of entity IDs
+    if (commitDisplayNames) {
+      const slugs = selectedIdsRef.current.map((id) => idToDisplay.get(id) ?? id);
+      onCommit(slugs);
     } else {
-      // Tags already committed via body field updates — just exit
-      onCancel();
+      onCommit(selectedIdsRef.current);
     }
-  }, [isComputedTags, onCommit, onCancel, prefix, displayToId]);
+  }, [onCommit, prefix, displayToId, commitDisplayNames, idToDisplay]);
 
   const commitRef = useRef(commit);
   commitRef.current = commit;
-  const addItemRef = useRef(addItem);
-  addItemRef.current = addItem;
 
   // Build async search for autocomplete
   const searchFn = useMemo(() => {

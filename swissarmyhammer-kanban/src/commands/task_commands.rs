@@ -117,6 +117,33 @@ impl Command for MoveTaskCmd {
     }
 }
 
+/// Add a tag to a task.
+///
+/// Requires both `tag` and `task` in the scope chain.
+pub struct TagTaskCmd;
+
+#[async_trait]
+impl Command for TagTaskCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.has_in_scope("tag") && ctx.has_in_scope("task")
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let task_id = ctx
+            .resolve_entity_id("task")
+            .ok_or_else(|| CommandError::MissingScope("task".into()))?;
+        let tag_name = ctx
+            .resolve_entity_id("tag")
+            .ok_or_else(|| CommandError::MissingScope("tag".into()))?;
+
+        let op = crate::task::TagTask::new(task_id, tag_name);
+
+        run_op(&op, &kanban).await
+    }
+}
+
 /// Remove a tag from a task.
 ///
 /// Requires both `tag` and `task` in the scope chain.

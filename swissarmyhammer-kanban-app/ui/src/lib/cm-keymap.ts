@@ -30,6 +30,7 @@ const FONT = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, 
  * Pass this as the `theme` prop on the CodeMirror component.
  */
 export const shadcnTheme = EditorView.theme({
+  // Editor root
   "&": {
     backgroundColor: "transparent",
     color: "var(--foreground)",
@@ -37,7 +38,7 @@ export const shadcnTheme = EditorView.theme({
   "&.cm-focused": {
     outline: "none",
   },
-  // CM6 base sets monospace + lineHeight here — override both
+  // Override view baseTheme: .cm-scroller sets fontFamily: "monospace"
   ".cm-scroller": {
     fontFamily: FONT,
     lineHeight: "inherit",
@@ -65,6 +66,7 @@ export const shadcnTheme = EditorView.theme({
   ".cm-selectionMatch": {
     backgroundColor: "var(--accent)",
   },
+  // Override view baseTheme tooltip styles
   ".cm-tooltip": {
     backgroundColor: "var(--popover)",
     color: "var(--popover-foreground)",
@@ -72,17 +74,19 @@ export const shadcnTheme = EditorView.theme({
     borderRadius: "calc(var(--radius) - 2px)",
     fontFamily: FONT,
   },
-  ".cm-tooltip-autocomplete": {
-    fontFamily: FONT,
-  },
-  ".cm-tooltip-autocomplete ul li": {
-    fontFamily: FONT,
+  // Override autocomplete baseTheme: .cm-tooltip.cm-tooltip-autocomplete > ul
+  // sets fontFamily: "monospace" — must match the compound selector structure
+  ".cm-tooltip.cm-tooltip-autocomplete": {
+    "& > ul": {
+      fontFamily: FONT,
+    },
   },
   ".cm-tooltip-autocomplete ul li[aria-selected]": {
     backgroundColor: "var(--accent)",
     color: "var(--accent-foreground)",
   },
-  ".cm-completionLabel, .cm-completionDetail": {
+  // Override autocomplete baseTheme: .cm-tooltip.cm-completionInfo
+  ".cm-tooltip.cm-completionInfo": {
     fontFamily: FONT,
   },
 });
