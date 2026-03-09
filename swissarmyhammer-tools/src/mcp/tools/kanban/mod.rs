@@ -731,7 +731,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             processor.process(&DeleteActor::new(id), ctx).await
         }
-        (Verb::List, Noun::Actors) => processor.process(&ListActors::default(), ctx).await,
+        (Verb::List, Noun::Actors) => processor.process(&ListActors, ctx).await,
 
         // Tag operations (board-level)
         (Verb::Add, Noun::Tag) => {
