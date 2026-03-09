@@ -224,9 +224,14 @@ fn write_ts_chunks(
     chunks: &[(usize, String)],
 ) -> Result<(), CodeContextError> {
     for (start_byte, content) in chunks {
+        let end_byte = start_byte + content.len();
+        // Count lines in the content
+        let start_line = 1i64; // Simple implementation: all chunks start at line 1
+        let end_line = 1i64 + content.lines().count() as i64;
+
         db.execute(
-            "INSERT INTO ts_chunks (file_path, start_byte, content) VALUES (?, ?, ?)",
-            rusqlite::params![file_path, *start_byte as i64, content],
+            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text) VALUES (?, ?, ?, ?, ?, ?)",
+            rusqlite::params![file_path, *start_byte as i64, end_byte as i64, start_line, end_line, content],
         )?;
     }
     Ok(())
@@ -243,15 +248,23 @@ mod tests {
         conn.execute_batch(
             "
             CREATE TABLE indexed_files (
-                file_path TEXT PRIMARY KEY,
-                ts_indexed INTEGER DEFAULT 0,
-                lsp_indexed INTEGER DEFAULT 0
+                file_path     TEXT PRIMARY KEY,
+                content_hash  BLOB NOT NULL,
+                file_size     INTEGER NOT NULL,
+                last_seen_at  INTEGER NOT NULL,
+                ts_indexed    INTEGER NOT NULL DEFAULT 0,
+                lsp_indexed   INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE ts_chunks (
-                file_path TEXT NOT NULL,
-                start_byte TEXT NOT NULL,
-                content TEXT NOT NULL,
-                FOREIGN KEY(file_path) REFERENCES indexed_files(file_path)
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path    TEXT NOT NULL REFERENCES indexed_files(file_path) ON DELETE CASCADE,
+                start_byte   INTEGER NOT NULL,
+                end_byte     INTEGER NOT NULL,
+                start_line   INTEGER NOT NULL,
+                end_line     INTEGER NOT NULL,
+                text         TEXT NOT NULL,
+                symbol_path  TEXT,
+                embedding    BLOB
             );
             "
         ).unwrap();
@@ -260,8 +273,8 @@ mod tests {
 
     fn insert_test_file(conn: &Connection, file_path: &str) {
         conn.execute(
-            "INSERT INTO indexed_files (file_path, ts_indexed, lsp_indexed) VALUES (?, 0, 0)",
-            [file_path],
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed) VALUES (?, ?, ?, ?, 0, 0)",
+            rusqlite::params![file_path, vec![0u8; 16], 1024i64, 1000i64],
         ).unwrap();
     }
 

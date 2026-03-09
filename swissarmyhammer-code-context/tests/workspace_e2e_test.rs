@@ -113,19 +113,23 @@ fn test_workspace_startup_discovers_files() {
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
     assert!(ws.is_leader(), "First process should be leader");
 
-    // Run startup_cleanup to discover files
+    // startup_cleanup was already called automatically in workspace.open()
+    // Call it again to verify it handles existing files correctly
     let stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("startup_cleanup failed");
 
-    // Should discover 4 files: Cargo.toml, main.rs, lib.rs, utils.rs
+    // Files should be unchanged since they were already discovered in workspace.open()
     assert_eq!(
-        stats.files_added, 4,
-        "Expected 4 files to be discovered, got {}",
-        stats.files_added
+        stats.files_added, 0,
+        "startup_cleanup should have been called automatically in workspace.open()"
     );
     assert_eq!(stats.files_removed, 0);
     assert_eq!(stats.files_dirty, 0);
-    assert_eq!(stats.files_unchanged, 0);
+    assert_eq!(
+        stats.files_unchanged, 4,
+        "Expected 4 unchanged files: Cargo.toml, main.rs, lib.rs, utils.rs, got {}",
+        stats.files_unchanged
+    );
 
     // Verify get_status returns the correct counts
     let status = swissarmyhammer_code_context::get_status(ws.db())
@@ -149,10 +153,10 @@ fn test_startup_cleanup_idempotent() {
 
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
 
-    // First run: discovers files
+    // First run: files already discovered by workspace.open()
     let stats1 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("First startup_cleanup failed");
-    assert_eq!(stats1.files_added, 4);
+    assert_eq!(stats1.files_unchanged, 4, "Files should be unchanged after workspace.open() auto-discovered them");
 
     // Second run: all files should be unchanged
     let stats2 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
@@ -186,10 +190,10 @@ fn test_startup_cleanup_detects_modifications() {
 
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
 
-    // First run: discover files
+    // First run: files already discovered by workspace.open()
     let stats1 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("First startup_cleanup failed");
-    assert_eq!(stats1.files_added, 4);
+    assert_eq!(stats1.files_unchanged, 4, "Files should be unchanged after workspace.open() auto-discovered them");
 
     // Modify one file
     let main_rs_path = root.join("src/main.rs");
@@ -243,10 +247,10 @@ fn test_startup_cleanup_detects_deletions() {
 
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
 
-    // First run: discover files
+    // First run: files already discovered by workspace.open()
     let stats1 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("First startup_cleanup failed");
-    assert_eq!(stats1.files_added, 4);
+    assert_eq!(stats1.files_unchanged, 4, "Files should be unchanged after workspace.open() auto-discovered them");
 
     // Delete one file
     std::fs::remove_file(root.join("src/utils.rs")).unwrap();
@@ -283,10 +287,10 @@ fn test_startup_cleanup_detects_new_files() {
 
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
 
-    // First run: discover files
+    // First run: files already discovered by workspace.open()
     let stats1 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("First startup_cleanup failed");
-    assert_eq!(stats1.files_added, 4);
+    assert_eq!(stats1.files_unchanged, 4, "Files should be unchanged after workspace.open() auto-discovered them");
 
     // Add a new file
     let new_module = r#"pub fn new_function() -> String {

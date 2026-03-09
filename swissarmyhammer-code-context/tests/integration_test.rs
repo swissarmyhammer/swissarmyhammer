@@ -222,9 +222,9 @@ fn create_test_project() -> tempfile::TempDir {
 
 /// Populate the database with chunks and call edges for all source files.
 fn populate_index(conn: &Connection, workspace_root: &Path) {
-    // Step 1: Run startup_cleanup to insert indexed_files rows.
-    let stats = startup_cleanup(conn, workspace_root).unwrap();
-    assert!(stats.files_added >= 3, "expected at least 3 files added, got {}", stats.files_added);
+    // Note: startup_cleanup is now called automatically in CodeContextWorkspace::open(),
+    // so we just verify that files are in the database. The workspace.open() call
+    // already populated indexed_files with the discovered source files.
 
     // Step 2: Insert ts_chunks with accurate data from tree-sitter parsing.
     let files = [
@@ -793,14 +793,17 @@ fn test_startup_cleanup_populates_indexed_files() {
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     let conn = ws.db();
 
+    // After workspace.open(), startup_cleanup has already been called automatically,
+    // so files are in the database. Calling again shows them as unchanged.
     let stats = startup_cleanup(conn, dir.path()).unwrap();
+    assert_eq!(stats.files_added, 0, "startup_cleanup already ran in workspace.open()");
     assert!(
-        stats.files_added >= 3,
-        "expected at least 3 files added, got {}",
-        stats.files_added
+        stats.files_unchanged >= 3,
+        "expected at least 3 files unchanged, got {}",
+        stats.files_unchanged
     );
 
-    // Running again should show them unchanged.
+    // Running a third time should still show them unchanged.
     let stats2 = startup_cleanup(conn, dir.path()).unwrap();
     assert_eq!(stats2.files_added, 0);
     assert!(stats2.files_unchanged >= 3);
@@ -948,11 +951,13 @@ fn test_symbol_operations_on_real_repo() {
     let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
     let conn = ws.db();
 
-    // Discover files via startup_cleanup
+    // Verify files were discovered by workspace.open() (which calls startup_cleanup automatically)
     let cleanup_stats = startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
     assert!(
-        cleanup_stats.files_added > 0,
-        "Expected files to be discovered"
+        cleanup_stats.files_unchanged > 0 || cleanup_stats.files_added > 0,
+        "Expected files to be discovered (files_added={}, files_unchanged={})",
+        cleanup_stats.files_added,
+        cleanup_stats.files_unchanged
     );
 
     // Parse each .rs file and populate chunks
@@ -1672,15 +1677,17 @@ fn test_collect_lsp_symbols_and_persist() {
         },
     ];
 
-    // First, add the file to indexed_files (required for foreign key constraint)
+    // First, add a file to indexed_files (required for foreign key constraint)
+    // Use a non-existent file to avoid conflicts with files already discovered by startup_cleanup
+    let test_file = "src/test_symbols.rs";
     conn.execute(
         "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
-         VALUES ('src/lib.rs', X'00112233', 1024, 1000)",
-        [],
+         VALUES (?, X'00112233', 1024, 1000)",
+        [test_file],
     ).unwrap();
 
     // Collect and persist symbols
-    let symbol_count = collect_and_persist_symbols(conn, "src/lib.rs", &symbols).unwrap();
+    let symbol_count = collect_and_persist_symbols(conn, test_file, &symbols).unwrap();
 
     // Verify symbols were persisted
     assert_eq!(symbol_count, 3, "Expected 3 symbols (greet, Config, Config::new)");
@@ -1690,7 +1697,7 @@ fn test_collect_lsp_symbols_and_persist() {
     println!("Status after LSP collection: lsp_indexed={}", status.lsp_indexed_files);
 
     // Verify we can query the symbols
-    let results = list_symbols(conn, "src/lib.rs").unwrap();
+    let results = list_symbols(conn, test_file).unwrap();
 
     // Should have symbols from LSP
     let lsp_symbols: Vec<_> = results.iter()
