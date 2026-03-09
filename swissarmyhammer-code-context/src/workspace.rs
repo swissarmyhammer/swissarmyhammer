@@ -9,7 +9,6 @@ use swissarmyhammer_leader_election::{ElectionConfig, ElectionError, LeaderElect
 
 use crate::db;
 use crate::error::CodeContextError;
-use crate::indexing::{spawn_indexing_worker, IndexingConfig};
 
 /// Directory name for the code context index
 const CONTEXT_DIR: &str = ".code-context";
@@ -101,13 +100,10 @@ impl CodeContextWorkspace {
                 // This must happen before spawning the indexing worker so it has files to process
                 crate::startup_cleanup(&db, workspace_root)?;
 
-                // Spawn background indexing worker thread in the leader process
-                // The worker runs in parallel and updates indexed flags as it completes files
-                spawn_indexing_worker(
-                    workspace_root.to_path_buf(),
-                    db_path,
-                    IndexingConfig::default(),
-                );
+                // NOTE: The basic indexing worker (spawn_indexing_worker) is intentionally
+                // NOT started here. It produces whole-file dumps without semantic chunking.
+                // Real tree-sitter indexing with chunks, symbols, and call edges is handled
+                // by index_discovered_files_async in the MCP server startup path.
 
                 Ok(Self {
                     mode: WorkspaceMode::Leader { db, _guard: guard },

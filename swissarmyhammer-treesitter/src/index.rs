@@ -760,7 +760,7 @@ impl IndexContext {
             self.last_status.current_file = Some(path.clone());
 
             let Some(lang_config) = registry.detect_language(path) else {
-                tracing::debug!(path = %path.display(), reason = "unsupported", "Skipping file");
+                tracing::trace!(path = %path.display(), reason = "unsupported", "Skipping file");
                 self.last_status.files_skipped += 1;
                 self.notify(IndexAction::FileSkipped {
                     path: path.clone(),
@@ -769,14 +769,14 @@ impl IndexContext {
                 continue;
             };
 
-            tracing::debug!(path = %path.display(), "Parsing file");
+            tracing::trace!(path = %path.display(), "Parsing file");
             self.notify(IndexAction::FileStarted { path: path.clone() });
 
             match self.parse_file_internal(path, lang_config) {
                 Ok(parsed) => {
                     self.files.insert(path.clone(), Arc::new(parsed));
                     self.last_status.files_parsed += 1;
-                    tracing::debug!(path = %path.display(), "Parsed file");
+                    tracing::trace!(path = %path.display(), "Parsed file");
                     self.notify(IndexAction::FileComplete { path: path.clone() });
                 }
                 Err(e) => {
@@ -844,7 +844,7 @@ impl IndexContext {
     /// files_total and files_skipped. If false, only increments files_skipped
     /// (used for unchanged files that were already counted in a previous index).
     fn handle_file_skip(&mut self, path: &Path, reason: SkipReason, count_as_new: bool) {
-        tracing::debug!(path = %path.display(), reason = ?reason, "Skipping file");
+        tracing::trace!(path = %path.display(), reason = ?reason, "Skipping file");
         self.last_status.current_file = Some(path.to_path_buf());
         if count_as_new {
             self.record_skipped_file();

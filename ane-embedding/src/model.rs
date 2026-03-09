@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use model_embedding::{EmbeddingResult, TextEmbedder};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{info, trace};
 
 use crate::coreml::CoreMLModel;
 use crate::error::EmbeddingError;
@@ -176,7 +176,7 @@ impl AneEmbeddingModel {
         }
 
         let total = start.elapsed();
-        debug!(
+        trace!(
             tokens = token_count,
             seq_len = seq_len,
             lock_us = t_lock.as_micros(),

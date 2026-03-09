@@ -115,7 +115,10 @@ fn run_indexing_worker(
             // Write results back to database
             for (file_path, chunk_count) in results {
                 if chunk_count == 0 {
-                    debug!("Skipping {} - no chunks extracted", file_path);
+                    debug!("Skipping {} - no chunks extracted, marking indexed to avoid retry loop", file_path);
+                    if let Err(e) = mark_ts_indexed(&db, &file_path) {
+                        warn!("Failed to mark {} as indexed: {}", file_path, e);
+                    }
                     continue;
                 }
 

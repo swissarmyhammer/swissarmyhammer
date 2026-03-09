@@ -28,10 +28,16 @@ pub struct StatusReport {
     pub lsp_indexed_percent: f64,
     /// Total number of tree-sitter chunks.
     pub ts_chunk_count: u64,
+    /// Number of files that actually have chunks in ts_chunks (honest metric).
+    pub files_with_chunks: u64,
+    /// Number of files that have symbols in lsp_symbols.
+    pub files_with_symbols: u64,
     /// Total number of LSP symbols.
     pub lsp_symbol_count: u64,
     /// Total number of call edges (both LSP and tree-sitter sourced).
     pub call_edge_count: u64,
+    /// Number of files still waiting for indexing (ts_indexed=0).
+    pub dirty_files: u64,
     /// Suggested next step.
     pub hint: &'static str,
 }
@@ -79,11 +85,29 @@ pub fn get_status(conn: &Connection) -> Result<StatusReport, CodeContextError> {
     let ts_chunk_count: u64 =
         conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))?;
 
+    let files_with_chunks: u64 = conn.query_row(
+        "SELECT COUNT(DISTINCT file_path) FROM ts_chunks",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let files_with_symbols: u64 = conn.query_row(
+        "SELECT COUNT(DISTINCT file_path) FROM lsp_symbols",
+        [],
+        |r| r.get(0),
+    )?;
+
     let lsp_symbol_count: u64 =
         conn.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0))?;
 
     let call_edge_count: u64 =
         conn.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0))?;
+
+    let dirty_files: u64 = conn.query_row(
+        "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 0",
+        [],
+        |r| r.get(0),
+    )?;
 
     let hint = crate::hints::hint_for_operation("get_status");
 
@@ -94,8 +118,11 @@ pub fn get_status(conn: &Connection) -> Result<StatusReport, CodeContextError> {
         ts_indexed_percent,
         lsp_indexed_percent,
         ts_chunk_count,
+        files_with_chunks,
+        files_with_symbols,
         lsp_symbol_count,
         call_edge_count,
+        dirty_files,
         hint,
     })
 }
@@ -270,8 +297,11 @@ mod tests {
         assert_eq!(report.ts_indexed_percent, 0.0);
         assert_eq!(report.lsp_indexed_percent, 0.0);
         assert_eq!(report.ts_chunk_count, 0);
+        assert_eq!(report.files_with_chunks, 0);
+        assert_eq!(report.files_with_symbols, 0);
         assert_eq!(report.lsp_symbol_count, 0);
         assert_eq!(report.call_edge_count, 0);
+        assert_eq!(report.dirty_files, 0);
         assert!(!report.hint.is_empty());
     }
 
@@ -293,8 +323,11 @@ mod tests {
         assert!((report.ts_indexed_percent - 66.666).abs() < 1.0);
         assert!((report.lsp_indexed_percent - 33.333).abs() < 1.0);
         assert_eq!(report.ts_chunk_count, 2);
+        assert_eq!(report.files_with_chunks, 2);
+        assert_eq!(report.files_with_symbols, 1);
         assert_eq!(report.lsp_symbol_count, 1);
         assert_eq!(report.call_edge_count, 0);
+        assert_eq!(report.dirty_files, 1);
     }
 
     #[test]

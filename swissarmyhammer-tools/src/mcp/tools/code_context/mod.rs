@@ -623,12 +623,30 @@ fn execute_get_blastradius(
 ///
 /// This runs asynchronously after startup_cleanup discovers files.
 /// Scans files, extracts chunks, and writes results to code-context DB.
+///
+/// Opens a direct read-write SQLite connection instead of going through
+/// CodeContextWorkspace::open (which would join as reader if another process
+/// is already leader, resulting in a read-only connection that silently fails writes).
 pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
-    // Open code-context workspace to access the database
-    let _ws = match CodeContextWorkspace::open(workspace_root) {
-        Ok(w) => w,
+    // Open a direct read-write connection to the DB, bypassing leader election.
+    // The leader lock is held by whoever opened the workspace first (usually the CLI).
+    // SQLite WAL mode allows concurrent writers with serialization.
+    let db_path = workspace_root.join(".code-context").join("index.db");
+    if !db_path.exists() {
+        tracing::info!("code-context: database not found at {}, skipping tree-sitter indexing", db_path.display());
+        return;
+    }
+
+    let db = match rusqlite::Connection::open(&db_path) {
+        Ok(conn) => {
+            if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;") {
+                tracing::warn!("code-context: failed to configure DB connection: {}", e);
+                return;
+            }
+            conn
+        }
         Err(e) => {
-            tracing::warn!("Failed to open code-context workspace for indexing: {}", e);
+            tracing::warn!("code-context: failed to open DB for tree-sitter indexing: {}", e);
             return;
         }
     };
@@ -639,17 +657,16 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
     // Run the scan to parse files and extract chunks
     match ts_index.scan().await {
         Ok(scan_result) => {
-            tracing::debug!(
-                "Tree-sitter indexing complete: parsed {} files in {}ms",
+            tracing::info!(
+                "code-context: tree-sitter parsed {} files in {}ms",
                 scan_result.files_parsed,
                 scan_result.total_time_ms
             );
 
             // Extract parsed files from tree-sitter index
             let file_paths = ts_index.files();
-            tracing::debug!("Extracted {} files from tree-sitter index", file_paths.len());
+            tracing::info!("code-context: extracting chunks from {} parsed files", file_paths.len());
 
-            let db = _ws.db();
             let lang_registry = swissarmyhammer_treesitter::LanguageRegistry::global();
 
             // For each parsed file, extract chunks and write to code-context DB
@@ -668,6 +685,14 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
                     }
                 };
 
+                // 0. Clear any existing chunks for this file (from basic indexer)
+                if let Err(e) = db.execute(
+                    "DELETE FROM ts_chunks WHERE file_path = ?",
+                    rusqlite::params![&relative_path],
+                ) {
+                    tracing::warn!("Failed to clear old chunks for {}: {}", relative_path, e);
+                }
+
                 // 1. Extract semantic chunks using tree-sitter
                 use swissarmyhammer_treesitter::chunk::chunk_file;
                 use std::sync::Arc;
@@ -679,6 +704,7 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
                 );
 
                 // 2. Write chunks to ts_chunks table
+                let mut chunks_written = 0u64;
                 for chunk in &chunks {
                     if let Some(content) = chunk.source.content() {
                         // Extract byte range from chunk source
@@ -711,19 +737,28 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
                             ],
                         );
 
-                        if let Err(e) = res {
-                            tracing::warn!(
-                                "Failed to insert chunk for {}: {}",
-                                relative_path,
-                                e
-                            );
+                        match res {
+                            Ok(_) => chunks_written += 1,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to insert chunk for {}: {}",
+                                    relative_path,
+                                    e
+                                );
+                            }
                         }
                     }
                 }
 
+                tracing::debug!(
+                    "Wrote {} chunks for {}",
+                    chunks_written,
+                    relative_path
+                );
+
                 // 3. Extract symbols from chunks
                 if let Err(e) = swissarmyhammer_code_context::ensure_ts_symbols(
-                    db,
+                    &db,
                     &relative_path,
                 ) {
                     tracing::warn!(
@@ -758,13 +793,13 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
                 };
 
                 match swissarmyhammer_code_context::generate_ts_call_edges(
-                    db,
+                    &db,
                     &relative_path,
                     source,
                     language,
                 ) {
                     Ok(edges) => {
-                        match swissarmyhammer_code_context::write_ts_edges(db, &relative_path, &edges) {
+                        match swissarmyhammer_code_context::write_ts_edges(&db, &relative_path, &edges) {
                             Ok(count) => {
                                 tracing::debug!("Wrote {} call edges for {}", count, relative_path);
                             }
@@ -798,9 +833,18 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
                     );
                 }
             }
+
+            // Summary
+            let chunk_count: i64 = db.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0)).unwrap_or(0);
+            let symbol_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0)).unwrap_or(0);
+            let edge_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0)).unwrap_or(0);
+            tracing::info!(
+                "code-context: indexing complete — {} chunks, {} symbols, {} call edges",
+                chunk_count, symbol_count, edge_count
+            );
         }
         Err(e) => {
-            tracing::warn!("Tree-sitter indexing failed: {}", e);
+            tracing::warn!("code-context: tree-sitter scan failed: {}", e);
         }
     }
 }

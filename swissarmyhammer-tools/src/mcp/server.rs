@@ -293,13 +293,32 @@ impl McpServer {
 
         tokio::spawn(async move {
             use super::tools::code_context::index_discovered_files_async;
+            use swissarmyhammer_code_context::CodeContextWorkspace;
 
-            // index_discovered_files_async opens CodeContextWorkspace internally,
-            // which triggers: DB creation, schema setup, startup_cleanup (file discovery),
-            // and spawn_indexing_worker (background basic indexer).
-            // Then it runs full tree-sitter parsing with symbols and call edges.
+            // 1. Open the workspace first — this creates .code-context/index.db,
+            //    sets up the schema, runs startup_cleanup (file discovery + hashing),
+            //    and acquires the leader lock.
             tracing::info!(
-                "code-context: starting file discovery and indexing for {}",
+                "code-context: opening workspace for {}",
+                workspace_root.display()
+            );
+            let _ws = match CodeContextWorkspace::open(&workspace_root) {
+                Ok(ws) => {
+                    tracing::info!(
+                        "code-context: workspace opened as {} with DB ready",
+                        if ws.is_leader() { "leader" } else { "reader" }
+                    );
+                    ws
+                }
+                Err(e) => {
+                    tracing::warn!("code-context: failed to open workspace: {}", e);
+                    return;
+                }
+            };
+
+            // 2. Now the DB exists and has files discovered. Run tree-sitter indexing.
+            tracing::info!(
+                "code-context: starting tree-sitter indexing for {}",
                 workspace_root.display()
             );
             index_discovered_files_async(&workspace_root).await;
