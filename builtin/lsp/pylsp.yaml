@@ -12,3 +12,11 @@ initialization_options: null
 startup_timeout_secs: 30
 health_check_interval_secs: 60
 install_hint: "Install python-lsp-server: pip install python-lsp-server"
+
+# Doctor checks for this LSP
+doctor:
+  enabled: true
+  description: "Validates pylsp installation and availability"
+  check_installed: true
+  check_version: false
+  expected_output_pattern: null
