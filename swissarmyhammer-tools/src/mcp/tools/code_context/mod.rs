@@ -621,8 +621,17 @@ fn execute_get_blastradius(
 /// Trigger tree-sitter indexing on discovered files.
 ///
 /// This runs asynchronously after startup_cleanup discovers files.
-/// Scans files and updates ts_indexed flags in the code-context DB.
+/// Scans files, extracts chunks, and writes results to code-context DB.
 async fn index_discovered_files_async(workspace_root: &Path) {
+    // Open code-context workspace to access the database
+    let ws = match CodeContextWorkspace::open(workspace_root) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!("Failed to open code-context workspace for indexing: {}", e);
+            return;
+        }
+    };
+
     // Create a tree-sitter index context for the workspace
     let mut ts_index = IndexContext::new(workspace_root.to_path_buf());
 
@@ -634,6 +643,23 @@ async fn index_discovered_files_async(workspace_root: &Path) {
                 scan_result.files_parsed,
                 scan_result.total_time_ms
             );
+
+            // Extract parsed files from tree-sitter index
+            let files = ts_index.files();
+            tracing::debug!("Extracted {} files from tree-sitter index", files.len());
+
+            // TODO: For each parsed file, extract symbols and write to code-context DB:
+            // 1. Get the ParsedFile for each path in files
+            // 2. Extract symbols using ensure_ts_symbols()
+            // 3. Generate call edges using generate_ts_call_edges()
+            // 4. Write edges using write_ts_edges()
+            // 5. Mark file as ts_indexed using appropriate DB update
+            //
+            // This requires:
+            // - Opening each ParsedFile from ts_index
+            // - Using code-context functions to write results
+            // - Handling database transactions to avoid corruption
+            // - Reporting progress back to get_status queries
         }
         Err(e) => {
             tracing::warn!("Tree-sitter indexing failed: {}", e);
