@@ -575,6 +575,20 @@ pub async fn set_focus(state: State<'_, AppState>, scope_chain: Vec<String>) -> 
 }
 
 // ---------------------------------------------------------------------------
+// log_command — lightweight log entry for commands that execute in the frontend
+// ---------------------------------------------------------------------------
+
+/// Log a command that was executed locally in the frontend.
+///
+/// Commands with a local `execute` handler never reach `dispatch_command`,
+/// so the frontend calls this to ensure every command appears in the
+/// unified Rust log.
+#[tauri::command]
+pub async fn log_command(cmd: String, target: Option<String>) {
+    tracing::info!(cmd = %cmd, target = ?target, "command");
+}
+
+// ---------------------------------------------------------------------------
 // dispatch_command — unified command dispatcher via Command trait
 // ---------------------------------------------------------------------------
 
@@ -602,7 +616,7 @@ pub async fn dispatch_command(
         target = ?target,
         args = ?args,
         scope_chain = ?scope_chain,
-        "dispatch_command"
+        "command"
     );
 
     // Resolve scope chain: explicit > stored focus

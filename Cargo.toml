@@ -83,6 +83,7 @@ serde_json = "1"
 anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
+tracing-log = "0.2"
 test-log = {version = "0.2.18" , features = ["trace"]}
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"

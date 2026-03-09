@@ -26,9 +26,11 @@ dirs = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-log = { workspace = true }
 tracing-subscriber = { workspace = true }
 notify = { workspace = true }
 sha2 = { workspace = true }
+log = "0.4"
 tauri-plugin-log = "2.8.0"
 tauri-plugin-window-state = "2.4.1"
 whoami = "1"

@@ -179,17 +179,16 @@ export function useAvailableCommands(): CommandAtDepth[] {
  */
 export async function dispatchCommand(cmd: CommandDef): Promise<void> {
   if (cmd.execute) {
-    console.log(`[cmd] ${cmd.id}`, cmd.target ? `target=${cmd.target}` : "");
+    // Log to Rust backend so every command appears in the unified log
+    Promise.resolve(invoke("log_command", { cmd: cmd.id, target: cmd.target })).catch(() => {});
     await cmd.execute();
   } else {
-    // Dispatch to Rust by command ID
-    console.log(`[cmd] ${cmd.id}`, { target: cmd.target, args: cmd.args });
-    const result = await invoke("dispatch_command", {
+    // Dispatch to Rust by command ID (dispatch_command logs internally)
+    await invoke("dispatch_command", {
       cmd: cmd.id,
       target: cmd.target,
       args: cmd.args,
     });
-    console.log(`[cmd] ${cmd.id} done`, result);
   }
 }
 

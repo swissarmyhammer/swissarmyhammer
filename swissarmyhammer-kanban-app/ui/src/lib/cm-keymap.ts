@@ -72,9 +72,18 @@ export const shadcnTheme = EditorView.theme({
     borderRadius: "calc(var(--radius) - 2px)",
     fontFamily: FONT,
   },
+  ".cm-tooltip-autocomplete": {
+    fontFamily: FONT,
+  },
+  ".cm-tooltip-autocomplete ul li": {
+    fontFamily: FONT,
+  },
   ".cm-tooltip-autocomplete ul li[aria-selected]": {
     backgroundColor: "var(--accent)",
     color: "var(--accent-foreground)",
+  },
+  ".cm-completionLabel, .cm-completionDetail": {
+    fontFamily: FONT,
   },
 });
 

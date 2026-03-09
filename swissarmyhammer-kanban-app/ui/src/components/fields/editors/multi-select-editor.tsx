@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap } from "@codemirror/view";
+import { Prec } from "@codemirror/state";
 import { invoke } from "@tauri-apps/api/core";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { useKeymap } from "@/lib/keymap-context";
@@ -229,26 +230,30 @@ export function MultiSelectEditor({
       exts.push(createMentionAutocomplete([source]));
     }
 
+    // Prec.highest ensures our Enter/Escape fire before basicSetup's
+    // insertNewline and before any other default keymaps.
+    // CM6 autocomplete uses Prec.highest too, so when the completion
+    // menu is open, autocomplete's Enter handler runs first (it checks
+    // for an active completion and only handles Enter if one exists).
     exts.push(
-      keymap.of([
-        {
-          key: "Enter",
-          run: () => {
-            // When autocomplete is open, CM6 intercepts Enter before this
-            // keymap fires — so we only reach here when no completion is active.
-            // Add any remaining text, then save and exit.
-            commitRef.current();
-            return true;
+      Prec.highest(
+        keymap.of([
+          {
+            key: "Enter",
+            run: () => {
+              commitRef.current();
+              return true;
+            },
           },
-        },
-        {
-          key: "Escape",
-          run: () => {
-            commitRef.current();
-            return true;
+          {
+            key: "Escape",
+            run: () => {
+              commitRef.current();
+              return true;
+            },
           },
-        },
-      ]),
+        ]),
+      ),
     );
 
     return exts;
