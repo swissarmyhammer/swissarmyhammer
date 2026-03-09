@@ -616,6 +616,13 @@ fn execute_get_blastradius(
 /// Returns a health report with file counts, indexing progress, and chunk/edge counts.
 fn execute_get_status(context: &ToolContext) -> Result<CallToolResult, McpError> {
     let ws = open_workspace(context)?;
+
+    // Leader: trigger startup cleanup on first access to populate the index from disk
+    if ws.is_leader() {
+        let _ = swissarmyhammer_code_context::startup_cleanup(ws.db(), ws.workspace_root())
+            .map_err(context_err);
+    }
+
     let result = swissarmyhammer_code_context::get_status(ws.db()).map_err(context_err)?;
     json_result(&result)
 }
