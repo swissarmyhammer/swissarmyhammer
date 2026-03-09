@@ -16,8 +16,7 @@ pub struct AddTaskCmd;
 #[async_trait]
 impl Command for AddTaskCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.has_in_scope("column")
-            || ctx.arg("column").and_then(|v| v.as_str()).is_some()
+        ctx.has_in_scope("column") || ctx.arg("column").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -58,8 +57,7 @@ pub struct MoveTaskCmd;
 #[async_trait]
 impl Command for MoveTaskCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.has_in_scope("task")
-            || ctx.arg("id").and_then(|v| v.as_str()).is_some()
+        ctx.has_in_scope("task") || ctx.arg("id").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -154,8 +152,7 @@ pub struct DeleteTaskCmd;
 #[async_trait]
 impl Command for DeleteTaskCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.has_in_scope("task")
-            || ctx.arg("id").and_then(|v| v.as_str()).is_some()
+        ctx.has_in_scope("task") || ctx.arg("id").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {

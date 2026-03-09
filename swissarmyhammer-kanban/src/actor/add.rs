@@ -22,11 +22,7 @@ pub(crate) fn actor_entity_to_json(entity: &Entity) -> Value {
 ///
 /// Actors are stored as separate files in `.kanban/actors/`.
 /// Use `ensure: true` for idempotent registration (returns existing actor if found).
-#[operation(
-    verb = "add",
-    noun = "actor",
-    description = "Add a new actor"
-)]
+#[operation(verb = "add", noun = "actor", description = "Add a new actor")]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddActor {
     /// The actor ID (slug)

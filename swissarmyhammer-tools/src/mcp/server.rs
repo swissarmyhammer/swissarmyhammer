@@ -980,16 +980,17 @@ fn slugify(name: &str) -> String {
 
 /// Curated palette for agent actors (cooler tones to distinguish from human actors).
 const AGENT_COLORS: &[&str] = &[
-    "5a67d8", "3182ce", "319795", "2f855a", "805ad5",
-    "6b46c1", "2b6cb0", "2c7a7b", "4c51bf", "38a169",
+    "5a67d8", "3182ce", "319795", "2f855a", "805ad5", "6b46c1", "2b6cb0", "2c7a7b", "4c51bf",
+    "38a169",
 ];
 
 /// Derive a deterministic hex color for an agent actor.
 fn agent_deterministic_color(id: &str) -> String {
-    let hash: u64 = id.bytes().fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    let hash: u64 = id
+        .bytes()
+        .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
     AGENT_COLORS[(hash as usize) % AGENT_COLORS.len()].to_string()
 }
-
 
 impl ServerHandler for McpServer {
     async fn initialize(
@@ -1179,5 +1180,4 @@ mod tests {
         assert_eq!(c1, c2);
         assert_eq!(c1.len(), 6);
     }
-
 }

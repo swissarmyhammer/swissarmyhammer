@@ -2516,7 +2516,9 @@ mod tests {
         let data = parse_json(&result);
 
         // Task should be auto-assigned to the actor
-        let assignees = data["assignees"].as_array().expect("assignees should be an array");
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
         assert_eq!(assignees.len(), 1);
         assert_eq!(assignees[0], "assistant");
     }
@@ -2539,7 +2541,9 @@ mod tests {
         let data = parse_json(&result);
 
         // Task should have no assignees
-        let assignees = data["assignees"].as_array().expect("assignees should be an array");
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
         assert!(assignees.is_empty());
     }
 
@@ -2573,7 +2577,9 @@ mod tests {
         let data = parse_json(&result);
 
         // Explicit assignees should be used, not auto-assigned actor
-        let assignees = data["assignees"].as_array().expect("assignees should be an array");
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
         assert_eq!(assignees.len(), 1);
         assert_eq!(assignees[0], "alice");
     }

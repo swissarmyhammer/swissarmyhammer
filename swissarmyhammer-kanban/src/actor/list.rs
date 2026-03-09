@@ -8,11 +8,7 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all actors
-#[operation(
-    verb = "list",
-    noun = "actors",
-    description = "List all actors"
-)]
+#[operation(verb = "list", noun = "actors", description = "List all actors")]
 #[derive(Debug, Default, Deserialize)]
 pub struct ListActors;
 
@@ -30,10 +26,7 @@ impl Execute<KanbanContext, KanbanError> for ListActors {
             let ectx = ctx.entity_context().await?;
             let all_actors = ectx.list("actor").await?;
 
-            let actors_json: Vec<Value> = all_actors
-                .iter()
-                .map(actor_entity_to_json)
-                .collect();
+            let actors_json: Vec<Value> = all_actors.iter().map(actor_entity_to_json).collect();
 
             Ok(serde_json::json!({
                 "actors": actors_json,
@@ -101,5 +94,4 @@ mod tests {
 
         assert_eq!(result["count"], 2);
     }
-
 }

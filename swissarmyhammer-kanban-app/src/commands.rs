@@ -312,10 +312,7 @@ pub async fn search_mentions(
         .map(|f| f.as_str())
         .unwrap_or("name");
 
-    let entities = ectx
-        .list(&entity_type)
-        .await
-        .map_err(|e| e.to_string())?;
+    let entities = ectx.list(&entity_type).await.map_err(|e| e.to_string())?;
 
     let query_lower = query.to_lowercase();
     let matches: Vec<Value> = entities

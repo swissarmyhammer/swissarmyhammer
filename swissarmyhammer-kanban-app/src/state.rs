@@ -476,14 +476,15 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
 
 /// Curated palette of visually distinct colors for actor avatars.
 const ACTOR_COLORS: &[&str] = &[
-    "e53e3e", "dd6b20", "d69e2e", "38a169", "319795",
-    "3182ce", "5a67d8", "805ad5", "d53f8c", "2b6cb0",
-    "c05621", "2f855a", "2c7a7b", "6b46c1", "b83280",
+    "e53e3e", "dd6b20", "d69e2e", "38a169", "319795", "3182ce", "5a67d8", "805ad5", "d53f8c",
+    "2b6cb0", "c05621", "2f855a", "2c7a7b", "6b46c1", "b83280",
 ];
 
 /// Derive a deterministic hex color from a username.
 fn deterministic_color(username: &str) -> String {
-    let hash: u64 = username.bytes().fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    let hash: u64 = username
+        .bytes()
+        .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
     ACTOR_COLORS[(hash as usize) % ACTOR_COLORS.len()].to_string()
 }
 
@@ -539,7 +540,8 @@ fn macos_profile_picture(username: &str) -> Option<String> {
         let bytes: Vec<u8> = (0..hex_clean.len())
             .step_by(2)
             .filter_map(|i| {
-                hex_clean.get(i..i + 2)
+                hex_clean
+                    .get(i..i + 2)
                     .and_then(|pair| u8::from_str_radix(pair, 16).ok())
             })
             .collect();
@@ -786,5 +788,4 @@ mod tests {
         // Not guaranteed but very likely with a 15-color palette
         assert_ne!(c1, c2);
     }
-
 }
