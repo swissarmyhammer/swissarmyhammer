@@ -17,6 +17,6 @@ install_hint: "Install python-lsp-server: pip install python-lsp-server"
 doctor:
   enabled: true
   description: "Validates pylsp installation and availability"
-  check_installed: true
-  check_version: false
-  expected_output_pattern: null
+  check_command: "which pylsp"
+  check_version_command: "pylsp --version"
+  version_pattern: null

@@ -17,6 +17,6 @@ install_hint: "Install gopls: go install github.com/golang/tools/gopls@latest"
 doctor:
   enabled: true
   description: "Validates gopls installation and availability"
-  check_installed: true
-  check_version: false
-  expected_output_pattern: null
+  check_command: "which gopls"
+  check_version_command: "gopls version"
+  version_pattern: null

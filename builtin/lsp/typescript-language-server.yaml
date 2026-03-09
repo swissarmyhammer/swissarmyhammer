@@ -22,6 +22,6 @@ install_hint: "Install typescript-language-server: npm install -g typescript-lan
 doctor:
   enabled: true
   description: "Validates typescript-language-server installation and availability"
-  check_installed: true
-  check_version: false
-  expected_output_pattern: null
+  check_command: "which typescript-language-server"
+  check_version_command: "typescript-language-server --version"
+  version_pattern: null

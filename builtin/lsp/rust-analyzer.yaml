@@ -17,6 +17,6 @@ install_hint: "Install rust-analyzer: rustup component add rust-analyzer"
 doctor:
   enabled: true
   description: "Validates rust-analyzer installation and availability"
-  check_installed: true
-  check_version: false
-  expected_output_pattern: null
+  check_command: "which rust-analyzer"
+  check_version_command: "rust-analyzer --version"
+  version_pattern: null
