@@ -23,7 +23,9 @@ pub mod error;
 pub mod hints;
 pub mod indexing;
 pub mod invalidation;
+pub mod lsp_communication;
 pub mod lsp_indexer;
+pub mod lsp_server;
 pub mod ops;
 pub mod ts_callgraph;
 pub mod watcher;
@@ -61,3 +63,7 @@ pub use ops::status::{
     StatusReport,
 };
 pub use workspace::{CodeContextWorkspace, WorkspaceMode};
+pub use lsp_server::{
+    detect_rust_analyzer, find_executable, start_lsp_server, LspServerConfig, LspServerHandle,
+};
+pub use lsp_communication::{LspJsonRpcClient, LspCollectionResult, collect_and_persist_symbols};
