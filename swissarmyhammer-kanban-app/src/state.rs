@@ -521,22 +521,32 @@ fn macos_profile_picture(username: &str) -> Option<String> {
         }
     }
 
-    // Try dscl as a fallback — reads the JPEGPhoto attribute
+    // Try dscl as a fallback — reads the JPEGPhoto attribute.
+    // dscl outputs hex-encoded text like "JPEGPhoto:\n ffd8ffe0 00104a46 ..."
+    // We need to parse the hex back to binary bytes.
     let output = std::process::Command::new("dscl")
         .args([".", "-read", &format!("/Users/{username}"), "JPEGPhoto"])
         .output()
         .ok()?;
 
     if output.status.success() {
-        // dscl output has a header line then hex-encoded data
-        // The binary data starts after the first newline + space
-        let stdout = output.stdout;
-        // Find the actual JPEG data — look for JPEG magic bytes (FF D8)
-        if let Some(pos) = stdout.windows(2).position(|w| w == [0xFF, 0xD8]) {
-            let jpeg_data = &stdout[pos..];
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Skip the "JPEGPhoto:\n" header line
+        let hex_body = stdout.strip_prefix("JPEGPhoto:\n").unwrap_or(&stdout);
+        // Remove all whitespace to get a continuous hex string
+        let hex_clean: String = hex_body.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+        // Decode hex pairs to bytes
+        let bytes: Vec<u8> = (0..hex_clean.len())
+            .step_by(2)
+            .filter_map(|i| {
+                hex_clean.get(i..i + 2)
+                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+            })
+            .collect();
+        if bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
             return Some(format!(
                 "data:image/jpeg;base64,{}",
-                STANDARD.encode(jpeg_data)
+                STANDARD.encode(&bytes)
             ));
         }
     }
