@@ -173,9 +173,15 @@ export function MultiSelectEditor({
   const commit = useCallback(() => {
     const text = editorRef.current?.view?.state.doc.toString().trim();
     if (text) {
-      // Synchronously resolve the display name to an ID and add it
       const clean = text.replace(new RegExp(`^\\${prefix}`), "").trim().toLowerCase();
       if (clean) {
+        if (isComputedTags) {
+          // Tags: process remaining text through addItem (async body mutation)
+          // then exit. addItem handles dedup and invoke.
+          addItemRef.current(text).then(() => onCancel());
+          return;
+        }
+        // Reference fields: synchronously resolve display name to ID
         const id = displayToId.get(clean);
         if (id && !selectedIdsRef.current.includes(id)) {
           selectedIdsRef.current = [...selectedIdsRef.current, id];
