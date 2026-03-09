@@ -1,0 +1,14 @@
+# Rust LSP Server Configuration
+name: rust-analyzer
+project_types:
+  - rust
+command: rust-analyzer
+args: []
+language_ids:
+  - rust
+file_extensions:
+  - rs
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install rust-analyzer: rustup component add rust-analyzer"

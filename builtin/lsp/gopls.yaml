@@ -1,0 +1,14 @@
+# Go LSP Server Configuration
+name: gopls
+project_types:
+  - go
+command: gopls
+args: []
+language_ids:
+  - go
+file_extensions:
+  - go
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install gopls: go install github.com/golang/tools/gopls@latest"

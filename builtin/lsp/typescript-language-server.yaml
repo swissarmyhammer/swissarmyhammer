@@ -1,0 +1,19 @@
+# TypeScript/JavaScript LSP Server Configuration
+name: typescript-language-server
+project_types:
+  - nodejs
+command: typescript-language-server
+args:
+  - --stdio
+language_ids:
+  - typescript
+  - javascript
+file_extensions:
+  - ts
+  - js
+  - tsx
+  - jsx
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install typescript-language-server: npm install -g typescript-language-server typescript"
