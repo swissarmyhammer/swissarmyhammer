@@ -16,6 +16,7 @@
 
 pub mod schema;
 pub mod doctor;
+pub mod watcher;
 
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
@@ -624,7 +625,7 @@ fn execute_get_blastradius(
 /// Scans files, extracts chunks, and writes results to code-context DB.
 async fn index_discovered_files_async(workspace_root: &Path) {
     // Open code-context workspace to access the database
-    let ws = match CodeContextWorkspace::open(workspace_root) {
+    let _ws = match CodeContextWorkspace::open(workspace_root) {
         Ok(w) => w,
         Err(e) => {
             tracing::warn!("Failed to open code-context workspace for indexing: {}", e);
