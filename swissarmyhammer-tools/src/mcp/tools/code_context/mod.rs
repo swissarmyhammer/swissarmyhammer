@@ -15,18 +15,21 @@
 //! opening a `CodeContextWorkspace` from the `ToolContext` working directory.
 
 pub mod schema;
+pub mod doctor;
 
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
 use rmcp::ErrorData as McpError;
+use std::path::Path;
 use swissarmyhammer_code_context::{
     BlastRadiusOptions, BuildLayer, CallGraphDirection, CallGraphOptions, CodeContextWorkspace,
     GetSymbolOptions, GrepOptions, SearchSymbolOptions,
 };
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+use swissarmyhammer_treesitter::IndexContext;
 
 // ---------------------------------------------------------------------------
 // Operation structs with Operation trait impls
@@ -615,16 +618,61 @@ fn execute_get_blastradius(
     json_result(&result)
 }
 
+/// Trigger tree-sitter indexing on discovered files.
+///
+/// This runs asynchronously after startup_cleanup discovers files.
+/// Scans files and updates ts_indexed flags in the code-context DB.
+async fn index_discovered_files_async(workspace_root: &Path) {
+    // Create a tree-sitter index context for the workspace
+    let mut ts_index = IndexContext::new(workspace_root.to_path_buf());
+
+    // Run the scan to parse files and extract chunks
+    match ts_index.scan().await {
+        Ok(scan_result) => {
+            tracing::debug!(
+                "Tree-sitter indexing complete: parsed {} files in {}ms",
+                scan_result.files_parsed,
+                scan_result.total_time_ms
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Tree-sitter indexing failed: {}", e);
+        }
+    }
+}
+
 /// Execute the "get status" operation.
 ///
 /// Returns a health report with file counts, indexing progress, and chunk/edge counts.
+/// Also includes LSP server availability from doctor check.
 fn execute_get_status(context: &ToolContext) -> Result<CallToolResult, McpError> {
     let ws = open_workspace(context)?;
+    let workspace_root = ws.workspace_root().to_path_buf();
 
     // Leader: trigger startup cleanup on first access to populate the index from disk
     if ws.is_leader() {
-        let _ = swissarmyhammer_code_context::startup_cleanup(ws.db(), ws.workspace_root())
+        let _ = swissarmyhammer_code_context::startup_cleanup(ws.db(), &workspace_root)
             .map_err(context_err);
+
+        // After discovering files, spawn tree-sitter indexing in background
+        // This runs asynchronously without blocking status response
+        let workspace_root_clone = workspace_root.clone();
+        tokio::spawn(async move {
+            index_discovered_files_async(&workspace_root_clone).await;
+        });
+    }
+
+    // Run doctor check to report on LSP availability
+    let doctor_report = doctor::run_doctor(&workspace_root);
+    tracing::debug!("Doctor report: {:?}", doctor_report);
+
+    // Log LSP availability for debugging
+    for lsp in &doctor_report.lsp_servers {
+        if lsp.installed {
+            tracing::debug!("LSP available: {} at {:?}", lsp.name, lsp.path);
+        } else {
+            tracing::debug!("LSP NOT available: {}", lsp.name);
+        }
     }
 
     let result = swissarmyhammer_code_context::get_status(ws.db()).map_err(context_err)?;

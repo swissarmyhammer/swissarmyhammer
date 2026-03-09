@@ -8611,6 +8611,7 @@ dependencies = [
  "swissarmyhammer-prompts",
  "swissarmyhammer-shell",
  "swissarmyhammer-skills",
+ "swissarmyhammer-treesitter",
  "swissarmyhammer-web",
  "tempfile",
  "test-log",
