@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { FieldDef, Entity } from "@/types/kanban";
 import {
   resolveEditor,
@@ -61,13 +61,14 @@ export function CellEditor({ field, value, entity, onCommit, onCancel }: CellEdi
  */
 function MultiSelectPopover({ field, entity, value, onCommit, onCancel }: CellEditorProps & { field: FieldDef }) {
   const [open, setOpen] = useState(true);
+  const committedRef = useRef(false);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
-      if (!nextOpen) {
-        // Closing the popover = done editing; let MultiSelectEditor's
-        // onCommit handle saving (it fires before this via Escape/blur).
-        // Only cancel if commit didn't already fire.
+      if (!nextOpen && !committedRef.current) {
+        // Popover closed without an explicit commit (e.g. click-outside).
+        // Exit edit mode — the MultiSelectEditor's commit will have already
+        // fired via its blur/Escape handler if data was changed.
         onCancel();
       }
       setOpen(nextOpen);
@@ -77,11 +78,18 @@ function MultiSelectPopover({ field, entity, value, onCommit, onCancel }: CellEd
 
   const handleCommit = useCallback(
     (val: unknown) => {
+      committedRef.current = true;
       setOpen(false);
       onCommit(val);
     },
     [onCommit],
   );
+
+  const handleCancel = useCallback(() => {
+    committedRef.current = true;
+    setOpen(false);
+    onCancel();
+  }, [onCancel]);
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -95,13 +103,18 @@ function MultiSelectPopover({ field, entity, value, onCommit, onCancel }: CellEd
         onOpenAutoFocus={(e) => {
           e.preventDefault();
         }}
+        onEscapeKeyDown={(e) => {
+          // Prevent Radix from closing the popover on Escape —
+          // let the CM6 keymap handle it via commit() first.
+          e.preventDefault();
+        }}
       >
         <MultiSelectEditor
           field={field}
           entity={entity}
           value={value}
           onCommit={handleCommit}
-          onCancel={onCancel}
+          onCancel={handleCancel}
           mode="compact"
         />
       </PopoverContent>

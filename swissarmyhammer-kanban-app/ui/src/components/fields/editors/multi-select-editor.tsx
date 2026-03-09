@@ -22,6 +22,7 @@ import {
   createMentionAutocomplete,
   type MentionSearchResult,
 } from "@/lib/cm-mention-autocomplete";
+import { Avatar } from "@/components/avatar";
 import { createDebouncedSearch } from "@/lib/debounced-search";
 import { getStr } from "@/types/kanban";
 import type { FieldDef, Entity } from "@/types/kanban";
@@ -270,13 +271,35 @@ export function MultiSelectEditor({
 
   return (
     <div ref={containerRef} className="space-y-1 p-2">
-      {/* Selected items as pills */}
+      {/* Selected items */}
       {selectedIds.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {selectedIds.map((id) => {
             const name = idToDisplay.get(id) ?? id;
             const ent = targetEntities.find((e) => e.id === id);
             const color = ent ? getStr(ent, "color", "888888") : "888888";
+
+            // Actors render as avatar + name; everything else as colored pills
+            if (targetEntityType === "actor") {
+              return (
+                <span
+                  key={id}
+                  className="inline-flex items-center gap-1 rounded-full pl-0.5 pr-1.5 py-px text-xs font-medium bg-muted"
+                >
+                  <Avatar actorId={id} size="sm" />
+                  {name}
+                  <button
+                    type="button"
+                    className="ml-0.5 hover:opacity-70 leading-none text-muted-foreground"
+                    onClick={() => removeItem(id)}
+                    onMouseDown={(e) => e.preventDefault()}
+                  >
+                    &times;
+                  </button>
+                </span>
+              );
+            }
+
             return (
               <span
                 key={id}
