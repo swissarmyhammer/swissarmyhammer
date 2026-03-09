@@ -164,8 +164,9 @@ describe("MultiSelectEditor", () => {
       );
       await settle();
 
-      // Should show alice's name
-      expect(container.textContent).toContain("alice");
+      // Should show alice's avatar (initials "A" via AvatarDisplay)
+      const avatars = container.querySelectorAll(".rounded-full");
+      expect(avatars.length).toBeGreaterThanOrEqual(1);
     });
 
     it("Enter key calls onCommit with selected IDs", async () => {
@@ -265,10 +266,11 @@ describe("MultiSelectEditor", () => {
       );
       await settle();
 
-      // Actor pills should have the bg-muted class (actor-specific rendering)
-      const pill = container.querySelector(".bg-muted");
-      expect(pill).toBeTruthy();
-      expect(pill!.textContent).toContain("alice");
+      // Actor pills use AvatarDisplay (same as grid/inspector) — renders .rounded-full avatars
+      const avatars = container.querySelectorAll(".rounded-full");
+      expect(avatars.length).toBeGreaterThanOrEqual(1);
+      // Avatar shows initials "A" for "alice"
+      expect(avatars[0].textContent).toBe("A");
     });
 
     it("remove button removes item from selection", async () => {
@@ -280,21 +282,23 @@ describe("MultiSelectEditor", () => {
       );
       await settle();
 
-      // Find the × button for alice
-      const pills = container.querySelectorAll(".bg-muted");
-      expect(pills.length).toBe(2);
+      // Each actor has an avatar (.rounded-full) and a remove button (×)
+      const avatars = container.querySelectorAll(".rounded-full");
+      expect(avatars.length).toBe(2);
 
-      const removeBtn = pills[0].querySelector("button");
-      expect(removeBtn).toBeTruthy();
+      // Find the first × remove button (sibling of the AvatarDisplay wrapper)
+      const removeButtons = container.querySelectorAll("button");
+      // Filter to × buttons (not CM6 internal buttons)
+      const removeBtns = Array.from(removeButtons).filter((b) => b.textContent?.includes("×"));
+      expect(removeBtns.length).toBe(2);
 
       await act(async () => {
-        fireEvent.click(removeBtn!);
+        fireEvent.click(removeBtns[0]);
       });
 
-      // After removing alice, only bob should remain
-      const remainingPills = container.querySelectorAll(".bg-muted");
-      expect(remainingPills.length).toBe(1);
-      expect(remainingPills[0].textContent).toContain("bob");
+      // After removing alice, only bob's avatar should remain
+      const remainingAvatars = container.querySelectorAll(".rounded-full");
+      expect(remainingAvatars.length).toBe(1);
     });
   });
 

@@ -23,7 +23,7 @@ import {
   createMentionAutocomplete,
   type MentionSearchResult,
 } from "@/lib/cm-mention-autocomplete";
-import { Avatar } from "@/components/avatar";
+import { AvatarDisplay } from "@/components/fields/displays/avatar-display";
 import { createDebouncedSearch } from "@/lib/debounced-search";
 import { getStr } from "@/types/kanban";
 import type { FieldDef, Entity } from "@/types/kanban";
@@ -271,26 +271,45 @@ export function MultiSelectEditor({
 
   return (
     <div ref={containerRef} className="space-y-1 p-2">
-      {/* Selected items */}
+      {/* Selected items — actors use AvatarDisplay (same component as grid/inspector) */}
       {selectedIds.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {selectedIds.map((id) => {
-            const name = idToDisplay.get(id) ?? id;
-            const ent = targetEntities.find((e) => e.id === id);
-            const color = ent ? getStr(ent, "color", "888888") : "888888";
-
-            // Actors render as avatar + name; everything else as colored pills
-            if (targetEntityType === "actor") {
+        <div className="flex flex-wrap items-center gap-1">
+          {targetEntityType === "actor" ? (
+            /* Each actor: AvatarDisplay renders the avatar identically to grid/inspector,
+               wrapped with a remove button for editor interactivity */
+            selectedIds.map((id) => (
+              <span key={id} className="inline-flex items-center gap-0.5">
+                <AvatarDisplay value={[id]} />
+                <button
+                  type="button"
+                  className="hover:opacity-70 leading-none text-muted-foreground text-xs"
+                  onClick={() => removeItem(id)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  title={`Remove ${idToDisplay.get(id) ?? id}`}
+                >
+                  &times;
+                </button>
+              </span>
+            ))
+          ) : (
+            selectedIds.map((id) => {
+              const name = idToDisplay.get(id) ?? id;
+              const ent = targetEntities.find((e) => e.id === id);
+              const color = ent ? getStr(ent, "color", "888888") : "888888";
               return (
                 <span
                   key={id}
-                  className="inline-flex items-center gap-1 rounded-full pl-0.5 pr-1.5 py-px text-xs font-medium bg-muted"
+                  className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-xs font-medium"
+                  style={{
+                    backgroundColor: `color-mix(in srgb, #${color} 20%, transparent)`,
+                    color: `#${color}`,
+                    border: `1px solid color-mix(in srgb, #${color} 30%, transparent)`,
+                  }}
                 >
-                  <Avatar actorId={id} size="sm" />
-                  {name}
+                  {prefix}{name}
                   <button
                     type="button"
-                    className="ml-0.5 hover:opacity-70 leading-none text-muted-foreground"
+                    className="ml-0.5 hover:opacity-70 leading-none"
                     onClick={() => removeItem(id)}
                     onMouseDown={(e) => e.preventDefault()}
                   >
@@ -298,30 +317,8 @@ export function MultiSelectEditor({
                   </button>
                 </span>
               );
-            }
-
-            return (
-              <span
-                key={id}
-                className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-xs font-medium"
-                style={{
-                  backgroundColor: `color-mix(in srgb, #${color} 20%, transparent)`,
-                  color: `#${color}`,
-                  border: `1px solid color-mix(in srgb, #${color} 30%, transparent)`,
-                }}
-              >
-                {prefix}{name}
-                <button
-                  type="button"
-                  className="ml-0.5 hover:opacity-70 leading-none"
-                  onClick={() => removeItem(id)}
-                  onMouseDown={(e) => e.preventDefault()}
-                >
-                  &times;
-                </button>
-              </span>
-            );
-          })}
+            })
+          )}
         </div>
       )}
       {/* CM6 input */}

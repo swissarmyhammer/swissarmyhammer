@@ -6,9 +6,12 @@
  */
 
 import { Avatar } from "@/components/avatar";
-import type { DisplayProps } from "./text-display";
 
-export function AvatarDisplay({ value }: DisplayProps) {
+interface AvatarDisplayProps {
+  value: unknown;
+}
+
+export function AvatarDisplay({ value }: AvatarDisplayProps) {
   const ids: string[] = Array.isArray(value)
     ? value.filter((v): v is string => typeof v === "string")
     : [];
