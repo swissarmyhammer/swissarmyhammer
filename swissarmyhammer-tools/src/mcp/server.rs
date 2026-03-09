@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use swissarmyhammer_common::{is_prompt_visible, Pretty, Result, SwissArmyHammerError};
+use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_config::model::{parse_model_config, ModelManager};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
@@ -243,7 +244,7 @@ impl McpServer {
             tool_handlers,
             git_ops_arc,
             agent_config,
-            Some(work_dir),
+            Some(work_dir.clone()),
             skill_library.clone(),
             agent_library.clone(),
             prompt_library.clone(),
@@ -260,7 +261,53 @@ impl McpServer {
             agent_library,
         };
 
+        // Initialize code-context eagerly at MCP startup
+        // This ensures files are discovered and indexing starts immediately,
+        // not lazily when the first tool call happens
+        Self::initialize_code_context(&work_dir);
+
         Ok(server)
+    }
+
+    /// Initialize code-context workspace and start indexing at MCP startup.
+    ///
+    /// Finds the git repository root from the working directory, opens a
+    /// CodeContextWorkspace (which triggers file discovery and background indexing),
+    /// then runs full tree-sitter indexing with symbols and call edges.
+    fn initialize_code_context(work_dir: &std::path::Path) {
+        let workspace_root = match find_git_repository_root_from(work_dir) {
+            Some(root) => root,
+            None => {
+                tracing::info!(
+                    "code-context: no git repository found from {}, skipping initialization",
+                    work_dir.display()
+                );
+                return;
+            }
+        };
+
+        tracing::info!(
+            "code-context: initializing for workspace {}",
+            workspace_root.display()
+        );
+
+        tokio::spawn(async move {
+            use super::tools::code_context::index_discovered_files_async;
+
+            // index_discovered_files_async opens CodeContextWorkspace internally,
+            // which triggers: DB creation, schema setup, startup_cleanup (file discovery),
+            // and spawn_indexing_worker (background basic indexer).
+            // Then it runs full tree-sitter parsing with symbols and call edges.
+            tracing::info!(
+                "code-context: starting file discovery and indexing for {}",
+                workspace_root.display()
+            );
+            index_discovered_files_async(&workspace_root).await;
+            tracing::info!(
+                "code-context: indexing complete for {}",
+                workspace_root.display()
+            );
+        });
     }
 
     /// Initialize git operations for the given working directory.

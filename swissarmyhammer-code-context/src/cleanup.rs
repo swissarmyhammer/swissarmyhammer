@@ -133,9 +133,52 @@ pub fn startup_cleanup(
     Ok(stats)
 }
 
+/// File extensions that tree-sitter can parse (kept in sync with LanguageRegistry).
+///
+/// Only files with these extensions are indexed. This prevents wasting DB space
+/// and indexing time on binary files, protobuf, images, etc.
+const PARSEABLE_EXTENSIONS: &[&str] = &[
+    // Rust
+    "rs",
+    // Python
+    "py", "pyi", "pyw",
+    // TypeScript / JavaScript
+    "ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx",
+    // Go
+    "go",
+    // Java / Kotlin / Scala
+    "java", "kt", "kts", "scala", "sc",
+    // C / C++
+    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh",
+    // C#
+    "cs",
+    // Ruby
+    "rb", "rake", "gemspec",
+    // PHP
+    "php", "phtml",
+    // Swift
+    "swift",
+    // Dart
+    "dart",
+    // Lua
+    "lua",
+    // Shell
+    "sh", "bash", "zsh",
+    // Config (useful for code context)
+    "toml", "yaml", "yml",
+];
+
+/// Check if a file path has a parseable extension.
+fn is_parseable(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| PARSEABLE_EXTENSIONS.contains(&ext))
+}
+
 /// Walk non-ignored files and hash them in parallel.
 ///
 /// Uses the `ignore` crate (respects `.gitignore`) and `rayon` for parallel hashing.
+/// Only includes files with extensions that tree-sitter can parse.
 /// Returns a `Vec<HashedFile>` with relative paths and truncated SHA-256 hashes.
 fn walk_and_hash(workspace_root: &Path) -> Result<Vec<HashedFile>, CodeContextError> {
     // Collect file paths first (WalkBuilder is not Send)
@@ -148,7 +191,7 @@ fn walk_and_hash(workspace_root: &Path) -> Result<Vec<HashedFile>, CodeContextEr
         .build()
     {
         let entry = entry.map_err(std::io::Error::other)?;
-        if entry.file_type().is_some_and(|ft| ft.is_file()) {
+        if entry.file_type().is_some_and(|ft| ft.is_file()) && is_parseable(entry.path()) {
             paths.push(entry.into_path());
         }
     }

@@ -623,7 +623,7 @@ fn execute_get_blastradius(
 ///
 /// This runs asynchronously after startup_cleanup discovers files.
 /// Scans files, extracts chunks, and writes results to code-context DB.
-async fn index_discovered_files_async(workspace_root: &Path) {
+pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
     // Open code-context workspace to access the database
     let _ws = match CodeContextWorkspace::open(workspace_root) {
         Ok(w) => w,
