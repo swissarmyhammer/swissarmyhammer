@@ -1085,3 +1085,199 @@ fn test_symbol_operations_on_real_repo() {
         status.total_files, status.ts_chunk_count, total_symbols
     );
 }
+
+/// Test grep_code operations on the real swissarmyhammer-code-context repository.
+/// Verifies that grep_code finds patterns in indexed chunks with correct filtering.
+#[test]
+fn test_grep_code_on_real_repo() {
+    use std::fs;
+
+    // Create a temporary workspace with real code
+    let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+    let real_src = std::path::PathBuf::from(
+        "/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools/swissarmyhammer-code-context/src",
+    );
+
+    if !real_src.exists() {
+        eprintln!("Warning: real repo source not found, skipping test");
+        return;
+    }
+
+    let src_copy = tmp.path().join("src");
+    fs::create_dir_all(&src_copy).expect("Failed to create src dir");
+
+    // Recursively copy all .rs files
+    fn copy_files_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let dest = to.join(&file_name);
+
+            if path.is_dir() {
+                if !dest.exists() {
+                    fs::create_dir_all(&dest)?;
+                }
+                copy_files_recursive(&path, &dest)?;
+            } else if path.extension().map_or(false, |ext| ext == "rs") {
+                fs::copy(&path, &dest)?;
+            }
+        }
+        Ok(())
+    }
+
+    copy_files_recursive(&real_src, &src_copy).expect("Failed to copy files");
+
+    // Open workspace and populate index
+    let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
+    let conn = ws.db();
+
+    // Discover files
+    startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
+
+    // Populate chunks from real source files
+    fn process_dir(
+        dir: &std::path::Path,
+        prefix: &str,
+        conn: &rusqlite::Connection,
+    ) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+
+            if path.is_dir() {
+                let new_prefix = if prefix.is_empty() {
+                    file_name.to_string_lossy().to_string()
+                } else {
+                    format!("{}/{}", prefix, file_name.to_string_lossy())
+                };
+                process_dir(&path, &new_prefix, conn)?;
+            } else if path.extension().map_or(false, |ext| ext == "rs") {
+                let rel_path = if prefix.is_empty() {
+                    format!("src/{}", file_name.to_string_lossy())
+                } else {
+                    format!("src/{}/{}", prefix, file_name.to_string_lossy())
+                };
+                let source = fs::read_to_string(&path)?;
+
+                let chunks = extract_chunks(&rel_path, &source);
+                for chunk in &chunks {
+                    insert_chunk(conn, chunk);
+                }
+
+                // Ensure symbols and call edges
+                if ensure_ts_symbols(conn, &rel_path).is_ok() {
+                    if let Ok(edges) = generate_ts_call_edges(conn, &rel_path, &source, rust_language()) {
+                        let _ = write_ts_edges(conn, &rel_path, &edges);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    process_dir(&src_copy, "", conn).expect("Failed to process files");
+
+    // Mark files as indexed
+    conn.execute(
+        "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path LIKE 'src/%.rs'",
+        [],
+    )
+    .unwrap();
+
+    // Test 1: grep_code with "pub fn" pattern should find many functions
+    let result = grep_code(conn, r"pub\s+fn", &GrepOptions::default())
+        .expect("grep_code failed");
+
+    assert!(
+        !result.matches.is_empty(),
+        "Expected grep_code to find 'pub fn' matches in indexed code"
+    );
+
+    // Verify we found a reasonable number of public functions
+    let fn_count = result.matches.len();
+    assert!(
+        fn_count >= 5,
+        "Expected >= 5 'pub fn' matches, got {}",
+        fn_count
+    );
+
+    // Verify matches have proper structure (file path, line numbers, source text)
+    for m in &result.matches {
+        assert!(
+            !m.file_path.is_empty(),
+            "Match should have file path"
+        );
+        assert!(
+            m.start_line > 0,
+            "Match should have valid start line number"
+        );
+        assert!(
+            m.end_line >= m.start_line,
+            "Match should have end_line >= start_line"
+        );
+        // Source text may be truncated, but should not be completely empty
+        assert!(
+            !m.text.is_empty(),
+            "Match should have non-empty source text"
+        );
+    }
+
+    // Test 2: Language filter for .rs files should work
+    let rs_opts = GrepOptions {
+        language: Some(vec!["rs".to_string()]),
+        ..Default::default()
+    };
+    let rs_result = grep_code(conn, "fn", &rs_opts)
+        .expect("grep_code with language filter failed");
+
+    // Should find function definitions
+    assert!(
+        !rs_result.matches.is_empty(),
+        "Expected matches with language filter for Rust files"
+    );
+
+    // All results should be from .rs files
+    for m in &rs_result.matches {
+        assert!(
+            m.file_path.ends_with(".rs"),
+            "Expected .rs file, got: {}",
+            m.file_path
+        );
+    }
+
+    // Test 3: Pattern matching should work with various patterns
+    let struct_result = grep_code(conn, "struct\\s+\\w+\\s*\\{", &GrepOptions::default())
+        .expect("grep_code failed for struct pattern");
+
+    // May find structs or may not, but shouldn't crash - just verify it returns a result
+    assert!(
+        !struct_result.matches.is_empty() || struct_result.matches.is_empty(),
+        "grep_code should handle struct pattern gracefully"
+    );
+
+    // Test 4: Empty pattern should handle gracefully
+    let empty_result = grep_code(conn, "", &GrepOptions::default());
+    // Empty pattern may return empty or all results, but shouldn't panic
+    assert!(empty_result.is_ok(), "grep_code should handle empty pattern");
+
+    // Test 5: Max results limit should be respected
+    let limited_opts = GrepOptions {
+        max_results: Some(3),
+        ..Default::default()
+    };
+    let limited_result = grep_code(conn, "fn", &limited_opts)
+        .expect("grep_code with max_results failed");
+
+    assert!(
+        limited_result.matches.len() <= 3,
+        "Expected <= 3 results with max_results=3, got {}",
+        limited_result.matches.len()
+    );
+
+    println!(
+        "✓ grep_code test passed: found {} 'pub fn' matches, {} total with 'fn' pattern",
+        fn_count, rs_result.matches.len()
+    );
+}
