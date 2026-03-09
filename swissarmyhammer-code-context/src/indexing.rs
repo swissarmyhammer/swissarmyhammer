@@ -119,12 +119,6 @@ fn run_indexing_worker(
         // In production, this would be longer; in tests we use shorter intervals
         thread::sleep(Duration::from_millis(100));
     }
-
-    info!(
-        "Indexing worker completed for {}",
-        workspace_root.display()
-    );
-    Ok(())
 }
 
 /// Query files that need tree-sitter indexing (ts_indexed=0)
