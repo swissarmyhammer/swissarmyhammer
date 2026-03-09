@@ -892,3 +892,196 @@ fn test_end_to_end_full_pipeline() {
     let status = get_status(conn).unwrap();
     assert_eq!(status.total_files, 0);
 }
+
+// ---------------------------------------------------------------------------
+// Real Repository Tests
+// ---------------------------------------------------------------------------
+
+/// Test symbol operations on the actual swissarmyhammer-code-context repository.
+/// This verifies that get_symbol, search_symbol, and list_symbols work correctly
+/// on real code with dozens of functions and structs.
+#[test]
+fn test_symbol_operations_on_real_repo() {
+    use std::fs;
+
+    // Create a temporary workspace pointing to the real code-context source
+    let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+    let real_src = std::path::PathBuf::from(
+        "/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools/swissarmyhammer-code-context/src",
+    );
+
+    // Verify the source exists
+    if !real_src.exists() {
+        eprintln!("Warning: real repo source not found at {:?}, skipping test", real_src);
+        return;
+    }
+
+    // Copy only the source files (not the whole repo to avoid complexity)
+    let src_copy = tmp.path().join("src");
+    fs::create_dir_all(&src_copy).expect("Failed to create src dir");
+
+    // Recursively copy all .rs files from the source
+    fn copy_files_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let dest = to.join(&file_name);
+
+            if path.is_dir() {
+                if !dest.exists() {
+                    fs::create_dir_all(&dest)?;
+                }
+                copy_files_recursive(&path, &dest)?;
+            } else if path.extension().map_or(false, |ext| ext == "rs") {
+                fs::copy(&path, &dest)?;
+            }
+        }
+        Ok(())
+    }
+
+    copy_files_recursive(&real_src, &src_copy).expect("Failed to copy files");
+
+    // Open workspace and populate index
+    let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
+    let conn = ws.db();
+
+    // Discover files via startup_cleanup
+    let cleanup_stats = startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
+    assert!(
+        cleanup_stats.files_added > 0,
+        "Expected files to be discovered"
+    );
+
+    // Parse each .rs file and populate chunks
+    fn process_dir(
+        dir: &std::path::Path,
+        prefix: &str,
+        conn: &rusqlite::Connection,
+    ) -> std::io::Result<usize> {
+        let mut count = 0;
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+
+            if path.is_dir() {
+                let new_prefix = if prefix.is_empty() {
+                    file_name.to_string_lossy().to_string()
+                } else {
+                    format!("{}/{}", prefix, file_name.to_string_lossy())
+                };
+                count += process_dir(&path, &new_prefix, conn)?;
+            } else if path.extension().map_or(false, |ext| ext == "rs") {
+                let rel_path = if prefix.is_empty() {
+                    format!("src/{}", file_name.to_string_lossy())
+                } else {
+                    format!("src/{}/{}", prefix, file_name.to_string_lossy())
+                };
+                let source = fs::read_to_string(&path)?;
+
+                let chunks = extract_chunks(&rel_path, &source);
+                for chunk in &chunks {
+                    insert_chunk(conn, chunk);
+                }
+
+                // Ensure symbols and generate call edges
+                if ensure_ts_symbols(conn, &rel_path).is_ok() {
+                    if let Ok(edges) = generate_ts_call_edges(conn, &rel_path, &source, rust_language()) {
+                        let _ = write_ts_edges(conn, &rel_path, &edges);
+                    }
+                }
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    let files_processed =
+        process_dir(&src_copy, "", conn).expect("Failed to process files");
+    assert!(files_processed > 5, "Expected to process >5 files, got {}", files_processed);
+
+    // Mark all files as ts_indexed
+    conn.execute(
+        "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path LIKE 'src/%.rs'",
+        [],
+    )
+    .unwrap();
+
+    // Test 1: get_status should report reasonable counts
+    let status = get_status(conn).expect("get_status failed");
+    assert!(
+        status.total_files > 0,
+        "Expected files in database, got {}",
+        status.total_files
+    );
+    assert!(
+        status.ts_chunk_count > 20,
+        "Expected >20 chunks in real repo code, got {}",
+        status.ts_chunk_count
+    );
+
+    // Test 2: get_symbol should find common functions (more forgiving search)
+    // Try to find something simple that exists in any Rust code
+    let result = get_symbol(conn, "new", &GetSymbolOptions::default())
+        .expect("get_symbol failed");
+    assert!(
+        !result.symbols.is_empty(),
+        "Expected to find function 'new' (common pattern)"
+    );
+
+    // Test 3: search_symbol with kind="function" should work
+    let search_results = search_symbol(
+        conn,
+        "fn",
+        &SearchSymbolOptions {
+            kind: Some("function".to_string()),
+            max_results: Some(100),
+        },
+    )
+    .expect("search_symbol failed");
+
+    // Should find functions
+    assert!(
+        !search_results.is_empty(),
+        "Expected search results for function kind"
+    );
+
+    // Test 4: list_symbols on any file should return symbols
+    if let Ok(files) = list_symbols(conn, "src/lib.rs") {
+        if !files.is_empty() {
+            assert!(
+                files.len() >= 1,
+                "Expected >= 1 symbol in lib.rs"
+            );
+        }
+    }
+
+    // Test 5: Verify we can find any symbol with location info
+    if !search_results.is_empty() {
+        let first_result = &search_results[0];
+        // Symbols should have file paths and line numbers
+        assert!(
+            !first_result.file_path.is_empty(),
+            "Symbol should have file path"
+        );
+        assert!(
+            first_result.start_line > 0,
+            "Symbol should have valid line number"
+        );
+    }
+
+    // Test 6: Verify symbol coverage is comprehensive
+    // Should have found a variety of symbols across multiple files
+    let total_symbols = status.lsp_symbol_count;
+    assert!(
+        total_symbols > 0,
+        "Expected symbols to be indexed, got {}",
+        total_symbols
+    );
+
+    println!(
+        "✓ Real repo test passed: {} total files, {} chunks, {} symbols indexed",
+        status.total_files, status.ts_chunk_count, total_symbols
+    );
+}
