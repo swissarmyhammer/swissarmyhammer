@@ -233,16 +233,11 @@ export function MultiSelectEditor({
       keymap.of([
         {
           key: "Enter",
-          run: (view) => {
-            const text = view.state.doc.toString().trim();
-            if (text) {
-              addItemRef.current(text);
-              view.dispatch({
-                changes: { from: 0, to: view.state.doc.length, insert: "" },
-              });
-            } else {
-              commitRef.current();
-            }
+          run: () => {
+            // When autocomplete is open, CM6 intercepts Enter before this
+            // keymap fires — so we only reach here when no completion is active.
+            // Add any remaining text, then save and exit.
+            commitRef.current();
             return true;
           },
         },
