@@ -25,6 +25,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
+import { EditorView } from "@codemirror/view";
 import { MultiSelectEditor } from "./multi-select-editor";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -121,14 +122,12 @@ function renderMultiSelect(
   );
 }
 
-/** Helper to get the CM6 EditorView from the rendered container. */
-function getCmView(container: HTMLElement) {
-  const cmContent = container.querySelector(".cm-content") as HTMLElement | null;
-  if (!cmContent) return null;
-  // @uiw/react-codemirror stores the view on the root .cm-editor element
-  const cmEditor = container.querySelector(".cm-editor") as HTMLElement | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (cmEditor as any)?.cmView?.view ?? null;
+/** Get the CM6 EditorView from the rendered container using the official API. */
+function getCmView(container: HTMLElement): EditorView {
+  const cmEditor = container.querySelector(".cm-editor") as HTMLElement;
+  const view = EditorView.findFromDOM(cmEditor);
+  if (!view) throw new Error("EditorView not found — CM6 did not initialize");
+  return view;
 }
 
 /** Wait for async effects (schema load, focus, etc.) */
@@ -242,21 +241,19 @@ describe("MultiSelectEditor", () => {
       );
       await settle();
 
-      // Type "alice" into the CM6 editor
+      // Type "alice" into the CM6 editor via EditorView.findFromDOM
       const view = getCmView(container);
-      if (view) {
-        await act(async () => {
-          view.dispatch({ changes: { from: 0, to: 0, insert: "alice" } });
-        });
+      await act(async () => {
+        view.dispatch({ changes: { from: 0, to: 0, insert: "alice" } });
+      });
 
-        const cmContent = container.querySelector(".cm-content") as HTMLElement;
-        await act(async () => {
-          fireEvent.keyDown(cmContent, { key: "Enter" });
-        });
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        fireEvent.keyDown(cmContent, { key: "Enter" });
+      });
 
-        // Should resolve "alice" to "alice-id" and commit
-        expect(onCommit).toHaveBeenCalledWith(["alice-id"]);
-      }
+      // Should resolve "alice" to "alice-id" and commit
+      expect(onCommit).toHaveBeenCalledWith(["alice-id"]);
     });
 
     it("actor selections render with Avatar component", async () => {
