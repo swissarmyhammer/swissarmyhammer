@@ -430,6 +430,11 @@ impl Workspace {
             result.total_time_ms
         );
 
+        // Extract and write tree-sitter symbols and call edges to code-context database
+        if let Err(e) = self.write_ts_symbols_and_edges(&context, &db) {
+            tracing::warn!(error = %e, "Failed to write tree-sitter symbols and edges to code-context");
+        }
+
         self.is_built
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -482,6 +487,82 @@ impl Workspace {
         } else {
             None
         }
+    }
+
+    /// Write tree-sitter symbols and call edges to code-context database
+    ///
+    /// After IndexContext.scan() completes, this extracts symbols from parsed files
+    /// and writes them to the code-context database for integration with code intelligence.
+    fn write_ts_symbols_and_edges(
+        &self,
+        context: &IndexContext,
+        _db: &Arc<IndexDatabase>,
+    ) -> Result<()> {
+        use swissarmyhammer_code_context::{generate_ts_call_edges, write_ts_edges};
+        use swissarmyhammer_code_context::CodeContextWorkspace;
+
+        let registry = crate::language::LanguageRegistry::global();
+
+        // Open code-context database for this workspace
+        let code_ctx = match CodeContextWorkspace::open(self.workspace_root.as_path()) {
+            Ok(ws) => ws,
+            Err(e) => {
+                tracing::warn!("Failed to open code-context workspace: {}", e);
+                return Ok(()); // Non-fatal - code-context is optional
+            }
+        };
+        let cc_conn = code_ctx.db();
+
+        // For each parsed file, extract symbols and write edges
+        let files = context.files();
+        tracing::info!("Writing tree-sitter symbols and edges for {} files", files.len());
+
+        for file_path in files {
+            // Get the ParsedFile
+            let parsed = match context.get(&file_path) {
+                Some(pf) => pf,
+                None => continue,
+            };
+
+            // Determine language
+            let lang_config = match registry.detect_language(&file_path) {
+                Some(cfg) => cfg,
+                None => {
+                    tracing::debug!("No language detected for {}", file_path.display());
+                    continue;
+                }
+            };
+
+            let ts_language = lang_config.language();
+            let file_path_str = file_path.to_str().unwrap_or("");
+
+            // Generate call edges using tree-sitter heuristic
+            let edges = match generate_ts_call_edges(cc_conn, file_path_str, &parsed.source, ts_language) {
+                Ok(edges) => edges,
+                Err(e) => {
+                    tracing::warn!("Failed to generate call edges for {}: {}", file_path.display(), e);
+                    Vec::new()
+                }
+            };
+
+            // Write edges to code-context database
+            if !edges.is_empty() {
+                if let Err(e) = write_ts_edges(cc_conn, file_path_str, &edges) {
+                    tracing::warn!("Failed to write call edges for {}: {}", file_path.display(), e);
+                }
+            }
+
+            // Mark file as ts_indexed in code-context database
+            if let Err(e) = cc_conn.execute(
+                "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?1",
+                [file_path_str],
+            ) {
+                tracing::warn!("Failed to mark {} as ts_indexed: {}", file_path.display(), e);
+            }
+        }
+
+        tracing::info!("Finished writing tree-sitter symbols and edges");
+        Ok(())
     }
 
     /// Check if this instance is the leader

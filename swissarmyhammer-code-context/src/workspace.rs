@@ -9,6 +9,7 @@ use swissarmyhammer_leader_election::{ElectionConfig, ElectionError, LeaderElect
 
 use crate::db;
 use crate::error::CodeContextError;
+use crate::indexing::{spawn_indexing_worker, IndexingConfig};
 
 /// Directory name for the code context index
 const CONTEXT_DIR: &str = ".code-context";
@@ -95,6 +96,14 @@ impl CodeContextWorkspace {
                 let db = Connection::open(&db_path)?;
                 db::configure_connection(&db)?;
                 db::create_schema(&db)?;
+
+                // Spawn background indexing worker thread in the leader process
+                // The worker runs in parallel and updates indexed flags as it completes files
+                spawn_indexing_worker(
+                    workspace_root.to_path_buf(),
+                    db_path,
+                    IndexingConfig::default(),
+                );
 
                 Ok(Self {
                     mode: WorkspaceMode::Leader { db, _guard: guard },

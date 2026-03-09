@@ -21,6 +21,7 @@ pub mod cleanup;
 pub mod db;
 pub mod error;
 pub mod hints;
+pub mod indexing;
 pub mod invalidation;
 pub mod lsp_indexer;
 pub mod ops;

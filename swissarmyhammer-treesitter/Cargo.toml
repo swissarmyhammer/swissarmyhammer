@@ -81,6 +81,9 @@ simsimd = { workspace = true }
 # Embedding support (platform-aware: ANE on Apple Silicon, llama.cpp elsewhere)
 swissarmyhammer-embedding = { path = "../swissarmyhammer-embedding" }
 
+# Code context integration for symbol extraction and edge generation
+swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
