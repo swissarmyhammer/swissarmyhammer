@@ -67,8 +67,8 @@ fn run_indexing_worker(
     db_path: &Path,
     config: IndexingConfig,
 ) -> Result<(), CodeContextError> {
-    debug!(
-        "Starting indexing worker for {}",
+    info!(
+        "code-context indexing worker started for {}",
         workspace_root.display()
     );
 
@@ -78,12 +78,13 @@ fn run_indexing_worker(
 
     // Work queue loop: keep checking for dirty files indefinitely
     // This allows the worker to index files that are discovered after startup
+    let mut indexed_count = 0;
     loop {
         // Query dirty files (ts_indexed = 0) in batches
         let dirty_files = query_dirty_files(&db, config.batch_size)?;
 
         if !dirty_files.is_empty() {
-            debug!("Found {} dirty files to index", dirty_files.len());
+            info!("code-context: processing {} dirty files", dirty_files.len());
 
             // Process files in parallel using rayon
             // Parse files using tree-sitter and extract chunks
@@ -131,6 +132,7 @@ fn run_indexing_worker(
                         if let Err(e) = mark_ts_indexed(&db, &file_path) {
                             warn!("Failed to mark {} as indexed: {}", file_path, e);
                         } else {
+                            indexed_count += 1;
                             debug!("Successfully indexed {} with {} chunks", file_path, chunk_count);
                         }
                     }
@@ -139,6 +141,7 @@ fn run_indexing_worker(
                     }
                 }
             }
+            info!("code-context: indexed {} files so far (batch complete)", indexed_count);
         }
 
         // Sleep before next iteration (allows new files to be discovered)
