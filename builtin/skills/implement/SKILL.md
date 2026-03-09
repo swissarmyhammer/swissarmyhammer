@@ -1,23 +1,16 @@
 ---
 name: implement
-description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent. Use "/implement all" to process every remaining card.
+description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent.
 context: fork
 agent: implementer
 metadata:
   author: swissarmyhammer
-  version: "4.0"
+  version: "3.0"
 ---
 
 # Implement
 
 Pick up the next kanban card and get it done.
-
-## Mode
-
-Check the arguments passed to this skill:
-
-- **No arguments or single card** (default): implement one card, then stop for review.
-- **`all`**: implement all remaining cards in sequence. After completing each card, immediately pick up the next one. Stop only when the board is clear or a card cannot be completed.
 
 ## Process
 
@@ -57,20 +50,17 @@ When all subtasks pass:
 
 A card left in "doing" is not finished.
 
-If you cannot complete the task, do NOT complete the card. Add a comment describing what happened and report back. In `all` mode, stop here — do not skip to the next card.
+If you cannot complete the task, do NOT complete the card. Add a comment describing what happened and report back.
 
-### 7. Report and continue
+### 7. Stop for review
 
-Present a brief summary of what was done and what tests pass.
+**Always stop after completing a card.** Present a summary of what was done and what tests pass. The user decides when to move to the next card — you do not auto-continue.
 
-- **Default mode**: stop here. The user decides when to move to the next card.
-- **`all` mode**: loop back to step 1 and pick up the next card immediately.
-
-Only exception in default mode: if the card description explicitly says **auto-continue** or **chain to next**, proceed to the next card without stopping.
+Only exception: if the card description explicitly says **auto-continue** or **chain to next**, proceed to the next card without stopping.
 
 ## Rules
 
-- One card at a time, in sequence. Complete each before starting the next.
+- One card at a time. Don't try to do multiple cards in one pass.
 - Do the work. No excuses, no "too complex". Find a way.
 - Don't over-engineer — write the simplest code that works.
 - Don't refactor unrelated code while implementing.
