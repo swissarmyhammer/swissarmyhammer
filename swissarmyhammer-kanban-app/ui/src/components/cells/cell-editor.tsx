@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { FieldDef } from "@/types/kanban";
+import type { FieldDef, Entity } from "@/types/kanban";
 import {
   resolveEditor,
   MarkdownEditor,
@@ -18,6 +18,7 @@ import {
 interface CellEditorProps {
   field: FieldDef;
   value: unknown;
+  entity: Entity;
   onCommit: (value: unknown) => void;
   onCancel: () => void;
 }
@@ -26,11 +27,15 @@ interface CellEditorProps {
  * Inline cell editor for grid view.
  * Dispatches on `field.editor` (via resolveEditor) to shared editor components.
  */
-export function CellEditor({ field, value, onCommit, onCancel }: CellEditorProps) {
+export function CellEditor({ field, value, entity, onCommit, onCancel }: CellEditorProps) {
   const editor = resolveEditor(field);
   const props = { value, onCommit, onCancel, mode: "compact" as const };
 
   switch (editor) {
+    case "none":
+      // Non-editable field — exit immediately
+      onCancel();
+      return null;
     case "select":
       return <SelectEditor {...props} field={field} />;
     case "number":
@@ -41,7 +46,7 @@ export function CellEditor({ field, value, onCommit, onCancel }: CellEditorProps
       return <ColorPaletteEditor {...props} />;
     case "multi-select":
       return (
-        <MultiSelectPopover field={field} value={value} onCommit={onCommit} onCancel={onCancel} />
+        <MultiSelectPopover field={field} entity={entity} value={value} onCommit={onCommit} onCancel={onCancel} />
       );
     case "markdown":
     default:
@@ -54,14 +59,12 @@ export function CellEditor({ field, value, onCommit, onCancel }: CellEditorProps
  * enters edit mode. Closing the popover (Escape or click-outside) commits
  * the current selection and exits edit mode.
  */
-function MultiSelectPopover({ field, value, onCommit, onCancel }: CellEditorProps & { field: FieldDef }) {
+function MultiSelectPopover({ field, entity, value, onCommit, onCancel }: CellEditorProps & { field: FieldDef }) {
   const [open, setOpen] = useState(true);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen) {
-        // Popover is closing — let the editor's own commit handle persisting;
-        // we just need to exit edit mode.
         onCancel();
       }
       setOpen(nextOpen);
@@ -80,7 +83,6 @@ function MultiSelectPopover({ field, value, onCommit, onCancel }: CellEditorProp
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
-        {/* Invisible anchor occupying the cell so the popover positions correctly */}
         <div className="w-full h-full min-h-[1.5rem]" />
       </PopoverTrigger>
       <PopoverContent
@@ -88,12 +90,12 @@ function MultiSelectPopover({ field, value, onCommit, onCancel }: CellEditorProp
         sideOffset={2}
         className="w-[320px] p-0"
         onOpenAutoFocus={(e) => {
-          // Let the MultiSelectEditor manage its own focus
           e.preventDefault();
         }}
       >
         <MultiSelectEditor
           field={field}
+          entity={entity}
           value={value}
           onCommit={handleCommit}
           onCancel={onCancel}

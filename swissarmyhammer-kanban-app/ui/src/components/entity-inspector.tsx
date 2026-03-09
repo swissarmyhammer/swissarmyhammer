@@ -82,7 +82,13 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     setEditingField(null);
   }, []);
 
-  const isEditable = (field: FieldDef) => field.type.kind !== "computed";
+  const isEditable = (field: FieldDef) => {
+    // Computed tag fields are editable via tag/untag commands
+    if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-tags") {
+      return true;
+    }
+    return field.type.kind !== "computed";
+  };
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
@@ -238,7 +244,7 @@ function FieldDispatch({
       case "date":
         return <DateEditor {...editorProps} />;
       case "multi-select":
-        return <MultiSelectEditor {...editorProps} field={field} />;
+        return <MultiSelectEditor {...editorProps} field={field} entity={entity} />;
       case "markdown":
       default:
         return (

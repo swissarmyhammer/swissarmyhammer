@@ -144,13 +144,15 @@ describe("EntityInspector", () => {
     expect(call![1]).toEqual({ cmd: "entity.update_field", args: { entity_type: "task", id: "test-id", field_name: "title", value: "New" } });
   });
 
-  it("does not allow editing computed fields", async () => {
+  it("allows editing computed tag fields via multi-select", async () => {
     const { container } = await renderInspector(makeEntity({ tags: ["bug"] }));
     const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
     expect(tagsRow).toBeTruthy();
-    // Click should not produce an editor
-    fireEvent.click(tagsRow!.querySelector(".cursor-text, .min-h-\\[1\\.25rem\\]")!);
-    expect(tagsRow!.querySelector(".cm-editor")).toBeNull();
+    // Click should produce a CM6 editor (tags are editable via tag/untag commands)
+    await act(async () => {
+      fireEvent.click(tagsRow!.querySelector(".cursor-text, .min-h-\\[1\\.25rem\\]")!);
+    });
+    expect(tagsRow!.querySelector(".cm-editor")).toBeTruthy();
   });
 
   it("body_field renders #tag as a styled pill when tag entity exists", async () => {
