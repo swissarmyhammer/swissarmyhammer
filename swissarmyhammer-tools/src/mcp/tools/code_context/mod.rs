@@ -21,11 +21,11 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
 use rmcp::ErrorData as McpError;
-use std::path::Path;
 use swissarmyhammer_code_context::{
     BlastRadiusOptions, BuildLayer, CallGraphDirection, CallGraphOptions, CodeContextWorkspace,
     GetSymbolOptions, GrepOptions, SearchSymbolOptions,
 };
+use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
 // ---------------------------------------------------------------------------
@@ -389,7 +389,11 @@ fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpErro
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
 
-    CodeContextWorkspace::open(Path::new(&working_dir)).map_err(|e| {
+    // Find the git repository root from the working directory
+    let workspace_root = find_git_repository_root_from(&working_dir)
+        .unwrap_or(working_dir);
+
+    CodeContextWorkspace::open(&workspace_root).map_err(|e| {
         McpError::internal_error(
             format!("Failed to open code context workspace: {}", e),
             None,

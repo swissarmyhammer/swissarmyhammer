@@ -240,6 +240,8 @@ use the skill tool to load the full instructions, then follow them.
 ### Available Skills
 
 
+- **code-context**: Code intelligence using the unified code context index. Use this skill when exploring a codebase, finding symbols, tracing call graphs, assessing blast radius, or searching code by pattern. This is the primary tool for understanding code structure and relationships. Agents should prefer this over raw file reads when navigating unfamiliar code. (local)
+
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
 
 - **coverage**: Analyze test coverage gaps on changed code. Scans branch changes, maps functions to tests structurally, and produces kanban cards for untested code. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent. (local)
