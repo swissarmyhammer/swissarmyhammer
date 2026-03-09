@@ -23,7 +23,7 @@ export function AvatarDisplay({ value }: DisplayProps) {
         <Avatar
           key={id}
           actorId={id}
-          size="sm"
+          size="md"
           className={i > 0 ? "-ml-1.5 ring-2 ring-background" : ""}
         />
       ))}

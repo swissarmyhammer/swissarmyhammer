@@ -17,9 +17,9 @@ import type { CommandDef } from "@/lib/command-scope";
 import { getStr } from "@/types/kanban";
 
 const SIZES = {
-  sm: "w-5 h-5 text-[9px]",
-  md: "w-7 h-7 text-xs",
-  lg: "w-9 h-9 text-sm",
+  sm: "w-5 h-5 min-w-5 min-h-5 text-[9px]",
+  md: "w-7 h-7 min-w-7 min-h-7 text-xs",
+  lg: "w-9 h-9 min-w-9 min-h-9 text-sm",
 } as const;
 
 interface AvatarProps {
