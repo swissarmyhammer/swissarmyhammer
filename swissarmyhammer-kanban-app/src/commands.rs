@@ -33,7 +33,11 @@ pub struct MenuItemEntry {
 
 /// Open a board at the given path, resolving to its .kanban directory.
 #[tauri::command]
-pub async fn open_board(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<Value, String> {
+pub async fn open_board(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Value, String> {
     let canonical = state.open_board(&PathBuf::from(&path), Some(app)).await?;
 
     // Return the board data
@@ -113,10 +117,7 @@ pub async fn get_keymap_mode(state: State<'_, AppState>) -> Result<String, Strin
 /// The frontend handles menu sync via `syncMenuToNative` after keymap
 /// changes, so we no longer rebuild the native menu here.
 #[tauri::command]
-pub async fn set_keymap_mode(
-    state: State<'_, AppState>,
-    mode: String,
-) -> Result<Value, String> {
+pub async fn set_keymap_mode(state: State<'_, AppState>, mode: String) -> Result<Value, String> {
     {
         let mut config = state.config.write().await;
         config.keymap_mode = mode.clone();
@@ -139,10 +140,7 @@ pub async fn get_ui_context(state: State<'_, AppState>) -> Result<Value, String>
 
 /// Persist the active view ID to config.
 #[tauri::command]
-pub async fn set_active_view(
-    state: State<'_, AppState>,
-    view_id: String,
-) -> Result<Value, String> {
+pub async fn set_active_view(state: State<'_, AppState>, view_id: String) -> Result<Value, String> {
     let mut config = state.config.write().await;
     config.active_view_id = Some(view_id.clone());
     config.save().map_err(|e| e.to_string())?;
@@ -327,10 +325,7 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
         .list("task")
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
-    let terminal_id = columns
-        .last()
-        .map(|c| c.id.as_str())
-        .unwrap_or("done");
+    let terminal_id = columns.last().map(|c| c.id.as_str()).unwrap_or("done");
 
     // Count tasks per column, and ready tasks per column
     let mut column_counts: HashMap<String, usize> = HashMap::new();
@@ -370,7 +365,10 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
         .map(|col| {
             let mut e = col.clone();
             let count = column_counts.get(col.id.as_str()).copied().unwrap_or(0);
-            let ready = column_ready_counts.get(col.id.as_str()).copied().unwrap_or(0);
+            let ready = column_ready_counts
+                .get(col.id.as_str())
+                .copied()
+                .unwrap_or(0);
             e.set("task_count", json!(count));
             e.set("ready_count", json!(ready));
             e.to_json()
@@ -439,7 +437,7 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
 /// plugin's save-on-exit, recreating the file we just deleted.
 #[tauri::command]
 pub async fn reset_windows(app: AppHandle) -> Result<(), String> {
-    if let Some(config_dir) = app.path().app_config_dir().ok() {
+    if let Ok(config_dir) = app.path().app_config_dir() {
         let state_file = config_dir.join(".window-state.json");
         if state_file.exists() {
             std::fs::remove_file(&state_file)
@@ -469,10 +467,7 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn list_views(state: State<'_, AppState>) -> Result<Value, String> {
     let handle = state.active_handle().await.ok_or("No active board")?;
-    let views_lock = handle
-        .ctx
-        .views()
-        .ok_or("Views not initialized")?;
+    let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
     let views = views_lock.read().await;
 
     let views_json: Vec<Value> = views
@@ -512,10 +507,7 @@ pub async fn rebuild_menu_from_manifest(
 /// the focused element hierarchy. It is used by `dispatch_command` when
 /// no explicit scope chain is provided.
 #[tauri::command]
-pub async fn set_focus(
-    state: State<'_, AppState>,
-    scope_chain: Vec<String>,
-) -> Result<(), String> {
+pub async fn set_focus(state: State<'_, AppState>, scope_chain: Vec<String>) -> Result<(), String> {
     tracing::debug!(scope_chain = ?scope_chain, "set_focus");
     *state.focus_scope_chain.write().await = scope_chain;
     Ok(())
@@ -580,12 +572,8 @@ pub async fn dispatch_command(
         Some(Value::Object(map)) => map.into_iter().collect(),
         _ => HashMap::new(),
     };
-    let mut ctx = swissarmyhammer_commands::CommandContext::new(
-        cmd.clone(),
-        scope,
-        target,
-        args_map,
-    );
+    let mut ctx =
+        swissarmyhammer_commands::CommandContext::new(cmd.clone(), scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
     // Set KanbanContext extension if board is open
@@ -601,13 +589,10 @@ pub async fn dispatch_command(
 
     // Execute
     tracing::debug!(cmd = %cmd, "executing command");
-    let result = cmd_impl
-        .execute(&ctx)
-        .await
-        .map_err(|e| {
-            tracing::error!(cmd = %cmd, error = %e, "command execution failed");
-            format!("Command failed: {}", e)
-        })?;
+    let result = cmd_impl.execute(&ctx).await.map_err(|e| {
+        tracing::error!(cmd = %cmd, error = %e, "command execution failed");
+        format!("Command failed: {}", e)
+    })?;
 
     tracing::info!(cmd = %cmd, undoable = undoable, result = %result, "command completed");
 
@@ -629,20 +614,33 @@ pub async fn dispatch_command(
             if let Ok(ectx) = handle.ctx.entity_context().await {
                 for evt in &mut events {
                     match evt {
-                        crate::watcher::WatchEvent::EntityCreated { entity_type, id, fields } => {
+                        crate::watcher::WatchEvent::EntityCreated {
+                            entity_type,
+                            id,
+                            fields,
+                        } => {
                             if let Ok(entity) = ectx.read(entity_type, id).await {
-                                *fields = entity.fields.into_iter()
+                                *fields = entity
+                                    .fields
+                                    .into_iter()
                                     .map(|(k, v)| (k.to_string(), v))
                                     .collect();
                             }
                         }
                         crate::watcher::WatchEvent::EntityFieldChanged {
-                            entity_type, id, fields, ..
+                            entity_type,
+                            id,
+                            fields,
+                            ..
                         } => {
                             if let Ok(entity) = ectx.read(entity_type, id).await {
-                                *fields = Some(entity.fields.into_iter()
-                                    .map(|(k, v)| (k.to_string(), v))
-                                    .collect());
+                                *fields = Some(
+                                    entity
+                                        .fields
+                                        .into_iter()
+                                        .map(|(k, v)| (k.to_string(), v))
+                                        .collect(),
+                                );
                             }
                         }
                         crate::watcher::WatchEvent::EntityRemoved { .. } => {}
@@ -687,7 +685,11 @@ pub async fn list_available_commands(
     // awaiting active_handle (avoids holding RwLock across an await point).
     let mut available: Vec<swissarmyhammer_commands::CommandDef> = {
         let registry = state.commands_registry.read().await;
-        registry.available_commands(&scope).into_iter().cloned().collect()
+        registry
+            .available_commands(&scope)
+            .into_iter()
+            .cloned()
+            .collect()
     };
 
     // Dynamic availability check — build a reusable context template and
@@ -766,5 +768,3 @@ pub async fn show_context_menu(
 
     Ok(())
 }
-
-

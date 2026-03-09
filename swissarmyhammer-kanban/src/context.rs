@@ -1006,11 +1006,7 @@ entity_type: task
 card_fields:
   - title
 "#;
-        std::fs::write(
-            views_dir.join("01JMVIEW0000000000BOARD0.yaml"),
-            custom_yaml,
-        )
-        .unwrap();
+        std::fs::write(views_dir.join("01JMVIEW0000000000BOARD0.yaml"), custom_yaml).unwrap();
 
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let views = ctx.views().unwrap().read().await;

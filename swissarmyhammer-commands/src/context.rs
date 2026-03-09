@@ -224,12 +224,7 @@ mod tests {
 
     #[test]
     fn target_moniker_parsing() {
-        let ctx = CommandContext::new(
-            "test",
-            vec![],
-            Some("column:doing".into()),
-            HashMap::new(),
-        );
+        let ctx = CommandContext::new("test", vec![], Some("column:doing".into()), HashMap::new());
         let (t, id) = ctx.target_moniker().unwrap();
         assert_eq!(t, "column");
         assert_eq!(id, "doing");

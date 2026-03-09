@@ -44,7 +44,10 @@ impl CommandsRegistry {
             }
         }
 
-        tracing::debug!(commands = registry.commands.len(), "commands registry built");
+        tracing::debug!(
+            commands = registry.commands.len(),
+            "commands registry built"
+        );
         registry
     }
 
@@ -265,7 +268,8 @@ mod tests {
 
     #[test]
     fn load_builtin_yaml_files() {
-        let registry = CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("entity", ENTITY_YAML)]);
+        let registry =
+            CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("entity", ENTITY_YAML)]);
         assert_eq!(registry.all_commands().len(), 4);
         assert!(registry.get("app.quit").is_some());
         assert!(registry.get("app.undo").is_some());
@@ -280,10 +284,8 @@ mod tests {
   keys:
     cua: Mod+W
 "#;
-        let registry = CommandsRegistry::from_yaml_sources(&[
-            ("app", APP_YAML),
-            ("override", override_yaml),
-        ]);
+        let registry =
+            CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("override", override_yaml)]);
 
         let quit = registry.get("app.quit").unwrap();
         // Keybinding was overridden
@@ -314,7 +316,8 @@ mod tests {
 
     #[test]
     fn available_commands_filters_by_scope() {
-        let registry = CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("entity", ENTITY_YAML)]);
+        let registry =
+            CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("entity", ENTITY_YAML)]);
 
         // No scope chain — only global commands
         let avail = registry.available_commands(&[]);
@@ -327,7 +330,8 @@ mod tests {
 
     #[test]
     fn available_commands_includes_when_scope_matches() {
-        let registry = CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("entity", ENTITY_YAML)]);
+        let registry =
+            CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("entity", ENTITY_YAML)]);
 
         let scope = vec!["column:todo".to_string()];
         let avail = registry.available_commands(&scope);
@@ -360,10 +364,8 @@ mod tests {
 - id: custom.hello
   name: Say Hello
 "#;
-        let registry = CommandsRegistry::from_yaml_sources(&[
-            ("app", APP_YAML),
-            ("user", user_yaml),
-        ]);
+        let registry =
+            CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("user", user_yaml)]);
 
         assert_eq!(registry.all_commands().len(), 3); // 2 app + 1 custom
         assert!(registry.get("custom.hello").is_some());

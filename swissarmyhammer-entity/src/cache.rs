@@ -128,8 +128,7 @@ impl EntityCache {
     /// Get the full `CachedEntity` (including hash and version) by type and id.
     pub async fn get_cached(&self, entity_type: &str, id: &str) -> Option<CachedEntity> {
         let map = self.cache.read().await;
-        map.get(&(entity_type.to_string(), id.to_string()))
-            .cloned()
+        map.get(&(entity_type.to_string(), id.to_string())).cloned()
     }
 
     /// Get clones of all cached entities of a given type.
@@ -178,7 +177,8 @@ impl EntityCache {
         } else {
             // Content unchanged — reuse existing version.
             let map = self.cache.read().await;
-            map.get(&key).map_or_else(|| self.bump_version(), |ce| ce.version)
+            map.get(&key)
+                .map_or_else(|| self.bump_version(), |ce| ce.version)
         };
 
         let mut map = self.cache.write().await;
@@ -207,11 +207,7 @@ impl EntityCache {
     /// Delegates to `inner.delete()` first, then removes the cache entry and
     /// emits an `EntityDeleted` event. Returns the `ChangeEntryId` from the
     /// underlying delete (or `None`).
-    pub async fn delete(
-        &self,
-        entity_type: &str,
-        id: &str,
-    ) -> Result<Option<ChangeEntryId>> {
+    pub async fn delete(&self, entity_type: &str, id: &str) -> Result<Option<ChangeEntryId>> {
         let change_id = self.inner.delete(entity_type, id).await?;
 
         let mut map = self.cache.write().await;
@@ -245,11 +241,7 @@ impl EntityCache {
     /// Returns `true` if the on-disk content differs from the cached version
     /// (or if the entity was not previously cached). Returns `false` if the
     /// content hash matches.
-    pub async fn refresh_from_disk(
-        &self,
-        entity_type: &str,
-        id: &str,
-    ) -> Result<bool> {
+    pub async fn refresh_from_disk(&self, entity_type: &str, id: &str) -> Result<bool> {
         let entity = self.inner.read(entity_type, id).await?;
         let new_hash = hash_entity(&entity);
         let key = (entity_type.to_string(), id.to_string());
@@ -353,11 +345,11 @@ mod tests {
         cache.write(&tag).await.unwrap();
 
         let cached2 = cache.get_cached("tag", "t1").await.unwrap();
-        assert_ne!(cached2.hash, hash1, "hash should change when content changes");
-        assert!(
-            cached2.version > ver1,
-            "version should bump on write"
+        assert_ne!(
+            cached2.hash, hash1,
+            "hash should change when content changes"
         );
+        assert!(cached2.version > ver1, "version should bump on write");
     }
 
     /// Writing the same content produces the same hash and does not bump version.
@@ -378,8 +370,14 @@ mod tests {
         cache.write(&tag).await.unwrap();
 
         let cached2 = cache.get_cached("tag", "t1").await.unwrap();
-        assert_eq!(hash1, cached2.hash, "hash should be identical for same content");
-        assert_eq!(ver1, cached2.version, "version should not bump for same content");
+        assert_eq!(
+            hash1, cached2.hash,
+            "hash should be identical for same content"
+        );
+        assert_eq!(
+            ver1, cached2.version,
+            "version should not bump for same content"
+        );
     }
 
     /// delete removes the entity from both disk and cache.

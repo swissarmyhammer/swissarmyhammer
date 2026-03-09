@@ -257,7 +257,9 @@ mod tests {
         // The tag entity should now exist
         let ectx = ctx.entity_context().await.unwrap();
         let tags = ectx.list("tag").await.unwrap();
-        let found = tags.iter().any(|t| t.get_str("tag_name") == Some("autotest"));
+        let found = tags
+            .iter()
+            .any(|t| t.get_str("tag_name") == Some("autotest"));
         assert!(found, "Tag entity 'autotest' should have been auto-created");
     }
 
@@ -285,7 +287,10 @@ mod tests {
         // Should still be exactly one tag entity named 'existing'
         let ectx = ctx.entity_context().await.unwrap();
         let tags = ectx.list("tag").await.unwrap();
-        let count = tags.iter().filter(|t| t.get_str("tag_name") == Some("existing")).count();
+        let count = tags
+            .iter()
+            .filter(|t| t.get_str("tag_name") == Some("existing"))
+            .count();
         assert_eq!(count, 1, "Should not duplicate existing tag");
     }
 

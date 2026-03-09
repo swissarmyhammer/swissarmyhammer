@@ -174,7 +174,10 @@ mod tests {
     #[test]
     fn builtin_view_definitions_load() {
         let defs = builtin_view_definitions();
-        assert!(!defs.is_empty(), "expected at least 1 builtin view definition");
+        assert!(
+            !defs.is_empty(),
+            "expected at least 1 builtin view definition"
+        );
     }
 
     #[test]

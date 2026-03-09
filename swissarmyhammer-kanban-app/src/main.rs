@@ -13,7 +13,6 @@ use state::AppState;
 use tauri::Manager;
 use tauri_plugin_window_state::{StateFlags, WindowExt};
 
-
 fn main() {
     let cli = Cli::parse();
 

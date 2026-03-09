@@ -123,10 +123,7 @@ async fn task_add_creates_task() {
         result.get("operation_id").is_some(),
         "result should contain operation_id"
     );
-    assert!(
-        result.get("id").is_some(),
-        "result should contain task id"
-    );
+    assert!(result.get("id").is_some(), "result should contain task id");
 
     // Verify the task actually exists on disk
     let task_id = result["id"].as_str().unwrap();
@@ -154,12 +151,7 @@ async fn task_move_to_column() {
     args.insert("column".to_string(), json!("doing"));
 
     let move_result = engine
-        .dispatch(
-            "task.move",
-            &[&format!("task:{}", task_id)],
-            None,
-            args,
-        )
+        .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
         .await
         .expect("task.move should succeed");
 
@@ -293,11 +285,12 @@ async fn entity_update_field() {
 async fn task_add_unavailable_without_column() {
     let engine = TestEngine::new().await;
 
-    let result = engine
-        .dispatch_simple("task.add", &[], None)
-        .await;
+    let result = engine.dispatch_simple("task.add", &[], None).await;
 
-    assert!(result.is_err(), "task.add should fail without column in scope");
+    assert!(
+        result.is_err(),
+        "task.add should fail without column in scope"
+    );
 }
 
 #[tokio::test]

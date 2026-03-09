@@ -142,7 +142,9 @@ pub fn update_cache(cache: &EntityCache, path: &Path) {
 ///
 /// Returns the list of events emitted.
 pub fn flush_and_emit(kanban_root: &Path, cache: &EntityCache) -> Vec<WatchEvent> {
-    let kanban_root = kanban_root.canonicalize().unwrap_or_else(|_| kanban_root.to_path_buf());
+    let kanban_root = kanban_root
+        .canonicalize()
+        .unwrap_or_else(|_| kanban_root.to_path_buf());
     let mut events = Vec::new();
 
     // Collect all current entity file paths on disk
@@ -360,9 +362,10 @@ fn classify_event(event: &Event, kanban_root: &Path) -> Vec<FsAction> {
         } else {
             // Canonicalize parent, re-append filename
             match (path.parent(), path.file_name()) {
-                (Some(parent), Some(name)) => {
-                    parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf()).join(name)
-                }
+                (Some(parent), Some(name)) => parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| parent.to_path_buf())
+                    .join(name),
                 _ => path.clone(),
             }
         };
@@ -539,7 +542,10 @@ fn parse_frontmatter_body(content: &str) -> Option<HashMap<String, serde_json::V
 
     let mut fields = json_to_field_map(json_val)?;
 
-    fields.insert("body".to_string(), serde_json::Value::String(body.to_string()));
+    fields.insert(
+        "body".to_string(),
+        serde_json::Value::String(body.to_string()),
+    );
     Some(fields)
 }
 
@@ -661,8 +667,14 @@ mod tests {
         let content = "name: To Do\nmetadata:\n  color: red\n  icon: star\n";
         let fields = parse_plain_yaml(content).unwrap();
         assert_eq!(fields.get("name").unwrap(), &serde_json::json!("To Do"));
-        assert_eq!(fields.get("metadata_color").unwrap(), &serde_json::json!("red"));
-        assert_eq!(fields.get("metadata_icon").unwrap(), &serde_json::json!("star"));
+        assert_eq!(
+            fields.get("metadata_color").unwrap(),
+            &serde_json::json!("red")
+        );
+        assert_eq!(
+            fields.get("metadata_icon").unwrap(),
+            &serde_json::json!("star")
+        );
         assert!(!fields.contains_key("metadata"));
     }
 
@@ -671,7 +683,10 @@ mod tests {
         let content = "---\ntitle: My Task\nassignees: []\n---\nBody text here\n";
         let fields = parse_frontmatter_body(content).unwrap();
         assert_eq!(fields.get("title").unwrap(), &serde_json::json!("My Task"));
-        assert_eq!(fields.get("body").unwrap(), &serde_json::json!("Body text here\n"));
+        assert_eq!(
+            fields.get("body").unwrap(),
+            &serde_json::json!("Body text here\n")
+        );
         assert_eq!(fields.get("assignees").unwrap(), &serde_json::json!([]));
     }
 
@@ -679,8 +694,14 @@ mod tests {
     fn test_parse_frontmatter_flattens_nested() {
         let content = "---\ntitle: T\nposition:\n  column: todo\n  ordinal: a0\n---\nBody\n";
         let fields = parse_frontmatter_body(content).unwrap();
-        assert_eq!(fields.get("position_column").unwrap(), &serde_json::json!("todo"));
-        assert_eq!(fields.get("position_ordinal").unwrap(), &serde_json::json!("a0"));
+        assert_eq!(
+            fields.get("position_column").unwrap(),
+            &serde_json::json!("todo")
+        );
+        assert_eq!(
+            fields.get("position_ordinal").unwrap(),
+            &serde_json::json!("a0")
+        );
         assert!(!fields.contains_key("position"));
     }
 
@@ -694,10 +715,12 @@ mod tests {
 
     #[test]
     fn test_diff_fields_modified() {
-        let old: HashMap<String, serde_json::Value> =
-            [("a".into(), serde_json::json!("old"))].into_iter().collect();
-        let new: HashMap<String, serde_json::Value> =
-            [("a".into(), serde_json::json!("new"))].into_iter().collect();
+        let old: HashMap<String, serde_json::Value> = [("a".into(), serde_json::json!("old"))]
+            .into_iter()
+            .collect();
+        let new: HashMap<String, serde_json::Value> = [("a".into(), serde_json::json!("new"))]
+            .into_iter()
+            .collect();
         let changes = diff_fields(&old, &new);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].field, "a");
@@ -716,8 +739,9 @@ mod tests {
 
     #[test]
     fn test_diff_fields_removed() {
-        let old: HashMap<String, serde_json::Value> =
-            [("c".into(), serde_json::json!("gone"))].into_iter().collect();
+        let old: HashMap<String, serde_json::Value> = [("c".into(), serde_json::json!("gone"))]
+            .into_iter()
+            .collect();
         let new: HashMap<String, serde_json::Value> = HashMap::new();
         let changes = diff_fields(&old, &new);
         assert_eq!(changes.len(), 1);
@@ -759,7 +783,12 @@ mod tests {
         std::fs::write(&path, "tag_name: Bug\ncolor: \"00ff00\"\n").unwrap();
         let evt = resolve_change(&path, &cache, &kanban);
         match evt {
-            Some(WatchEvent::EntityFieldChanged { entity_type, id, changes, .. }) => {
+            Some(WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            }) => {
                 assert_eq!(entity_type, "tag");
                 assert_eq!(id, "bug");
                 assert_eq!(changes.len(), 1);
@@ -780,7 +809,11 @@ mod tests {
 
         let evt = resolve_change(&path, &cache, &kanban);
         match evt {
-            Some(WatchEvent::EntityCreated { entity_type, id, fields }) => {
+            Some(WatchEvent::EntityCreated {
+                entity_type,
+                id,
+                fields,
+            }) => {
                 assert_eq!(entity_type, "tag");
                 assert_eq!(id, "new");
                 assert_eq!(fields.get("tag_name").unwrap(), &serde_json::json!("New"));
@@ -837,7 +870,12 @@ mod tests {
         let captured = events.lock().unwrap();
         assert!(!captured.is_empty(), "should have events");
         match &captured[0] {
-            WatchEvent::EntityFieldChanged { entity_type, id, changes, .. } => {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
                 assert_eq!(entity_type, "task");
                 assert_eq!(id, "test");
                 assert!(changes.iter().any(|c| c.field == "title"));
@@ -904,7 +942,11 @@ mod tests {
         let captured = events.lock().unwrap();
         assert!(!captured.is_empty());
         match &captured[0] {
-            WatchEvent::EntityCreated { entity_type, id, fields } => {
+            WatchEvent::EntityCreated {
+                entity_type,
+                id,
+                fields,
+            } => {
                 assert_eq!(entity_type, "tag");
                 assert_eq!(id, "new-tag");
                 assert_eq!(fields.get("tag_name").unwrap(), &serde_json::json!("new"));
@@ -985,7 +1027,9 @@ mod tests {
         let events = flush_and_emit(&kanban, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
-            WatchEvent::EntityCreated { entity_type, id, .. } => {
+            WatchEvent::EntityCreated {
+                entity_type, id, ..
+            } => {
                 assert_eq!(entity_type, "tag");
                 assert_eq!(id, "new");
             }
@@ -994,22 +1038,38 @@ mod tests {
 
         // Second flush should produce no events (cache updated)
         let events2 = flush_and_emit(&kanban, &cache);
-        assert!(events2.is_empty(), "should produce no events on second flush");
+        assert!(
+            events2.is_empty(),
+            "should produce no events on second flush"
+        );
     }
 
     #[test]
     fn test_flush_and_emit_detects_field_change() {
         let (_tmp, kanban) = setup_kanban_dir();
-        std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\ncolor: \"ff0000\"\n").unwrap();
+        std::fs::write(
+            kanban.join("tags/bug.yaml"),
+            "tag_name: Bug\ncolor: \"ff0000\"\n",
+        )
+        .unwrap();
         let cache = new_entity_cache(&kanban);
 
         // Modify a field
-        std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\ncolor: \"00ff00\"\n").unwrap();
+        std::fs::write(
+            kanban.join("tags/bug.yaml"),
+            "tag_name: Bug\ncolor: \"00ff00\"\n",
+        )
+        .unwrap();
 
         let events = flush_and_emit(&kanban, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
-            WatchEvent::EntityFieldChanged { entity_type, id, changes, .. } => {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
                 assert_eq!(entity_type, "tag");
                 assert_eq!(id, "bug");
                 assert_eq!(changes.len(), 1);
@@ -1045,7 +1105,10 @@ mod tests {
         let cache = new_entity_cache(&kanban);
 
         let events = flush_and_emit(&kanban, &cache);
-        assert!(events.is_empty(), "should produce no events when nothing changed");
+        assert!(
+            events.is_empty(),
+            "should produce no events when nothing changed"
+        );
     }
 
     #[test]
@@ -1071,7 +1134,12 @@ mod tests {
         let events = flush_and_emit(&kanban, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
-            WatchEvent::EntityFieldChanged { entity_type, id, changes, fields } => {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                fields,
+            } => {
                 assert_eq!(entity_type, "task");
                 assert_eq!(id, "task1");
                 // Raw body field should be detected as changed
@@ -1109,7 +1177,12 @@ mod tests {
         let events = flush_and_emit(&kanban, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
-            WatchEvent::EntityFieldChanged { entity_type, id, changes, .. } => {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
                 assert_eq!(entity_type, "task");
                 assert_eq!(id, "task1");
                 assert!(

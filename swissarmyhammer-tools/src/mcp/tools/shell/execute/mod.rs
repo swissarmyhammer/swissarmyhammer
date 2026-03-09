@@ -24,44 +24,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-/// Global shell state — initialized lazily on first use.
-static SHELL_STATE: Lazy<Arc<Mutex<Option<ShellState>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
-
-/// Stable directory for shell state, resolved once to an absolute path.
-///
-/// In test mode this uses a fixed temp directory so that concurrent tests
-/// which change the process CWD cannot corrupt the shell state path.
-/// In production mode it uses `CWD/.shell` (resolved to absolute at first call).
-static SHELL_DIR: Lazy<PathBuf> = Lazy::new(|| {
-    #[cfg(test)]
-    {
-        let dir = std::env::temp_dir().join(format!("sah-shell-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("Failed to create test shell dir");
-        dir
-    }
-    #[cfg(not(test))]
-    {
-        std::env::current_dir()
-            .expect("CWD must be accessible")
-            .join(".shell")
-    }
-});
-
-/// Get or initialize the global shell state.
-async fn get_shell_state() -> Result<Arc<Mutex<Option<ShellState>>>, McpError> {
-    let state = Arc::clone(&SHELL_STATE);
-    {
-        let mut guard = state.lock().await;
-        if guard.is_none() {
-            let s = ShellState::new_in_dir(SHELL_DIR.clone()).map_err(|e| {
-                McpError::internal_error(format!("Failed to initialize shell state: {}", e), None)
-            })?;
-            *guard = Some(s);
-        }
-    }
-    Ok(state)
-}
-
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
 
 /// Default shell configuration providing hardcoded sensible defaults

@@ -92,21 +92,16 @@ impl Command for MoveTaskCmd {
 
             let mut column_tasks: Vec<_> = all_tasks
                 .into_iter()
-                .filter(|t| {
-                    t.get_str("position_column") == Some(&column) && t.id != task_id
-                })
+                .filter(|t| t.get_str("position_column") == Some(&column) && t.id != task_id)
                 .collect();
-            column_tasks
-                .sort_by(|a, b| {
-                    let oa = a.get_str("position_ordinal").unwrap_or("a0");
-                    let ob = b.get_str("position_ordinal").unwrap_or("a0");
-                    oa.cmp(ob)
-                });
+            column_tasks.sort_by(|a, b| {
+                let oa = a.get_str("position_ordinal").unwrap_or("a0");
+                let ob = b.get_str("position_ordinal").unwrap_or("a0");
+                oa.cmp(ob)
+            });
 
-            let ordinal = crate::task_helpers::compute_ordinal_for_drop(
-                &column_tasks,
-                drop_index as usize,
-            );
+            let ordinal =
+                crate::task_helpers::compute_ordinal_for_drop(&column_tasks, drop_index as usize);
             op = op.with_ordinal(ordinal.as_str());
         }
 

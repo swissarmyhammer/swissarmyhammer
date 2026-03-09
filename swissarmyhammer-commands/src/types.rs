@@ -160,10 +160,7 @@ params:
             cmd: "task.move".into(),
             scope_chain: Some(vec!["task:01ABC".into(), "column:todo".into()]),
             target: Some("column:doing".into()),
-            args: Some(HashMap::from([(
-                "drop_index".into(),
-                serde_json::json!(2),
-            )])),
+            args: Some(HashMap::from([("drop_index".into(), serde_json::json!(2))])),
         };
         assert_eq!(inv.cmd, "task.move");
         assert_eq!(inv.scope_chain.as_ref().unwrap().len(), 2);

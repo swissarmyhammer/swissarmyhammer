@@ -197,8 +197,11 @@ impl BuiltinGenerator {
                 // Read the file content at build time and embed it as a string literal
                 if let Ok(content) = fs::read_to_string(&path) {
                     let hashes = raw_string_hashes(&content);
-                    writeln!(code, "        (\"{resource_name}\", r{hashes}\"{content}\"{hashes}),")
-                        .unwrap();
+                    writeln!(
+                        code,
+                        "        (\"{resource_name}\", r{hashes}\"{content}\"{hashes}),"
+                    )
+                    .unwrap();
                 }
             }
         }

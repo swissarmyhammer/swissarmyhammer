@@ -1467,6 +1467,9 @@ Generated for {{app.name}} by liquid templating engine.
     #[test]
     #[serial_test::serial(cwd)]
     fn test_with_template_vars_sets_default_variables() {
+        let temp_dir = TempDir::new().unwrap();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));
 
@@ -1490,6 +1493,9 @@ Generated for {{app.name}} by liquid templating engine.
     #[test]
     #[serial_test::serial(cwd)]
     fn test_with_template_vars_user_model_override() {
+        let temp_dir = TempDir::new().unwrap();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));
         vars.insert("model".to_string(), json!("User Custom Model"));

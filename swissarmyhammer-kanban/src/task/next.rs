@@ -119,8 +119,12 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
 
             // Sort by column order first, then ordinal within column
             candidates.sort_by(|a, b| {
-                let col_a = column_order.get(a.get_str("position_column").unwrap_or("")).unwrap_or(&0);
-                let col_b = column_order.get(b.get_str("position_column").unwrap_or("")).unwrap_or(&0);
+                let col_a = column_order
+                    .get(a.get_str("position_column").unwrap_or(""))
+                    .unwrap_or(&0);
+                let col_b = column_order
+                    .get(b.get_str("position_column").unwrap_or(""))
+                    .unwrap_or(&0);
                 let ord_a = Ordinal::from_string(a.get_str("position_ordinal").unwrap_or("a0"));
                 let ord_b = Ordinal::from_string(b.get_str("position_ordinal").unwrap_or("a0"));
                 col_a.cmp(col_b).then(ord_a.cmp(&ord_b))
@@ -349,7 +353,10 @@ mod tests {
 
         // next task should return null — all tasks are done
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
-        assert!(result.is_null(), "Expected null when all tasks are done, got: {result}");
+        assert!(
+            result.is_null(),
+            "Expected null when all tasks are done, got: {result}"
+        );
     }
 
     #[tokio::test]
