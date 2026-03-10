@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout};
 use serde_json::{json, Value};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 use rusqlite::Connection;
 
 use crate::error::CodeContextError;
@@ -189,7 +189,7 @@ impl LspJsonRpcClient {
 
             // Notifications have no "id" field — skip them
             if response.get("id").is_none() {
-                debug!("Skipping LSP notification: {}", response.get("method").and_then(|v| v.as_str()).unwrap_or("unknown"));
+                trace!("Skipping LSP notification: {}", response.get("method").and_then(|v| v.as_str()).unwrap_or("unknown"));
                 continue;
             }
 
