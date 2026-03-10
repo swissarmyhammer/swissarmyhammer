@@ -1011,7 +1011,17 @@ mod tests {
 
     #[test]
     fn test_clone_temp_dir_cleanup_on_drop() {
-        let source = parse_git_source("anthropics/skills", None).unwrap();
+        // Use a local bare repo to avoid network dependency
+        let bare = tempfile::tempdir().unwrap();
+        git2::Repository::init_bare(bare.path()).unwrap();
+
+        let source = GitSource {
+            clone_url: format!("file://{}", bare.path().display()),
+            git_ref: None,
+            subpath: None,
+            select: None,
+            display_name: "local/test".to_string(),
+        };
         let temp_dir = git_clone(&source).unwrap();
         let path = temp_dir.path().to_path_buf();
         assert!(path.exists());
