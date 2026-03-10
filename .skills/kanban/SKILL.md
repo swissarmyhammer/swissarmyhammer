@@ -40,11 +40,15 @@ Use `next task` with a `tag` filter to pick up specific kinds of work one card a
 
 This is the preferred way to work through tagged cards — it returns one ready card at a time and excludes done cards automatically.
 
-**Avoid** using `list tasks` with only a `tag` filter — this returns every matching card across all columns (including done) and can produce huge results. If you must list, always combine `tag` with `column`:
+**Never call `list tasks` with no parameters** — there is no good reason to dump every task. Always use a filter (`column`, `tag`, `assignee`, `ready`) or use `next task` to get one card at a time:
 
 ```json
-{"op": "list tasks", "tag": "bug", "column": "todo"}
+{"op": "list tasks", "column": "todo"}
+{"op": "list tasks", "tag": "bug"}
+{"op": "list tasks", "ready": true}
 ```
+
+Note: `list tasks` automatically excludes done tasks unless you explicitly request `column: "done"`.
 
 ### Setting Up Tags
 

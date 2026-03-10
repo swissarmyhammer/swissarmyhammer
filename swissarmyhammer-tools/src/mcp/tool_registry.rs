@@ -1822,6 +1822,8 @@ mod tests {
         }
     }
 
+    crate::impl_empty_initializable!(MockTool);
+
     #[async_trait::async_trait]
     impl McpTool for MockTool {
         fn name(&self) -> &'static str {
@@ -2066,6 +2068,8 @@ mod tests {
                     true
                 }
             }
+
+            crate::impl_empty_initializable!($name);
 
             #[async_trait::async_trait]
             impl McpTool for $name {

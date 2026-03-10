@@ -438,7 +438,75 @@ impl CodeContextTool {
     }
 }
 
-crate::impl_empty_doctorable!(CodeContextTool);
+impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
+    fn name(&self) -> &str {
+        "Code Context"
+    }
+
+    fn category(&self) -> &str {
+        "tools"
+    }
+
+    fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+        use swissarmyhammer_common::health::HealthCheck;
+
+        let mut checks = Vec::new();
+        let cat = self.category();
+
+        // Check LSP server availability for detected project type
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let report = doctor::run_doctor(&cwd);
+
+        if let Some(ref ptype) = report.project_type {
+            for lsp in &report.lsp_servers {
+                if lsp.installed {
+                    checks.push(HealthCheck::ok(
+                        format!("{} (LSP)", lsp.name),
+                        format!(
+                            "Available at {}",
+                            lsp.path.as_deref().unwrap_or("unknown")
+                        ),
+                        cat,
+                    ));
+                } else if let Some(ref err) = lsp.error {
+                    // Binary found on PATH but doesn't actually work
+                    let hint = lsp.install_hint.as_deref().unwrap_or("Check installation");
+                    checks.push(HealthCheck::error(
+                        format!("{} (LSP)", lsp.name),
+                        format!(
+                            "Found at {} but broken: {}",
+                            lsp.path.as_deref().unwrap_or("unknown"),
+                            err
+                        ),
+                        Some(hint.to_string()),
+                        cat,
+                    ));
+                } else {
+                    // Not found at all
+                    let hint = lsp.install_hint.as_deref().unwrap_or("Install the LSP server");
+                    checks.push(HealthCheck::warning(
+                        format!("{} (LSP)", lsp.name),
+                        format!("Not found (needed for {} code intelligence)", ptype),
+                        Some(hint.to_string()),
+                        cat,
+                    ));
+                }
+            }
+        } else {
+            checks.push(HealthCheck::ok(
+                "LSP servers",
+                "No project type detected — no LSP required",
+                cat,
+            ));
+        }
+
+        checks
+    }
+
+    fn is_applicable(&self) -> bool {
+        true
+    }
+}
 impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
     fn name(&self) -> &str { "code_context" }
     fn category(&self) -> &str { "tools" }
@@ -1127,9 +1195,9 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
         let lang_config = match lang_registry.detect_language(&file_path) {
             Some(config) => config,
             None => {
-                // Not a supported language — mark indexed and skip
+                // Not a supported language — mark ts done, leave lsp for the LSP daemon
                 let _ = db.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
                     rusqlite::params![relative_path],
                 );
                 indexed += 1;
@@ -1141,9 +1209,9 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
         let content = match std::fs::read_to_string(&file_path) {
             Ok(c) => c,
             Err(_) => {
-                // File unreadable (binary, permissions, etc.) — mark indexed
+                // File unreadable (binary, permissions, etc.) — mark ts done
                 let _ = db.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
                     rusqlite::params![relative_path],
                 );
                 indexed += 1;
@@ -1154,7 +1222,7 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
         let mut parser = tree_sitter::Parser::new();
         if parser.set_language(&lang_config.language()).is_err() {
             let _ = db.execute(
-                "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+                "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
                 rusqlite::params![relative_path],
             );
             indexed += 1;
@@ -1165,7 +1233,7 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
             Some(t) => t,
             None => {
                 let _ = db.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
                     rusqlite::params![relative_path],
                 );
                 indexed += 1;
@@ -1236,9 +1304,9 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
             let _ = swissarmyhammer_code_context::write_ts_edges(&db, relative_path, &edges);
         }
 
-        // 7. Mark file as ts_indexed and lsp_indexed (tree-sitter symbols serve as LSP symbols)
+        // 7. Mark file as ts_indexed — lsp_indexed is set independently by the LSP daemon
         let _ = db.execute(
-            "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+            "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
             rusqlite::params![relative_path],
         );
 

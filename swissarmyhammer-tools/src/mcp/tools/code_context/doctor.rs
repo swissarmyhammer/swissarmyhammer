@@ -11,6 +11,10 @@ pub struct LspAvailability {
     pub name: String,
     pub installed: bool,
     pub path: Option<String>,
+    /// Why the binary failed to run (even if found on PATH)
+    pub error: Option<String>,
+    /// Human-readable install instructions
+    pub install_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -36,28 +40,49 @@ pub fn detect_project_type(root: &Path) -> Option<String> {
     None
 }
 
-/// Check if a command/executable is available in PATH.
-fn is_command_available(cmd: &str) -> (bool, Option<String>) {
-    match Command::new("which").arg(cmd).output() {
-        Ok(output) => {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                (true, Some(path))
-            } else {
-                (false, None)
-            }
+/// Check if a command/executable is available and actually works.
+///
+/// Finding the binary via `which` isn't enough — rustup shims exist on PATH
+/// but fail if the actual component isn't installed. We verify by running
+/// `cmd --version` and checking for a successful exit.
+fn is_command_available(cmd: &str) -> (bool, Option<String>, Option<String>) {
+    // First, find the binary path
+    let path = match Command::new("which").arg(cmd).output() {
+        Ok(output) if output.status.success() => {
+            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
         }
-        Err(_) => (false, None),
+        _ => return (false, None, None),
+    };
+
+    // Binary exists on PATH — now verify it actually runs
+    match Command::new(cmd).arg("--version").output() {
+        Ok(output) if output.status.success() => (true, path, None),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let reason = if stderr.is_empty() {
+                format!("exited with status {}", output.status)
+            } else {
+                stderr
+            };
+            (false, path, Some(reason))
+        }
+        Err(e) => (false, path, Some(format!("failed to execute: {}", e))),
     }
 }
 
-/// Get LSP servers appropriate for a project type.
-fn get_lsp_servers_for_type(project_type: &str) -> Vec<&'static str> {
+/// LSP server info for a project type: (command, install_hint).
+fn get_lsp_servers_for_type(project_type: &str) -> Vec<(&'static str, &'static str)> {
     match project_type {
-        "rust" => vec!["rust-analyzer"],
-        "javascript" => vec!["node_modules/.bin/typescript-language-server", "tsserver"],
-        "python" => vec!["pylsp", "pyright"],
-        "go" => vec!["gopls"],
+        "rust" => vec![("rust-analyzer", "rustup component add rust-analyzer")],
+        "javascript" => vec![
+            ("typescript-language-server", "npm install -g typescript-language-server typescript"),
+            ("tsserver", "npm install -g typescript"),
+        ],
+        "python" => vec![
+            ("pylsp", "pip install python-lsp-server"),
+            ("pyright", "npm install -g pyright"),
+        ],
+        "go" => vec![("gopls", "go install golang.org/x/tools/gopls@latest")],
         _ => vec![],
     }
 }
@@ -69,12 +94,14 @@ pub fn run_doctor(root: &Path) -> DoctorReport {
     let mut lsp_servers = Vec::new();
 
     if let Some(ref ptype) = project_type {
-        for lsp_cmd in get_lsp_servers_for_type(ptype) {
-            let (installed, path) = is_command_available(lsp_cmd);
+        for (lsp_cmd, hint) in get_lsp_servers_for_type(ptype) {
+            let (installed, path, error) = is_command_available(lsp_cmd);
             lsp_servers.push(LspAvailability {
                 name: lsp_cmd.to_string(),
                 installed,
                 path,
+                error,
+                install_hint: if installed { None } else { Some(hint.to_string()) },
             });
         }
     }
