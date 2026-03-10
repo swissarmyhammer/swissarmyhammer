@@ -32,6 +32,18 @@ fn generate_code_context_examples() -> Vec<Value> {
             "value": {"op": "grep code", "pattern": "TODO|FIXME", "max_results": 20}
         }),
         json!({
+            "description": "Semantic similarity search across code",
+            "value": {"op": "search code", "query": "authentication handler", "top_k": 5}
+        }),
+        json!({
+            "description": "Find duplicated code in a file",
+            "value": {"op": "find duplicates", "file_path": "src/handlers.rs", "min_similarity": 0.85}
+        }),
+        json!({
+            "description": "Find all function definitions in Rust files using S-expression query",
+            "value": {"op": "query ast", "query": "(function_item name: (identifier) @name)", "language": "rust"}
+        }),
+        json!({
             "description": "Traverse call graph from a symbol",
             "value": {"op": "get callgraph", "symbol": "process_request", "direction": "outbound"}
         }),
@@ -58,8 +70,8 @@ fn generate_code_context_examples() -> Vec<Value> {
 mod tests {
     use super::*;
     use crate::mcp::tools::code_context::{
-        BuildStatus, ClearStatus, GetBlastradius, GetCallgraph, GetCodeStatus,
-        GetSymbol, GrepCode, ListSymbols, SearchSymbol,
+        BuildStatus, ClearStatus, FindDuplicates, GetBlastradius, GetCallgraph, GetCodeStatus,
+        GetSymbol, GrepCode, ListSymbols, QueryAst, SearchCode, SearchSymbol,
     };
 
     fn test_operations() -> Vec<&'static dyn Operation> {
@@ -68,6 +80,9 @@ mod tests {
             &SearchSymbol as &dyn Operation,
             &ListSymbols as &dyn Operation,
             &GrepCode as &dyn Operation,
+            &SearchCode as &dyn Operation,
+            &FindDuplicates as &dyn Operation,
+            &QueryAst as &dyn Operation,
             &GetCallgraph as &dyn Operation,
             &GetBlastradius as &dyn Operation,
             &GetCodeStatus as &dyn Operation,
@@ -97,7 +112,7 @@ mod tests {
         let op_enum = schema["properties"]["op"]["enum"]
             .as_array()
             .expect("op should have enum");
-        assert_eq!(op_enum.len(), 9);
+        assert_eq!(op_enum.len(), 12);
         assert!(op_enum.contains(&json!("get symbol")));
         assert!(op_enum.contains(&json!("search symbol")));
         assert!(op_enum.contains(&json!("list symbols")));
@@ -106,6 +121,9 @@ mod tests {
         assert!(op_enum.contains(&json!("get blastradius")));
         assert!(op_enum.contains(&json!("get status")));
         assert!(op_enum.contains(&json!("build status")));
+        assert!(op_enum.contains(&json!("search code")));
+        assert!(op_enum.contains(&json!("find duplicates")));
+        assert!(op_enum.contains(&json!("query ast")));
         assert!(op_enum.contains(&json!("clear status")));
     }
 
@@ -117,7 +135,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 9);
+        assert_eq!(op_schemas.len(), 12);
     }
 
     #[test]
@@ -138,6 +156,11 @@ mod tests {
         assert!(props.contains_key("layer"));
         assert!(props.contains_key("language"));
         assert!(props.contains_key("files"));
+        assert!(props.contains_key("top_k"));
+        assert!(props.contains_key("min_similarity"));
+        assert!(props.contains_key("file_pattern"));
+        assert!(props.contains_key("min_chunk_bytes"));
+        assert!(props.contains_key("max_per_chunk"));
     }
 
     #[test]
@@ -146,7 +169,7 @@ mod tests {
         let schema = generate_code_context_schema(&ops);
 
         assert!(schema["examples"].is_array());
-        assert_eq!(schema["examples"].as_array().unwrap().len(), 9);
+        assert_eq!(schema["examples"].as_array().unwrap().len(), 12);
     }
 
     #[test]

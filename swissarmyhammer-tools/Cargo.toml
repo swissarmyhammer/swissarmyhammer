@@ -93,6 +93,13 @@ swissarmyhammer-embedding = { path = "../swissarmyhammer-embedding" }
 # SQLite for embedding storage
 rusqlite = { workspace = true }
 
+# Hashing and tree-sitter for incremental indexing
+md5 = { workspace = true }
+tree-sitter = { workspace = true }
+
+# LSP server lifecycle management
+swissarmyhammer-lsp = { workspace = true }
+
 # Operations pattern
 swissarmyhammer-operations = { workspace = true }
 

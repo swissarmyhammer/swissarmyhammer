@@ -19,6 +19,7 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 use tokio::sync::{Mutex, RwLock};
 
+
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_file_tools, register_git_tools, register_js_tools, register_kanban_tools,
@@ -274,7 +275,16 @@ impl McpServer {
     /// Finds the git repository root from the working directory, opens a
     /// CodeContextWorkspace (which triggers file discovery and background indexing),
     /// then runs full tree-sitter indexing with symbols and call edges.
+    ///
+    /// Uses `std::sync::Once` to ensure this runs exactly once, even when
+    /// multiple MCP connections call it concurrently (Claude Code opens ~3).
     fn initialize_code_context(work_dir: &std::path::Path) {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        let work_dir = work_dir.to_path_buf();
+        INIT.call_once(move || Self::do_initialize_code_context(&work_dir));
+    }
+
+    fn do_initialize_code_context(work_dir: &std::path::Path) {
         let workspace_root = match find_git_repository_root_from(work_dir) {
             Some(root) => root,
             None => {
@@ -290,6 +300,38 @@ impl McpServer {
             "code-context: initializing for workspace {}",
             workspace_root.display()
         );
+
+        // Start LSP supervisor in parallel with tree-sitter indexing.
+        // LSP servers (e.g. rust-analyzer) take 30-120s to warm up, so
+        // launching early overlaps with tree-sitter scanning.
+        let lsp_root = workspace_root.clone();
+        tokio::spawn(async move {
+            let mut supervisor = swissarmyhammer_lsp::LspSupervisorManager::new(lsp_root);
+            let results = supervisor.start().await;
+            let ok_count = results.iter().filter(|r| r.is_ok()).count();
+            let err_count = results.iter().filter(|r| r.is_err()).count();
+            tracing::info!(
+                "code-context: LSP supervisor started — {} servers ok, {} failed",
+                ok_count, err_count
+            );
+            for r in &results {
+                if let Err(e) = r {
+                    tracing::warn!("code-context: LSP start error: {}", e);
+                }
+            }
+
+            // Store supervisor for status queries and periodic health checks
+            use super::tools::code_context::LSP_SUPERVISOR;
+            let _ = LSP_SUPERVISOR.set(Arc::new(tokio::sync::Mutex::new(supervisor)));
+
+            // Periodic health check loop (every 60s)
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                if let Some(sup) = LSP_SUPERVISOR.get() {
+                    sup.lock().await.health_check_all().await;
+                }
+            }
+        });
 
         tokio::spawn(async move {
             use super::tools::code_context::index_discovered_files_async;
@@ -326,6 +368,10 @@ impl McpServer {
                 "code-context: indexing complete for {}",
                 workspace_root.display()
             );
+
+            // 3. Start file watcher to keep index in sync with filesystem changes.
+            use super::tools::code_context::watcher::start_code_context_watcher;
+            let _watcher_handle = start_code_context_watcher(workspace_root);
         });
     }
 

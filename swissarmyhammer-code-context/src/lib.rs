@@ -53,7 +53,17 @@ pub use ops::get_symbol::{
     get_symbol, symbol_kind_name, GetSymbolOptions, GetSymbolResult, MatchTier, SymbolLocation,
     SymbolMatch,
 };
+pub use ops::find_duplicates::{
+    find_duplicates, ChunkRef, DuplicateGroup, DuplicateMatch, FindDuplicatesOptions,
+    FindDuplicatesResult,
+};
 pub use ops::grep_code::{grep_code, GrepMatch, GrepOptions, GrepResult, MatchPosition};
+pub use ops::query_ast::{
+    query_ast, AstCapture, AstMatch, QueryAstOptions, QueryAstResult,
+};
+pub use ops::search_code::{
+    search_code, serialize_embedding, SearchCodeMatch, SearchCodeOptions, SearchCodeResult,
+};
 pub use ops::list_symbol::list_symbols;
 pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
 pub use blocking::{check_blocking_status, BlockingStatus, IndexLayer};

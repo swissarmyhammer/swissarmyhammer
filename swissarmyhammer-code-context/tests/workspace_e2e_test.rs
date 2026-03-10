@@ -356,7 +356,7 @@ fn test_indexing_worker_marks_files_indexed() {
     let project = create_test_project();
     let root = project.path();
 
-    // Open workspace (spawns indexing worker in leader)
+    // Open workspace
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
     assert!(ws.is_leader(), "Should be leader");
 
@@ -374,8 +374,15 @@ fn test_indexing_worker_marks_files_indexed() {
     assert_eq!(before.total_files, 4, "Should have 4 files in database");
     assert_eq!(before.ts_indexed_files, 0, "No files should be indexed initially");
 
+    // Explicitly spawn the indexing worker (no longer auto-started by workspace open)
+    let db_path = root.join(".code-context").join("index.db");
+    swissarmyhammer_code_context::indexing::spawn_indexing_worker(
+        root.to_path_buf(),
+        db_path,
+        swissarmyhammer_code_context::indexing::IndexingConfig::default(),
+    );
+
     // Give indexing worker time to run (it's in a background thread)
-    // Worker processes in batches with 100ms delay between batches
     thread::sleep(Duration::from_secs(2));
 
     // Check status after indexing worker runs

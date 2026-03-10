@@ -20,4 +20,12 @@ pub enum CodeContextError {
     /// Invalid regex pattern
     #[error("invalid regex pattern: {0}")]
     Pattern(String),
+
+    /// LSP communication error
+    #[error("LSP error: {0}")]
+    LspError(String),
+
+    /// Query execution error
+    #[error("{0}")]
+    QueryError(String),
 }

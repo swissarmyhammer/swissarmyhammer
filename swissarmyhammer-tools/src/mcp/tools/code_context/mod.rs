@@ -25,12 +25,18 @@ use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
 use rmcp::ErrorData as McpError;
 use std::path::Path;
 use swissarmyhammer_code_context::{
-    BlastRadiusOptions, BuildLayer, CallGraphDirection, CallGraphOptions, CodeContextWorkspace,
-    GetSymbolOptions, GrepOptions, SearchSymbolOptions,
+    BlastRadiusOptions, BlockingStatus, BuildLayer, CallGraphDirection, CallGraphOptions,
+    CodeContextWorkspace, FindDuplicatesOptions, GetSymbolOptions, GrepOptions, IndexLayer,
+    QueryAstOptions, SearchCodeOptions, SearchSymbolOptions,
 };
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
-use swissarmyhammer_treesitter::IndexContext;
+
+/// Global LSP supervisor handle, initialized once at MCP startup.
+/// Used by `get status` to report LSP server state and by `server.rs` for init.
+pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
+    std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>
+> = std::sync::OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // Operation structs with Operation trait impls
@@ -281,6 +287,115 @@ impl Operation for ClearStatus {
     }
 }
 
+/// Operation metadata for semantic code search using embeddings.
+#[derive(Debug, Default)]
+pub struct SearchCode;
+
+static SEARCH_CODE_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("query")
+        .description("Natural language query to search for semantically similar code")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("top_k")
+        .description("Maximum number of results to return (default: 10)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("min_similarity")
+        .description("Minimum cosine similarity threshold, 0.0-1.0 (default: 0.7)")
+        .param_type(ParamType::Number),
+    ParamMeta::new("language")
+        .description("Only search chunks from files with these extensions (e.g. [\"rs\", \"py\"])")
+        .param_type(ParamType::Array),
+    ParamMeta::new("file_pattern")
+        .description("Only search chunks from files matching this path pattern")
+        .param_type(ParamType::String),
+];
+
+impl Operation for SearchCode {
+    fn verb(&self) -> &'static str {
+        "search"
+    }
+    fn noun(&self) -> &'static str {
+        "code"
+    }
+    fn description(&self) -> &'static str {
+        "Semantic similarity search across code chunks using embeddings"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SEARCH_CODE_PARAMS
+    }
+}
+
+/// Operation metadata for finding duplicated code.
+#[derive(Debug, Default)]
+pub struct FindDuplicates;
+
+static FIND_DUPLICATES_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("File to check for duplicated code elsewhere in the codebase")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("min_similarity")
+        .description("Minimum cosine similarity to report as duplicate, 0.0-1.0 (default: 0.85)")
+        .param_type(ParamType::Number),
+    ParamMeta::new("min_chunk_bytes")
+        .description("Minimum chunk size in bytes to consider (default: 100)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("max_per_chunk")
+        .description("Maximum duplicates to show per source chunk (default: 5)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for FindDuplicates {
+    fn verb(&self) -> &'static str {
+        "find"
+    }
+    fn noun(&self) -> &'static str {
+        "duplicates"
+    }
+    fn description(&self) -> &'static str {
+        "Find code in a file that is duplicated elsewhere in the codebase"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        FIND_DUPLICATES_PARAMS
+    }
+}
+
+/// Operation metadata for tree-sitter S-expression AST queries.
+#[derive(Debug, Default)]
+pub struct QueryAst;
+
+static QUERY_AST_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("query")
+        .description("Tree-sitter S-expression query pattern (e.g., '(function_item name: (identifier) @name)')")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("language")
+        .description("Language to parse files as (e.g., 'rust', 'python', 'typescript')")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("files")
+        .description("File paths (relative to workspace root) to query against")
+        .param_type(ParamType::Array),
+    ParamMeta::new("max_results")
+        .description("Maximum number of matches to return (default: 50)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for QueryAst {
+    fn verb(&self) -> &'static str {
+        "query"
+    }
+    fn noun(&self) -> &'static str {
+        "ast"
+    }
+    fn description(&self) -> &'static str {
+        "Execute tree-sitter S-expression queries against parsed ASTs for structural code search"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        QUERY_AST_PARAMS
+    }
+}
+
 // Static operation instances for schema generation
 static GET_SYMBOL_OP: Lazy<GetSymbol> = Lazy::new(GetSymbol::default);
 static SEARCH_SYMBOL_OP: Lazy<SearchSymbol> = Lazy::new(SearchSymbol::default);
@@ -291,6 +406,9 @@ static GET_BLASTRADIUS_OP: Lazy<GetBlastradius> = Lazy::new(GetBlastradius::defa
 static GET_CODE_STATUS_OP: Lazy<GetCodeStatus> = Lazy::new(GetCodeStatus::default);
 static BUILD_STATUS_OP: Lazy<BuildStatus> = Lazy::new(BuildStatus::default);
 static CLEAR_STATUS_OP: Lazy<ClearStatus> = Lazy::new(ClearStatus::default);
+static SEARCH_CODE_OP: Lazy<SearchCode> = Lazy::new(SearchCode::default);
+static FIND_DUPLICATES_OP: Lazy<FindDuplicates> = Lazy::new(FindDuplicates::default);
+static QUERY_AST_OP: Lazy<QueryAst> = Lazy::new(QueryAst::default);
 
 static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
@@ -298,6 +416,9 @@ static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(||
         &*SEARCH_SYMBOL_OP as &dyn Operation,
         &*LIST_SYMBOLS_OP as &dyn Operation,
         &*GREP_CODE_OP as &dyn Operation,
+        &*SEARCH_CODE_OP as &dyn Operation,
+        &*FIND_DUPLICATES_OP as &dyn Operation,
+        &*QUERY_AST_OP as &dyn Operation,
         &*GET_CALLGRAPH_OP as &dyn Operation,
         &*GET_BLASTRADIUS_OP as &dyn Operation,
         &*GET_CODE_STATUS_OP as &dyn Operation,
@@ -360,18 +481,21 @@ impl McpTool for CodeContextTool {
             "search symbol" => execute_search_symbol(&arguments, context),
             "list symbols" => execute_list_symbols(&arguments, context),
             "grep code" => execute_grep_code(&arguments, context),
+            "search code" => execute_search_code(&arguments, context).await,
+            "find duplicates" => execute_find_duplicates(&arguments, context),
+            "query ast" => execute_query_ast(&arguments, context),
             "get callgraph" => execute_get_callgraph(&arguments, context),
             "get blastradius" => execute_get_blastradius(&arguments, context),
             "get status" => execute_get_status(context),
             "build status" => execute_build_status(&arguments, context),
             "clear status" => execute_clear_status(context),
             "" => Err(McpError::invalid_params(
-                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'.",
+                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'.",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'",
+                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'",
                     other
                 ),
                 None,
@@ -430,6 +554,39 @@ fn context_err(e: swissarmyhammer_code_context::CodeContextError) -> McpError {
     McpError::internal_error(format!("{}", e), None)
 }
 
+/// Check if tree-sitter indexing is complete; if not, return a progress message.
+///
+/// Returns `Ok(None)` when ready, `Ok(Some(result))` with a progress message when not.
+fn check_ts_readiness(ws: &CodeContextWorkspace) -> Result<Option<CallToolResult>, McpError> {
+    let status = swissarmyhammer_code_context::check_blocking_status(ws.db(), IndexLayer::TreeSitter)
+        .map_err(context_err)?;
+    match status {
+        BlockingStatus::Ready => Ok(None),
+        BlockingStatus::NotReady {
+            total_files,
+            indexed_files,
+            progress_percent,
+        } => {
+            let msg = format!(
+                "Index not ready — {}/{} files indexed ({:.0}% complete). Please retry shortly.",
+                indexed_files, total_files, progress_percent
+            );
+            Ok(Some(CallToolResult {
+                content: vec![Annotated::new(
+                    RawContent::Text(RawTextContent {
+                        text: msg,
+                        meta: None,
+                    }),
+                    None,
+                )],
+                is_error: Some(false),
+                structured_content: None,
+                meta: None,
+            }))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Operation handlers
 // ---------------------------------------------------------------------------
@@ -452,6 +609,9 @@ fn execute_get_symbol(
     };
 
     let ws = open_workspace(context)?;
+    if let Some(progress) = check_ts_readiness(&ws)? {
+        return Ok(progress);
+    }
     let result =
         swissarmyhammer_code_context::get_symbol(ws.db(), query, &options).map_err(context_err)?;
     json_result(&result)
@@ -475,6 +635,9 @@ fn execute_search_symbol(
     };
 
     let ws = open_workspace(context)?;
+    if let Some(progress) = check_ts_readiness(&ws)? {
+        return Ok(progress);
+    }
     let results = swissarmyhammer_code_context::search_symbol(ws.db(), query, &options)
         .map_err(context_err)?;
     json_result(&results)
@@ -495,6 +658,9 @@ fn execute_list_symbols(
         })?;
 
     let ws = open_workspace(context)?;
+    if let Some(progress) = check_ts_readiness(&ws)? {
+        return Ok(progress);
+    }
     let results =
         swissarmyhammer_code_context::list_symbols(ws.db(), file_path).map_err(context_err)?;
     json_result(&results)
@@ -535,8 +701,212 @@ fn execute_grep_code(
     };
 
     let ws = open_workspace(context)?;
+    if let Some(progress) = check_ts_readiness(&ws)? {
+        return Ok(progress);
+    }
     let result =
         swissarmyhammer_code_context::grep_code(ws.db(), pattern, &options).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "search code" operation.
+///
+/// Embeds the query text and computes cosine similarity against stored chunk embeddings.
+async fn execute_search_code(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
+
+    let top_k = args
+        .get("top_k")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(10);
+
+    let min_similarity = args
+        .get("min_similarity")
+        .and_then(|v| v.as_f64())
+        .map(|n| n as f32)
+        .unwrap_or(0.7);
+
+    let language = args.get("language").and_then(|v| {
+        v.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(String::from))
+                .collect()
+        })
+    });
+
+    let file_pattern = args
+        .get("file_pattern")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // Embed the query text
+    use swissarmyhammer_embedding::{Embedder, TextEmbedder};
+    let embedder = Embedder::default().await.map_err(|e| {
+        McpError::internal_error(format!("Failed to create embedder: {}", e), None)
+    })?;
+    embedder.load().await.map_err(|e| {
+        McpError::internal_error(format!("Failed to load embedding model: {}", e), None)
+    })?;
+    let embed_result = embedder.embed_text(query).await.map_err(|e| {
+        McpError::internal_error(format!("Failed to embed query: {}", e), None)
+    })?;
+
+    let options = SearchCodeOptions {
+        top_k,
+        min_similarity,
+        language,
+        file_pattern,
+    };
+
+    let ws = open_workspace(context)?;
+    if let Some(progress) = check_ts_readiness(&ws)? {
+        return Ok(progress);
+    }
+    let result = swissarmyhammer_code_context::search_code(
+        ws.db(),
+        embed_result.embedding(),
+        &options,
+    )
+    .map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "find duplicates" operation.
+///
+/// For each chunk in the target file, finds similar chunks in other files.
+fn execute_find_duplicates(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            McpError::invalid_params("Missing required parameter 'file_path'", None)
+        })?;
+
+    let min_similarity = args
+        .get("min_similarity")
+        .and_then(|v| v.as_f64())
+        .map(|n| n as f32)
+        .unwrap_or(0.85);
+
+    let min_chunk_bytes = args
+        .get("min_chunk_bytes")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(100);
+
+    let max_per_chunk = args
+        .get("max_per_chunk")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(5);
+
+    let options = FindDuplicatesOptions {
+        min_similarity,
+        min_chunk_bytes,
+        max_per_chunk,
+    };
+
+    let ws = open_workspace(context)?;
+    if let Some(progress) = check_ts_readiness(&ws)? {
+        return Ok(progress);
+    }
+    let result = swissarmyhammer_code_context::find_duplicates(ws.db(), file_path, &options)
+        .map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "query ast" operation.
+///
+/// Parses files with tree-sitter and runs an S-expression query against the ASTs.
+/// Uses `LanguageRegistry` from `swissarmyhammer-treesitter` to resolve language grammars.
+fn execute_query_ast(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let query_str = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
+
+    let language_name = args
+        .get("language")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'language'", None))?;
+
+    // Resolve language via LanguageRegistry
+    use swissarmyhammer_treesitter::LanguageRegistry;
+    let registry = LanguageRegistry::global();
+    let lang_config = registry
+        .get_by_name(language_name)
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("Unsupported language '{}'. Use a language name like 'rust', 'python', 'typescript', etc.", language_name),
+                None,
+            )
+        })?;
+    let ts_language = lang_config.language();
+
+    // Resolve workspace root
+    let working_dir = context
+        .working_dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+    let workspace_root =
+        find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
+
+    // Get file paths: either from explicit list or by scanning DB for files with matching extensions
+    let file_paths: Vec<String> = if let Some(files) = args.get("files").and_then(|v| v.as_array()) {
+        files
+            .iter()
+            .filter_map(|item| item.as_str().map(String::from))
+            .collect()
+    } else {
+        // Query indexed files with matching extensions from DB
+        let ws = open_workspace(context)?;
+        if let Some(progress) = check_ts_readiness(&ws)? {
+            return Ok(progress);
+        }
+        let extensions = lang_config.extensions;
+        let mut paths = Vec::new();
+        if let Ok(mut stmt) = ws
+            .db()
+            .prepare("SELECT file_path FROM indexed_files WHERE ts_indexed = 1")
+        {
+            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                for row in rows.flatten() {
+                    if extensions
+                        .iter()
+                        .any(|ext| row.ends_with(&format!(".{}", ext)))
+                    {
+                        paths.push(row);
+                    }
+                }
+            }
+        }
+        paths
+    };
+
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(50);
+
+    let options = QueryAstOptions { max_results };
+
+    let result =
+        swissarmyhammer_code_context::query_ast(&workspace_root, &ts_language, &file_paths, query_str, &options)
+            .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -580,6 +950,9 @@ fn execute_get_callgraph(
     };
 
     let ws = open_workspace(context)?;
+    if let Some(progress) = check_ts_readiness(&ws)? {
+        return Ok(progress);
+    }
     let result =
         swissarmyhammer_code_context::get_callgraph(ws.db(), &options).map_err(context_err)?;
     json_result(&result)
@@ -614,23 +987,26 @@ fn execute_get_blastradius(
     };
 
     let ws = open_workspace(context)?;
+    if let Some(progress) = check_ts_readiness(&ws)? {
+        return Ok(progress);
+    }
     let result =
         swissarmyhammer_code_context::get_blastradius(ws.db(), &options).map_err(context_err)?;
     json_result(&result)
 }
 
-/// Trigger tree-sitter indexing on discovered files.
+/// Trigger incremental tree-sitter indexing on dirty files.
 ///
-/// This runs asynchronously after startup_cleanup discovers files.
-/// Scans files, extracts chunks, and writes results to code-context DB.
+/// Queries dirty files (ts_indexed=0) from the DB, parses each one individually
+/// with tree-sitter, extracts semantic chunks, writes them to the DB, and marks
+/// the file as indexed — all incrementally so `get status` shows real-time progress.
 ///
-/// Opens a direct read-write SQLite connection instead of going through
-/// CodeContextWorkspace::open (which would join as reader if another process
-/// is already leader, resulting in a read-only connection that silently fails writes).
+/// Skips the batch `IndexContext::scan()` approach which blocks all DB writes
+/// until the entire scan (including embedding) completes.
 pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
-    // Open a direct read-write connection to the DB, bypassing leader election.
-    // The leader lock is held by whoever opened the workspace first (usually the CLI).
-    // SQLite WAL mode allows concurrent writers with serialization.
+    use std::sync::Arc;
+    use swissarmyhammer_treesitter::{chunk::chunk_file, ChunkSource, LanguageRegistry, ParsedFile};
+
     let db_path = workspace_root.join(".code-context").join("index.db");
     if !db_path.exists() {
         tracing::info!("code-context: database not found at {}, skipping tree-sitter indexing", db_path.display());
@@ -651,202 +1027,180 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
         }
     };
 
-    // Create a tree-sitter index context for the workspace
-    let mut ts_index = IndexContext::new(workspace_root.to_path_buf());
-
-    // Run the scan to parse files and extract chunks
-    match ts_index.scan().await {
-        Ok(scan_result) => {
-            tracing::info!(
-                "code-context: tree-sitter parsed {} files in {}ms",
-                scan_result.files_parsed,
-                scan_result.total_time_ms
-            );
-
-            // Extract parsed files from tree-sitter index
-            let file_paths = ts_index.files();
-            tracing::info!("code-context: extracting chunks from {} parsed files", file_paths.len());
-
-            let lang_registry = swissarmyhammer_treesitter::LanguageRegistry::global();
-
-            // For each parsed file, extract chunks and write to code-context DB
-            for file_path in file_paths {
-                let relative_path = match file_path.strip_prefix(workspace_root) {
-                    Ok(p) => p.to_string_lossy().to_string(),
-                    Err(_) => file_path.to_string_lossy().to_string(),
-                };
-
-                // Get the parsed file from the index
-                let parsed_file = match ts_index.get(&file_path) {
-                    Some(pf) => pf,
-                    None => {
-                        tracing::warn!("Could not retrieve parsed file for {}", relative_path);
-                        continue;
-                    }
-                };
-
-                // 0. Clear any existing chunks for this file (from basic indexer)
-                if let Err(e) = db.execute(
-                    "DELETE FROM ts_chunks WHERE file_path = ?",
-                    rusqlite::params![&relative_path],
-                ) {
-                    tracing::warn!("Failed to clear old chunks for {}: {}", relative_path, e);
-                }
-
-                // 1. Extract semantic chunks using tree-sitter
-                use swissarmyhammer_treesitter::chunk::chunk_file;
-                use std::sync::Arc;
-                let chunks = chunk_file(Arc::new(parsed_file.clone()));
-                tracing::debug!(
-                    "Extracted {} chunks from {}",
-                    chunks.len(),
-                    relative_path
-                );
-
-                // 2. Write chunks to ts_chunks table
-                let mut chunks_written = 0u64;
-                for chunk in &chunks {
-                    if let Some(content) = chunk.source.content() {
-                        // Extract byte range from chunk source
-                        let (start_byte, end_byte) = match &chunk.source {
-                            swissarmyhammer_treesitter::ChunkSource::Parsed {
-                                start_byte,
-                                end_byte,
-                                ..
-                            } => (*start_byte, *end_byte),
-                            _ => continue,
-                        };
-
-                        // Convert bytes to line numbers
-                        let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
-                        let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
-
-                        let symbol_path = chunk.symbol_path();
-
-                        let res = db.execute(
-                            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path)
-                             VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            rusqlite::params![
-                                &relative_path,
-                                start_byte as i32,
-                                end_byte as i32,
-                                start_line,
-                                end_line,
-                                content,
-                                &symbol_path,
-                            ],
-                        );
-
-                        match res {
-                            Ok(_) => chunks_written += 1,
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to insert chunk for {}: {}",
-                                    relative_path,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-
-                tracing::debug!(
-                    "Wrote {} chunks for {}",
-                    chunks_written,
-                    relative_path
-                );
-
-                // 3. Extract symbols from chunks
-                if let Err(e) = swissarmyhammer_code_context::ensure_ts_symbols(
-                    &db,
-                    &relative_path,
-                ) {
-                    tracing::warn!(
-                        "Failed to extract symbols for {}: {}",
-                        relative_path,
-                        e
-                    );
-                }
-
-                // 4. Generate and write call edges
-                let source = parsed_file.source.as_str();
-                let language = match lang_registry.detect_language(&file_path) {
-                    Some(config) => config.language(),
-                    None => {
-                        tracing::debug!(
-                            "Language not detected for {}, skipping call graph extraction",
-                            relative_path
-                        );
-                        // Skip call edge generation for unsupported languages
-                        if let Err(e) = db.execute(
-                            "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                            rusqlite::params![&relative_path],
-                        ) {
-                            tracing::warn!(
-                                "Failed to mark {} as ts_indexed: {}",
-                                relative_path,
-                                e
-                            );
-                        }
-                        continue;
-                    }
-                };
-
-                match swissarmyhammer_code_context::generate_ts_call_edges(
-                    &db,
-                    &relative_path,
-                    source,
-                    language,
-                ) {
-                    Ok(edges) => {
-                        match swissarmyhammer_code_context::write_ts_edges(&db, &relative_path, &edges) {
-                            Ok(count) => {
-                                tracing::debug!("Wrote {} call edges for {}", count, relative_path);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to write call edges for {}: {}",
-                                    relative_path,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to generate call edges for {}: {}",
-                            relative_path,
-                            e
-                        );
-                    }
-                }
-
-                // 5. Mark file as ts_indexed
-                if let Err(e) = db.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                    rusqlite::params![&relative_path],
-                ) {
-                    tracing::warn!(
-                        "Failed to mark {} as ts_indexed: {}",
-                        relative_path,
-                        e
-                    );
+    // Query all dirty files from the DB (populated by startup_cleanup)
+    let dirty_files: Vec<String> = match db.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed = 0") {
+        Ok(mut stmt) => {
+            match stmt.query_map([], |row| row.get::<_, String>(0)) {
+                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Err(e) => {
+                    tracing::warn!("code-context: failed to query dirty files: {}", e);
+                    return;
                 }
             }
-
-            // Summary
-            let chunk_count: i64 = db.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0)).unwrap_or(0);
-            let symbol_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0)).unwrap_or(0);
-            let edge_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0)).unwrap_or(0);
-            tracing::info!(
-                "code-context: indexing complete — {} chunks, {} symbols, {} call edges",
-                chunk_count, symbol_count, edge_count
-            );
         }
         Err(e) => {
-            tracing::warn!("code-context: tree-sitter scan failed: {}", e);
+            tracing::warn!("code-context: failed to prepare dirty files query: {}", e);
+            return;
         }
+    };
+
+    if dirty_files.is_empty() {
+        tracing::info!("code-context: no dirty files to index");
+        return;
     }
+
+    tracing::info!("code-context: indexing {} dirty files incrementally", dirty_files.len());
+
+    let lang_registry = LanguageRegistry::global();
+    let total = dirty_files.len();
+    let mut indexed = 0u64;
+    let mut total_chunks = 0u64;
+
+    for relative_path in &dirty_files {
+        let file_path = workspace_root.join(relative_path);
+
+        // 1. Detect language
+        let lang_config = match lang_registry.detect_language(&file_path) {
+            Some(config) => config,
+            None => {
+                // Not a supported language — mark indexed and skip
+                let _ = db.execute(
+                    "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+                    rusqlite::params![relative_path],
+                );
+                indexed += 1;
+                continue;
+            }
+        };
+
+        // 2. Read and parse file
+        let content = match std::fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(_) => {
+                // File unreadable (binary, permissions, etc.) — mark indexed
+                let _ = db.execute(
+                    "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+                    rusqlite::params![relative_path],
+                );
+                indexed += 1;
+                continue;
+            }
+        };
+
+        let mut parser = tree_sitter::Parser::new();
+        if parser.set_language(&lang_config.language()).is_err() {
+            let _ = db.execute(
+                "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+                rusqlite::params![relative_path],
+            );
+            indexed += 1;
+            continue;
+        }
+
+        let tree = match parser.parse(&content, None) {
+            Some(t) => t,
+            None => {
+                let _ = db.execute(
+                    "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+                    rusqlite::params![relative_path],
+                );
+                indexed += 1;
+                continue;
+            }
+        };
+
+        let content_hash: [u8; 16] = md5::compute(content.as_bytes()).into();
+
+        let parsed_file = Arc::new(ParsedFile::new(
+            file_path.clone(),
+            content,
+            tree,
+            content_hash,
+        ));
+
+        // 3. Extract semantic chunks
+        let chunks = chunk_file(parsed_file.clone());
+
+        // 4. Clear old chunks and write new ones
+        let _ = db.execute(
+            "DELETE FROM ts_chunks WHERE file_path = ?",
+            rusqlite::params![relative_path],
+        );
+
+        let mut chunks_written = 0u64;
+        for chunk in &chunks {
+            if let Some(content) = chunk.source.content() {
+                let (start_byte, end_byte) = match &chunk.source {
+                    ChunkSource::Parsed { start_byte, end_byte, .. } => (*start_byte, *end_byte),
+                    _ => continue,
+                };
+
+                let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
+                let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
+                let symbol_path = chunk.symbol_path();
+
+                if db.execute(
+                    "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        relative_path,
+                        start_byte as i32,
+                        end_byte as i32,
+                        start_line,
+                        end_line,
+                        content,
+                        &symbol_path,
+                    ],
+                ).is_ok() {
+                    chunks_written += 1;
+                }
+            }
+        }
+
+        // 5. Extract symbols from chunks
+        let _ = swissarmyhammer_code_context::ensure_ts_symbols(&db, relative_path);
+
+        // 6. Generate and write call edges
+        let source_text = parsed_file.source.as_str();
+        let language = lang_config.language();
+        if let Ok(edges) = swissarmyhammer_code_context::generate_ts_call_edges(
+            &db,
+            relative_path,
+            source_text,
+            language,
+        ) {
+            let _ = swissarmyhammer_code_context::write_ts_edges(&db, relative_path, &edges);
+        }
+
+        // 7. Mark file as ts_indexed and lsp_indexed (tree-sitter symbols serve as LSP symbols)
+        let _ = db.execute(
+            "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?",
+            rusqlite::params![relative_path],
+        );
+
+        indexed += 1;
+        total_chunks += chunks_written;
+
+        // Log progress every 100 files
+        if indexed % 100 == 0 {
+            tracing::info!(
+                "code-context: indexed {}/{} files ({} chunks so far)",
+                indexed, total, total_chunks
+            );
+        }
+
+        // Yield to let other async tasks run
+        tokio::task::yield_now().await;
+    }
+
+    // Summary
+    let chunk_count: i64 = db.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0)).unwrap_or(0);
+    let symbol_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0)).unwrap_or(0);
+    let edge_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0)).unwrap_or(0);
+    tracing::info!(
+        "code-context: indexing complete — {}/{} files, {} chunks, {} symbols, {} call edges",
+        indexed, total, chunk_count, symbol_count, edge_count
+    );
 }
 
 /// Execute the "get status" operation.
@@ -883,7 +1237,19 @@ fn execute_get_status(context: &ToolContext) -> Result<CallToolResult, McpError>
         }
     }
 
-    let result = swissarmyhammer_code_context::get_status(ws.db()).map_err(context_err)?;
+    let status = swissarmyhammer_code_context::get_status(ws.db()).map_err(context_err)?;
+
+    // Merge LSP daemon status into the response
+    let mut result = serde_json::to_value(&status).unwrap_or_default();
+    if let Some(sup) = LSP_SUPERVISOR.get() {
+        if let Ok(guard) = sup.try_lock() {
+            let daemon_status = guard.status();
+            if let Ok(daemon_json) = serde_json::to_value(&daemon_status) {
+                result["lsp_daemons"] = daemon_json;
+            }
+        }
+    }
+
     json_result(&result)
 }
 
@@ -960,11 +1326,14 @@ mod tests {
     fn test_code_context_tool_has_operations() {
         let tool = CodeContextTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 9);
+        assert_eq!(ops.len(), 12);
         assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
         assert!(ops.iter().any(|o| o.op_string() == "grep code"));
+        assert!(ops.iter().any(|o| o.op_string() == "search code"));
+        assert!(ops.iter().any(|o| o.op_string() == "find duplicates"));
+        assert!(ops.iter().any(|o| o.op_string() == "query ast"));
         assert!(ops.iter().any(|o| o.op_string() == "get callgraph"));
         assert!(ops.iter().any(|o| o.op_string() == "get blastradius"));
         assert!(ops.iter().any(|o| o.op_string() == "get status"));
@@ -987,6 +1356,7 @@ mod tests {
         assert!(op_enum.contains(&serde_json::json!("search symbol")));
         assert!(op_enum.contains(&serde_json::json!("list symbols")));
         assert!(op_enum.contains(&serde_json::json!("grep code")));
+        assert!(op_enum.contains(&serde_json::json!("query ast")));
         assert!(op_enum.contains(&serde_json::json!("get callgraph")));
         assert!(op_enum.contains(&serde_json::json!("get blastradius")));
         assert!(op_enum.contains(&serde_json::json!("get status")));
@@ -1002,7 +1372,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 9);
+        assert_eq!(op_schemas.len(), 12);
     }
 
     #[tokio::test]
