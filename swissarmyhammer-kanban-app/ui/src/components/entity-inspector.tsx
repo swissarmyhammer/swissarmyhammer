@@ -1,26 +1,19 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { ACTOR_COLORS } from "@/lib/actor-colors";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { SubtaskProgress } from "@/components/subtask-progress";
-import {
-  resolveDisplay,
-  BadgeListDisplay,
-  BadgeDisplay,
-  ColorSwatchDisplay,
-  DateDisplay,
-  NumberDisplay,
-  TextDisplay,
-} from "@/components/fields/displays";
+import { CellDispatch } from "@/components/cells";
 import {
   resolveEditor,
   MarkdownEditor,
   SelectEditor,
   NumberEditor,
   DateEditor,
+  MultiSelectEditor,
 } from "@/components/fields/editors";
 import { useSchema } from "@/lib/schema-context";
-import { useEntityStore } from "@/lib/entity-store-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import type { FieldDef, Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
@@ -44,9 +37,7 @@ interface EntityInspectorProps {
 export function EntityInspector({ entity }: EntityInspectorProps) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const { getSchema } = useSchema();
-  const { getEntities } = useEntityStore();
   const { updateField } = useFieldUpdate();
-  const tags = getEntities("tag");
   const schema = getSchema(entity.entity_type);
   const bodyFieldName = schema?.entity.body_field;
   const fields = schema?.fields ?? [];
@@ -82,7 +73,13 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     setEditingField(null);
   }, []);
 
-  const isEditable = (field: FieldDef) => field.type.kind !== "computed";
+  const isEditable = (field: FieldDef) => {
+    // Computed tag fields are editable via tag/untag commands
+    if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-tags") {
+      return true;
+    }
+    return field.type.kind !== "computed";
+  };
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
@@ -96,8 +93,6 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
       entity={entity}
       editing={editingField === field.name}
       editable={isEditable(field)}
-      isBodyField={field.name === bodyFieldName}
-      tags={tags}
       bodyFieldName={bodyFieldName}
       showLabel={showLabel}
       onEdit={() => handleEdit(field.name)}
@@ -139,8 +134,6 @@ interface FieldRowProps {
   entity: Entity;
   editing: boolean;
   editable: boolean;
-  isBodyField?: boolean;
-  tags: Entity[];
   bodyFieldName?: string;
   showLabel?: boolean;
   onEdit: () => void;
@@ -154,8 +147,6 @@ function FieldRow({
   entity,
   editing,
   editable,
-  isBodyField,
-  tags,
   bodyFieldName,
   showLabel = true,
   onEdit,
@@ -174,8 +165,6 @@ function FieldRow({
         value={value}
         entity={entity}
         editing={editing && editable}
-        isBodyField={isBodyField}
-        tags={tags}
         bodyFieldName={bodyFieldName}
         onEdit={onEdit}
         onCommit={onCommit}
@@ -190,8 +179,6 @@ function FieldDispatch({
   value,
   entity,
   editing,
-  isBodyField,
-  tags,
   bodyFieldName,
   onEdit,
   onCommit,
@@ -201,14 +188,13 @@ function FieldDispatch({
   value: unknown;
   entity: Entity;
   editing: boolean;
-  isBodyField?: boolean;
-  tags: Entity[];
   bodyFieldName?: string;
   onEdit: () => void;
   onCommit: (value: unknown) => void;
   onCancel: () => void;
 }) {
   // Markdown fields — EditableMarkdown handles its own display/edit toggle
+  // Mentions (tags, actors, etc.) are read from context automatically.
   if (field.type.kind === "markdown") {
     const text = typeof value === "string" ? value : "";
     const multiline = !field.type.single_line;
@@ -217,7 +203,6 @@ function FieldDispatch({
         value={text}
         onCommit={(v) => onCommit(v)}
         multiline={multiline}
-        tags={isBodyField ? tags : undefined}
         className="text-sm leading-relaxed cursor-text"
         inputClassName="text-sm leading-relaxed bg-transparent w-full"
         placeholder={`Add ${field.name.replace(/_/g, " ")}...`}
@@ -249,6 +234,8 @@ function FieldDispatch({
         return <NumberEditor {...editorProps} />;
       case "date":
         return <DateEditor {...editorProps} />;
+      case "multi-select":
+        return <MultiSelectEditor {...editorProps} field={field} entity={entity} />;
       case "markdown":
       default:
         return (
@@ -260,41 +247,16 @@ function FieldDispatch({
     }
   }
 
-  // Read-only: use shared display components in full mode
-  const display = resolveDisplay(field);
-  const displayProps = { field, value, entity, mode: "full" as const };
-
-  const rendered = (() => {
-    switch (display) {
-      case "badge-list":
-        return <BadgeListDisplay {...displayProps} />;
-      case "badge":
-        return <BadgeDisplay {...displayProps} />;
-      case "color-swatch":
-        return <ColorSwatchDisplay {...displayProps} />;
-      case "date":
-        return <DateDisplay {...displayProps} />;
-      case "number":
-        return <NumberDisplay {...displayProps} />;
-      default:
-        return <TextDisplay {...displayProps} />;
-    }
-  })();
-
+  // Read-only: use the same CellDispatch as the grid — single rendering path
   return (
     <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
-      {rendered}
+      <CellDispatch field={field} value={value} entity={entity} />
     </div>
   );
 }
 
-/** 16-color palette matching Rust auto_color */
-const COLOR_PALETTE = [
-  "d73a4a", "e36209", "f9c513", "0e8a16",
-  "006b75", "1d76db", "0075ca", "5319e7",
-  "b60205", "d93f0b", "fbca04", "0e8a16",
-  "006b75", "1d76db", "6f42c1", "e4e669",
-];
+/** Palette for the color-picker grid — uses the canonical actor palette. */
+const COLOR_PALETTE = ACTOR_COLORS;
 
 function ColorField({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
   const [selected, setSelected] = useState(value);

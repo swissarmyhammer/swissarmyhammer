@@ -1,19 +1,12 @@
 /**
  * Find known tag slugs in text by literal string matching.
  *
- * NO parsing logic here — the backend (tag_parser.rs) is the sole authority
- * on what constitutes a valid tag. This module just locates known `#slug`
- * strings in text for rendering/decoration purposes.
+ * Thin wrapper around the generic mention-finder with prefix `#`.
  */
 
-export interface TagHit {
-  /** Start position in text (of the `#`) */
-  index: number;
-  /** Length of full match including `#` */
-  length: number;
-  /** Tag name without `#` */
-  slug: string;
-}
+import { findMentionsInText, type MentionHit } from "@/lib/mention-finder";
+
+export type TagHit = MentionHit;
 
 /**
  * Find all occurrences of known `#slug` patterns in text.
@@ -24,26 +17,5 @@ export function findTagsInText(
   text: string,
   slugs: Iterable<string>,
 ): TagHit[] {
-  const hits: TagHit[] = [];
-  for (const slug of slugs) {
-    const needle = `#${slug}`;
-    let pos = 0;
-    while (pos <= text.length - needle.length) {
-      const idx = text.indexOf(needle, pos);
-      if (idx === -1) break;
-
-      const beforeOk =
-        idx === 0 || !/\w/.test(text[idx - 1]);
-      const end = idx + needle.length;
-      const afterOk =
-        end >= text.length || /[\s#]/.test(text[end]);
-
-      if (beforeOk && afterOk) {
-        hits.push({ index: idx, length: needle.length, slug });
-      }
-      pos = idx + 1;
-    }
-  }
-  hits.sort((a, b) => a.index - b.index);
-  return hits;
+  return findMentionsInText(text, "#", slugs);
 }

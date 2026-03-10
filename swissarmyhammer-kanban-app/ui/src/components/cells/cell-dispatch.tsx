@@ -7,6 +7,7 @@ import {
   DateDisplay,
   NumberDisplay,
   MarkdownDisplay,
+  AvatarDisplay,
   TextDisplay,
 } from "@/components/fields/displays";
 
@@ -38,6 +39,8 @@ export function CellDispatch({ field, value, entity }: CellDisplayProps) {
       return <NumberDisplay {...props} />;
     case "markdown":
       return <MarkdownDisplay {...props} />;
+    case "avatar":
+      return <AvatarDisplay {...props} />;
     default:
       return <TextDisplay {...props} />;
   }

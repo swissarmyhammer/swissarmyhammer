@@ -13,6 +13,7 @@
 
 pub mod compute;
 pub mod context;
+pub mod derive;
 pub mod error;
 pub mod id_types;
 pub mod types;
@@ -20,6 +21,7 @@ pub mod validation;
 
 pub use compute::{ComputeEngine, DeriveFn};
 pub use context::{load_yaml_dir, FieldsContext, FieldsContextBuilder};
+pub use derive::{DeriveError, DeriveHandler, DeriveRegistry};
 pub use error::{FieldsError, Result};
 pub use id_types::{EntityTypeName, FieldDefId, FieldName};
 pub use types::{Display, Editor, EntityDef, FieldDef, FieldType, SelectOption, SortKind};

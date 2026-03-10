@@ -4,10 +4,10 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
-import { useAvailableCommands, collectAvailableCommands, type CommandAtDepth } from "@/lib/command-scope";
+import { useAvailableCommands, collectAvailableCommands, dispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap } from "@/lib/keymap-context";
-import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
+import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
 
 interface CommandPaletteProps {
@@ -106,7 +106,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     const entry = filtered[selectedIndex];
     if (entry) {
       onClose();
-      entry.command.execute?.();
+      dispatchCommand(entry.command);
     }
   }, [filtered, selectedIndex, onClose]);
 
@@ -157,13 +157,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   // CM6 extensions for the single-line filter input
   const extensions = useMemo(
     () => [
-      minimalTheme,
       keymapCompartment.current.of(keymapExtension(mode)),
-      // Prevent line wrapping — single-line input
-      EditorView.theme({
-        ".cm-content": { whiteSpace: "nowrap" },
-        ".cm-scroller": { overflow: "hidden" },
-      }),
       // Navigation and execution keybindings (highest priority)
       keymap.of([
         {
@@ -254,6 +248,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             value={filter}
             onChange={setFilter}
             extensions={extensions}
+            theme={shadcnTheme}
             basicSetup={false}
             placeholder="Type a command..."
             className="text-sm"
@@ -284,7 +279,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
                   onClick={() => {
                     onClose();
-                    entry.command.execute?.();
+                    dispatchCommand(entry.command);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >

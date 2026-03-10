@@ -42,6 +42,7 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     // Task commands
     map.insert("task.add".into(), Arc::new(task_commands::AddTaskCmd));
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
+    map.insert("task.tag".into(), Arc::new(task_commands::TagTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
     map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
 
@@ -145,8 +146,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 4 task + 2 entity + 1 tag + 1 attachment + 1 column + 6 UI + 6 app = 21
-        assert_eq!(cmds.len(), 21);
+        // 5 task + 2 entity + 1 tag + 1 attachment + 1 column + 6 UI + 6 app = 22
+        assert_eq!(cmds.len(), 22);
     }
 
     // =========================================================================
@@ -182,6 +183,30 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("task.move").unwrap();
         let ctx = ctx_scope(&["column:todo"]);
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn tag_available_with_tag_and_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("task.tag").unwrap();
+        let ctx = ctx_scope(&["tag:bug", "task:01ABC", "column:todo"]);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn tag_not_available_without_tag() {
+        let cmds = register_commands();
+        let cmd = cmds.get("task.tag").unwrap();
+        let ctx = ctx_scope(&["task:01ABC", "column:todo"]);
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn tag_not_available_without_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("task.tag").unwrap();
+        let ctx = ctx_scope(&["tag:bug", "column:todo"]);
         assert!(!cmd.available(&ctx));
     }
 

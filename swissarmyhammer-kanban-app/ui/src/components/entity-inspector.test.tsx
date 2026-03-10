@@ -15,9 +15,31 @@ const TASK_SCHEMA = {
   ],
 };
 
+const TAG_SCHEMA = {
+  entity: { name: "tag", fields: ["tag_name", "color", "description"], mention_prefix: "#", mention_display_field: "tag_name" },
+  fields: [
+    { id: "t1", name: "tag_name", type: { kind: "text", single_line: true }, section: "header" },
+    { id: "t2", name: "color", type: { kind: "color" }, section: "body" },
+    { id: "t3", name: "description", type: { kind: "markdown" }, section: "body" },
+  ],
+};
+
+const ACTOR_SCHEMA = {
+  entity: { name: "actor", fields: ["name", "color"], mention_prefix: "@", mention_display_field: "name" },
+  fields: [
+    { id: "a1", name: "name", type: { kind: "text", single_line: true }, section: "header" },
+    { id: "a2", name: "color", type: { kind: "color" }, section: "body" },
+  ],
+};
+
+const SCHEMAS: Record<string, unknown> = { task: TASK_SCHEMA, tag: TAG_SCHEMA, actor: ACTOR_SCHEMA };
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
-  if (args[0] === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
+  if (args[0] === "get_entity_schema") {
+    const entityType = args[1]?.entityType as string;
+    return Promise.resolve(SCHEMAS[entityType] ?? TASK_SCHEMA);
+  }
   if (args[0] === "get_keymap_mode") return Promise.resolve("cua");
   if (args[0] === "update_entity_field") return Promise.resolve({ id: "test-id" });
   return Promise.resolve("ok");
@@ -122,13 +144,15 @@ describe("EntityInspector", () => {
     expect(call![1]).toEqual({ cmd: "entity.update_field", args: { entity_type: "task", id: "test-id", field_name: "title", value: "New" } });
   });
 
-  it("does not allow editing computed fields", async () => {
+  it("allows editing computed tag fields via multi-select", async () => {
     const { container } = await renderInspector(makeEntity({ tags: ["bug"] }));
     const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
     expect(tagsRow).toBeTruthy();
-    // Click should not produce an editor
-    fireEvent.click(tagsRow!.querySelector(".cursor-text, .min-h-\\[1\\.25rem\\]")!);
-    expect(tagsRow!.querySelector(".cm-editor")).toBeNull();
+    // Click should produce a CM6 editor (tags are editable via tag/untag commands)
+    await act(async () => {
+      fireEvent.click(tagsRow!.querySelector(".cursor-text, .min-h-\\[1\\.25rem\\]")!);
+    });
+    expect(tagsRow!.querySelector(".cm-editor")).toBeTruthy();
   });
 
   it("body_field renders #tag as a styled pill when tag entity exists", async () => {

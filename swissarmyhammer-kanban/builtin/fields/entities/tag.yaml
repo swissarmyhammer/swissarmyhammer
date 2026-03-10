@@ -1,4 +1,6 @@
 name: tag
+mention_prefix: "#"
+mention_display_field: tag_name
 fields:
   - tag_name
   - color

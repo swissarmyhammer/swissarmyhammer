@@ -145,3 +145,49 @@ async fn enriched_entity_has_computed_fields() {
     assert_eq!(bbag["ready"], true);
     assert_eq!(bbag["blocks"], json!([blocked_id]));
 }
+
+#[tokio::test]
+async fn depends_on_field_persists_through_save_and_reload() {
+    let (temp, ctx, processor) = setup().await;
+
+    // Create two tasks
+    let r1 = processor
+        .process(&AddTask::new("First"), &ctx)
+        .await
+        .unwrap();
+    let first_id = r1["id"].as_str().unwrap().to_string();
+
+    let r2 = processor
+        .process(&AddTask::new("Second"), &ctx)
+        .await
+        .unwrap();
+    let second_id = r2["id"].as_str().unwrap().to_string();
+
+    // Set depends_on on the second task
+    let update =
+        UpdateEntityField::new("task", &second_id, "depends_on", json!([first_id.clone()]));
+    processor.process(&update, &ctx).await.unwrap();
+
+    // Verify the field is set before reload
+    let ectx = ctx.entity_context().await.unwrap();
+    let entity = ectx.read("task", &second_id).await.unwrap();
+    assert_eq!(
+        entity.get("depends_on"),
+        Some(&json!([first_id])),
+        "depends_on should be set before reload"
+    );
+    let _ = ectx;
+    let _ = ctx;
+
+    // Re-open the context from disk (fresh load)
+    let kanban_dir = temp.path().join(".kanban");
+    let ctx2 = KanbanContext::new(&kanban_dir);
+    let ectx2 = ctx2.entity_context().await.unwrap();
+    let reloaded = ectx2.read("task", &second_id).await.unwrap();
+
+    assert_eq!(
+        reloaded.get("depends_on"),
+        Some(&json!([first_id])),
+        "depends_on must survive save/reload"
+    );
+}

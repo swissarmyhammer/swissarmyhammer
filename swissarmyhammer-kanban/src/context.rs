@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityContext};
-use swissarmyhammer_fields::{load_yaml_dir, FieldsContext, ValidationEngine};
+use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
 use swissarmyhammer_views::{ViewsChangelog, ViewsContext};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -32,6 +32,8 @@ pub struct KanbanContext {
     views: Option<RwLock<ViewsContext>>,
     /// View changelog (populated via `open()`, None when created via `new()`)
     views_changelog: Option<ViewsChangelog>,
+    /// Derive handlers for computed field read/write
+    derive_registry: Arc<DeriveRegistry>,
 }
 
 impl KanbanContext {
@@ -46,6 +48,7 @@ impl KanbanContext {
             entities: OnceCell::new(),
             views: None,
             views_changelog: None,
+            derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
         }
     }
 
@@ -78,6 +81,7 @@ impl KanbanContext {
             entities: cell,
             views: Some(RwLock::new(views)),
             views_changelog: Some(views_changelog),
+            derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
         })
     }
 
@@ -102,6 +106,11 @@ impl KanbanContext {
     /// Access the field registry, if initialized.
     pub fn fields(&self) -> Option<&FieldsContext> {
         self.fields.as_deref()
+    }
+
+    /// Access the derive handler registry.
+    pub fn derive_registry(&self) -> &DeriveRegistry {
+        &self.derive_registry
     }
 
     /// Access the view registry lock, if initialized.
@@ -777,7 +786,7 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 21 built-in + 1 custom = 22
+        // Open — should have 22 built-in + 1 custom = 23
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
         assert_eq!(fields.all_fields().len(), 22);

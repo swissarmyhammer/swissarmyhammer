@@ -268,6 +268,7 @@ export function GridView({ view }: GridViewProps) {
       return (
         <CellEditor
           field={field}
+          entity={entity}
           value={entity.fields[field.name]}
           onCommit={handleCommit}
           onCancel={onCancel}

@@ -423,7 +423,9 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                     column={col}
                     tasks={colTasks}
                     blockedIds={blockedIds}
-                    onAddTask={handleAddTask}
+                    // Only the first column gets the + button — new tasks should
+                    // always enter at the first workflow stage.
+                    onAddTask={i === 0 ? handleAddTask : undefined}
                     onRenameColumn={handleRenameColumn}
                     presorted
                   />

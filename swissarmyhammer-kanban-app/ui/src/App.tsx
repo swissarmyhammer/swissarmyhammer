@@ -62,8 +62,13 @@ interface PanelEntry {
 
 function App() {
   const [board, setBoard] = useState<BoardData | null>(null);
-  const [taskEntities, setTaskEntities] = useState<Entity[]>([]);
-  const [tagEntities, setTagEntities] = useState<Entity[]>([]);
+  /** All list-type entities keyed by type (task, tag, actor, ...). */
+  const [entitiesByType, setEntitiesByType] = useState<Record<string, Entity[]>>({});
+  const setEntitiesFor = useCallback(
+    (type: string, updater: (prev: Entity[]) => Entity[]) =>
+      setEntitiesByType((prev) => ({ ...prev, [type]: updater(prev[type] ?? []) })),
+    [],
+  );
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
   const panelStackRef = useRef(panelStack);
@@ -100,15 +105,19 @@ function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [boardData, openData, taskData] = await Promise.all([
+      const [boardData, openData, taskData, actorData] = await Promise.all([
         invoke<BoardDataResponse>("get_board_data"),
         invoke<OpenBoard[]>("list_open_boards"),
         invoke<EntityListResponse>("list_entities", { entityType: "task" }),
+        invoke<EntityListResponse>("list_entities", { entityType: "actor" }),
       ]);
       setBoard(parseBoardData(boardData));
       setOpenBoards(openData);
-      setTaskEntities(taskData.entities.map(entityFromBag));
-      setTagEntities(boardData.tags.map(entityFromBag));
+      setEntitiesByType({
+        task: taskData.entities.map(entityFromBag),
+        tag: boardData.tags.map(entityFromBag),
+        actor: actorData.entities.map(entityFromBag),
+      });
     } catch (error) {
       console.error("Failed to load board data:", error);
     }
@@ -122,13 +131,13 @@ function App() {
   // Validates each moniker against loaded entities — drops missing ones.
   useEffect(() => {
     if (inspectorRestoredRef.current) return;
-    if (taskEntities.length === 0 && tagEntities.length === 0) return;
+    const allEntities = Object.values(entitiesByType).flat();
+    if (allEntities.length === 0) return;
     inspectorRestoredRef.current = true;
 
     invoke<{ inspector_stack: string[] }>("get_ui_context")
       .then(({ inspector_stack }) => {
         if (!inspector_stack || inspector_stack.length === 0) return;
-        const allEntities = [...taskEntities, ...tagEntities];
         const validated: PanelEntry[] = [];
         for (const moniker of inspector_stack) {
           const sep = moniker.indexOf(":");
@@ -145,7 +154,7 @@ function App() {
         }
       })
       .catch(() => {});
-  }, [taskEntities, tagEntities]);
+  }, [entitiesByType]);
 
   // Persist inspector stack whenever it changes
   useEffect(() => {
@@ -164,30 +173,18 @@ function App() {
       listen<EntityCreatedEvent>("entity-created", (event) => {
         const { entity_type, id } = event.payload;
         if (entity_type === "column" || entity_type === "swimlane") {
-          // Structural changes — full refresh to get correct counts/ordering
           refresh();
           return;
         }
-        // Re-fetch the full entity so computed fields are included
         invoke<EntityBag>("get_entity", { entityType: entity_type, id })
           .then((bag) => {
             const entity = entityFromBag(bag);
-            if (entity_type === "task") {
-              setTaskEntities((prev) => {
-                // Guard against duplicates (cache may lag behind entity store)
-                if (prev.some((e) => e.id === id)) {
-                  return prev.map((e) => (e.id === id ? entity : e));
-                }
-                return [...prev, entity];
-              });
-            } else if (entity_type === "tag") {
-              setTagEntities((prev) => {
-                if (prev.some((e) => e.id === id)) {
-                  return prev.map((e) => (e.id === id ? entity : e));
-                }
-                return [...prev, entity];
-              });
-            }
+            setEntitiesFor(entity_type, (prev) => {
+              if (prev.some((e) => e.id === id)) {
+                return prev.map((e) => (e.id === id ? entity : e));
+              }
+              return [...prev, entity];
+            });
           })
           .catch((err) => {
             console.error(`[entity-created] Failed to fetch ${entity_type}/${id}:`, err);
@@ -195,34 +192,27 @@ function App() {
       }),
       listen<EntityRemovedEvent>("entity-removed", (event) => {
         const { entity_type, id } = event.payload;
-        if (entity_type === "task") {
-          setTaskEntities((prev) => prev.filter((e) => e.id !== id));
-        } else if (entity_type === "tag") {
-          setTagEntities((prev) => prev.filter((e) => e.id !== id));
-        } else if (entity_type === "column" || entity_type === "swimlane") {
+        if (entity_type === "column" || entity_type === "swimlane") {
           refresh();
+        } else {
+          setEntitiesFor(entity_type, (prev) => prev.filter((e) => e.id !== id));
         }
       }),
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
         const { entity_type, id, fields: fullFields } = event.payload;
 
-        // Use enriched fields from the event when available (includes
-        // computed fields like tags, progress). Fall back to fetching
-        // via get_entity for external watcher events.
         const applyEntity = (entity: Entity) => {
           const replaceById = (entities: Entity[]) =>
             entities.map((e) => (e.id === id ? entity : e));
 
-          if (entity_type === "task") {
-            setTaskEntities(replaceById);
-          } else if (entity_type === "tag") {
-            setTagEntities(replaceById);
-          } else if (entity_type === "board") {
+          if (entity_type === "board") {
             setBoard((prev) => (prev ? { ...prev, board: entity } : prev));
           } else if (entity_type === "column") {
             setBoard((prev) => (prev ? { ...prev, columns: replaceById(prev.columns) } : prev));
           } else if (entity_type === "swimlane") {
             setBoard((prev) => (prev ? { ...prev, swimlanes: replaceById(prev.swimlanes) } : prev));
+          } else {
+            setEntitiesFor(entity_type, replaceById);
           }
         };
 
@@ -249,11 +239,10 @@ function App() {
   }, [refresh]);
 
   const entityStore = useMemo(() => ({
-    task: taskEntities,
-    tag: tagEntities,
+    ...entitiesByType,
     column: board?.columns ?? [],
     swimlane: board?.swimlanes ?? [],
-  }), [taskEntities, tagEntities, board]);
+  }), [entitiesByType, board]);
 
   return (
     <TooltipProvider delayDuration={400}>
@@ -281,7 +270,7 @@ function App() {
             <LeftNav />
             <ActiveViewRenderer
               board={board}
-              tasks={taskEntities}
+              tasks={entitiesByType.task ?? []}
             />
           </div>
 

@@ -7,7 +7,7 @@ import { getCM } from "@replit/codemirror-vim";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { useKeymap } from "@/lib/keymap-context";
-import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
+import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import type { EditorProps } from "./markdown-editor";
 
 /** Format a Date as YYYY-MM-DD */
@@ -93,7 +93,6 @@ export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
 
   const extensions = useMemo(
     () => [
-      minimalTheme,
       keymapCompartment.current.of(keymapExtension(mode)),
       EditorView.lineWrapping,
       // Vim: Escape in normal mode commits, insert→normal saves
@@ -177,6 +176,7 @@ export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
             value={draft}
             onChange={(val) => setDraft(val)}
             extensions={extensions}
+            theme={shadcnTheme}
             basicSetup={{
               lineNumbers: false,
               foldGutter: false,

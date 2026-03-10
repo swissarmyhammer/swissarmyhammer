@@ -55,9 +55,9 @@ impl Execute<KanbanContext, KanbanError> for AddTag {
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
 
-            // Check if a tag with this name already exists
-            if find_tag_entity_by_name(ectx, &self.name).await.is_some() {
-                return Err(KanbanError::duplicate_id("tag", self.name.clone()));
+            // If a tag with this name already exists, return it (idempotent)
+            if let Some(existing) = find_tag_entity_by_name(ectx, &self.name).await {
+                return Ok(tag_entity_to_json(&existing));
             }
 
             let color = self

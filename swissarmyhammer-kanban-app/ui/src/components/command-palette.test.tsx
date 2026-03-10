@@ -14,7 +14,7 @@ vi.mock("@replit/codemirror-vim", async () => {
   const actual = await vi.importActual<typeof import("@replit/codemirror-vim")>("@replit/codemirror-vim");
   return {
     ...actual,
-    getCM: vi.fn(() => ({ state: { vim: {} } })),
+    getCM: vi.fn(() => ({ state: { vim: {} } }) as any),
     Vim: { ...actual.Vim, handleKey: vi.fn(), exitInsertMode: vi.fn() },
   };
 });
@@ -190,7 +190,7 @@ describe("CommandPalette vim insert mode", () => {
     getCMMock.mockImplementation(() => {
       callCount++;
       if (callCount <= 3) return null;
-      return { state: { vim: {} } };
+      return { state: { vim: {} } } as any;
     });
 
     await act(async () => {

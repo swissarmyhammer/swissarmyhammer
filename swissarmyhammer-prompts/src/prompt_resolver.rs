@@ -295,8 +295,10 @@ This is a user-defined debug/error prompt that should override the builtin one.
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();
 
-        // Save and restore HOME so we don't pollute other tests
+        // Store original HOME value to restore later
         let original_home = std::env::var("HOME").ok();
+
+        // Temporarily change home directory for test
         std::env::set_var("HOME", temp_dir.path());
 
         // Load builtin prompts first
@@ -308,8 +310,8 @@ This is a user-defined debug/error prompt that should override the builtin one.
         // Load user prompts (should override the builtin if it exists, or just add it if not)
         resolver.load_all_prompts(&mut library).unwrap();
 
-        // Restore HOME before asserting
-        if let Some(home) = original_home {
+        // Restore HOME before assertions so it's restored even on panic
+        if let Some(home) = &original_home {
             std::env::set_var("HOME", home);
         }
 

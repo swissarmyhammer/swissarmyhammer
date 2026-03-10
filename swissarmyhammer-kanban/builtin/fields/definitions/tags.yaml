@@ -4,7 +4,7 @@ description: Tags derived from #tag patterns in body
 type:
   kind: computed
   derive: parse-body-tags
-editor: none
+editor: multi-select
 display: badge-list
 width: 200
 section: header

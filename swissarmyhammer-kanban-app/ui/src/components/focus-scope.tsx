@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
-import { CommandScopeContext, type CommandDef, type CommandScope } from "@/lib/command-scope";
+import { CommandScopeContext, resolveCommand, dispatchCommand, type CommandDef, type CommandScope } from "@/lib/command-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 
@@ -94,6 +94,7 @@ function FocusScopeInner({
 }) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
+  const scope = useContext(CommandScopeContext);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -105,11 +106,30 @@ function FocusScopeInner({
     [moniker, setFocus, contextMenuHandler],
   );
 
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      // Skip if target is an interactive element
+      const target = e.target as HTMLElement;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (target.closest("[contenteditable]")) return;
+
+      e.stopPropagation();
+
+      const cmd = resolveCommand(scope, "entity.inspect");
+      if (cmd) {
+        dispatchCommand(cmd);
+      }
+    },
+    [scope],
+  );
+
   return (
     <div
       data-moniker={moniker}
       data-focused={isDirectFocus || undefined}
       onClick={onClick}
+      onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       className={className}
       style={style}

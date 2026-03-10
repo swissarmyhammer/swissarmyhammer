@@ -69,7 +69,7 @@ mod tests {
     async fn test_get_actor() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice Smith")
+        AddActor::new("alice", "Alice Smith")
             .execute(&ctx)
             .await
             .into_result()
@@ -83,7 +83,6 @@ mod tests {
 
         assert_eq!(result["id"], "alice");
         assert_eq!(result["name"], "Alice Smith");
-        assert_eq!(result["type"], "human");
     }
 
     #[tokio::test]

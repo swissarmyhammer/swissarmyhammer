@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
-import { Compartment } from "@codemirror/state";
+import { Compartment, type Extension } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { invoke } from "@tauri-apps/api/core";
 import { useKeymap } from "@/lib/keymap-context";
-import { minimalTheme, keymapExtension } from "@/lib/cm-keymap";
-import { tagDecorations } from "@/lib/cm-tag-decorations";
-import { tagAutocomplete } from "@/lib/cm-tag-autocomplete";
-import { tagTooltips, type TagMeta } from "@/lib/cm-tag-tooltip";
-import { remarkTags } from "@/lib/remark-tags";
+import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
+import { useSchema } from "@/lib/schema-context";
+import { useEntityStore } from "@/lib/entity-store-context";
+import { createMentionDecorations } from "@/lib/cm-mention-decorations";
+import { createMentionCompletionSource, createMentionAutocomplete, type MentionSearchResult } from "@/lib/cm-mention-autocomplete";
+import { createDebouncedSearch } from "@/lib/debounced-search";
+import { createMentionTooltips, type MentionMeta } from "@/lib/cm-mention-tooltip";
+import { remarkMentions } from "@/lib/remark-mentions";
 import { TagPill } from "@/components/tag-pill";
+import { MentionPill } from "@/components/mention-pill";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -24,7 +29,7 @@ interface EditableMarkdownProps {
   inputClassName?: string;
   multiline?: boolean;
   placeholder?: string;
-  /** Tag entities for colored pill decorations in the editor */
+  /** @deprecated Tag entities — now read from context automatically for multiline editors. */
   tags?: Entity[];
 }
 
@@ -45,6 +50,84 @@ function toggleCheckbox(source: string, index: number): string | null {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Pre-built mention infrastructure per entity type (created once per prefix).
+// Keyed by "prefix:entityType" — bounded by schema-defined mentionable types.
+// Size cap prevents unbounded growth if entity types are ever dynamic.
+// ---------------------------------------------------------------------------
+
+const INFRA_CACHE_LIMIT = 20;
+
+const mentionInfra = new Map<string, ReturnType<typeof createMentionDecorations>>();
+const tooltipInfra = new Map<string, ReturnType<typeof createMentionTooltips>>();
+
+/** Get or create decoration infrastructure, clearing cache if it exceeds the size cap. */
+function getDecoInfra(prefix: string, entityType: string) {
+  const key = `${prefix}:${entityType}`;
+  if (!mentionInfra.has(key)) {
+    if (mentionInfra.size >= INFRA_CACHE_LIMIT) mentionInfra.clear();
+    const cssClass = `cm-${entityType}-pill`;
+    const colorVar = `--${entityType}-color`;
+    mentionInfra.set(key, createMentionDecorations(prefix, cssClass, colorVar));
+  }
+  return mentionInfra.get(key)!;
+}
+
+/** Get or create tooltip infrastructure, clearing cache if it exceeds the size cap. */
+function getTooltipInfra(prefix: string, entityType: string) {
+  const key = `${prefix}:${entityType}`;
+  if (!tooltipInfra.has(key)) {
+    if (tooltipInfra.size >= INFRA_CACHE_LIMIT) tooltipInfra.clear();
+    const cssClass = `cm-${entityType}-tooltip`;
+    tooltipInfra.set(key, createMentionTooltips(prefix, cssClass));
+  }
+  return tooltipInfra.get(key)!;
+}
+
+/** Build a slug→color map for a mentionable entity type. */
+function buildColorMap(entities: Entity[], displayField: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const e of entities) {
+    const slug = getStr(e, displayField);
+    const color = getStr(e, "color", "888888");
+    if (slug) map.set(slug, color);
+  }
+  return map;
+}
+
+/** Build a slug→meta map for tooltips. */
+function buildMetaMap(entities: Entity[], displayField: string): Map<string, MentionMeta> {
+  const map = new Map<string, MentionMeta>();
+  for (const e of entities) {
+    const slug = getStr(e, displayField);
+    const color = getStr(e, "color", "888888");
+    const description = getStr(e, "description") || undefined;
+    if (slug) map.set(slug, { color, description });
+  }
+  return map;
+}
+
+/** Build a debounced async search function that calls the Tauri backend. */
+function buildAsyncSearch(entityType: string): (query: string) => Promise<MentionSearchResult[]> {
+  const rawSearch = async (query: string): Promise<MentionSearchResult[]> => {
+    try {
+      const results = await invoke<Array<{ id: string; display_name: string; color: string }>>(
+        "search_mentions",
+        { entityType, query },
+      );
+      return results.map((r) => ({
+        slug: r.display_name,
+        displayName: r.display_name,
+        color: r.color,
+      }));
+    } catch {
+      return [];
+    }
+  };
+
+  return createDebouncedSearch({ search: rawSearch, delayMs: 150 });
+}
+
 export function EditableMarkdown({
   value,
   onCommit,
@@ -52,7 +135,7 @@ export function EditableMarkdown({
   inputClassName,
   multiline,
   placeholder,
-  tags,
+  tags: _legacyTags,
 }: EditableMarkdownProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -60,6 +143,8 @@ export function EditableMarkdown({
   const clickCoordsRef = useRef<{ x: number; y: number } | null>(null);
   const keymapCompartment = useRef(new Compartment());
   const { mode } = useKeymap();
+  const { mentionableTypes } = useSchema();
+  const { getEntities } = useEntityStore();
 
   // Keep draft in sync when value changes externally
   useEffect(() => {
@@ -73,8 +158,6 @@ export function EditableMarkdown({
   }, [editing]);
 
   // Save + exit the editor
-  // Read directly from the CM view to avoid stale draft state
-  // (React may not have re-rendered after CM's onChange → setDraft yet)
   const commitAndExit = useCallback(() => {
     if (committedRef.current) return;
     committedRef.current = true;
@@ -87,7 +170,6 @@ export function EditableMarkdown({
     }
   }, [draft, value, onCommit]);
 
-  // Ref so DOM event handlers always see the latest closure
   const commitAndExitRef = useRef(commitAndExit);
   commitAndExitRef.current = commitAndExit;
 
@@ -117,11 +199,9 @@ export function EditableMarkdown({
     prevModeRef.current = mode;
   }, [mode, editing]);
 
-  // After editor mounts and gets focus, ensure vim is in normal mode
-  // and position cursor at click location
+  // After editor mounts, ensure vim normal mode and position cursor at click location
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
-      // Ensure vim starts in normal mode (solid block cursor)
       if (mode === "vim") {
         const cm = getCM(view);
         if (cm?.state?.vim?.insertMode) {
@@ -130,9 +210,6 @@ export function EditableMarkdown({
         }
       }
 
-      // Position cursor at click coordinates via CM6 API.
-      // posAtCoords requires real DOM layout (getClientRects) so guard
-      // against environments where layout isn't available (e.g. jsdom).
       const coords = clickCoordsRef.current;
       clickCoordsRef.current = null;
       if (coords) {
@@ -142,15 +219,13 @@ export function EditableMarkdown({
             view.dispatch({ selection: { anchor: pos } });
           }
         } catch {
-          // No layout available — cursor stays at default position
+          // No layout available
         }
       }
     },
     [mode]
   );
 
-  // Display mode refs — must be declared before any early return to
-  // satisfy React's rules of hooks (same number of hooks every render).
   const displayRef = useRef<HTMLDivElement>(null);
 
   const handleCheckboxChange = useCallback(
@@ -168,7 +243,6 @@ export function EditableMarkdown({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      // Store click coordinates — CM6 posAtCoords will resolve them after mount
       clickCoordsRef.current = { x: e.clientX, y: e.clientY };
       setDraft(value);
       setEditing(true);
@@ -176,44 +250,44 @@ export function EditableMarkdown({
     [value]
   );
 
-  // Known tag slugs for the remark plugin
-  const knownSlugs = useMemo(
-    () => (tags ? tags.map((t) => getStr(t, "tag_name")) : []),
-    [tags],
-  );
+  // Build mention data for all mentionable types from context
+  const mentionData = useMemo(() => {
+    if (!multiline) return [];
+    return mentionableTypes.map((mt) => {
+      const entities = getEntities(mt.entityType);
+      return {
+        ...mt,
+        entities,
+        colorMap: buildColorMap(entities, mt.displayField),
+        metaMap: buildMetaMap(entities, mt.displayField),
+        slugs: entities.map((e) => getStr(e, mt.displayField)).filter(Boolean),
+      };
+    });
+  }, [multiline, mentionableTypes, getEntities]);
 
-  // Build tag color map for CM6 decorations
-  const tagColorMap = useMemo(() => {
-    const map = new Map<string, string>();
-    if (tags) {
-      for (const t of tags) {
-        const name = getStr(t, "tag_name");
-        const color = getStr(t, "color", "888888");
-        map.set(name, color);
-      }
+  // Build CM6 extensions for all mention types.
+  // IMPORTANT: All completion sources must be collected into a single
+  // autocompletion() call to avoid CM6 "Config merge conflict for field override".
+  const mentionExtensions = useMemo((): Extension[] => {
+    if (!multiline) return [];
+    const exts: Extension[] = [];
+    const completionSources: Array<ReturnType<typeof createMentionCompletionSource>> = [];
+    for (const md of mentionData) {
+      if (md.colorMap.size === 0) continue;
+      const decoInfra = getDecoInfra(md.prefix, md.entityType);
+      exts.push(decoInfra.extension(md.colorMap));
+      completionSources.push(createMentionCompletionSource(md.prefix, buildAsyncSearch(md.entityType)));
+      const tooltipInfraInstance = getTooltipInfra(md.prefix, md.entityType);
+      exts.push(tooltipInfraInstance.extension(md.metaMap));
     }
-    return map;
-  }, [tags]);
-
-  // Build tag meta map for CM6 hover tooltips
-  const tagMetaMap = useMemo(() => {
-    const map = new Map<string, TagMeta>();
-    if (tags) {
-      for (const t of tags) {
-        const name = getStr(t, "tag_name");
-        const color = getStr(t, "color", "888888");
-        const description = getStr(t, "description") || undefined;
-        map.set(name, { color, description });
-      }
+    if (completionSources.length > 0) {
+      exts.push(createMentionAutocomplete(completionSources));
     }
-    return map;
-  }, [tags]);
+    return exts;
+  }, [multiline, mentionData]);
 
-  // Memoize extensions so keystroke-driven re-renders don't recreate
-  // the vim/emacs extension and blow away modal state
   const extensions = useMemo(
     () => [
-      minimalTheme,
       keymapCompartment.current.of(keymapExtension(mode)),
       EditorView.lineWrapping,
       // Vim mode: intercept Escape at the DOM level to check vim state
@@ -224,12 +298,9 @@ export function EditableMarkdown({
                 if (event.key === "Escape") {
                   const cm = getCM(view);
                   if (cm?.state?.vim?.insertMode) {
-                    // Insert mode: let vim handle Escape (→ normal mode),
-                    // then save the value on next tick
                     setTimeout(() => saveInPlaceRef.current(), 0);
                     return false;
                   }
-                  // Normal mode: save and exit the editor
                   commitAndExitRef.current();
                   return true;
                 }
@@ -238,7 +309,6 @@ export function EditableMarkdown({
             }),
           ]
         : [
-            // CUA / Emacs: Escape saves and exits
             keymap.of([
               {
                 key: "Escape",
@@ -249,7 +319,6 @@ export function EditableMarkdown({
               },
             ]),
           ]),
-      // Single-line: Enter saves and exits
       ...(!multiline
         ? [
             keymap.of([
@@ -266,15 +335,45 @@ export function EditableMarkdown({
       ...(multiline
         ? [markdown({ base: markdownLanguage, codeLanguages: languages })]
         : []),
-      // Tag decorations — colored pills for #tag patterns
-      ...(multiline ? [tagDecorations(tagColorMap)] : []),
-      // Tag autocomplete — triggered by # in multiline mode
-      ...(multiline && tagColorMap.size > 0 ? [tagAutocomplete(tagColorMap)] : []),
-      // Tag hover tooltips
-      ...(multiline && tagMetaMap.size > 0 ? [tagTooltips(tagMetaMap)] : []),
+      ...mentionExtensions,
     ],
-    [mode, multiline, tagColorMap, tagMetaMap]
+    [mode, multiline, mentionExtensions]
   );
+
+  // Build remark plugins for all mentionable types (must be before early return)
+  const remarkPlugins = useMemo(() => {
+    const plugins: Array<ReturnType<typeof remarkMentions> | typeof remarkGfm> = [remarkGfm];
+    for (const md of mentionData) {
+      if (md.slugs.length === 0) continue;
+      plugins.push(
+        remarkMentions(md.prefix, md.slugs, `${md.entityType}Pill`, `${md.entityType}-pill`)
+      );
+    }
+    return plugins;
+  }, [mentionData]);
+
+  // Build custom components for all mentionable types (must be before early return)
+  const mentionComponents = useMemo(() => {
+    const comps: Record<string, React.ComponentType> = {};
+    for (const md of mentionData) {
+      if (md.entityType === "tag") {
+        comps["tag-pill"] = (props: { slug?: string }) => (
+          <TagPill slug={props.slug ?? ""} tags={md.entities} />
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ) as any;
+      } else {
+        comps[`${md.entityType}-pill`] = (props: { slug?: string }) => (
+          <MentionPill
+            entityType={md.entityType}
+            slug={props.slug ?? ""}
+            prefix={md.prefix}
+          />
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ) as any;
+      }
+    }
+    return comps;
+  }, [mentionData]);
 
   if (editing) {
     return (
@@ -286,6 +385,7 @@ export function EditableMarkdown({
         onBlur={commitAndExit}
         onCreateEditor={handleCreateEditor}
         extensions={extensions}
+        theme={shadcnTheme}
         basicSetup={{
           lineNumbers: false,
           foldGutter: false,
@@ -308,7 +408,7 @@ export function EditableMarkdown({
     >
       {value ? (
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkTags(knownSlugs)]}
+          remarkPlugins={remarkPlugins}
           components={{
             input: (props) => {
               if (props.type === "checkbox") {
@@ -323,12 +423,7 @@ export function EditableMarkdown({
               }
               return <input {...props} />;
             },
-            ...({
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              "tag-pill": (props: any) => (
-                <TagPill slug={props.slug ?? ""} tags={tags ?? []} />
-              ),
-            } as Record<string, React.ComponentType>),
+            ...(mentionComponents as Record<string, React.ComponentType>),
           }}
         >
           {value}

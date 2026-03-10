@@ -1,8 +1,11 @@
 import { forwardRef, useCallback, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { remarkTags } from "@/lib/remark-tags";
+import { useSchema } from "@/lib/schema-context";
+import { useEntityStore } from "@/lib/entity-store-context";
+import { remarkMentions } from "@/lib/remark-mentions";
 import { TagPill } from "@/components/tag-pill";
+import { MentionPill } from "@/components/mention-pill";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 import type { DisplayProps } from "./text-display";
@@ -26,9 +29,9 @@ interface MarkdownDisplayProps extends DisplayProps {
 
 /**
  * Markdown display — compact: truncated plain text, full: rendered ReactMarkdown with
- * GFM, tag pills, and interactive checkboxes.
+ * GFM, mention pills for all mentionable types, and interactive checkboxes.
  */
-export function MarkdownDisplay({ value, mode, tags, onCommit }: MarkdownDisplayProps) {
+export function MarkdownDisplay({ value, mode, onCommit }: MarkdownDisplayProps) {
   const text = typeof value === "string" ? value : "";
   const displayRef = useRef<HTMLDivElement>(null);
 
@@ -46,7 +49,6 @@ export function MarkdownDisplay({ value, mode, tags, onCommit }: MarkdownDisplay
     <MarkdownFull
       ref={displayRef}
       text={text}
-      tags={tags}
       onCommit={onCommit}
     />
   );
@@ -54,13 +56,54 @@ export function MarkdownDisplay({ value, mode, tags, onCommit }: MarkdownDisplay
 
 const MarkdownFull = forwardRef<HTMLDivElement, {
   text: string;
-  tags?: Entity[];
   onCommit?: (value: string) => void;
-}>(function MarkdownFull({ text, tags, onCommit }, ref) {
-  const knownSlugs = useMemo(
-    () => (tags ? tags.map((t) => getStr(t, "tag_name")) : []),
-    [tags],
-  );
+}>(function MarkdownFull({ text, onCommit }, ref) {
+  const { mentionableTypes } = useSchema();
+  const { getEntities } = useEntityStore();
+
+  const mentionData = useMemo(() => {
+    return mentionableTypes.map((mt) => {
+      const entities = getEntities(mt.entityType);
+      return {
+        ...mt,
+        entities,
+        slugs: entities.map((e) => getStr(e, mt.displayField)).filter(Boolean),
+      };
+    });
+  }, [mentionableTypes, getEntities]);
+
+  const remarkPlugins = useMemo(() => {
+    const plugins: Array<ReturnType<typeof remarkMentions> | typeof remarkGfm> = [remarkGfm];
+    for (const md of mentionData) {
+      if (md.slugs.length === 0) continue;
+      plugins.push(
+        remarkMentions(md.prefix, md.slugs, `${md.entityType}Pill`, `${md.entityType}-pill`)
+      );
+    }
+    return plugins;
+  }, [mentionData]);
+
+  const mentionComponents = useMemo(() => {
+    const comps: Record<string, React.ComponentType> = {};
+    for (const md of mentionData) {
+      if (md.entityType === "tag") {
+        comps["tag-pill"] = (props: { slug?: string }) => (
+          <TagPill slug={props.slug ?? ""} tags={md.entities} />
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ) as any;
+      } else {
+        comps[`${md.entityType}-pill`] = (props: { slug?: string }) => (
+          <MentionPill
+            entityType={md.entityType}
+            slug={props.slug ?? ""}
+            prefix={md.prefix}
+          />
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ) as any;
+      }
+    }
+    return comps;
+  }, [mentionData]);
 
   const handleCheckboxChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -79,7 +122,7 @@ const MarkdownFull = forwardRef<HTMLDivElement, {
   return (
     <div ref={ref} className="prose prose-sm dark:prose-invert max-w-none">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkTags(knownSlugs)]}
+        remarkPlugins={remarkPlugins}
         components={{
           input: (props) => {
             if (props.type === "checkbox") {
@@ -94,12 +137,7 @@ const MarkdownFull = forwardRef<HTMLDivElement, {
             }
             return <input {...props} />;
           },
-          ...({
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            "tag-pill": (props: any) => (
-              <TagPill slug={props.slug ?? ""} tags={tags ?? []} />
-            ),
-          } as Record<string, React.ComponentType>),
+          ...(mentionComponents as Record<string, React.ComponentType>),
         }}
       >
         {text}

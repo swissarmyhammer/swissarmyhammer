@@ -1,9 +1,38 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
+
+// Schema responses keyed by entity type
+const SCHEMAS: Record<string, unknown> = {
+  tag: {
+    entity: { name: "tag", fields: ["tag_name", "color", "description"], mention_prefix: "#", mention_display_field: "tag_name" },
+    fields: [
+      { name: "tag_name", type: { kind: "text" } },
+      { name: "color", type: { kind: "color" } },
+      { name: "description", type: { kind: "markdown" } },
+    ],
+  },
+  actor: {
+    entity: { name: "actor", fields: ["name", "color", "avatar"], mention_prefix: "@", mention_display_field: "name" },
+    fields: [
+      { name: "name", type: { kind: "text" } },
+      { name: "color", type: { kind: "color" } },
+      { name: "avatar", type: { kind: "text" } },
+    ],
+  },
+};
+const DEFAULT_SCHEMA = { entity: { name: "unknown", fields: [] }, fields: [] };
 
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve("cua")),
+  invoke: vi.fn((cmd: string, args?: Record<string, unknown>) => {
+    if (cmd === "get_keymap_mode") return Promise.resolve("cua");
+    if (cmd === "get_entity_schema") {
+      const entityType = args?.entityType as string;
+      return Promise.resolve(SCHEMAS[entityType] ?? DEFAULT_SCHEMA);
+    }
+    if (cmd === "search_mentions") return Promise.resolve([]);
+    return Promise.resolve(null);
+  }),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -11,9 +40,45 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { EditableMarkdown } from "./editable-markdown";
 import { KeymapProvider } from "@/lib/keymap-context";
+import { SchemaProvider } from "@/lib/schema-context";
+import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { InspectProvider } from "@/lib/inspect-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { Entity } from "@/types/kanban";
 
-function renderWithProvider(ui: React.ReactElement) {
-  return render(<KeymapProvider>{ui}</KeymapProvider>);
+/** Entities with mention-supporting fields populated. */
+const TAG_ENTITIES: Entity[] = [
+  { entity_type: "tag", id: "01TAG1", fields: { tag_name: "bug", color: "ff0000", description: "Bug fixes" } },
+  { entity_type: "tag", id: "01TAG2", fields: { tag_name: "feature", color: "00ff00" } },
+];
+const ACTOR_ENTITIES: Entity[] = [
+  { entity_type: "actor", id: "wballard", fields: { name: "wballard", color: "3366cc" } },
+];
+
+function renderWithProvider(ui: React.ReactElement, entities?: Record<string, Entity[]>) {
+  return render(
+    <TooltipProvider>
+      <SchemaProvider>
+        <EntityStoreProvider entities={entities ?? { tag: [], actor: [] }}>
+          <EntityFocusProvider>
+            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+              <KeymapProvider>{ui}</KeymapProvider>
+            </InspectProvider>
+          </EntityFocusProvider>
+        </EntityStoreProvider>
+      </SchemaProvider>
+    </TooltipProvider>
+  );
+}
+
+/** Render with fully-populated mention context (tags + actors). */
+async function renderWithMentions(ui: React.ReactElement) {
+  let result: ReturnType<typeof render>;
+  await act(async () => {
+    result = renderWithProvider(ui, { tag: TAG_ENTITIES, actor: ACTOR_ENTITIES });
+  });
+  return result!;
 }
 
 describe("EditableMarkdown", () => {
@@ -252,6 +317,67 @@ describe("EditableMarkdown", () => {
       expect(onCommit).toHaveBeenCalledWith(
         "## Subtasks\n\n- [ ] alpha\n- [ ] bravo\n- [ ] charlie\n\nSome notes here."
       );
+    });
+  });
+
+  describe("multiline editing with mention types", () => {
+    it("enters edit mode without crashing when mentionable types are populated", async () => {
+      const { container } = await renderWithMentions(
+        <EditableMarkdown
+          value="Task with #bug tag and @wballard mention"
+          onCommit={() => {}}
+          multiline
+          placeholder="Add description..."
+        />
+      );
+
+      // Display mode should render the text
+      expect(screen.getByText(/Task with/)).toBeTruthy();
+
+      // Click to enter edit mode — this should not crash
+      await act(async () => {
+        fireEvent.click(container.querySelector(".cursor-text")!);
+      });
+
+      // CM6 editor should be mounted
+      const editor = container.querySelector(".cm-editor");
+      expect(editor).toBeTruthy();
+    });
+
+    it("enters edit mode on empty body with mention types loaded", async () => {
+      const { container } = await renderWithMentions(
+        <EditableMarkdown
+          value=""
+          onCommit={() => {}}
+          multiline
+          placeholder="Add description..."
+        />
+      );
+
+      // Should show placeholder
+      expect(screen.getByText("Add description...")).toBeTruthy();
+
+      // Click placeholder to enter edit mode — this is the exact user flow that crashes
+      await act(async () => {
+        fireEvent.click(screen.getByText("Add description..."));
+      });
+
+      // CM6 editor should be mounted without crashing
+      const editor = container.querySelector(".cm-editor");
+      expect(editor).toBeTruthy();
+    });
+
+    it("renders tag pills in display mode with mentions loaded", async () => {
+      await renderWithMentions(
+        <EditableMarkdown
+          value="Fix the #bug in login"
+          onCommit={() => {}}
+          multiline
+        />
+      );
+
+      // Tag pill should be rendered
+      expect(screen.getByText("#bug")).toBeTruthy();
     });
   });
 });

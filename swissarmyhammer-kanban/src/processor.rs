@@ -60,6 +60,15 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         let ectx = ctx.entity_context().await?;
         ectx.set_transaction(tx_id.clone()).await;
 
+        // Log every operation flowing through the processor so we can trace
+        // activity from any entry point (Tauri, MCP, CLI, tests).
+        let op_name = operation.op_string();
+        tracing::info!(
+            op = %op_name,
+            actor = ?self.actor,
+            "[op] {}", op_name,
+        );
+
         // Execute the operation
         let exec_result = operation.execute(ctx).await;
 

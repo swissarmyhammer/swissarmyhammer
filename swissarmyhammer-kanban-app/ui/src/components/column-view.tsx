@@ -64,14 +64,16 @@ export function ColumnView({ column, tasks, blockedIds, onAddTask, onRenameColum
           />
           <Badge variant="secondary">{tasks.length}</Badge>
           <div className="flex-1" />
-          <button
-            type="button"
-            className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-            onClick={() => onAddTask?.(column.id)}
-            title={`Add task to ${getStr(column, "name")}`}
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+          {onAddTask && (
+            <button
+              type="button"
+              className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+              onClick={() => onAddTask(column.id)}
+              title={`Add task to ${getStr(column, "name")}`}
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          )}
         </div>
         <div ref={setNodeRef} className="flex-1 overflow-y-auto px-2 pt-1 pb-2 space-y-1.5">
           <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>

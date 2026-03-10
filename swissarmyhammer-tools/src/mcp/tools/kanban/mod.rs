@@ -36,8 +36,8 @@ use swissarmyhammer_kanban::{
         AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask,
         TagTask, UnassignTask, UntagTask, UpdateTask,
     },
-    Execute, KanbanContext, KanbanOperation, KanbanOperationProcessor, Noun, Operation,
-    OperationProcessor, Verb,
+    ActorId, Execute, KanbanContext, KanbanOperation, KanbanOperationProcessor, Noun, Operation,
+    OperationProcessor, TaskId, Verb,
 };
 
 // Static operation instances for metadata access
@@ -59,7 +59,7 @@ static UPDATE_SWIMLANE: Lazy<UpdateSwimlane> = Lazy::new(|| UpdateSwimlane::new(
 static DELETE_SWIMLANE: Lazy<DeleteSwimlane> = Lazy::new(|| DeleteSwimlane::new(""));
 static LIST_SWIMLANES: Lazy<ListSwimlanes> = Lazy::new(ListSwimlanes::default);
 
-static ADD_ACTOR: Lazy<AddActor> = Lazy::new(|| AddActor::human("", ""));
+static ADD_ACTOR: Lazy<AddActor> = Lazy::new(|| AddActor::new("", ""));
 static GET_ACTOR: Lazy<GetActor> = Lazy::new(|| GetActor::new(""));
 static UPDATE_ACTOR: Lazy<UpdateActor> = Lazy::new(|| UpdateActor::new(""));
 static DELETE_ACTOR: Lazy<DeleteActor> = Lazy::new(|| DeleteActor::new(""));
@@ -470,7 +470,58 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
-            // Could add position, tags, assignees, depends_on parsing here
+            if let Some(column) = op.get_string("column") {
+                cmd.column = Some(column.to_string());
+            }
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd.swimlane = Some(swimlane.to_string());
+            }
+            if let Some(ordinal) = op.get_string("ordinal") {
+                cmd.ordinal = Some(ordinal.to_string());
+            }
+
+            // Parse explicit assignees from params
+            let explicit_assignees: Vec<ActorId> = op
+                .get_param("assignees")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(ActorId::from_string))
+                        .collect()
+                })
+                .or_else(|| {
+                    // Also accept singular "assignee" param
+                    op.get_string("assignee")
+                        .map(|a| vec![ActorId::from_string(a)])
+                })
+                .unwrap_or_default();
+
+            // Auto-assign: if no explicit assignees and the operation has an actor,
+            // automatically assign the creating actor to the task
+            let assignees = if explicit_assignees.is_empty() {
+                match &op.actor {
+                    Some(actor) => vec![actor.clone()],
+                    None => Vec::new(),
+                }
+            } else {
+                explicit_assignees
+            };
+
+            if !assignees.is_empty() {
+                cmd = cmd.with_assignees(assignees);
+            }
+
+            // Parse depends_on
+            if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
+                let dep_ids: Vec<TaskId> = deps
+                    .iter()
+                    .filter_map(|v| v.as_str().map(TaskId::from_string))
+                    .collect();
+                if !dep_ids.is_empty() {
+                    cmd = cmd.with_depends_on(dep_ids);
+                }
+            }
+
             processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Task) => {
@@ -644,17 +695,12 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
             let name = op
                 .get_string("name")
                 .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
-            let actor_type = op.get_string("type").unwrap_or("human");
             let ensure = op
                 .get_param("ensure")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let mut cmd = if actor_type == "agent" {
-                AddActor::agent(id, name)
-            } else {
-                AddActor::human(id, name)
-            };
+            let mut cmd = AddActor::new(id, name);
 
             if ensure {
                 cmd = cmd.with_ensure();
@@ -685,7 +731,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
                 .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
             processor.process(&DeleteActor::new(id), ctx).await
         }
-        (Verb::List, Noun::Actors) => processor.process(&ListActors::default(), ctx).await,
+        (Verb::List, Noun::Actors) => processor.process(&ListActors, ctx).await,
 
         // Tag operations (board-level)
         (Verb::Add, Noun::Tag) => {
@@ -2408,7 +2454,6 @@ mod tests {
         add_args.insert("op".to_string(), json!("add actor"));
         add_args.insert("id".to_string(), json!("alice"));
         add_args.insert("name".to_string(), json!("Alice"));
-        add_args.insert("actor_type".to_string(), json!("human"));
         add_args.insert("ensure".to_string(), json!(false));
 
         let result = tool.execute(add_args, &context).await.unwrap();
@@ -2438,5 +2483,104 @@ mod tests {
 
         // directories_exist should now return false
         assert!(!ctx.directories_exist());
+    }
+
+    // =========================================================================
+    // Auto-assign tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_add_task_auto_assigns_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Register an agent actor
+        let mut actor_args = serde_json::Map::new();
+        actor_args.insert("op".to_string(), json!("add actor"));
+        actor_args.insert("id".to_string(), json!("assistant"));
+        actor_args.insert("name".to_string(), json!("AI Assistant"));
+        actor_args.insert("type".to_string(), json!("agent"));
+        tool.execute(actor_args, &context).await.unwrap();
+
+        // Add a task with actor set but no explicit assignees
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Auto-assigned task"));
+        add_args.insert("actor".to_string(), json!("assistant"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Task should be auto-assigned to the actor
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert_eq!(assignees.len(), 1);
+        assert_eq!(assignees[0], "assistant");
+    }
+
+    #[tokio::test]
+    async fn test_add_task_no_auto_assign_without_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Add a task without actor
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("No actor task"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Task should have no assignees
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert!(assignees.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_add_task_explicit_assignees_override_auto_assign() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Register actors
+        for (id, name) in [("assistant", "AI Assistant"), ("alice", "Alice")] {
+            let mut actor_args = serde_json::Map::new();
+            actor_args.insert("op".to_string(), json!("add actor"));
+            actor_args.insert("id".to_string(), json!(id));
+            actor_args.insert("name".to_string(), json!(name));
+            actor_args.insert("type".to_string(), json!("human"));
+            tool.execute(actor_args, &context).await.unwrap();
+        }
+
+        // Add a task with actor AND explicit assignees
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Explicitly assigned task"));
+        add_args.insert("actor".to_string(), json!("assistant"));
+        add_args.insert("assignees".to_string(), json!(["alice"]));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Explicit assignees should be used, not auto-assigned actor
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert_eq!(assignees.len(), 1);
+        assert_eq!(assignees[0], "alice");
     }
 }

@@ -8,9 +8,34 @@ use crate::tag_parser;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
+use swissarmyhammer_entity::EntityContext;
+use swissarmyhammer_fields::types::EntityDef;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
+
+/// Parse `#tag` patterns from an entity's body field and auto-create tag entities
+/// for any that don't already exist.
+async fn auto_create_tags(
+    ectx: &EntityContext,
+    entity: &Entity,
+    entity_def: &EntityDef,
+) -> std::result::Result<(), KanbanError> {
+    let body_field = entity_def.body_field.as_deref().unwrap_or("body");
+    let body = entity.get_str(body_field).unwrap_or("");
+    let tags = tag_parser::parse_tags(body);
+    for tag_name in &tags {
+        if !tag_name_exists_entity(ectx, tag_name).await {
+            let color = auto_color::auto_color(tag_name).to_string();
+            let tag_id = ulid::Ulid::new().to_string();
+            let mut tag_entity = Entity::new("tag", tag_id.as_str());
+            tag_entity.set("tag_name", json!(tag_name));
+            tag_entity.set("color", json!(color));
+            ectx.write(&tag_entity).await?;
+        }
+    }
+    Ok(())
+}
 
 /// Update a single field on any entity.
 ///
@@ -78,6 +103,47 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
                 });
             }
 
+            // Check if this is a computed field — route through DeriveHandler
+            let fields_ctx = ectx.fields();
+            let field_def = fields_ctx.get_field_by_name(&self.field_name);
+            if let Some(field_def) = field_def {
+                if let swissarmyhammer_fields::FieldType::Computed { ref derive } = field_def.type_
+                {
+                    let handler = ctx.derive_registry().get(derive).ok_or_else(|| {
+                        KanbanError::InvalidValue {
+                            field: self.field_name.clone(),
+                            message: format!("no derive handler registered for '{}'", derive),
+                        }
+                    })?;
+                    if !handler.writable() {
+                        return Err(KanbanError::InvalidValue {
+                            field: self.field_name.clone(),
+                            message: "computed field is read-only".into(),
+                        });
+                    }
+
+                    let mut entity = ectx
+                        .read(&self.entity_type, &self.id)
+                        .await
+                        .map_err(KanbanError::from_entity_error)?;
+
+                    handler
+                        .apply(&mut entity.fields, entity_def, &self.value)
+                        .map_err(|e| KanbanError::InvalidValue {
+                            field: self.field_name.clone(),
+                            message: e.to_string(),
+                        })?;
+
+                    ectx.write(&entity).await?;
+
+                    // Auto-create tag entities for any new tags in the body
+                    auto_create_tags(ectx, &entity, entity_def).await?;
+
+                    return Ok(entity.to_json());
+                }
+            }
+
+            // Normal field: direct read-set-write
             let mut entity = ectx
                 .read(&self.entity_type, &self.id)
                 .await
@@ -91,28 +157,8 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
 
             ectx.write(&entity).await?;
 
-            // Auto-create tag entities when a task body field is updated
-            if self.entity_type == "task" {
-                let fields_ctx = ectx.fields();
-                let entity_def = fields_ctx.get_entity("task");
-                let is_body_field = entity_def
-                    .map(|def| def.body_field.as_deref() == Some(&self.field_name))
-                    .unwrap_or(false);
-                if is_body_field {
-                    let body_text = self.value.as_str().unwrap_or("");
-                    let tags = tag_parser::parse_tags(body_text);
-                    for tag_name in &tags {
-                        if !tag_name_exists_entity(ectx, tag_name).await {
-                            let color = auto_color::auto_color(tag_name).to_string();
-                            let tag_id = ulid::Ulid::new().to_string();
-                            let mut tag_entity = Entity::new("tag", tag_id.as_str());
-                            tag_entity.set("tag_name", json!(tag_name));
-                            tag_entity.set("color", json!(color));
-                            ectx.write(&tag_entity).await?;
-                        }
-                    }
-                }
-            }
+            // Auto-create tag entities when a body field is updated directly
+            auto_create_tags(ectx, &entity, entity_def).await?;
 
             Ok(entity.to_json())
         }
@@ -292,6 +338,81 @@ mod tests {
             .filter(|t| t.get_str("tag_name") == Some("existing"))
             .count();
         assert_eq!(count, 1, "Should not duplicate existing tag");
+    }
+
+    #[tokio::test]
+    async fn test_update_computed_tags_via_derive_handler() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a task with a tag in the body
+        let task_result = AddTask::new("Derive test")
+            .with_description("Has #original tag")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        // Update the computed "tags" field — should route through ParseBodyTags handler
+        let cmd = UpdateEntityField::new(
+            "task",
+            &task_id,
+            "tags",
+            serde_json::json!(["original", "added"]),
+        );
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
+
+        // The body should now contain both tags
+        let body = result["body"].as_str().unwrap();
+        let tags = crate::tag_parser::parse_tags(body);
+        assert!(
+            tags.contains(&"original".to_string()),
+            "original tag preserved"
+        );
+        assert!(
+            tags.contains(&"added".to_string()),
+            "new tag added via derive handler"
+        );
+
+        // Tag entity for "added" should have been auto-created
+        let ectx = ctx.entity_context().await.unwrap();
+        let tag_entities = ectx.list("tag").await.unwrap();
+        assert!(
+            tag_entities
+                .iter()
+                .any(|t| t.get_str("tag_name") == Some("added")),
+            "Tag entity 'added' should have been auto-created"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_computed_field_read_only_returns_error() {
+        // This test verifies that the derive handler routing checks writable().
+        // Since ParseBodyTags is writable, we test the invalid-field path instead:
+        // a computed field with no registered handler returns an error.
+        let (_temp, ctx) = setup().await;
+
+        let task_result = AddTask::new("Error test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        // "progress" is a computed field with derive: parse-body-progress
+        // but no DeriveHandler is registered for it in kanban_derive_registry
+        let cmd = UpdateEntityField::new("task", &task_id, "progress", serde_json::json!(0.5));
+        let result = cmd.execute(&ctx).await.into_result();
+        assert!(
+            result.is_err(),
+            "Should fail when no derive handler registered"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no derive handler"),
+            "Error should mention missing handler: {}",
+            err
+        );
     }
 
     #[tokio::test]

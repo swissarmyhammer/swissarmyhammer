@@ -669,6 +669,8 @@ type:
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into()],
             validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -694,6 +696,8 @@ type:
             body_field: None,
             fields: vec!["title".into(), "status".into(), "missing".into()],
             validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -717,6 +721,8 @@ type:
                 body_field: Some("body".into()),
                 fields: vec!["title".into(), "status".into()],
                 validate: None,
+                mention_prefix: None,
+                mention_display_field: None,
             })
             .await
             .unwrap();

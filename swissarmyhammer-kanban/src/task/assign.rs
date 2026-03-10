@@ -127,7 +127,7 @@ mod tests {
     async fn test_assign_task() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::agent("assistant", "Assistant")
+        AddActor::new("assistant", "Assistant")
             .execute(&ctx)
             .await
             .into_result()
@@ -159,7 +159,7 @@ mod tests {
     async fn test_assign_task_idempotent() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::agent("assistant", "Assistant")
+        AddActor::new("assistant", "Assistant")
             .execute(&ctx)
             .await
             .into_result()
@@ -190,7 +190,7 @@ mod tests {
     async fn test_assign_task_nonexistent_task() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::agent("assistant", "Assistant")
+        AddActor::new("assistant", "Assistant")
             .execute(&ctx)
             .await
             .into_result()

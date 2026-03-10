@@ -1,0 +1,9 @@
+id: "0000000000000000000000000V"
+name: avatar
+description: Profile image (data URI or URL)
+type:
+  kind: text
+  single_line: true
+editor: none
+display: avatar
+section: hidden

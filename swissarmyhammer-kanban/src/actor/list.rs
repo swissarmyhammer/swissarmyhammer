@@ -8,33 +8,14 @@ use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// List all actors
-#[operation(
-    verb = "list",
-    noun = "actors",
-    description = "List all actors with optional type filter"
-)]
+#[operation(verb = "list", noun = "actors", description = "List all actors")]
 #[derive(Debug, Default, Deserialize)]
-pub struct ListActors {
-    /// Filter by actor type (human or agent)
-    #[serde(rename = "type")]
-    pub actor_type: Option<String>,
-}
+pub struct ListActors;
 
 impl ListActors {
+    /// Create a new ListActors command
     pub fn new() -> Self {
-        Self { actor_type: None }
-    }
-
-    pub fn humans() -> Self {
-        Self {
-            actor_type: Some("human".to_string()),
-        }
-    }
-
-    pub fn agents() -> Self {
-        Self {
-            actor_type: Some("agent".to_string()),
-        }
+        Self
     }
 }
 
@@ -45,14 +26,7 @@ impl Execute<KanbanContext, KanbanError> for ListActors {
             let ectx = ctx.entity_context().await?;
             let all_actors = ectx.list("actor").await?;
 
-            let actors_json: Vec<Value> = all_actors
-                .iter()
-                .filter(|a| match &self.actor_type {
-                    None => true,
-                    Some(t) => a.get_str("actor_type") == Some(t.as_str()),
-                })
-                .map(actor_entity_to_json)
-                .collect();
+            let actors_json: Vec<Value> = all_actors.iter().map(actor_entity_to_json).collect();
 
             Ok(serde_json::json!({
                 "actors": actors_json,
@@ -105,12 +79,12 @@ mod tests {
     async fn test_list_actors() {
         let (_temp, ctx) = setup().await;
 
-        AddActor::human("alice", "Alice")
+        AddActor::new("alice", "Alice")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        AddActor::agent("assistant", "Assistant")
+        AddActor::new("assistant", "Assistant")
             .execute(&ctx)
             .await
             .into_result()
@@ -119,55 +93,5 @@ mod tests {
         let result = ListActors::new().execute(&ctx).await.into_result().unwrap();
 
         assert_eq!(result["count"], 2);
-    }
-
-    #[tokio::test]
-    async fn test_list_actors_filter_humans() {
-        let (_temp, ctx) = setup().await;
-
-        AddActor::human("alice", "Alice")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        AddActor::agent("assistant", "Assistant")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let result = ListActors::humans()
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert_eq!(result["count"], 1);
-        assert_eq!(result["actors"][0]["type"], "human");
-    }
-
-    #[tokio::test]
-    async fn test_list_actors_filter_agents() {
-        let (_temp, ctx) = setup().await;
-
-        AddActor::human("alice", "Alice")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        AddActor::agent("assistant", "Assistant")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let result = ListActors::agents()
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert_eq!(result["count"], 1);
-        assert_eq!(result["actors"][0]["type"], "agent");
     }
 }

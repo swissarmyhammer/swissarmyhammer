@@ -31,13 +31,23 @@ fn main() {
         }
     }
 
-    // Otherwise, launch the Tauri GUI — tauri-plugin-log owns the logger.
-    tracing::info!("Launching Tauri GUI");
+    // Otherwise, launch the Tauri GUI — tauri-plugin-log owns the `log` crate logger.
+    // The `tracing` crate's "log" feature (enabled in workspace Cargo.toml) makes
+    // tracing::info!() automatically emit log::info!() records, which tauri-plugin-log
+    // picks up. No explicit bridge needed.
+
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stderr,
+                ))
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::all())
@@ -45,6 +55,7 @@ fn main() {
         )
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
+            commands::log_command,
             commands::dispatch_command,
             commands::set_focus,
             commands::list_available_commands,
@@ -61,6 +72,7 @@ fn main() {
             commands::get_entity_schema,
             commands::list_entities,
             commands::get_entity,
+            commands::search_mentions,
             commands::get_board_data,
             commands::quit_app,
             commands::reset_windows,

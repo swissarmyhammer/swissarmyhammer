@@ -11,6 +11,9 @@ use swissarmyhammer_commands::{
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor};
 use tokio::sync::RwLock;
 
+use swissarmyhammer_kanban::actor::AddActor;
+use swissarmyhammer_kanban::Execute;
+
 use crate::watcher::{self, BoardWatcher, EntityCache};
 
 const MAX_RECENT_BOARDS: usize = 20;
@@ -43,6 +46,40 @@ impl BoardHandle {
             entity_cache,
             _watcher: None,
         })
+    }
+
+    /// Ensure an actor entity exists for the current OS user.
+    ///
+    /// Uses `whoami` to detect username/realname, derives a deterministic color,
+    /// and generates an initials-based SVG avatar. Idempotent via `ensure: true`.
+    pub async fn ensure_os_actor(&self) {
+        let username = whoami::username();
+        let realname = whoami::realname();
+        let color = deterministic_color(&username);
+
+        let mut cmd = AddActor::new(username.as_str(), realname.as_str())
+            .with_ensure()
+            .with_color(&color);
+
+        // Only set avatar if we have a real profile picture.
+        // Initials are rendered client-side as fallback.
+        if let Some(photo) = macos_profile_picture(&username) {
+            cmd = cmd.with_avatar(photo);
+        }
+
+        match cmd.execute(&self.ctx).await.into_result() {
+            Ok(result) => {
+                let created = result["created"].as_bool().unwrap_or(false);
+                if created {
+                    tracing::info!(id = %username, name = %realname, "created OS user actor");
+                } else {
+                    tracing::debug!(id = %username, "OS user actor already exists");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to ensure OS user actor");
+            }
+        }
     }
 
     /// Start the file watcher, emitting entity-level events on the given AppHandle.
@@ -209,6 +246,9 @@ impl AppState {
         }
 
         let mut handle = BoardHandle::open(kanban_path).await?;
+
+        // Ensure OS user actor exists
+        handle.ensure_os_actor().await;
 
         // Start file watcher if we have an app handle
         if let Some(app) = app_handle {
@@ -434,6 +474,93 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     Ok(child)
 }
 
+/// Curated palette of visually distinct colors for actor avatars.
+const ACTOR_COLORS: &[&str] = &[
+    "e53e3e", "dd6b20", "d69e2e", "38a169", "319795", "3182ce", "5a67d8", "805ad5", "d53f8c",
+    "2b6cb0", "c05621", "2f855a", "2c7a7b", "6b46c1", "b83280",
+];
+
+/// Derive a deterministic hex color from a username.
+fn deterministic_color(username: &str) -> String {
+    let hash: u64 = username
+        .bytes()
+        .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    ACTOR_COLORS[(hash as usize) % ACTOR_COLORS.len()].to_string()
+}
+
+/// Try to load the macOS user profile picture as a data URI.
+///
+/// macOS stores user pictures at `/Users/<username>/Library/Caches/com.apple.user-picture/`
+/// or via the DSCL directory services. We try the simplest approach: read the JPEG
+/// from the standard DS picture path.
+#[cfg(target_os = "macos")]
+fn macos_profile_picture(username: &str) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    // macOS stores user profile pictures via dscl; the actual file is at:
+    // /var/db/dslocal/nodes/Default/users/<username>.plist (needs root)
+    // But a more accessible copy often exists at:
+    let home = std::env::var("HOME").ok()?;
+    let candidates = [
+        format!("{home}/Library/Caches/com.apple.user-picture/user-picture.jpeg"),
+        format!("{home}/Library/Caches/com.apple.user-picture/user-picture.png"),
+        format!("{home}/.face"),
+        format!("{home}/.face.icon"),
+    ];
+
+    for path in &candidates {
+        if let Ok(data) = std::fs::read(path) {
+            if data.is_empty() {
+                continue;
+            }
+            let mime = if path.ends_with(".png") {
+                "image/png"
+            } else {
+                "image/jpeg"
+            };
+            return Some(format!("data:{mime};base64,{}", STANDARD.encode(&data)));
+        }
+    }
+
+    // Try dscl as a fallback — reads the JPEGPhoto attribute.
+    // dscl outputs hex-encoded text like "JPEGPhoto:\n ffd8ffe0 00104a46 ..."
+    // We need to parse the hex back to binary bytes.
+    let output = std::process::Command::new("dscl")
+        .args([".", "-read", &format!("/Users/{username}"), "JPEGPhoto"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Skip the "JPEGPhoto:\n" header line
+        let hex_body = stdout.strip_prefix("JPEGPhoto:\n").unwrap_or(&stdout);
+        // Remove all whitespace to get a continuous hex string
+        let hex_clean: String = hex_body.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+        // Decode hex pairs to bytes
+        let bytes: Vec<u8> = (0..hex_clean.len())
+            .step_by(2)
+            .filter_map(|i| {
+                hex_clean
+                    .get(i..i + 2)
+                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+            })
+            .collect();
+        if bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
+            return Some(format!(
+                "data:image/jpeg;base64,{}",
+                STANDARD.encode(&bytes)
+            ));
+        }
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_profile_picture(_username: &str) -> Option<String> {
+    None
+}
+
 /// Get the path to the app config file.
 fn config_file_path() -> PathBuf {
     dirs::config_dir()
@@ -641,5 +768,24 @@ mod tests {
         // boards map should contain the handle
         let boards = state.boards.read().await;
         assert!(boards.contains_key(&canonical));
+    }
+
+    #[test]
+    fn test_deterministic_color_is_stable() {
+        let c1 = deterministic_color("alice");
+        let c2 = deterministic_color("alice");
+        assert_eq!(c1, c2);
+        // Should be a valid 6-char hex
+        assert_eq!(c1.len(), 6);
+        assert!(c1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_deterministic_color_varies() {
+        let c1 = deterministic_color("alice");
+        let c2 = deterministic_color("bob");
+        // Different usernames should (usually) get different colors
+        // Not guaranteed but very likely with a 15-color palette
+        assert_ne!(c1, c2);
     }
 }
