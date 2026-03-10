@@ -184,6 +184,11 @@ fn index_single_file(
     // Collect symbols and persist them (this also marks lsp_indexed = 1)
     let result = client.collect_and_persist_file_symbols(db, full_path, relative_path)?;
 
+    // Close the document so re-indexing won't trigger "duplicate didOpen"
+    if let Err(e) = client.send_did_close(full_path) {
+        debug!("Failed to send didClose for {}: {}", relative_path, e);
+    }
+
     if let Some(err) = &result.error {
         // The client returned an LspCollectionResult with an error string
         // but didn't propagate it as Err. Log it but still count as indexed

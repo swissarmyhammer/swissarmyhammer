@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 use crate::error::CodeContextError;
 use crate::lsp_indexer::{flatten_symbols, write_symbols, write_edges, mark_lsp_indexed, CallEdge};
-use lsp_types::{DocumentSymbol, CallHierarchyItem, CallHierarchyOutgoingCall};
+use lsp_types::{DocumentSymbol, DocumentSymbolResponse, SymbolInformation, CallHierarchyItem, CallHierarchyOutgoingCall};
 
 /// Result of collecting symbols from LSP server for a file.
 #[derive(Debug)]
@@ -64,7 +64,9 @@ pub fn collect_and_persist_symbols(
 /// - `DocumentSymbol[]` (hierarchical, preferred)
 /// - `SymbolInformation[]` (flat, legacy)
 ///
-/// We only handle the `DocumentSymbol[]` form here.
+/// Both formats are supported. `SymbolInformation` items are converted to
+/// flat `DocumentSymbol` entries (no children, `range` = `selection_range` =
+/// the symbol's `location.range`).
 pub fn parse_document_symbols(response: &Value) -> Result<Vec<DocumentSymbol>, CodeContextError> {
     // Check for JSON-RPC error first
     if let Some(error) = response.get("error") {
@@ -86,13 +88,41 @@ pub fn parse_document_symbols(response: &Value) -> Result<Vec<DocumentSymbol>, C
         }
     };
 
-    // Try to parse as DocumentSymbol[]
-    let symbols: Vec<DocumentSymbol> = serde_json::from_value(Value::Array(result.clone()))
+    if result.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Use lsp-types' DocumentSymbolResponse which handles both formats
+    let dsr: DocumentSymbolResponse = serde_json::from_value(Value::Array(result.clone()))
         .map_err(|e| CodeContextError::LspError(format!(
-            "failed to parse DocumentSymbol array: {}", e
+            "failed to parse documentSymbol response: {}", e
         )))?;
 
-    Ok(symbols)
+    match dsr {
+        DocumentSymbolResponse::Nested(symbols) => Ok(symbols),
+        DocumentSymbolResponse::Flat(infos) => Ok(symbol_information_to_document_symbols(infos)),
+    }
+}
+
+/// Convert legacy `SymbolInformation[]` to `DocumentSymbol[]`.
+///
+/// Each `SymbolInformation` becomes a flat `DocumentSymbol` with no children.
+/// The `range` and `selection_range` are both set to `location.range`.
+#[allow(deprecated)]
+fn symbol_information_to_document_symbols(infos: Vec<SymbolInformation>) -> Vec<DocumentSymbol> {
+    infos
+        .into_iter()
+        .map(|si| DocumentSymbol {
+            name: si.name,
+            detail: si.container_name,
+            kind: si.kind,
+            tags: si.tags,
+            deprecated: si.deprecated,
+            range: si.location.range,
+            selection_range: si.location.range,
+            children: None,
+        })
+        .collect()
 }
 
 /// JSON-RPC request/response handler for LSP communication.
@@ -351,6 +381,36 @@ impl LspJsonRpcClient {
             .map_err(|e| CodeContextError::LspError(format!("flush didOpen failed: {}", e)))?;
 
         debug!("Sent textDocument/didOpen for {}", file_path.display());
+        Ok(())
+    }
+
+    /// Send a `textDocument/didClose` notification to the LSP server.
+    ///
+    /// This informs the server that the client is no longer interested in
+    /// the document. Should be called after indexing to avoid "duplicate
+    /// didOpen" warnings on re-indexing.
+    pub fn send_did_close(&mut self, file_path: &Path) -> Result<(), CodeContextError> {
+        let uri = format!("file://{}", file_path.to_string_lossy());
+
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didClose",
+            "params": {
+                "textDocument": {
+                    "uri": uri
+                }
+            }
+        });
+
+        let json_str = notification.to_string();
+        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
+
+        self.stdin.write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write didClose failed: {}", e)))?;
+        self.stdin.flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush didClose failed: {}", e)))?;
+
+        debug!("Sent textDocument/didClose for {}", file_path.display());
         Ok(())
     }
 
@@ -726,6 +786,55 @@ mod tests {
         });
         let result = parse_document_symbols(&response);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_document_symbols_flat_symbol_information() {
+        // Simulate a response with SymbolInformation[] (legacy flat format)
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "MyStruct",
+                    "kind": 23,  // SymbolKind::STRUCT
+                    "location": {
+                        "uri": "file:///workspace/src/lib.rs",
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 10, "character": 1}
+                        }
+                    }
+                },
+                {
+                    "name": "my_fn",
+                    "kind": 12,  // SymbolKind::FUNCTION
+                    "location": {
+                        "uri": "file:///workspace/src/lib.rs",
+                        "range": {
+                            "start": {"line": 12, "character": 0},
+                            "end": {"line": 20, "character": 1}
+                        }
+                    },
+                    "containerName": "MyStruct"
+                }
+            ]
+        });
+
+        let symbols = parse_document_symbols(&response).unwrap();
+        assert_eq!(symbols.len(), 2);
+
+        assert_eq!(symbols[0].name, "MyStruct");
+        assert_eq!(symbols[0].kind, SymbolKind::STRUCT);
+        assert_eq!(symbols[0].range.start.line, 0);
+        assert_eq!(symbols[0].range.end.line, 10);
+        assert!(symbols[0].children.is_none());
+
+        assert_eq!(symbols[1].name, "my_fn");
+        assert_eq!(symbols[1].kind, SymbolKind::FUNCTION);
+        // container_name is mapped to detail
+        assert_eq!(symbols[1].detail, Some("MyStruct".to_string()));
+        assert_eq!(symbols[1].range.start.line, 12);
     }
 
     #[test]
