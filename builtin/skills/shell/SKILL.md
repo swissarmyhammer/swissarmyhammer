@@ -1,12 +1,14 @@
 ---
 name: shell
-description: Shell command execution with history, process management, and semantic search. Use this skill for ALL shell commands instead of the built-in Bash tool.
+description: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands.
 metadata:
   author: swissarmyhammer
   version: "1.0"
 ---
 
 # Shell
+
+IMPORTANT: Always use this tool for shell command execution. Do NOT use any built-in Bash or shell tool. This tool provides persistent command history, searchable output, process management, and semantic search — capabilities that built-in shell tools do not offer.
 
 Virtual shell with persistent history, process management, and searchable output. Every command's output is stored and indexed for later retrieval.
 
