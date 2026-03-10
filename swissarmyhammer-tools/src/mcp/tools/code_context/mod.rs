@@ -439,7 +439,70 @@ impl CodeContextTool {
 }
 
 crate::impl_empty_doctorable!(CodeContextTool);
-crate::impl_empty_initializable!(CodeContextTool);
+impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
+    fn name(&self) -> &str { "code_context" }
+    fn category(&self) -> &str { "tools" }
+    fn priority(&self) -> i32 { 22 }
+
+    fn init(&self, _scope: &swissarmyhammer_common::lifecycle::InitScope) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
+        use swissarmyhammer_common::lifecycle::InitResult;
+
+        // Create .code-context/ directory if in a git repo
+        let root = swissarmyhammer_common::utils::find_git_repository_root();
+        match root {
+            Some(root) => {
+                let cc_dir = root.join(".code-context");
+                if !cc_dir.exists() {
+                    if let Err(e) = std::fs::create_dir_all(&cc_dir) {
+                        return vec![InitResult::error("code-context", format!("Failed to create .code-context/: {}", e))];
+                    }
+                }
+                // Ensure .code-context/ is in .gitignore
+                let gitignore = root.join(".gitignore");
+                let needs_entry = if gitignore.exists() {
+                    match std::fs::read_to_string(&gitignore) {
+                        Ok(content) => !content.lines().any(|l| l.trim() == ".code-context" || l.trim() == ".code-context/"),
+                        Err(_) => true,
+                    }
+                } else {
+                    true
+                };
+                if needs_entry {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&gitignore) {
+                        let _ = writeln!(f, ".code-context/");
+                    }
+                }
+                vec![InitResult::ok("code-context", "Created .code-context/ directory")]
+            }
+            None => vec![InitResult::skipped("code-context", "No git repository found")],
+        }
+    }
+
+    fn deinit(&self, _scope: &swissarmyhammer_common::lifecycle::InitScope) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
+        use swissarmyhammer_common::lifecycle::InitResult;
+
+        let root = swissarmyhammer_common::utils::find_git_repository_root();
+        match root {
+            Some(root) => {
+                let cc_dir = root.join(".code-context");
+                if cc_dir.exists() {
+                    if let Err(e) = std::fs::remove_dir_all(&cc_dir) {
+                        return vec![InitResult::error("code-context", format!("Failed to remove .code-context/: {}", e))];
+                    }
+                    vec![InitResult::ok("code-context", "Removed .code-context/ directory")]
+                } else {
+                    vec![InitResult::skipped("code-context", ".code-context/ not found")]
+                }
+            }
+            None => vec![InitResult::skipped("code-context", "No git repository found")],
+        }
+    }
+
+    // start() and stop() left as defaults — background work is currently managed
+    // by McpServer::initialize_code_context() which has access to work_dir.
+    // Future: when tools receive context at start time, move that logic here.
+}
 
 #[async_trait]
 impl McpTool for CodeContextTool {

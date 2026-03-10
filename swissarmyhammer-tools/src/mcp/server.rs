@@ -1134,6 +1134,19 @@ impl ServerHandler for McpServer {
             Self::initialize_code_context(work_dir);
         }
 
+        // Run Initializable::start() on all registered tools
+        {
+            let registry = self.tool_registry.read().await;
+            for tool in registry.iter_tools() {
+                let results = tool.start();
+                for r in &results {
+                    if r.status == swissarmyhammer_common::lifecycle::InitStatus::Error {
+                        tracing::warn!("Tool start error: {} — {}", r.name, r.message);
+                    }
+                }
+            }
+        }
+
         Ok(InitializeResult {
             protocol_version: ProtocolVersion::default(),
             capabilities: create_server_capabilities(),
