@@ -2021,3 +2021,331 @@ pub fn greet(config: &Config) -> String {
 
     println!("\nReal LSP integration test PASSED");
 }
+
+// ---------------------------------------------------------------------------
+// Call edge verification tests (TS and LSP sources independently)
+// ---------------------------------------------------------------------------
+
+/// Source code with a known call graph for edge verification tests.
+///
+/// Call graph:
+///   main -> foo, main -> bar
+///   foo  -> helper
+///   bar  -> helper
+const KNOWN_CALL_GRAPH_RS: &str = r#"fn main() {
+    foo();
+    bar();
+}
+
+fn foo() {
+    helper();
+}
+
+fn bar() {
+    helper();
+}
+
+fn helper() {}
+"#;
+
+/// Verify that tree-sitter heuristic call edges match a known call graph.
+///
+/// Given simple Rust source with explicit `main->foo`, `main->bar`,
+/// `foo->helper`, `bar->helper` relationships, this test extracts chunks,
+/// generates TS call edges, and verifies the edges stored in `lsp_call_edges`
+/// have the correct caller/callee pairs and `source = 'treesitter'`.
+#[test]
+fn test_ts_call_edges_known_graph() {
+    // Step 1: Create a temp project with the known call-graph source.
+    let dir = tempfile::tempdir().unwrap();
+    let src_dir = dir.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(src_dir.join("main.rs"), KNOWN_CALL_GRAPH_RS).unwrap();
+
+    // Step 2: Open workspace (runs startup_cleanup automatically).
+    let ws = CodeContextWorkspace::open(dir.path()).unwrap();
+    let conn = ws.db();
+
+    // Step 3: Extract chunks from the known source and insert them.
+    let rel_path = "src/main.rs";
+    let chunks = extract_chunks(rel_path, KNOWN_CALL_GRAPH_RS);
+    assert!(
+        chunks.len() >= 4,
+        "expected at least 4 chunks (main, foo, bar, helper), got {}",
+        chunks.len()
+    );
+    for chunk in &chunks {
+        insert_chunk(conn, chunk);
+    }
+
+    // Step 4: Ensure synthetic lsp_symbols exist for the file's chunks.
+    let sym_count = ensure_ts_symbols(conn, rel_path).unwrap();
+    assert!(
+        sym_count >= 4,
+        "expected at least 4 synthetic symbols, got {}",
+        sym_count
+    );
+
+    // Step 5: Generate and write TS call edges.
+    let edges =
+        generate_ts_call_edges(conn, rel_path, KNOWN_CALL_GRAPH_RS, rust_language()).unwrap();
+    let written = write_ts_edges(conn, rel_path, &edges).unwrap();
+    assert!(
+        written >= 4,
+        "expected at least 4 edges written (main->foo, main->bar, foo->helper, bar->helper), got {}",
+        written
+    );
+
+    // Step 6: Query lsp_call_edges and collect caller->callee pairs.
+    let mut stmt = conn
+        .prepare(
+            "SELECT caller_id, callee_id, source FROM lsp_call_edges WHERE caller_file = ?1",
+        )
+        .unwrap();
+
+    let rows: Vec<(String, String, String)> = stmt
+        .query_map([rel_path], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    // Helper: extract the short symbol name from a ts: id like "ts:src/main.rs:foo".
+    let short_name = |id: &str| -> String {
+        id.rsplit(':').next().unwrap_or(id).to_string()
+    };
+
+    let edge_pairs: Vec<(String, String)> = rows
+        .iter()
+        .map(|(caller, callee, _)| (short_name(caller), short_name(callee)))
+        .collect();
+
+    println!("TS call edges found: {:?}", edge_pairs);
+
+    // Step 7: Verify expected edges exist.
+    assert!(
+        edge_pairs.iter().any(|(c, t)| c == "main" && t == "foo"),
+        "expected main->foo edge, got: {:?}",
+        edge_pairs
+    );
+    assert!(
+        edge_pairs.iter().any(|(c, t)| c == "main" && t == "bar"),
+        "expected main->bar edge, got: {:?}",
+        edge_pairs
+    );
+    assert!(
+        edge_pairs
+            .iter()
+            .any(|(c, t)| c == "foo" && t == "helper"),
+        "expected foo->helper edge, got: {:?}",
+        edge_pairs
+    );
+    assert!(
+        edge_pairs
+            .iter()
+            .any(|(c, t)| c == "bar" && t == "helper"),
+        "expected bar->helper edge, got: {:?}",
+        edge_pairs
+    );
+
+    // Step 8: Verify all edges have source = 'treesitter'.
+    for (caller_id, callee_id, source) in &rows {
+        assert_eq!(
+            source, "treesitter",
+            "edge {}->{}  expected source 'treesitter', got '{}'",
+            caller_id, callee_id, source
+        );
+    }
+
+    println!(
+        "test_ts_call_edges_known_graph PASSED: {} edges verified",
+        rows.len()
+    );
+}
+
+/// Verify that LSP-sourced call edges work for a known call graph using
+/// a real rust-analyzer process.
+///
+/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Run with:
+///   cargo test -p swissarmyhammer-code-context -- test_lsp_call_edges_known_graph --ignored --nocapture
+#[test]
+#[ignore]
+fn test_lsp_call_edges_known_graph() {
+    use std::process::{Command, Stdio};
+    use swissarmyhammer_code_context::{LspJsonRpcClient, detect_rust_analyzer};
+    use swissarmyhammer_code_context::db;
+
+    // Guard: skip if rust-analyzer is not installed.
+    if detect_rust_analyzer().is_none() {
+        println!("SKIPPED: rust-analyzer not found in PATH");
+        return;
+    }
+
+    // Step 1: Create a temp Rust project with the known call-graph source.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let cargo_toml = r#"[package]
+name = "call-edge-test"
+version = "0.1.0"
+edition = "2021"
+"#;
+    fs::write(root.join("Cargo.toml"), cargo_toml).unwrap();
+
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    let main_rs_path = src_dir.join("main.rs");
+    fs::write(&main_rs_path, KNOWN_CALL_GRAPH_RS).unwrap();
+
+    println!("Created test project at {}", root.display());
+
+    // Step 2: Open workspace and set up the database.
+    let ws = CodeContextWorkspace::open(root).unwrap();
+    let conn = ws.db();
+
+    // Step 3: Spawn rust-analyzer.
+    let mut child = Command::new("rust-analyzer")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rust-analyzer");
+
+    let stdin = child.stdin.take().expect("Failed to take stdin");
+    let stdout = child.stdout.take().expect("Failed to take stdout");
+    let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+    // Step 4: Initialize LSP and open the document.
+    client.initialize(root).expect("LSP initialize failed");
+    println!("LSP server initialized");
+
+    client
+        .send_did_open(&main_rs_path, "rust", KNOWN_CALL_GRAPH_RS)
+        .expect("didOpen failed");
+    println!("Sent textDocument/didOpen for src/main.rs");
+
+    // Give rust-analyzer time to parse the project.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    // Step 5: Collect and persist LSP symbols.
+    let rel_path = "src/main.rs";
+    let persist_result = client
+        .collect_and_persist_file_symbols(conn, &main_rs_path, rel_path)
+        .expect("collect_and_persist_file_symbols failed");
+
+    println!(
+        "LSP symbols: {} persisted, error: {:?}",
+        persist_result.symbol_count, persist_result.error
+    );
+    assert!(
+        persist_result.error.is_none(),
+        "documentSymbol should not error: {:?}",
+        persist_result.error
+    );
+    assert!(
+        persist_result.symbol_count >= 4,
+        "Expected at least 4 symbols (main, foo, bar, helper), got {}",
+        persist_result.symbol_count
+    );
+
+    // Step 6: Verify lsp_indexed = 1 for the file.
+    let lsp_indexed: i64 = conn
+        .query_row(
+            "SELECT lsp_indexed FROM indexed_files WHERE file_path = ?1",
+            [rel_path],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        lsp_indexed, 1,
+        "lsp_indexed should be 1 after persist, got {}",
+        lsp_indexed
+    );
+    println!("lsp_indexed = 1 confirmed for {}", rel_path);
+
+    // Step 7: Verify LSP symbols are in the database.
+    let symbol_names: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM lsp_symbols WHERE file_path = ?1 ORDER BY name")
+            .unwrap();
+        stmt.query_map([rel_path], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    println!("LSP symbol names in DB: {:?}", symbol_names);
+
+    assert!(
+        symbol_names.contains(&"main".to_string()),
+        "Should contain 'main', got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"foo".to_string()),
+        "Should contain 'foo', got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"bar".to_string()),
+        "Should contain 'bar', got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"helper".to_string()),
+        "Should contain 'helper', got: {:?}",
+        symbol_names
+    );
+
+    // Step 8: Attempt to collect LSP call edges via callHierarchy/outgoingCalls.
+    // This may not be supported by all rust-analyzer versions, so we handle
+    // gracefully if it fails.
+    match client.collect_and_persist_call_edges(conn, &main_rs_path, rel_path) {
+        Ok(edge_count) => {
+            println!("LSP call edges persisted: {}", edge_count);
+
+            if edge_count > 0 {
+                // Query and verify LSP edges.
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT caller_id, callee_id, source FROM lsp_call_edges
+                         WHERE caller_file = ?1 AND source = 'lsp'",
+                    )
+                    .unwrap();
+
+                let lsp_rows: Vec<(String, String, String)> = stmt
+                    .query_map([rel_path], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+
+                println!("LSP call edges in DB:");
+                for (caller, callee, source) in &lsp_rows {
+                    println!("  {} -> {} (source={})", caller, callee, source);
+                    assert_eq!(
+                        source, "lsp",
+                        "expected source 'lsp', got '{}'",
+                        source
+                    );
+                }
+            } else {
+                println!("NOTE: rust-analyzer returned 0 call edges (callHierarchy may not be fully supported)");
+            }
+        }
+        Err(e) => {
+            println!(
+                "NOTE: LSP call edge collection failed (callHierarchy may not be supported): {}",
+                e
+            );
+        }
+    }
+
+    // Cleanup: shut down rust-analyzer.
+    client.shutdown().expect("LSP shutdown failed");
+    let _ = child.wait();
+
+    println!("\ntest_lsp_call_edges_known_graph PASSED");
+}

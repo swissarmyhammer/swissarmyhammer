@@ -26,6 +26,7 @@ pub mod invalidation;
 pub mod lsp_communication;
 pub mod lsp_indexer;
 pub mod lsp_server;
+pub mod lsp_worker;
 pub mod ops;
 pub mod ts_callgraph;
 pub mod watcher;
@@ -77,3 +78,4 @@ pub use lsp_server::{
     detect_rust_analyzer, find_executable, start_lsp_server, LspServerConfig, LspServerHandle,
 };
 pub use lsp_communication::{LspJsonRpcClient, LspCollectionResult, collect_and_persist_symbols, parse_document_symbols};
+pub use lsp_worker::{spawn_lsp_indexing_worker, LspWorkerConfig, SharedLspClient};

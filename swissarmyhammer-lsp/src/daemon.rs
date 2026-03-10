@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
@@ -17,7 +18,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use swissarmyhammer_code_context::LspJsonRpcClient;
+use swissarmyhammer_code_context::{LspJsonRpcClient, SharedLspClient};
 
 use crate::error::LspError;
 use crate::types::{LspDaemonState, OwnedLspServerSpec};
@@ -57,9 +58,10 @@ pub struct LspDaemon {
     child: Option<Child>,
     /// JSON-RPC client created after a successful initialize handshake.
     ///
-    /// Owns the child process's stdin/stdout pipes. Dropped and recreated on
-    /// daemon restart.
-    client: Option<LspJsonRpcClient>,
+    /// Stored behind `Arc<Mutex<Option<...>>>` so external consumers (like the
+    /// LSP indexing worker) can share access to the client without owning the
+    /// daemon. The `Option` is `None` when the daemon is not running.
+    client: SharedLspClient,
     /// Consecutive failure count for backoff calculation.
     consecutive_failures: u32,
     /// Observable state — subscribers get notified on every transition.
@@ -85,7 +87,7 @@ impl LspDaemon {
             spec,
             workspace_root,
             child: None,
-            client: None,
+            client: Arc::new(Mutex::new(None)),
             consecutive_failures: 0,
             state_tx,
             state_rx,
@@ -112,8 +114,27 @@ impl LspDaemon {
     /// Returns `None` if the daemon has not been started, failed to start, or
     /// has been shut down. The client is created after a successful `initialize`
     /// handshake and dropped on shutdown or restart.
-    pub fn client(&mut self) -> Option<&mut LspJsonRpcClient> {
-        self.client.as_mut()
+    ///
+    /// **Note**: This locks the internal `Mutex`. For long-running background work,
+    /// prefer [`shared_client()`] and lock externally.
+    pub fn client(&self) -> Option<std::sync::MutexGuard<'_, Option<LspJsonRpcClient>>> {
+        match self.client.lock() {
+            Ok(guard) if guard.is_some() => Some(guard),
+            Ok(_) => None,
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                if guard.is_some() { Some(guard) } else { None }
+            }
+        }
+    }
+
+    /// Return a cloneable handle to the shared LSP client.
+    ///
+    /// The returned `Arc<Mutex<Option<LspJsonRpcClient>>>` can be passed to
+    /// background workers (e.g. the LSP indexing worker) so they can send
+    /// requests through the same LSP process.
+    pub fn shared_client(&self) -> SharedLspClient {
+        Arc::clone(&self.client)
     }
 
     // -- lifecycle --------------------------------------------------------
@@ -208,7 +229,10 @@ impl LspDaemon {
                     }
                 };
 
-                self.client = client;
+                // Store the client in the shared Arc<Mutex<Option<...>>>
+                if let Ok(mut guard) = self.client.lock() {
+                    *guard = client;
+                }
                 self.child = Some(child);
                 self.consecutive_failures = 0;
                 self.set_state(LspDaemonState::Running {
@@ -250,7 +274,7 @@ impl LspDaemon {
             Ok(Some(status)) => {
                 let reason = format!("process exited: {status}");
                 warn!(cmd = self.spec.command, %status, "LSP server exited unexpectedly");
-                self.client = None;
+                if let Ok(mut guard) = self.client.lock() { *guard = None; }
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -259,7 +283,7 @@ impl LspDaemon {
             Err(e) => {
                 let reason = format!("try_wait error: {e}");
                 warn!(cmd = self.spec.command, %e, "Error checking LSP server health");
-                self.client = None;
+                if let Ok(mut guard) = self.client.lock() { *guard = None; }
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -310,7 +334,7 @@ impl LspDaemon {
     pub async fn shutdown(&mut self) {
         // Drop the client first — this closes the stdin/stdout pipes,
         // which signals the LSP server to exit.
-        self.client = None;
+        if let Ok(mut guard) = self.client.lock() { *guard = None; }
 
         let child = match self.child.take() {
             Some(c) => c,
