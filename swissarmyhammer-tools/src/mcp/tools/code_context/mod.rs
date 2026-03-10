@@ -439,6 +439,7 @@ impl CodeContextTool {
 }
 
 crate::impl_empty_doctorable!(CodeContextTool);
+crate::impl_empty_initializable!(CodeContextTool);
 
 #[async_trait]
 impl McpTool for CodeContextTool {

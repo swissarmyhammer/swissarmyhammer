@@ -241,6 +241,7 @@ impl GitChangesTool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(GitChangesTool);
+crate::impl_empty_initializable!(GitChangesTool);
 
 #[async_trait]
 impl McpTool for GitChangesTool {

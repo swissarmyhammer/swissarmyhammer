@@ -89,6 +89,11 @@ fn build_description(library: &Arc<RwLock<AgentLibrary>>) -> String {
     format!("{}{}", DESCRIPTION_PREFIX, agents_xml)
 }
 
+impl swissarmyhammer_common::lifecycle::Initializable for AgentMcpTool {
+    fn name(&self) -> &str { "Agent" }
+    fn category(&self) -> &str { "tools" }
+}
+
 impl swissarmyhammer_common::health::Doctorable for AgentMcpTool {
     fn name(&self) -> &str {
         "Agent"
