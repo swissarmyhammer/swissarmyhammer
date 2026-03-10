@@ -332,7 +332,8 @@ impl McpServer {
 
         // Open workspace and start TS indexing in parallel with LSP startup.
         let ts_root = workspace_root.clone();
-        let ts_handle = tokio::spawn(async move {
+        // TS indexing is fire-and-forget — runs independently of LSP.
+        tokio::spawn(async move {
             use super::tools::code_context::index_discovered_files_async;
             use swissarmyhammer_code_context::CodeContextWorkspace;
 
@@ -365,34 +366,40 @@ impl McpServer {
             );
         });
 
-        // Join both, then start the LSP indexing worker and file watcher.
+        // Start file watcher immediately — it marks files dirty for whichever
+        // worker picks them up.
+        let watcher_root = workspace_root.clone();
         tokio::spawn(async move {
-            // Wait for both TS indexing and LSP supervisor to finish initial work.
-            let (lsp_result, _ts_result) = tokio::join!(lsp_handle, ts_handle);
-
-            // Start LSP indexing worker with the shared client from the daemon.
-            if let Ok(Some(shared_client)) = lsp_result {
-                use swissarmyhammer_code_context::{spawn_lsp_indexing_worker, LspWorkerConfig};
-                let db_path = workspace_root.join(".code-context").join("index.db");
-                spawn_lsp_indexing_worker(
-                    workspace_root.clone(),
-                    db_path,
-                    shared_client,
-                    LspWorkerConfig::default(),
-                );
-                tracing::info!(
-                    "code-context: LSP indexing worker started for {}",
-                    workspace_root.display()
-                );
-            } else {
-                tracing::info!(
-                    "code-context: no LSP client available, skipping LSP indexing"
-                );
-            }
-
-            // Start file watcher to keep index in sync with filesystem changes.
             use super::tools::code_context::watcher::start_code_context_watcher;
-            let _watcher_handle = start_code_context_watcher(workspace_root.clone());
+            let _watcher_handle = start_code_context_watcher(watcher_root);
+            // Keep this task alive so the watcher handle isn't dropped
+            std::future::pending::<()>().await;
+        });
+
+        // Once the LSP supervisor is ready, start the LSP indexing worker.
+        // This runs in parallel with TS indexing — no need to wait for it.
+        tokio::spawn(async move {
+            match lsp_handle.await {
+                Ok(Some(shared_client)) => {
+                    use swissarmyhammer_code_context::{spawn_lsp_indexing_worker, LspWorkerConfig};
+                    let db_path = workspace_root.join(".code-context").join("index.db");
+                    spawn_lsp_indexing_worker(
+                        workspace_root.clone(),
+                        db_path,
+                        shared_client,
+                        LspWorkerConfig::default(),
+                    );
+                    tracing::info!(
+                        "code-context: LSP indexing worker started for {}",
+                        workspace_root.display()
+                    );
+                }
+                _ => {
+                    tracing::info!(
+                        "code-context: no LSP client available, skipping LSP indexing"
+                    );
+                }
+            }
 
             // LSP health check loop (runs forever)
             loop {

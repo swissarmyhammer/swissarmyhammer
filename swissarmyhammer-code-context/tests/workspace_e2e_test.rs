@@ -541,3 +541,632 @@ fn test_ts_indexing_produces_chunks_and_leaves_lsp_unindexed() {
         bad_chunks
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 9: File change triggers re-indexing with updated chunks
+// ---------------------------------------------------------------------------
+
+/// Proves the full file change → re-indexing cycle works:
+///
+/// 1. Create project, run startup_cleanup, spawn TS worker, wait for indexing.
+/// 2. Verify all files have `ts_indexed=1` and chunks exist for `lib.rs`.
+/// 3. Modify `src/lib.rs` on disk (add a new function `new_feature`).
+/// 4. Run `startup_cleanup` again — it detects the hash change and sets `ts_indexed=0`.
+/// 5. Verify `lib.rs` is dirty while other files remain indexed.
+/// 6. Spawn TS worker again, wait for re-indexing.
+/// 7. Verify `ts_indexed=1` for all files again.
+/// 8. Query `ts_chunks` for `lib.rs` — the new content (`new_feature`) must appear.
+#[test]
+fn test_file_change_triggers_reindexing() {
+    use std::thread;
+    use std::time::Duration;
+
+    let project = create_test_project();
+    let root = project.path();
+
+    // -- Phase 1: initial index --
+    let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
+    assert!(ws.is_leader(), "Should be leader");
+
+    let _stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
+        .expect("startup_cleanup failed");
+
+    let db_path = root.join(".code-context").join("index.db");
+    swissarmyhammer_code_context::indexing::spawn_indexing_worker(
+        root.to_path_buf(),
+        db_path.clone(),
+        swissarmyhammer_code_context::indexing::IndexingConfig::default(),
+    );
+    thread::sleep(Duration::from_secs(2));
+
+    // Verify: all files ts_indexed=1
+    let db = ws.db();
+    {
+        let mut stmt = db
+            .prepare("SELECT file_path, ts_indexed FROM indexed_files")
+            .expect("prepare failed");
+        let rows: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for (path, ts) in &rows {
+            assert_eq!(*ts, 1, "After initial index, ts_indexed should be 1 for {}", path);
+        }
+    }
+
+    // Verify: chunks exist for lib.rs containing original content
+    let initial_lib_chunks: Vec<String> = {
+        let mut stmt = db
+            .prepare("SELECT text FROM ts_chunks WHERE file_path LIKE '%lib.rs'")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert!(
+        !initial_lib_chunks.is_empty(),
+        "lib.rs should have chunks after initial indexing"
+    );
+    let initial_text = initial_lib_chunks.join("\n");
+    assert!(
+        initial_text.contains("Config"),
+        "Initial lib.rs chunks should contain 'Config'"
+    );
+    assert!(
+        !initial_text.contains("new_feature"),
+        "Initial lib.rs chunks should NOT contain 'new_feature'"
+    );
+
+    let initial_chunk_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM ts_chunks WHERE file_path LIKE '%lib.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    println!("Initial lib.rs chunk count: {}", initial_chunk_count);
+
+    // -- Phase 2: modify lib.rs --
+    let lib_rs_path = root.join("src/lib.rs");
+    let modified_lib = r#"pub struct Config {
+    pub name: String,
+    pub value: i32,
+}
+
+impl Config {
+    pub fn new(name: String, value: i32) -> Self {
+        Self { name, value }
+    }
+
+    pub fn display(&self) -> String {
+        format!("{}: {}", self.name, self.value)
+    }
+}
+
+pub fn validate_config(config: &Config) -> bool {
+    config.value > 0
+}
+
+pub fn new_feature() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config() {
+        let cfg = Config::new("test".to_string(), 42);
+        assert!(validate_config(&cfg));
+    }
+}
+"#;
+    std::fs::write(&lib_rs_path, modified_lib).unwrap();
+
+    // -- Phase 3: detect the change via startup_cleanup --
+    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
+        .expect("startup_cleanup after modification failed");
+    assert_eq!(
+        cleanup_stats.files_dirty, 1,
+        "Only lib.rs should be dirty after modification, got {} dirty",
+        cleanup_stats.files_dirty
+    );
+
+    // Verify lib.rs is dirty, others are still indexed
+    {
+        let mut stmt = db
+            .prepare("SELECT file_path, ts_indexed FROM indexed_files ORDER BY file_path")
+            .unwrap();
+        let rows: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for (path, ts) in &rows {
+            if path.contains("lib.rs") {
+                assert_eq!(
+                    *ts, 0,
+                    "lib.rs should have ts_indexed=0 after modification"
+                );
+            } else {
+                assert_eq!(
+                    *ts, 1,
+                    "{} should still have ts_indexed=1",
+                    path
+                );
+            }
+        }
+    }
+
+    // -- Phase 4: re-index --
+    swissarmyhammer_code_context::indexing::spawn_indexing_worker(
+        root.to_path_buf(),
+        db_path,
+        swissarmyhammer_code_context::indexing::IndexingConfig::default(),
+    );
+    thread::sleep(Duration::from_secs(2));
+
+    // Verify: all files ts_indexed=1 again
+    {
+        let mut stmt = db
+            .prepare("SELECT file_path, ts_indexed FROM indexed_files")
+            .unwrap();
+        let rows: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for (path, ts) in &rows {
+            assert_eq!(
+                *ts, 1,
+                "After re-indexing, ts_indexed should be 1 for {}",
+                path
+            );
+        }
+    }
+
+    // Verify: new content appears in chunks for lib.rs
+    let reindexed_lib_chunks: Vec<String> = {
+        let mut stmt = db
+            .prepare("SELECT text FROM ts_chunks WHERE file_path LIKE '%lib.rs'")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert!(
+        !reindexed_lib_chunks.is_empty(),
+        "lib.rs should have chunks after re-indexing"
+    );
+    let reindexed_text = reindexed_lib_chunks.join("\n");
+    assert!(
+        reindexed_text.contains("new_feature"),
+        "Re-indexed lib.rs chunks should contain 'new_feature', got:\n{}",
+        reindexed_text
+    );
+    // Original content should still be present (Config struct was kept)
+    assert!(
+        reindexed_text.contains("Config"),
+        "Re-indexed lib.rs chunks should still contain 'Config'"
+    );
+
+    // Chunk count should have increased (new chunks were added for the modified file)
+    let final_chunk_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM ts_chunks WHERE file_path LIKE '%lib.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    println!(
+        "Final lib.rs chunk count: {} (was {})",
+        final_chunk_count, initial_chunk_count
+    );
+    assert!(
+        final_chunk_count >= initial_chunk_count,
+        "Chunk count should not decrease after re-indexing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: File change resets both ts_indexed and lsp_indexed flags
+// ---------------------------------------------------------------------------
+
+/// Verifies that `startup_cleanup` resets BOTH `ts_indexed` and `lsp_indexed`
+/// when a file's content hash changes, even if only one pipeline had run.
+///
+/// 1. Create project, index via TS worker, then manually set `lsp_indexed=1`.
+/// 2. Modify `src/utils.rs` on disk.
+/// 3. Run `startup_cleanup` — should reset both flags to 0 for `utils.rs`.
+/// 4. Other files should retain their indexed state.
+#[test]
+fn test_file_change_resets_both_index_flags() {
+    use std::thread;
+    use std::time::Duration;
+
+    let project = create_test_project();
+    let root = project.path();
+
+    // -- Phase 1: initial index via TS worker --
+    let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
+    assert!(ws.is_leader(), "Should be leader");
+
+    let _stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
+        .expect("startup_cleanup failed");
+
+    let db_path = root.join(".code-context").join("index.db");
+    swissarmyhammer_code_context::indexing::spawn_indexing_worker(
+        root.to_path_buf(),
+        db_path,
+        swissarmyhammer_code_context::indexing::IndexingConfig::default(),
+    );
+    thread::sleep(Duration::from_secs(2));
+
+    let db = ws.db();
+
+    // Verify ts_indexed=1 for all files after TS worker
+    {
+        let mut stmt = db
+            .prepare("SELECT file_path, ts_indexed FROM indexed_files")
+            .unwrap();
+        let rows: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for (path, ts) in &rows {
+            assert_eq!(*ts, 1, "ts_indexed should be 1 for {} after TS worker", path);
+        }
+    }
+
+    // Simulate LSP worker having run: set lsp_indexed=1 for all files
+    db.execute("UPDATE indexed_files SET lsp_indexed = 1", [])
+        .expect("Failed to set lsp_indexed=1");
+
+    // Verify both flags are 1 for all files
+    {
+        let mut stmt = db
+            .prepare("SELECT file_path, ts_indexed, lsp_indexed FROM indexed_files")
+            .unwrap();
+        let rows: Vec<(String, i64, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for (path, ts, lsp) in &rows {
+            assert_eq!(*ts, 1, "ts_indexed should be 1 for {}", path);
+            assert_eq!(*lsp, 1, "lsp_indexed should be 1 for {}", path);
+        }
+    }
+
+    // -- Phase 2: modify utils.rs --
+    let utils_path = root.join("src/utils.rs");
+    let modified_utils = r#"pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+pub fn multiply(a: i32, b: i32) -> i32 {
+    a * b
+}
+
+pub fn is_positive(n: i32) -> bool {
+    n > 0
+}
+
+pub fn subtract(a: i32, b: i32) -> i32 {
+    a - b
+}
+"#;
+    std::fs::write(&utils_path, modified_utils).unwrap();
+
+    // -- Phase 3: run startup_cleanup to detect the change --
+    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
+        .expect("startup_cleanup after modification failed");
+    assert_eq!(
+        cleanup_stats.files_dirty, 1,
+        "Only utils.rs should be dirty"
+    );
+    assert_eq!(
+        cleanup_stats.files_unchanged, 3,
+        "3 other files should be unchanged"
+    );
+
+    // -- Phase 4: verify both flags reset for utils.rs, others unchanged --
+    {
+        let mut stmt = db
+            .prepare("SELECT file_path, ts_indexed, lsp_indexed FROM indexed_files ORDER BY file_path")
+            .unwrap();
+        let rows: Vec<(String, i64, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        for (path, ts, lsp) in &rows {
+            if path.contains("utils.rs") {
+                assert_eq!(
+                    *ts, 0,
+                    "ts_indexed should be 0 for utils.rs after modification"
+                );
+                assert_eq!(
+                    *lsp, 0,
+                    "lsp_indexed should be 0 for utils.rs after modification"
+                );
+            } else {
+                assert_eq!(
+                    *ts, 1,
+                    "ts_indexed should still be 1 for {} (not modified)",
+                    path
+                );
+                assert_eq!(
+                    *lsp, 1,
+                    "lsp_indexed should still be 1 for {} (not modified)",
+                    path
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: LSP re-indexing after file change (requires rust-analyzer)
+// ---------------------------------------------------------------------------
+
+/// Proves the full LSP re-indexing cycle works after a file modification:
+///
+/// 1. Create project, run startup_cleanup, TS-index all files.
+/// 2. Spawn rust-analyzer manually, initialize it, and LSP-index `src/lib.rs`.
+/// 3. Verify `lsp_indexed = 1` for lib.rs and `lsp_symbols` rows exist.
+/// 4. Modify `src/lib.rs` on disk (add `added_later` function).
+/// 5. Run `startup_cleanup` — detects hash change, resets both flags to 0.
+/// 6. Re-run TS indexing, then LSP-index lib.rs again with the same server.
+/// 7. Verify both flags back to 1 and `lsp_symbols` contains `added_later`.
+///
+/// Marked `#[ignore]` because it requires `rust-analyzer` to be installed.
+/// Run with:
+///   cargo test --test workspace_e2e_test -- test_lsp_reindexing_after_file_change --ignored --nocapture
+#[test]
+#[ignore]
+fn test_lsp_reindexing_after_file_change() {
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::Duration;
+    use swissarmyhammer_code_context::{detect_rust_analyzer, LspJsonRpcClient};
+
+    // Skip gracefully if rust-analyzer is not installed
+    if detect_rust_analyzer().is_none() {
+        eprintln!("SKIP: rust-analyzer not found in PATH");
+        return;
+    }
+
+    let project = create_test_project();
+    let root = project.path();
+
+    // -- Phase 1: open workspace, TS-index everything --
+    let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
+    assert!(ws.is_leader(), "Should be leader");
+
+    let _stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
+        .expect("startup_cleanup failed");
+
+    let db_path = root.join(".code-context").join("index.db");
+    swissarmyhammer_code_context::indexing::spawn_indexing_worker(
+        root.to_path_buf(),
+        db_path.clone(),
+        swissarmyhammer_code_context::indexing::IndexingConfig::default(),
+    );
+    thread::sleep(Duration::from_secs(2));
+
+    // Verify TS indexing completed
+    let db = ws.db();
+    {
+        let ts_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ts_count, 4, "All 4 files should be TS-indexed");
+    }
+
+    // -- Phase 2: spawn rust-analyzer and LSP-index lib.rs --
+    let mut ra_child = Command::new("rust-analyzer")
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rust-analyzer");
+
+    let stdin = ra_child.stdin.take().expect("Failed to take stdin");
+    let stdout = ra_child.stdout.take().expect("Failed to take stdout");
+    let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+    client.initialize(root).expect("LSP initialize failed");
+
+    let lib_rs_abs = root.join("src/lib.rs");
+    let lib_content = std::fs::read_to_string(&lib_rs_abs).unwrap();
+    client
+        .send_did_open(&lib_rs_abs, "rust", &lib_content)
+        .expect("didOpen failed");
+
+    // Give rust-analyzer time to analyze the project
+    thread::sleep(Duration::from_secs(5));
+
+    let result = client
+        .collect_and_persist_file_symbols(db, &lib_rs_abs, "src/lib.rs")
+        .expect("collect_and_persist_file_symbols failed");
+    println!(
+        "Initial LSP indexing: {} symbols for {}",
+        result.symbol_count, result.file_path
+    );
+    if let Some(ref err) = result.error {
+        eprintln!("LSP collection warning: {}", err);
+    }
+
+    // -- Phase 3: verify lsp_indexed = 1 for lib.rs --
+    {
+        let lsp_flag: i64 = db
+            .query_row(
+                "SELECT lsp_indexed FROM indexed_files WHERE file_path LIKE '%lib.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            lsp_flag, 1,
+            "lib.rs should have lsp_indexed=1 after LSP indexing"
+        );
+    }
+
+    // Verify lsp_symbols exist for lib.rs
+    let initial_symbol_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM lsp_symbols WHERE file_path = 'src/lib.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    println!("Initial lsp_symbols count for lib.rs: {}", initial_symbol_count);
+    assert!(
+        initial_symbol_count > 0,
+        "lsp_symbols should have rows for lib.rs after LSP indexing"
+    );
+
+    // -- Phase 4: modify lib.rs on disk --
+    let modified_lib = r#"pub struct Config {
+    pub name: String,
+    pub value: i32,
+}
+
+impl Config {
+    pub fn new(name: String, value: i32) -> Self {
+        Self { name, value }
+    }
+
+    pub fn display(&self) -> String {
+        format!("{}: {}", self.name, self.value)
+    }
+}
+
+pub fn validate_config(config: &Config) -> bool {
+    config.value > 0
+}
+
+pub fn added_later() -> i32 {
+    99
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config() {
+        let cfg = Config::new("test".to_string(), 42);
+        assert!(validate_config(&cfg));
+    }
+}
+"#;
+    std::fs::write(&lib_rs_abs, modified_lib).unwrap();
+
+    // -- Phase 5: startup_cleanup detects hash change, resets both flags --
+    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
+        .expect("startup_cleanup after modification failed");
+    assert_eq!(
+        cleanup_stats.files_dirty, 1,
+        "Only lib.rs should be dirty, got {} dirty",
+        cleanup_stats.files_dirty
+    );
+
+    {
+        let (ts_flag, lsp_flag): (i64, i64) = db
+            .query_row(
+                "SELECT ts_indexed, lsp_indexed FROM indexed_files WHERE file_path LIKE '%lib.rs'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ts_flag, 0, "ts_indexed should be 0 after file change");
+        assert_eq!(lsp_flag, 0, "lsp_indexed should be 0 after file change");
+    }
+
+    // -- Phase 6: re-run TS worker, then LSP-index again --
+    swissarmyhammer_code_context::indexing::spawn_indexing_worker(
+        root.to_path_buf(),
+        db_path,
+        swissarmyhammer_code_context::indexing::IndexingConfig::default(),
+    );
+    thread::sleep(Duration::from_secs(2));
+
+    // Re-open the modified file in rust-analyzer
+    let modified_content = std::fs::read_to_string(&lib_rs_abs).unwrap();
+    client
+        .send_did_open(&lib_rs_abs, "rust", &modified_content)
+        .expect("didOpen (modified) failed");
+
+    // Give rust-analyzer time to re-analyze
+    thread::sleep(Duration::from_secs(5));
+
+    let result2 = client
+        .collect_and_persist_file_symbols(db, &lib_rs_abs, "src/lib.rs")
+        .expect("collect_and_persist_file_symbols (re-index) failed");
+    println!(
+        "Re-index LSP: {} symbols for {}",
+        result2.symbol_count, result2.file_path
+    );
+
+    // -- Phase 7: verify both flags back to 1 --
+    {
+        let (ts_flag, lsp_flag): (i64, i64) = db
+            .query_row(
+                "SELECT ts_indexed, lsp_indexed FROM indexed_files WHERE file_path LIKE '%lib.rs'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            ts_flag, 1,
+            "ts_indexed should be 1 after re-indexing"
+        );
+        assert_eq!(
+            lsp_flag, 1,
+            "lsp_indexed should be 1 after re-indexing"
+        );
+    }
+
+    // -- Phase 8: verify lsp_symbols contains `added_later` --
+    {
+        let mut stmt = db
+            .prepare("SELECT name FROM lsp_symbols WHERE file_path = 'src/lib.rs'")
+            .expect("prepare lsp_symbols query failed");
+        let symbol_names: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        println!("LSP symbols after re-index: {:?}", symbol_names);
+
+        assert!(
+            symbol_names.iter().any(|n| n == "added_later"),
+            "lsp_symbols should contain 'added_later' after re-indexing, got: {:?}",
+            symbol_names
+        );
+        // Original symbols should still be present
+        assert!(
+            symbol_names.iter().any(|n| n == "Config"),
+            "lsp_symbols should still contain 'Config', got: {:?}",
+            symbol_names
+        );
+    }
+
+    // -- Phase 9: clean shutdown --
+    client.shutdown().expect("LSP shutdown failed");
+    let _ = ra_child.wait();
+}

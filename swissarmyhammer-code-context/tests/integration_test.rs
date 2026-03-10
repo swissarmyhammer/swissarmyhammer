@@ -2349,3 +2349,295 @@ edition = "2021"
 
     println!("\ntest_lsp_call_edges_known_graph PASSED");
 }
+
+// ---------------------------------------------------------------------------
+// LSP symbol lookup end-to-end test
+// ---------------------------------------------------------------------------
+
+/// Proves that after real LSP indexing plus TS chunk extraction, the
+/// `get_symbol`, `search_symbol`, and `list_symbols` operations return
+/// correct results with non-empty source text.
+///
+/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Run with:
+///   cargo test --test integration_test -- test_lsp_symbol_lookup_end_to_end --ignored --nocapture
+#[test]
+#[ignore]
+fn test_lsp_symbol_lookup_end_to_end() {
+    use std::process::{Command, Stdio};
+    use swissarmyhammer_code_context::{
+        LspJsonRpcClient, detect_rust_analyzer,
+        ensure_ts_symbols,
+    };
+
+    // -- Guard: skip if rust-analyzer is not installed -----------------------
+    if detect_rust_analyzer().is_none() {
+        println!("SKIPPED: rust-analyzer not found in PATH");
+        return;
+    }
+
+    // -- Step 1: Create a temp Rust project with known source ---------------
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let cargo_toml = r#"[package]
+name = "lsp-lookup-test"
+version = "0.1.0"
+edition = "2021"
+"#;
+    fs::write(root.join("Cargo.toml"), cargo_toml).unwrap();
+
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let lib_rs_content = r#"pub struct Config {
+    pub name: String,
+    pub port: u16,
+}
+
+impl Config {
+    pub fn new(name: String, port: u16) -> Self {
+        Self { name, port }
+    }
+
+    pub fn display_name(&self) -> String {
+        format!("{} (port {})", self.name, self.port)
+    }
+}
+
+pub fn greet(name: &str) -> String {
+    format!("Hello, {}", name)
+}
+"#;
+    let lib_rs_path = src_dir.join("lib.rs");
+    fs::write(&lib_rs_path, lib_rs_content).unwrap();
+
+    println!("Created test project at {}", root.display());
+
+    // -- Step 2: Open workspace, run startup_cleanup ------------------------
+    let ws = CodeContextWorkspace::open(root).unwrap();
+    let conn = ws.db();
+
+    // -- Step 3: Populate TS chunks so source text is available --------------
+    let rel_path = "src/lib.rs";
+    let chunks = extract_chunks(rel_path, lib_rs_content);
+    for chunk in &chunks {
+        insert_chunk(conn, chunk);
+    }
+    // Create synthetic lsp_symbols from TS chunks (needed for merging).
+    ensure_ts_symbols(conn, rel_path).unwrap();
+    // Mark TS indexed.
+    conn.execute(
+        "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?1",
+        [rel_path],
+    )
+    .unwrap();
+
+    println!("TS chunks inserted: {} chunks for {}", chunks.len(), rel_path);
+
+    // -- Step 4: Spawn rust-analyzer ----------------------------------------
+    let mut child = Command::new("rust-analyzer")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rust-analyzer");
+
+    let stdin = child.stdin.take().expect("Failed to take stdin");
+    let stdout = child.stdout.take().expect("Failed to take stdout");
+    let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+    // -- Step 5: Initialize and open the document ---------------------------
+    client.initialize(root).expect("LSP initialize failed");
+    println!("LSP server initialized");
+
+    client
+        .send_did_open(&lib_rs_path, "rust", lib_rs_content)
+        .expect("didOpen failed");
+    println!("Sent textDocument/didOpen for src/lib.rs");
+
+    // Give rust-analyzer time to parse.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    // -- Step 6: Persist LSP symbols ----------------------------------------
+    let persist_result = client
+        .collect_and_persist_file_symbols(conn, &lib_rs_path, rel_path)
+        .expect("collect_and_persist_file_symbols failed");
+
+    println!(
+        "Persisted {} LSP symbols, error: {:?}",
+        persist_result.symbol_count, persist_result.error
+    );
+    assert!(
+        persist_result.error.is_none(),
+        "documentSymbol should not error: {:?}",
+        persist_result.error
+    );
+    assert!(
+        persist_result.symbol_count >= 4,
+        "Expected at least 4 symbols (Config, new, display_name, greet), got {}",
+        persist_result.symbol_count
+    );
+
+    // -- Step 7: Test get_symbol --------------------------------------------
+    let opts = GetSymbolOptions::default();
+
+    // get_symbol("Config") -- should find the struct with source text
+    let result = get_symbol(conn, "Config", &opts).unwrap();
+    println!(
+        "get_symbol('Config'): {} results",
+        result.symbols.len()
+    );
+    assert!(
+        !result.symbols.is_empty(),
+        "expected get_symbol('Config') to return results"
+    );
+    let config_sym = result
+        .symbols
+        .iter()
+        .find(|s| s.name == "Config")
+        .expect("expected a symbol named 'Config'");
+    assert_eq!(
+        config_sym.file_path, rel_path,
+        "Config should be in src/lib.rs"
+    );
+    // Should be merged (both TS and LSP data present).
+    println!(
+        "  Config source={}, kind={:?}, text_len={}",
+        config_sym.source,
+        config_sym.kind,
+        config_sym.text.len()
+    );
+
+    // get_symbol("greet") -- should find the function
+    let result = get_symbol(conn, "greet", &opts).unwrap();
+    assert!(
+        !result.symbols.is_empty(),
+        "expected get_symbol('greet') to return results"
+    );
+    let greet_sym = result
+        .symbols
+        .iter()
+        .find(|s| s.name == "greet")
+        .expect("expected a symbol named 'greet'");
+    assert_eq!(
+        greet_sym.file_path, rel_path,
+        "greet should be in src/lib.rs"
+    );
+    println!(
+        "  greet source={}, kind={:?}, text_len={}",
+        greet_sym.source,
+        greet_sym.kind,
+        greet_sym.text.len()
+    );
+
+    // -- Step 8: Test search_symbol -----------------------------------------
+    let search_opts = SearchSymbolOptions::default();
+
+    // search_symbol("Config") -- should find Config struct
+    let results = search_symbol(conn, "Config", &search_opts).unwrap();
+    println!("search_symbol('Config'): {} results", results.len());
+    assert!(
+        !results.is_empty(),
+        "expected search_symbol('Config') to return results"
+    );
+    assert!(
+        results.iter().any(|s| s.name == "Config"),
+        "expected 'Config' in search_symbol results, got: {:?}",
+        results.iter().map(|s| &s.name).collect::<Vec<_>>()
+    );
+
+    // search_symbol("greet") -- should find greet function
+    let results = search_symbol(conn, "greet", &search_opts).unwrap();
+    println!("search_symbol('greet'): {} results", results.len());
+    assert!(
+        !results.is_empty(),
+        "expected search_symbol('greet') to return results"
+    );
+    assert!(
+        results.iter().any(|s| s.name == "greet"),
+        "expected 'greet' in search_symbol results, got: {:?}",
+        results.iter().map(|s| &s.name).collect::<Vec<_>>()
+    );
+
+    // -- Step 9: Test list_symbols ------------------------------------------
+    let list_results = list_symbols(conn, rel_path).unwrap();
+    println!("list_symbols('{}'): {} results", rel_path, list_results.len());
+    let list_names: Vec<&str> = list_results.iter().map(|s| s.name.as_str()).collect();
+    let list_qpaths: Vec<&str> = list_results
+        .iter()
+        .map(|s| s.qualified_path.as_str())
+        .collect();
+    println!("  names: {:?}", list_names);
+    println!("  qualified_paths: {:?}", list_qpaths);
+
+    assert!(
+        list_names.contains(&"Config") || list_qpaths.iter().any(|p| p.contains("Config")),
+        "expected Config in list_symbols results"
+    );
+    assert!(
+        list_names.contains(&"new") || list_qpaths.iter().any(|p| p.contains("new")),
+        "expected new in list_symbols results"
+    );
+    assert!(
+        list_names.contains(&"display_name")
+            || list_qpaths.iter().any(|p| p.contains("display_name")),
+        "expected display_name in list_symbols results"
+    );
+    assert!(
+        list_names.contains(&"greet") || list_qpaths.iter().any(|p| p.contains("greet")),
+        "expected greet in list_symbols results"
+    );
+
+    // Results should be sorted by start_line.
+    assert!(
+        list_results
+            .windows(2)
+            .all(|w| w[0].start_line <= w[1].start_line),
+        "expected list_symbols results sorted by start_line"
+    );
+
+    // -- Step 10: Verify source text is non-empty for at least one result ---
+    // get_symbol returns merged results with TS source text when both indices
+    // have the symbol at the same location.
+    let all_result = get_symbol(conn, "Config", &opts).unwrap();
+    let has_text = all_result
+        .symbols
+        .iter()
+        .any(|s| !s.text.is_empty());
+    println!(
+        "Source text present: {} (symbols with text: {})",
+        has_text,
+        all_result
+            .symbols
+            .iter()
+            .filter(|s| !s.text.is_empty())
+            .count()
+    );
+    assert!(
+        has_text,
+        "expected at least one get_symbol result to have non-empty source text"
+    );
+
+    // Verify the source text actually contains meaningful content.
+    let text_sym = all_result
+        .symbols
+        .iter()
+        .find(|s| !s.text.is_empty())
+        .unwrap();
+    assert!(
+        text_sym.text.contains("Config") || text_sym.text.contains("struct"),
+        "expected source text to contain 'Config' or 'struct', got: {}",
+        &text_sym.text[..text_sym.text.len().min(200)]
+    );
+    println!(
+        "  Source text snippet: {}",
+        &text_sym.text[..text_sym.text.len().min(120)]
+    );
+
+    // -- Cleanup: shut down rust-analyzer -----------------------------------
+    client.shutdown().expect("LSP shutdown failed");
+    let _ = child.wait();
+
+    println!("\ntest_lsp_symbol_lookup_end_to_end PASSED");
+}
