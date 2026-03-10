@@ -65,7 +65,7 @@ mod file_loader;
 mod yaml_expander;
 
 // Re-export main types
-pub use config::{AvpConfig, DirectoryConfig, SwissarmyhammerConfig};
+pub use config::{AvpConfig, DirectoryConfig, ShellConfig, SwissarmyhammerConfig};
 pub use directory::{
     find_git_repository_root, find_git_repository_root_from, DirectoryRootType, ManagedDirectory,
 };

@@ -225,10 +225,13 @@ impl FileEntry {
 pub struct VirtualFileSystem<C: DirectoryConfig> {
     /// The subdirectory to look for (e.g., "prompts" or "validators").
     pub subdirectory: String,
-    /// Map of file names to file entries.
+    /// Map of file names to file entries (highest-precedence version wins).
     pub files: HashMap<String, FileEntry>,
     /// Track sources for each file.
     pub file_sources: HashMap<String, FileSource>,
+    /// Full stack of all file versions, keyed by name, ordered by load order
+    /// (lowest precedence first). Use [`get_stack`](Self::get_stack) to access.
+    file_stacks: HashMap<String, Vec<FileEntry>>,
     /// Explicit search paths. When non-empty, `load_all` uses these instead of ManagedDirectory.
     search_paths: Vec<SearchPath>,
     /// When true, `load_all` resolves dot-directory paths lazily (e.g., `~/.prompts`, `{git_root}/.prompts`).
@@ -244,6 +247,7 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
             subdirectory: subdirectory.into(),
             files: HashMap::new(),
             file_sources: HashMap::new(),
+            file_stacks: HashMap::new(),
             search_paths: Vec::new(),
             use_dot_dirs: false,
             _phantom: PhantomData,
@@ -263,15 +267,32 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
     }
 
     /// Add a file entry.
+    ///
+    /// The entry replaces any existing file with the same name (highest-precedence wins
+    /// in [`get`](Self::get)). All versions are preserved in the stack, accessible
+    /// via [`get_stack`](Self::get_stack).
     pub fn add_file(&mut self, entry: FileEntry) {
         self.file_sources
             .insert(entry.name.clone(), entry.source.clone());
+        self.file_stacks
+            .entry(entry.name.clone())
+            .or_default()
+            .push(entry.clone());
         self.files.insert(entry.name.clone(), entry);
     }
 
-    /// Get a file by name.
+    /// Get a file by name (highest-precedence version).
     pub fn get(&self, name: &str) -> Option<&FileEntry> {
         self.files.get(name)
+    }
+
+    /// Get the full stack of all versions of a file, ordered by load order
+    /// (lowest precedence first, highest precedence last).
+    ///
+    /// This is useful when you need to merge content from all layers rather
+    /// than just taking the highest-precedence version.
+    pub fn get_stack(&self, name: &str) -> Option<&[FileEntry]> {
+        self.file_stacks.get(name).map(|v| v.as_slice())
     }
 
     /// Get the source of a file.
@@ -646,6 +667,52 @@ mod tests {
         let file = vfs.get("test").unwrap();
         assert_eq!(file.content, "user content");
         assert_eq!(file.source, FileSource::User);
+    }
+
+    #[test]
+    fn test_get_stack_preserves_all_versions() {
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+
+        // Add builtin
+        vfs.add_builtin("config", "builtin content");
+
+        // Add user version
+        let user_entry = FileEntry::new(
+            "config",
+            PathBuf::from("/home/user/.shell/config.yaml"),
+            "user content".to_string(),
+            FileSource::User,
+        );
+        vfs.add_file(user_entry);
+
+        // Add local version
+        let local_entry = FileEntry::new(
+            "config",
+            PathBuf::from("/project/.shell/config.yaml"),
+            "local content".to_string(),
+            FileSource::Local,
+        );
+        vfs.add_file(local_entry);
+
+        // get() returns the winner (last added)
+        let winner = vfs.get("config").unwrap();
+        assert_eq!(winner.content, "local content");
+
+        // get_stack() returns all three in load order
+        let stack = vfs.get_stack("config").unwrap();
+        assert_eq!(stack.len(), 3);
+        assert_eq!(stack[0].content, "builtin content");
+        assert_eq!(stack[0].source, FileSource::Builtin);
+        assert_eq!(stack[1].content, "user content");
+        assert_eq!(stack[1].source, FileSource::User);
+        assert_eq!(stack[2].content, "local content");
+        assert_eq!(stack[2].source, FileSource::Local);
+    }
+
+    #[test]
+    fn test_get_stack_returns_none_for_missing() {
+        let vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        assert!(vfs.get_stack("nonexistent").is_none());
     }
 
     #[test]

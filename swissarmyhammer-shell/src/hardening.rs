@@ -551,7 +551,7 @@ pub struct SecurityStatistics {
 #[derive(Debug)]
 pub struct HardenedSecurityValidator {
     /// Base command validator
-    base_validator: &'static ShellSecurityValidator,
+    base_validator: ShellSecurityValidator,
 
     /// Threat detector
     threat_detector: ThreatDetector,
@@ -564,7 +564,7 @@ impl HardenedSecurityValidator {
     /// Create a new hardened security validator
     pub fn new(_policy: ShellSecurityPolicy, hardening_config: SecurityHardeningConfig) -> Self {
         Self {
-            base_validator: crate::security::get_validator(),
+            base_validator: crate::security::load_validator(),
             threat_detector: ThreatDetector::new(),
             hardening_config,
         }

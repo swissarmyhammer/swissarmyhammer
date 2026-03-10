@@ -14,10 +14,14 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 # Configuration loading (may be needed for security policies)
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 
+# Directory stacking for shell config overlay (builtin → user → project)
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+
 # Core dependencies
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

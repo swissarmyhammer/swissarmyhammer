@@ -3,15 +3,13 @@
 //! This module provides comprehensive security controls for shell command execution,
 //! including blocked command prevention, directory access controls, and audit logging.
 
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use swissarmyhammer_common::{ErrorSeverity, Result, Severity, SwissArmyHammerError};
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 /// Maximum allowed command length in characters
 const MAX_COMMAND_LENGTH: usize = 4096;
@@ -166,17 +164,65 @@ impl Default for ShellSecurityPolicy {
 #[derive(Debug)]
 pub struct ShellSecurityValidator {
     policy: ShellSecurityPolicy,
-    blocked_patterns: Vec<Regex>,
+    compiled_config: crate::config::CompiledShellConfig,
 }
 
 impl ShellSecurityValidator {
     /// Create a new validator with the given policy
     pub fn new(policy: ShellSecurityPolicy) -> Result<Self> {
-        let blocked_patterns = Self::compile_blocked_patterns(&policy.blocked_commands)?;
+        // Convert legacy policy to ShellSecurityConfig for compilation
+        let config = crate::config::ShellSecurityConfig {
+            permit: Vec::new(),
+            deny: policy
+                .blocked_commands
+                .iter()
+                .map(|p| crate::config::PatternRule {
+                    pattern: p.clone(),
+                    reason: format!("Blocked by policy: {}", p),
+                })
+                .collect(),
+            settings: crate::config::ShellSettings {
+                max_command_length: policy.max_command_length,
+                max_env_value_length: policy.max_env_value_length,
+                enable_audit_logging: policy.enable_audit_logging,
+            },
+        };
+
+        let compiled_config =
+            crate::config::CompiledShellConfig::compile(&config).map_err(|e| {
+                SwissArmyHammerError::Other {
+                    message: format!("Failed to compile pattern '{}': {}", e.pattern, e.source),
+                }
+            })?;
 
         Ok(Self {
             policy,
-            blocked_patterns,
+            compiled_config,
+        })
+    }
+
+    /// Create a new validator from a [`ShellSecurityConfig`] with permit/deny rules.
+    pub fn from_config(config: &crate::config::ShellSecurityConfig) -> Result<Self> {
+        let compiled_config =
+            crate::config::CompiledShellConfig::compile(config).map_err(|e| {
+                SwissArmyHammerError::Other {
+                    message: format!("Failed to compile pattern '{}': {}", e.pattern, e.source),
+                }
+            })?;
+
+        // Build a legacy policy for backwards compat
+        let policy = ShellSecurityPolicy {
+            enable_validation: true,
+            blocked_commands: config.deny.iter().map(|r| r.pattern.clone()).collect(),
+            allowed_directories: None,
+            max_command_length: config.settings.max_command_length,
+            enable_audit_logging: config.settings.enable_audit_logging,
+            max_env_value_length: config.settings.max_env_value_length,
+        };
+
+        Ok(Self {
+            policy,
+            compiled_config,
         })
     }
 
@@ -194,8 +240,8 @@ impl ShellSecurityValidator {
         // Check command length
         self.check_command_length(command)?;
 
-        // Check for blocked patterns
-        self.check_blocked_patterns(command)?;
+        // Evaluate permit/deny rules (permit-first)
+        crate::config::evaluate_command(command, &self.compiled_config)?;
 
         Ok(())
     }
@@ -283,6 +329,63 @@ impl ShellSecurityValidator {
         Ok(())
     }
 
+    /// Validate directory access without an instance (static check).
+    ///
+    /// Checks for path traversal attempts only — no allowed-directory enforcement.
+    pub fn validate_directory_access_static(
+        directory: &Path,
+    ) -> std::result::Result<(), ShellSecurityError> {
+        let path_str = directory.to_string_lossy();
+        if path_str.contains("../") || path_str.contains("..\\") {
+            return Err(ShellSecurityError::DirectoryAccessDenied {
+                directory: directory.to_path_buf(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate environment variables without an instance (static check).
+    ///
+    /// Takes the max env value length as a parameter instead of reading from policy.
+    pub fn validate_environment_variables_with_settings(
+        env_vars: &HashMap<String, String>,
+        max_env_value_length: usize,
+    ) -> std::result::Result<(), ShellSecurityError> {
+        for (key, value) in env_vars {
+            if !Self::is_valid_env_var_name(key) {
+                return Err(ShellSecurityError::InvalidEnvironmentVariable { name: key.clone() });
+            }
+
+            if value.len() > max_env_value_length {
+                return Err(ShellSecurityError::InvalidEnvironmentVariableValue {
+                    name: key.clone(),
+                    reason: format!(
+                        "Value length {} exceeds maximum of {} characters",
+                        value.len(),
+                        max_env_value_length
+                    ),
+                });
+            }
+
+            if value.contains('\0') {
+                return Err(ShellSecurityError::InvalidEnvironmentVariableValue {
+                    name: key.clone(),
+                    reason: "Invalid characters: null bytes are not allowed".to_string(),
+                });
+            }
+
+            if value.contains('\n') || value.contains('\r') {
+                return Err(ShellSecurityError::InvalidEnvironmentVariableValue {
+                    name: key.clone(),
+                    reason: "Invalid characters: newlines are not allowed".to_string(),
+                });
+            }
+
+            Self::warn_if_protected_env_var(key);
+        }
+        Ok(())
+    }
+
     /// Get the security policy
     pub fn policy(&self) -> &ShellSecurityPolicy {
         &self.policy
@@ -298,32 +401,6 @@ impl ShellSecurityValidator {
             });
         }
         Ok(())
-    }
-
-    /// Check for blocked command patterns
-    fn check_blocked_patterns(&self, command: &str) -> std::result::Result<(), ShellSecurityError> {
-        for pattern in &self.blocked_patterns {
-            if pattern.is_match(command) {
-                return Err(ShellSecurityError::BlockedCommandPattern {
-                    pattern: pattern.as_str().to_string(),
-                    command: command.to_string(),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    /// Compile blocked command patterns from configuration
-    fn compile_blocked_patterns(patterns: &[String]) -> Result<Vec<Regex>> {
-        let mut compiled = Vec::new();
-        for pattern in patterns {
-            compiled.push(
-                Regex::new(pattern).map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to compile blocked pattern '{pattern}': {e}"),
-                })?,
-            );
-        }
-        Ok(compiled)
     }
 
     /// Check if an environment variable name is valid
@@ -422,73 +499,21 @@ impl ShellAuditEvent {
     }
 }
 
-/// Global security validator instance
-static GLOBAL_VALIDATOR: OnceLock<ShellSecurityValidator> = OnceLock::new();
-
-/// Get or initialize the global security validator
-pub fn get_validator() -> &'static ShellSecurityValidator {
-    GLOBAL_VALIDATOR.get_or_init(|| {
-        // Try to load configuration from SahConfig
-        let policy = match load_security_policy() {
-            Ok(Some(policy)) => {
-                info!(target: "shell_security", "Loaded security policy from configuration");
-                policy
-            }
-            Ok(None) => {
-                info!(target: "shell_security", "No security configuration found, using default policy");
-                ShellSecurityPolicy::default()
-            }
-            Err(e) => {
-                // In tests, be more graceful about configuration errors
-                if cfg!(test) {
-                    warn!(target: "shell_security", "Configuration error in test environment: {}. Using default policy.", e);
-                    ShellSecurityPolicy::default()
-                } else {
-                    // This is a critical error - invalid security configuration could be a security risk
-                    panic!("Critical security error: {e}. Application cannot start with invalid security configuration.");
-                }
-            }
-        };
-
-        ShellSecurityValidator::new(policy).unwrap_or_else(|e| {
-            warn!(
-                "Failed to create security validator: {}. Using default policy.",
-                e
-            );
-            ShellSecurityValidator::new(ShellSecurityPolicy::default())
-                .expect("Default policy should always work")
-        })
+/// Load a fresh [`ShellSecurityValidator`] from stacked config.
+///
+/// Reads `builtin/shell/config.yaml` → `~/.shell/config.yaml` → `./.shell/config.yaml`,
+/// merges them, compiles regex patterns, and returns a ready-to-use validator.
+/// No caching — each call reads fresh from disk so config changes take effect immediately.
+pub fn load_validator() -> ShellSecurityValidator {
+    let config = crate::config::load_shell_config();
+    ShellSecurityValidator::from_config(&config).unwrap_or_else(|e| {
+        warn!(
+            "Failed to create security validator from config: {}. Using defaults.",
+            e
+        );
+        ShellSecurityValidator::new(ShellSecurityPolicy::default())
+            .expect("Default policy should always work")
     })
-}
-
-/// Load security policy from configuration, failing fast on invalid configuration
-fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
-    // Try to load configuration from all sources
-    match swissarmyhammer_config::load_configuration() {
-        Ok(template_context) => {
-            // Try to extract shell security policy from config
-            match template_context.get("shell_security") {
-                Some(value) => {
-                    // The TemplateContext uses serde_json::Value internally, so we can use it directly
-                    match serde_json::from_value(value.clone()) {
-                        Ok(policy) => Ok(Some(policy)),
-                        Err(e) => {
-                            let error_msg = format!("Invalid shell security policy configuration: {e}. Security configuration must be valid to prevent security vulnerabilities.");
-                            error!(target: "shell_security", "Failed to deserialize shell security policy: {}", e);
-                            Err(SwissArmyHammerError::Other { message: error_msg })
-                        }
-                    }
-                }
-                None => Ok(None), // No shell_security section is fine
-            }
-        }
-        Err(e) => {
-            // Config loading failed - this could indicate corruption or permission issues
-            let error_msg = format!("Failed to load configuration: {}. This could indicate a corrupted config file or permission issues.", e);
-            error!(target: "shell_security", "Failed to load configuration: {}", e);
-            Err(SwissArmyHammerError::Other { message: error_msg })
-        }
-    }
 }
 
 /// Log a shell command execution for audit purposes
@@ -497,8 +522,8 @@ pub fn log_shell_execution(
     working_dir: Option<&Path>,
     environment_vars: &HashMap<String, String>,
 ) {
-    let validator = get_validator();
-    if !validator.policy().enable_audit_logging {
+    let config = crate::config::load_shell_config();
+    if !config.settings.enable_audit_logging {
         return;
     }
 
@@ -517,8 +542,8 @@ pub fn log_shell_execution(
 
 /// Log shell command completion for audit purposes
 pub fn log_shell_completion(command: &str, exit_code: i32, execution_time_ms: u64) {
-    let validator = get_validator();
-    if !validator.policy().enable_audit_logging {
+    let config = crate::config::load_shell_config();
+    if !config.settings.enable_audit_logging {
         return;
     }
 
@@ -546,23 +571,36 @@ pub fn log_shell_completion(command: &str, exit_code: i32, execution_time_ms: u6
 // Workflow validation functions that were previously in swissarmyhammer::workflow
 // These are shell-specific and are now part of the shell domain crate
 
-/// Validate a command for security issues
+/// Validate a command for security issues.
+///
+/// Loads fresh config from stacked YAML on each call so that user/project
+/// config changes take effect immediately without restart.
 pub fn validate_command(command: &str) -> std::result::Result<(), ShellSecurityError> {
-    get_validator().validate_command(command)
+    load_validator().validate_command(command)
 }
 
-/// Validate working directory access security
+/// Validate working directory access security.
+///
+/// Checks for path traversal attempts. Does not depend on YAML config.
 pub fn validate_working_directory_security(
     directory: &Path,
 ) -> std::result::Result<(), ShellSecurityError> {
-    get_validator().validate_directory_access(directory)
+    // Directory validation is structural — no config-dependent patterns
+    ShellSecurityValidator::validate_directory_access_static(directory)
 }
 
-/// Validate environment variables security
+/// Validate environment variables security.
+///
+/// Checks variable names and values. Does not depend on YAML config
+/// (uses hardcoded max from loaded config settings).
 pub fn validate_environment_variables_security(
     env_vars: &HashMap<String, String>,
 ) -> std::result::Result<(), ShellSecurityError> {
-    get_validator().validate_environment_variables(env_vars)
+    let config = crate::config::load_shell_config();
+    ShellSecurityValidator::validate_environment_variables_with_settings(
+        env_vars,
+        config.settings.max_env_value_length,
+    )
 }
 
 #[cfg(test)]
@@ -773,12 +811,11 @@ mod tests {
                 path
             );
 
-            // Also test through the validator directly
-            let validator = get_validator();
-            let result2 = validator.validate_directory_access(Path::new(path));
+            // Also test through the static method directly
+            let result2 = ShellSecurityValidator::validate_directory_access_static(Path::new(path));
             assert!(
                 result2.is_err(),
-                "Direct validator call for '{}' should also be blocked",
+                "Static validator call for '{}' should also be blocked",
                 path
             );
         }

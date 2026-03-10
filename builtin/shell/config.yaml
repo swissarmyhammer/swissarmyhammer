@@ -1,0 +1,73 @@
+# Shell security configuration — builtin defaults
+#
+# This file defines the default permit/deny patterns for shell command validation.
+# It is embedded at compile time and serves as the lowest-precedence layer.
+#
+# Override at:
+#   ~/.shell/config.yaml       (user-level, medium precedence)
+#   ./.shell/config.yaml       (project-level, highest precedence)
+#
+# Evaluation order:
+#   1. Permit patterns checked first — a match allows the command immediately
+#   2. Deny patterns checked second — a match blocks the command
+#   3. No match — command is allowed (default-allow)
+
+deny:
+  # Dangerous file operations
+  - pattern: 'rm\s+-rf\s+/'
+    reason: "Destructive recursive delete from root"
+  - pattern: 'rm\s+-rf\s+\*'
+    reason: "Destructive recursive delete of all files"
+  - pattern: 'format\s+'
+    reason: "Disk formatting command"
+  - pattern: 'mkfs\s+'
+    reason: "Filesystem creation command"
+  - pattern: 'dd\s+if=.*of=/dev/'
+    reason: "Raw disk write via dd"
+
+  # System modification commands
+  - pattern: 'fdisk\s+'
+    reason: "Disk partitioning command"
+  - pattern: 'parted\s+'
+    reason: "Disk partitioning command"
+  - pattern: 'shutdown\s+'
+    reason: "System shutdown command"
+  - pattern: 'reboot\s+'
+    reason: "System reboot command"
+  - pattern: 'sudo\s+'
+    reason: "Privilege escalation"
+  - pattern: 'systemctl\s+'
+    reason: "System service management"
+  - pattern: 'crontab\s+'
+    reason: "Cron job modification"
+  - pattern: 'chmod\s+\+s\s+'
+    reason: "Set SUID/SGID bit"
+
+  # Network-based attacks
+  - pattern: 'wget.*http.*\|.*sh'
+    reason: "Download and execute pattern"
+  - pattern: 'curl.*http.*\|.*sh'
+    reason: "Download and execute pattern"
+  - pattern: 'nc\s+-l\s+'
+    reason: "Netcat listener (reverse shell vector)"
+  - pattern: 'ssh\s+.*@'
+    reason: "SSH remote connection"
+
+  # Code execution patterns
+  - pattern: 'eval\s+'
+    reason: "Dynamic code evaluation"
+  - pattern: 'exec\s+/bin/'
+    reason: "Direct binary execution"
+
+  # Sensitive file access
+  - pattern: "/etc/passwd"
+    reason: "Access to system password file"
+  - pattern: "/etc/shadow"
+    reason: "Access to system shadow password file"
+
+permit: []
+
+settings:
+  max_command_length: 4096
+  max_env_value_length: 1024
+  enable_audit_logging: true

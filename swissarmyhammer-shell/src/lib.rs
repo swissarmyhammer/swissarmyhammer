@@ -30,6 +30,9 @@
 
 #![warn(missing_docs)]
 
+/// Shell security configuration with stacked YAML config loading.
+pub mod config;
+
 /// Shell command security validation and control system
 pub mod security;
 
@@ -39,9 +42,16 @@ pub mod hardening;
 /// Performance monitoring and profiling for shell command execution
 pub mod performance;
 
+// Re-export config types
+pub use config::{
+    evaluate_command, load_shell_config, load_shell_config_from_paths, parse_shell_config,
+    CompiledRule, CompiledShellConfig, PatternCompileError, PatternRule, ShellSecurityConfig,
+    ShellSettings, BUILTIN_CONFIG_YAML,
+};
+
 // Re-export core types for convenience
 pub use security::{
-    get_validator, log_shell_completion, log_shell_execution, ShellAuditEvent, ShellSecurityError,
+    load_validator, log_shell_completion, log_shell_execution, ShellAuditEvent, ShellSecurityError,
     ShellSecurityPolicy, ShellSecurityValidator,
 };
 

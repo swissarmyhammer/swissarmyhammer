@@ -111,6 +111,27 @@ impl DirectoryConfig for AvpConfig {
     }
 }
 
+/// Configuration for `.shell` directories.
+///
+/// Shell security uses this configuration for managing permit/deny
+/// pattern configs at user (`~/.shell/`) and project (`./.shell/`) levels.
+#[derive(Debug, Clone, Copy)]
+pub struct ShellConfig;
+
+impl DirectoryConfig for ShellConfig {
+    const DIR_NAME: &'static str = ".shell";
+    const GITIGNORE_CONTENT: &'static str = r#"# Shell security configuration
+# This file is automatically created by swissarmyhammer-directory
+
+# Log files
+*.log
+"#;
+
+    fn init_subdirs() -> &'static [&'static str] {
+        &[]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +148,12 @@ mod tests {
         assert_eq!(AvpConfig::DIR_NAME, ".avp");
         assert!(AvpConfig::GITIGNORE_CONTENT.contains("*.log"));
         assert!(AvpConfig::init_subdirs().is_empty());
+    }
+
+    #[test]
+    fn test_shell_config() {
+        assert_eq!(ShellConfig::DIR_NAME, ".shell");
+        assert!(ShellConfig::GITIGNORE_CONTENT.contains("*.log"));
+        assert!(ShellConfig::init_subdirs().is_empty());
     }
 }
