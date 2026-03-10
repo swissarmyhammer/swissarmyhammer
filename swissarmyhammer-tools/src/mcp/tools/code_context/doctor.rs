@@ -125,8 +125,11 @@ mod tests {
 
     #[test]
     fn test_detect_rust_project() {
-        let root = Path::new("/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools");
-        assert_eq!(detect_project_type(root), Some("rust".to_string()));
+        let tmp = std::env::temp_dir().join("test_detect_rust_project");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+        assert_eq!(detect_project_type(&tmp), Some("rust".to_string()));
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

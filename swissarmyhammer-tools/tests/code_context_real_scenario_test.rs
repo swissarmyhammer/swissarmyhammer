@@ -11,7 +11,9 @@ use tokio::sync::Mutex as TokioMutex;
 
 /// Test calling code_context tool with the swissarmyhammer-tools project
 /// This is what should happen when the user is working on the project
+/// Requires specific local project layout — skipped in CI
 #[tokio::test]
+#[ignore]
 async fn test_code_context_on_real_project() {
     let project_root =
         PathBuf::from("/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools");
