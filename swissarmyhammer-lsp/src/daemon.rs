@@ -151,6 +151,19 @@ impl LspDaemon {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
+
+                // Drain stderr in the background so LSP diagnostics aren't lost
+                if let Some(stderr) = child.stderr.take() {
+                    let cmd = self.spec.command.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncBufReadExt, BufReader};
+                        let mut lines = BufReader::new(stderr).lines();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            tracing::debug!(cmd = %cmd, "LSP stderr: {}", line);
+                        }
+                    });
+                }
+
                 self.child = Some(child);
                 self.consecutive_failures = 0;
                 self.set_state(LspDaemonState::Running {
@@ -337,8 +350,19 @@ impl LspDaemon {
         // Send initialize request
         send_jsonrpc_message(&mut writer, &init_params).await?;
 
-        // Read initialize response
-        let _response = read_jsonrpc_message(&mut reader).await?;
+        // Read initialize response — on EOF, capture stderr for diagnostics
+        let _response = match read_jsonrpc_message(&mut reader).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                let stderr_context = Self::capture_stderr(child).await;
+                let msg = if stderr_context.is_empty() {
+                    e.to_string()
+                } else {
+                    format!("{e}; stderr: {stderr_context}")
+                };
+                return Err(LspError::HandshakeFailed(msg));
+            }
+        };
 
         // Send initialized notification
         let initialized = json!({
@@ -349,6 +373,21 @@ impl LspDaemon {
         send_jsonrpc_message(&mut writer, &initialized).await?;
 
         Ok(())
+    }
+
+    /// Read whatever the child has written to stderr (best-effort, with timeout).
+    async fn capture_stderr(child: &mut Child) -> String {
+        use tokio::io::AsyncReadExt;
+        let Some(stderr) = child.stderr.as_mut() else {
+            return String::new();
+        };
+        let mut buf = vec![0u8; 4096];
+        match tokio::time::timeout(Duration::from_secs(1), stderr.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => {
+                String::from_utf8_lossy(&buf[..n]).trim().to_string()
+            }
+            _ => String::new(),
+        }
     }
 
     /// Send `shutdown` + `exit` and wait for the child to exit.
