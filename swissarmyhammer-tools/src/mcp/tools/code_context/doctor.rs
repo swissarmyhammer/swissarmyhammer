@@ -92,7 +92,11 @@ mod tests {
     #[test]
     fn test_detect_rust_project() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname = \"test\"\n").unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .unwrap();
         assert_eq!(detect_project_type(tmp.path()), Some("rust".to_string()));
     }
 
