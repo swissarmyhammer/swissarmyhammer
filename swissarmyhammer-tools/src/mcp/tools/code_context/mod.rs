@@ -692,7 +692,7 @@ fn context_err(e: swissarmyhammer_code_context::CodeContextError) -> McpError {
 ///
 /// Returns `Ok(None)` when ready, `Ok(Some(result))` with a progress message when not.
 fn check_ts_readiness(ws: &CodeContextWorkspace) -> Result<Option<CallToolResult>, McpError> {
-    let status = swissarmyhammer_code_context::check_blocking_status(ws.db(), IndexLayer::TreeSitter)
+    let status = swissarmyhammer_code_context::check_blocking_status(&*ws.db(), IndexLayer::TreeSitter)
         .map_err(context_err)?;
     match status {
         BlockingStatus::Ready => Ok(None),
@@ -747,7 +747,7 @@ fn execute_get_symbol(
         return Ok(progress);
     }
     let result =
-        swissarmyhammer_code_context::get_symbol(ws.db(), query, &options).map_err(context_err)?;
+        swissarmyhammer_code_context::get_symbol(&*ws.db(), query, &options).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -772,7 +772,7 @@ fn execute_search_symbol(
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let results = swissarmyhammer_code_context::search_symbol(ws.db(), query, &options)
+    let results = swissarmyhammer_code_context::search_symbol(&*ws.db(), query, &options)
         .map_err(context_err)?;
     json_result(&results)
 }
@@ -796,7 +796,7 @@ fn execute_list_symbols(
         return Ok(progress);
     }
     let results =
-        swissarmyhammer_code_context::list_symbols(ws.db(), file_path).map_err(context_err)?;
+        swissarmyhammer_code_context::list_symbols(&*ws.db(), file_path).map_err(context_err)?;
     json_result(&results)
 }
 
@@ -839,7 +839,7 @@ fn execute_grep_code(
         return Ok(progress);
     }
     let result =
-        swissarmyhammer_code_context::grep_code(ws.db(), pattern, &options).map_err(context_err)?;
+        swissarmyhammer_code_context::grep_code(&*ws.db(), pattern, &options).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -904,7 +904,7 @@ async fn execute_search_code(
         return Ok(progress);
     }
     let result = swissarmyhammer_code_context::search_code(
-        ws.db(),
+        &*ws.db(),
         embed_result.embedding(),
         &options,
     )
@@ -954,7 +954,7 @@ fn execute_find_duplicates(
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let result = swissarmyhammer_code_context::find_duplicates(ws.db(), file_path, &options)
+    let result = swissarmyhammer_code_context::find_duplicates(&*ws.db(), file_path, &options)
         .map_err(context_err)?;
     json_result(&result)
 }
@@ -1088,7 +1088,7 @@ fn execute_get_callgraph(
         return Ok(progress);
     }
     let result =
-        swissarmyhammer_code_context::get_callgraph(ws.db(), &options).map_err(context_err)?;
+        swissarmyhammer_code_context::get_callgraph(&*ws.db(), &options).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1125,56 +1125,36 @@ fn execute_get_blastradius(
         return Ok(progress);
     }
     let result =
-        swissarmyhammer_code_context::get_blastradius(ws.db(), &options).map_err(context_err)?;
+        swissarmyhammer_code_context::get_blastradius(&*ws.db(), &options).map_err(context_err)?;
     json_result(&result)
 }
 
 /// Trigger incremental tree-sitter indexing on dirty files.
 ///
-/// Queries dirty files (ts_indexed=0) from the DB, parses each one individually
-/// with tree-sitter, extracts semantic chunks, writes them to the DB, and marks
-/// the file as indexed — all incrementally so `get status` shows real-time progress.
-///
-/// Skips the batch `IndexContext::scan()` approach which blocks all DB writes
-/// until the entire scan (including embedding) completes.
-pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
+/// Uses the leader's single shared write connection for all DB operations.
+/// The mutex is locked only for each DB call — file I/O and parsing happen
+/// without holding the lock so other writers (LSP worker, watcher) can interleave.
+pub(crate) async fn index_discovered_files_async(
+    workspace_root: &Path,
+    db: swissarmyhammer_code_context::SharedDb,
+) {
     use std::sync::Arc;
     use swissarmyhammer_treesitter::{chunk::chunk_file, ChunkSource, LanguageRegistry, ParsedFile};
 
-    let db_path = workspace_root.join(".code-context").join("index.db");
-    if !db_path.exists() {
-        tracing::info!("code-context: database not found at {}, skipping tree-sitter indexing", db_path.display());
-        return;
-    }
-
-    let db = match rusqlite::Connection::open(&db_path) {
-        Ok(conn) => {
-            if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;") {
-                tracing::warn!("code-context: failed to configure DB connection: {}", e);
+    // Query all dirty files from the DB (populated by startup_cleanup)
+    let dirty_files: Vec<String> = {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        let result: Result<Vec<String>, rusqlite::Error> = (|| {
+            let mut stmt = conn.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed = 0")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })();
+        match result {
+            Ok(files) => files,
+            Err(e) => {
+                tracing::warn!("code-context: failed to query dirty files: {}", e);
                 return;
             }
-            conn
-        }
-        Err(e) => {
-            tracing::warn!("code-context: failed to open DB for tree-sitter indexing: {}", e);
-            return;
-        }
-    };
-
-    // Query all dirty files from the DB (populated by startup_cleanup)
-    let dirty_files: Vec<String> = match db.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed = 0") {
-        Ok(mut stmt) => {
-            match stmt.query_map([], |row| row.get::<_, String>(0)) {
-                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                Err(e) => {
-                    tracing::warn!("code-context: failed to query dirty files: {}", e);
-                    return;
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!("code-context: failed to prepare dirty files query: {}", e);
-            return;
         }
     };
 
@@ -1193,12 +1173,12 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
     for relative_path in &dirty_files {
         let file_path = workspace_root.join(relative_path);
 
-        // 1. Detect language
+        // 1. Detect language (no DB needed)
         let lang_config = match lang_registry.detect_language(&file_path) {
             Some(config) => config,
             None => {
-                // Not a supported language — mark ts done, leave lsp for the LSP daemon
-                let _ = db.execute(
+                let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+                let _ = conn.execute(
                     "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
                     rusqlite::params![relative_path],
                 );
@@ -1207,12 +1187,12 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
             }
         };
 
-        // 2. Read and parse file
+        // 2. Read and parse file (no DB needed)
         let content = match std::fs::read_to_string(&file_path) {
             Ok(c) => c,
             Err(_) => {
-                // File unreadable (binary, permissions, etc.) — mark ts done
-                let _ = db.execute(
+                let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+                let _ = conn.execute(
                     "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
                     rusqlite::params![relative_path],
                 );
@@ -1223,7 +1203,8 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
 
         let mut parser = tree_sitter::Parser::new();
         if parser.set_language(&lang_config.language()).is_err() {
-            let _ = db.execute(
+            let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+            let _ = conn.execute(
                 "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
                 rusqlite::params![relative_path],
             );
@@ -1234,7 +1215,8 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
         let tree = match parser.parse(&content, None) {
             Some(t) => t,
             None => {
-                let _ = db.execute(
+                let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+                let _ = conn.execute(
                     "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
                     rusqlite::params![relative_path],
                 );
@@ -1252,70 +1234,76 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
             content_hash,
         ));
 
-        // 3. Extract semantic chunks
+        // 3. Extract semantic chunks (no DB needed)
         let chunks = chunk_file(parsed_file.clone());
 
-        // 4. Clear old chunks and write new ones
-        let _ = db.execute(
-            "DELETE FROM ts_chunks WHERE file_path = ?",
-            rusqlite::params![relative_path],
-        );
+        // 4. Lock DB once for the entire write batch for this file
+        {
+            let conn = db.lock().unwrap_or_else(|p| p.into_inner());
 
-        let mut chunks_written = 0u64;
-        for chunk in &chunks {
-            if let Some(content) = chunk.source.content() {
-                let (start_byte, end_byte) = match &chunk.source {
-                    ChunkSource::Parsed { start_byte, end_byte, .. } => (*start_byte, *end_byte),
-                    _ => continue,
-                };
+            // Clear old chunks
+            let _ = conn.execute(
+                "DELETE FROM ts_chunks WHERE file_path = ?",
+                rusqlite::params![relative_path],
+            );
 
-                let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
-                let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
-                let symbol_path = chunk.symbol_path();
+            // Write new chunks
+            let mut chunks_written = 0u64;
+            for chunk in &chunks {
+                if let Some(content) = chunk.source.content() {
+                    let (start_byte, end_byte) = match &chunk.source {
+                        ChunkSource::Parsed { start_byte, end_byte, .. } => (*start_byte, *end_byte),
+                        _ => continue,
+                    };
 
-                if db.execute(
-                    "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![
-                        relative_path,
-                        start_byte as i32,
-                        end_byte as i32,
-                        start_line,
-                        end_line,
-                        content,
-                        &symbol_path,
-                    ],
-                ).is_ok() {
-                    chunks_written += 1;
+                    let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
+                    let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
+                    let symbol_path = chunk.symbol_path();
+
+                    if conn.execute(
+                        "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path)
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        rusqlite::params![
+                            relative_path,
+                            start_byte as i32,
+                            end_byte as i32,
+                            start_line,
+                            end_line,
+                            content,
+                            &symbol_path,
+                        ],
+                    ).is_ok() {
+                        chunks_written += 1;
+                    }
                 }
             }
+
+            // 5. Extract symbols from chunks
+            let _ = swissarmyhammer_code_context::ensure_ts_symbols(&conn, relative_path);
+
+            // 6. Generate and write call edges
+            let source_text = parsed_file.source.as_str();
+            let language = lang_config.language();
+            if let Ok(edges) = swissarmyhammer_code_context::generate_ts_call_edges(
+                &conn,
+                relative_path,
+                source_text,
+                language,
+            ) {
+                let _ = swissarmyhammer_code_context::write_ts_edges(&conn, relative_path, &edges);
+            }
+
+            // 7. Mark file as ts_indexed
+            let _ = conn.execute(
+                "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
+                rusqlite::params![relative_path],
+            );
+
+            total_chunks += chunks_written;
         }
-
-        // 5. Extract symbols from chunks
-        let _ = swissarmyhammer_code_context::ensure_ts_symbols(&db, relative_path);
-
-        // 6. Generate and write call edges
-        let source_text = parsed_file.source.as_str();
-        let language = lang_config.language();
-        if let Ok(edges) = swissarmyhammer_code_context::generate_ts_call_edges(
-            &db,
-            relative_path,
-            source_text,
-            language,
-        ) {
-            let _ = swissarmyhammer_code_context::write_ts_edges(&db, relative_path, &edges);
-        }
-
-        // 7. Mark file as ts_indexed — lsp_indexed is set independently by the LSP daemon
-        let _ = db.execute(
-            "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-            rusqlite::params![relative_path],
-        );
 
         indexed += 1;
-        total_chunks += chunks_written;
 
-        // Log progress every 100 files
         if indexed % 100 == 0 {
             tracing::info!(
                 "code-context: indexed {}/{} files ({} chunks so far)",
@@ -1328,9 +1316,10 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
     }
 
     // Summary
-    let chunk_count: i64 = db.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0)).unwrap_or(0);
-    let symbol_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0)).unwrap_or(0);
-    let edge_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0)).unwrap_or(0);
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    let chunk_count: i64 = conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0)).unwrap_or(0);
+    let symbol_count: i64 = conn.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0)).unwrap_or(0);
+    let edge_count: i64 = conn.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0)).unwrap_or(0);
     tracing::info!(
         "code-context: indexing complete — {}/{} files, {} chunks, {} symbols, {} call edges",
         indexed, total, chunk_count, symbol_count, edge_count
@@ -1345,19 +1334,6 @@ fn execute_get_status(context: &ToolContext) -> Result<CallToolResult, McpError>
     let ws = open_workspace(context)?;
     let workspace_root = ws.workspace_root().to_path_buf();
 
-    // Leader: trigger startup cleanup on first access to populate the index from disk
-    if ws.is_leader() {
-        let _ = swissarmyhammer_code_context::startup_cleanup(ws.db(), &workspace_root)
-            .map_err(context_err);
-
-        // After discovering files, spawn tree-sitter indexing in background
-        // This runs asynchronously without blocking status response
-        let workspace_root_clone = workspace_root.clone();
-        tokio::spawn(async move {
-            index_discovered_files_async(&workspace_root_clone).await;
-        });
-    }
-
     // Run doctor check to report on LSP availability
     let doctor_report = doctor::run_doctor(&workspace_root);
     tracing::debug!("Doctor report: {:?}", doctor_report);
@@ -1371,7 +1347,7 @@ fn execute_get_status(context: &ToolContext) -> Result<CallToolResult, McpError>
         }
     }
 
-    let status = swissarmyhammer_code_context::get_status(ws.db()).map_err(context_err)?;
+    let status = swissarmyhammer_code_context::get_status(&*ws.db()).map_err(context_err)?;
 
     // Merge LSP daemon status into the response
     let mut result = serde_json::to_value(&status).unwrap_or_default();
@@ -1410,7 +1386,7 @@ fn execute_build_status(
     };
 
     let ws = open_workspace(context)?;
-    let result = swissarmyhammer_code_context::build_status(ws.db(), layer).map_err(context_err)?;
+    let result = swissarmyhammer_code_context::build_status(&*ws.db(), layer).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1419,7 +1395,7 @@ fn execute_build_status(
 /// Wipes all index data from all tables and returns stats about what was cleared.
 fn execute_clear_status(context: &ToolContext) -> Result<CallToolResult, McpError> {
     let ws = open_workspace(context)?;
-    let result = swissarmyhammer_code_context::clear_status(ws.db()).map_err(context_err)?;
+    let result = swissarmyhammer_code_context::clear_status(&*ws.db()).map_err(context_err)?;
     json_result(&result)
 }
 

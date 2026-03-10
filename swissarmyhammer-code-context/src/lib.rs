@@ -80,7 +80,7 @@ pub use ops::status::{
     build_status, clear_status, get_status, BuildLayer, BuildStatusResult, ClearStatusResult,
     StatusReport,
 };
-pub use workspace::{CodeContextWorkspace, WorkspaceMode};
+pub use workspace::{CodeContextWorkspace, DbRef, SharedDb, WorkspaceMode};
 pub use lsp_server::{
     detect_rust_analyzer, find_executable, start_lsp_server, LspServerConfig, LspServerHandle,
 };

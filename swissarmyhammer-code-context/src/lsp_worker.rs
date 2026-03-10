@@ -20,6 +20,7 @@ use tracing::{debug, info, warn};
 use crate::error::CodeContextError;
 use crate::lsp_communication::LspJsonRpcClient;
 use crate::lsp_indexer::mark_lsp_indexed;
+use crate::workspace::SharedDb;
 
 /// Configuration for the LSP indexing worker.
 #[derive(Debug, Clone)]
@@ -61,19 +62,19 @@ pub type SharedLspClient = Arc<Mutex<Option<LspJsonRpcClient>>>;
 ///
 /// # Arguments
 /// * `workspace_root` - Absolute path to the workspace root.
-/// * `db_path` - Path to the `.code-context/index.db` SQLite database.
+/// * `db` - Shared write connection from the leader workspace.
 /// * `client` - Shared handle to the LSP JSON-RPC client.
 /// * `config` - Worker configuration.
 pub fn spawn_lsp_indexing_worker(
     workspace_root: PathBuf,
-    db_path: PathBuf,
+    db: SharedDb,
     client: SharedLspClient,
     config: LspWorkerConfig,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("code-context-lsp-indexer".to_string())
         .spawn(move || {
-            match run_lsp_indexing_loop(&workspace_root, &db_path, &client, &config) {
+            match run_lsp_indexing_loop(&workspace_root, &db, &client, &config) {
                 Ok(()) => info!("LSP indexing worker completed"),
                 Err(e) => warn!("LSP indexing worker error: {}", e),
             }
@@ -82,9 +83,13 @@ pub fn spawn_lsp_indexing_worker(
 }
 
 /// Main indexing loop. Runs until the thread is terminated.
+///
+/// Uses the leader's shared write connection for all DB operations.
+/// The mutex is locked only for the duration of each DB call, so the
+/// TS indexer and file watcher can interleave writes without blocking.
 fn run_lsp_indexing_loop(
     workspace_root: &Path,
-    db_path: &Path,
+    db: &SharedDb,
     client: &SharedLspClient,
     config: &LspWorkerConfig,
 ) -> Result<(), CodeContextError> {
@@ -93,14 +98,14 @@ fn run_lsp_indexing_loop(
         workspace_root.display()
     );
 
-    let db = Connection::open(db_path)?;
-    db.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
-
     let mut total_indexed = 0u64;
 
     loop {
-        // 1. Query dirty files
-        let dirty_files = query_lsp_dirty_files(&db, config.batch_size)?;
+        // 1. Query dirty files (lock DB briefly)
+        let dirty_files = {
+            let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+            query_lsp_dirty_files(&conn, config.batch_size)?
+        };
 
         if dirty_files.is_empty() {
             thread::sleep(config.idle_sleep);
@@ -136,7 +141,7 @@ fn run_lsp_indexing_loop(
         for relative_path in &dirty_files {
             let full_path = workspace_root.join(relative_path);
 
-            match index_single_file(lsp_client, &db, &full_path, relative_path) {
+            match index_single_file(lsp_client, db, &full_path, relative_path) {
                 Ok(symbol_count) => {
                     total_indexed += 1;
                     debug!(
@@ -147,7 +152,8 @@ fn run_lsp_indexing_loop(
                 Err(e) => {
                     warn!("LSP indexing failed for {}: {}", relative_path, e);
                     // Still mark as indexed to prevent infinite retry
-                    if let Err(mark_err) = mark_lsp_indexed(&db, relative_path) {
+                    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Err(mark_err) = mark_lsp_indexed(&conn, relative_path) {
                         warn!(
                             "Failed to mark {} as lsp_indexed after error: {}",
                             relative_path, mark_err
@@ -167,10 +173,13 @@ fn run_lsp_indexing_loop(
 
 /// Index a single file via LSP: didOpen, documentSymbol, persist, mark indexed.
 ///
+/// Locks the shared DB only for the persist step — LSP I/O happens without
+/// holding the mutex so other writers aren't blocked during network waits.
+///
 /// Returns the number of symbols persisted on success.
 fn index_single_file(
     client: &mut LspJsonRpcClient,
-    db: &Connection,
+    db: &SharedDb,
     full_path: &Path,
     relative_path: &str,
 ) -> Result<usize, CodeContextError> {
@@ -178,11 +187,14 @@ fn index_single_file(
     let content = std::fs::read_to_string(full_path)?;
     let language_id = extension_to_language_id(full_path);
 
-    // Send didOpen notification
+    // Send didOpen notification (no DB lock needed)
     client.send_did_open(full_path, language_id, &content)?;
 
-    // Collect symbols and persist them (this also marks lsp_indexed = 1)
-    let result = client.collect_and_persist_file_symbols(db, full_path, relative_path)?;
+    // Collect symbols and persist them — lock DB for the write
+    let result = {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        client.collect_and_persist_file_symbols(&conn, full_path, relative_path)?
+    };
 
     // Close the document so re-indexing won't trigger "duplicate didOpen"
     if let Err(e) = client.send_did_close(full_path) {
@@ -190,10 +202,6 @@ fn index_single_file(
     }
 
     if let Some(err) = &result.error {
-        // The client returned an LspCollectionResult with an error string
-        // but didn't propagate it as Err. Log it but still count as indexed
-        // because collect_and_persist_file_symbols already called mark_lsp_indexed
-        // on the success path within collect_and_persist_symbols.
         warn!(
             "LSP symbol collection warning for {}: {}",
             relative_path, err
@@ -253,6 +261,7 @@ fn extension_to_language_id(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
 
     /// Create an in-memory DB with the required schema.
     fn create_test_db() -> Connection {

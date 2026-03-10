@@ -330,67 +330,83 @@ impl McpServer {
             shared_client
         });
 
-        // Open workspace and start TS indexing. The workspace holds the
-        // LeaderGuard (flock) — it must stay alive for the server's lifetime.
-        // The task runs indexing then waits forever to keep the guard held.
+        // Open the workspace as leader. This creates the single write connection
+        // and holds the flock via LeaderGuard. ALL writers share this one connection.
+        use swissarmyhammer_code_context::CodeContextWorkspace;
+
+        tracing::info!(
+            "code-context: opening workspace for {}",
+            workspace_root.display()
+        );
+        let ws = match CodeContextWorkspace::open(&workspace_root) {
+            Ok(ws) => {
+                tracing::info!(
+                    "code-context: workspace opened as {}",
+                    if ws.is_leader() { "leader" } else { "reader" }
+                );
+                ws
+            }
+            Err(e) => {
+                tracing::warn!("code-context: failed to open workspace: {}", e);
+                return;
+            }
+        };
+
+        // Extract the shared write connection. Only the leader has one.
+        let shared_db = ws.shared_db();
+
+        // Keep the workspace (and its LeaderGuard) alive forever.
+        // The guard holds the flock — dropping it releases leadership.
+        tokio::spawn(async move {
+            let _ws = ws;
+            std::future::pending::<()>().await;
+        });
+
+        // All workers below share the single write connection.
+        // If we're not leader (shared_db is None), skip write-side work.
+        let shared_db = match shared_db {
+            Some(db) => db,
+            None => {
+                tracing::info!("code-context: reader mode — skipping indexing workers");
+                return;
+            }
+        };
+
+        // Start tree-sitter indexing
         let ts_root = workspace_root.clone();
+        let ts_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
             use super::tools::code_context::index_discovered_files_async;
-            use swissarmyhammer_code_context::CodeContextWorkspace;
-
-            tracing::info!(
-                "code-context: opening workspace for {}",
-                ts_root.display()
-            );
-            let _ws = match CodeContextWorkspace::open(&ts_root) {
-                Ok(ws) => {
-                    tracing::info!(
-                        "code-context: workspace opened as {} with DB ready",
-                        if ws.is_leader() { "leader" } else { "reader" }
-                    );
-                    ws
-                }
-                Err(e) => {
-                    tracing::warn!("code-context: failed to open workspace: {}", e);
-                    return;
-                }
-            };
-
             tracing::info!(
                 "code-context: starting tree-sitter indexing for {}",
                 ts_root.display()
             );
-            index_discovered_files_async(&ts_root).await;
+            index_discovered_files_async(&ts_root, ts_db).await;
             tracing::info!(
                 "code-context: tree-sitter indexing complete for {}",
                 ts_root.display()
             );
-
-            // Keep this task alive so the workspace (and its LeaderGuard) isn't dropped.
-            // The guard holds the flock — dropping it releases leadership.
-            std::future::pending::<()>().await;
         });
 
-        // Start file watcher immediately — it marks files dirty for whichever
-        // worker picks them up.
+        // Start file watcher — marks files dirty and re-indexes via shared connection
         let watcher_root = workspace_root.clone();
+        let watcher_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
             use super::tools::code_context::watcher::start_code_context_watcher;
-            let _watcher_handle = start_code_context_watcher(watcher_root);
+            let _watcher_handle = start_code_context_watcher(watcher_root, watcher_db);
             // Keep this task alive so the watcher handle isn't dropped
             std::future::pending::<()>().await;
         });
 
         // Once the LSP supervisor is ready, start the LSP indexing worker.
-        // This runs in parallel with TS indexing — no need to wait for it.
+        let lsp_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
             match lsp_handle.await {
                 Ok(Some(shared_client)) => {
                     use swissarmyhammer_code_context::{spawn_lsp_indexing_worker, LspWorkerConfig};
-                    let db_path = workspace_root.join(".code-context").join("index.db");
                     spawn_lsp_indexing_worker(
                         workspace_root.clone(),
-                        db_path,
+                        lsp_db,
                         shared_client,
                         LspWorkerConfig::default(),
                     );
