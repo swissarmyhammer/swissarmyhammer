@@ -55,6 +55,8 @@ pub struct McpServer {
     /// Agent library - kept alive to back the AgentTool's shared reference
     #[allow(dead_code)]
     agent_library: Arc<RwLock<AgentLibrary>>,
+    /// Working directory — stored for deferred initialization (e.g. code-context)
+    work_dir: Option<PathBuf>,
 }
 
 /// Determine if a retry should be attempted based on the error and attempt count.
@@ -260,12 +262,8 @@ impl McpServer {
             tool_context,
             skill_library,
             agent_library,
+            work_dir: Some(work_dir),
         };
-
-        // Initialize code-context eagerly at MCP startup
-        // This ensures files are discovered and indexing starts immediately,
-        // not lazily when the first tool call happens
-        Self::initialize_code_context(&work_dir);
 
         Ok(server)
     }
@@ -1129,6 +1127,12 @@ impl ServerHandler for McpServer {
 
         // Auto-create agent actor for the connecting MCP client
         self.ensure_agent_actor(&request.client_info.name).await;
+
+        // Start code-context background work (LSP, indexing, file watcher)
+        // only when an MCP client actually connects — not in the constructor.
+        if let Some(ref work_dir) = self.work_dir {
+            Self::initialize_code_context(work_dir);
+        }
 
         Ok(InitializeResult {
             protocol_version: ProtocolVersion::default(),
