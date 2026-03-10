@@ -249,7 +249,7 @@ use the skill tool to load the full instructions, then follow them.
 
 - **review**: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Reviews produce verbose output — automatically delegates to a reviewer subagent. (local)
 
-- **shell**: Shell command execution with history, process management, and semantic search. Use this skill for ALL shell commands instead of the built-in Bash tool. (local)
+- **shell**: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands. (local)
 
 - **test**: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent. (local)
 
