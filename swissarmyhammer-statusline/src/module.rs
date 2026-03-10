@@ -76,10 +76,7 @@ impl ModuleRegistry {
         // Claude modules (stdin JSON data)
         modules.insert("directory".into(), modules::directory::eval as ModuleFn);
         modules.insert("model".into(), modules::model::eval as ModuleFn);
-        modules.insert(
-            "context_bar".into(),
-            modules::context_bar::eval as ModuleFn,
-        );
+        modules.insert("context_bar".into(), modules::context_bar::eval as ModuleFn);
         modules.insert("cost".into(), modules::cost::eval as ModuleFn);
         modules.insert("session".into(), modules::session::eval as ModuleFn);
         modules.insert("vim_mode".into(), modules::vim_mode::eval as ModuleFn);

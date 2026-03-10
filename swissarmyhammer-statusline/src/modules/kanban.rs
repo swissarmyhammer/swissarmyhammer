@@ -52,11 +52,7 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let filled = ((pct as f64 / 100.0) * width as f64).round() as usize;
     let filled = filled.min(width);
     let empty = width - filled;
-    let bar = format!(
-        "{}{}",
-        "\u{2588}".repeat(filled),
-        "\u{2591}".repeat(empty)
-    );
+    let bar = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
 
     let style_str = if pct < cfg.thresholds.low.below {
         &cfg.thresholds.low.style

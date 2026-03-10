@@ -2101,10 +2101,7 @@ impl CliBuilder {
                       echo '{\"model\":{\"display_name\":\"Opus\"}}' | sah statusline\n\
                       sah statusline config > .swissarmyhammer/statusline/config.yaml",
             },
-            vec![
-                Command::new("config")
-                    .about("Dump the full annotated builtin config to stdout"),
-            ],
+            vec![Command::new("config").about("Dump the full annotated builtin config to stdout")],
         )
     }
 }

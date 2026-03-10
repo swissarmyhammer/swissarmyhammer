@@ -26,11 +26,7 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let filled = filled.min(width);
     let empty = width - filled;
 
-    let bar = format!(
-        "{}{}",
-        "\u{2588}".repeat(filled),
-        "\u{2591}".repeat(empty)
-    );
+    let bar = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
 
     let style_str = if (pct as u32) < cfg.thresholds.low.below {
         &cfg.thresholds.low.style
