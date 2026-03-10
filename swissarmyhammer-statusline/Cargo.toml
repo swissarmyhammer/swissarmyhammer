@@ -1,0 +1,28 @@
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!
+
+[package]
+name = "swissarmyhammer-statusline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Starship-like statusline for Claude Code integration"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+git2 = { workspace = true }
+dirs = { workspace = true }
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
+swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
+swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -23,6 +23,11 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
         uninstall_deny_bash()?;
     }
 
+    // Remove statusline from Claude Code settings
+    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
+        uninstall_statusline()?;
+    }
+
     // Always remove builtin skills from .skills/ store and agent dirs
     // (init always installs them, so deinit should always remove them)
     uninstall_builtin_skills(global)?;
@@ -102,6 +107,23 @@ fn uninstall_mcp_all_agents(global: bool) -> Result<(), String> {
         uninstall_project_legacy()?;
     }
 
+    Ok(())
+}
+
+/// Remove statusline configuration from .claude/settings.json.
+fn uninstall_statusline() -> Result<(), String> {
+    let path = settings::claude_settings_path();
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut claude_settings = settings::read_settings(&path)?;
+    let changed = settings::remove_statusline(&mut claude_settings);
+
+    if changed {
+        settings::write_settings(&path, &claude_settings)?;
+        println!("Statusline removed from {}", path.display());
+    }
     Ok(())
 }
 

@@ -1,0 +1,159 @@
+# SwissArmyHammer Statusline Configuration
+# ==========================================
+#
+# This is the default (builtin) configuration for the sah statusline.
+# To customize, copy this file to:
+#   Project: .swissarmyhammer/statusline/config.yaml
+#   User:    ~/.swissarmyhammer/statusline/config.yaml
+#
+# Config layers are merged with "last wins" semantics:
+#   builtin -> user -> project
+
+# Top-level format string controls which modules appear and in what order.
+# Use $module_name to reference modules. Adjacent modules with no space
+# will be joined without separator.
+format: "$directory $git_branch$git_status$git_state $model $context_bar $kanban $index $languages"
+
+# ── Directory Module ──────────────────────────────────────────────────
+# Shows the current working directory basename.
+# Source: workspace.current_dir from Claude Code JSON
+directory:
+  style: "cyan bold"
+  truncation_length: 1
+  format: "$path"
+
+# ── Git Branch Module ─────────────────────────────────────────────────
+# Shows the current git branch name.
+# Source: git2 Repository::discover() + repo.head()
+git_branch:
+  style: "purple"
+  symbol: "\ue0a0 "
+  format: "$symbol$branch"
+  truncation_length: 20
+  truncation_symbol: "\u2026"
+
+# ── Git Status Module ─────────────────────────────────────────────────
+# Shows file status counts (modified, staged, untracked, etc.) and
+# ahead/behind remote tracking information.
+# Source: git2 repo.statuses() + graph_ahead_behind()
+git_status:
+  style: "red bold"
+  format: "[$all_status$ahead_behind]"
+  modified: "!"
+  staged: "+"
+  untracked: "?"
+  deleted: "\u2718"
+  conflicted: "="
+  stashed: "$"
+  ahead: "\u21e1"
+  behind: "\u21e3"
+  diverged: "\u21d5"
+
+# ── Git State Module ──────────────────────────────────────────────────
+# Shows repository state during rebase, merge, cherry-pick, etc.
+# Source: git2 repo.state()
+git_state:
+  style: "yellow bold"
+  format: "($state $progress)"
+
+# ── Model Module ──────────────────────────────────────────────────────
+# Shows the current AI model name.
+# Source: model.display_name from Claude Code JSON
+model:
+  style: "green"
+  format: "\U0001f9e0 $name"
+
+# ── Context Bar Module ────────────────────────────────────────────────
+# Shows a progress bar for context window usage with color thresholds.
+# Source: context_window.used_percentage from Claude Code JSON
+context_bar:
+  bar_width: 10
+  format: "[$bar] $percentage%"
+  thresholds:
+    low:
+      below: 50
+      style: "green"
+    medium:
+      below: 80
+      style: "yellow"
+    high:
+      below: 101
+      style: "red"
+
+# ── Cost Module ───────────────────────────────────────────────────────
+# Shows the total session cost in USD.
+# Source: cost.total_cost_usd from Claude Code JSON
+cost:
+  style: "dim"
+  format: "$$amount"
+  hide_zero: true
+
+# ── Session Module ────────────────────────────────────────────────────
+# Shows a truncated session ID.
+# Source: session_id from Claude Code JSON
+session:
+  style: "dim"
+  format: "$id"
+
+# ── Vim Mode Module ──────────────────────────────────────────────────
+# Shows the current vim mode. Hidden when vim mode is not active.
+# Source: vim.mode from Claude Code JSON
+vim_mode:
+  style: "bold"
+  format: "$mode"
+
+# ── Agent Module ──────────────────────────────────────────────────────
+# Shows the current agent name. Hidden when no agent is active.
+# Source: agent.name from Claude Code JSON
+agent:
+  style: "blue"
+  format: "\U0001f916 $name"
+
+# ── Worktree Module ──────────────────────────────────────────────────
+# Shows the worktree branch. Hidden when not in a worktree.
+# Source: worktree.branch from Claude Code JSON
+worktree:
+  style: "green"
+  format: "\U0001f332 $branch"
+
+# ── Version Module ───────────────────────────────────────────────────
+# Shows the Claude Code version.
+# Source: version from Claude Code JSON
+version:
+  style: "dim"
+  format: "v$version"
+
+# ── Kanban Module ─────────────────────────────────────────────────────
+# Shows kanban board progress as a bar chart.
+# Source: swissarmyhammer-kanban task counts
+kanban:
+  style: "yellow"
+  bar_width: 6
+  format: "\U0001f4cb [$bar] $done/$total"
+  thresholds:
+    low:
+      below: 25
+      style: "red"
+    medium:
+      below: 75
+      style: "yellow"
+    high:
+      below: 101
+      style: "green"
+
+# ── Index Module ──────────────────────────────────────────────────────
+# Shows code-context indexing progress. Hidden when complete.
+# Source: swissarmyhammer-code-context StatusReport
+index:
+  style: "blue"
+  format: "idx $percent%"
+  show_when_complete: false
+
+# ── Languages Module ─────────────────────────────────────────────────
+# Shows language icons for detected languages. Icons are dimmed when
+# the corresponding LSP server is not found in PATH.
+# Source: code-context indexed_files + find_executable()
+languages:
+  style: "bold"
+  dim_without_lsp: true
+  format: "$icons"

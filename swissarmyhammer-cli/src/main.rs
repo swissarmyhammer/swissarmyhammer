@@ -571,6 +571,7 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
         Some(("model", sub_matches)) => handle_model_command(sub_matches, context).await,
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
+        Some(("statusline", sub_matches)) => handle_statusline_command(sub_matches),
         Some((category, sub_matches)) => {
             route_category_command(category, sub_matches, context, cli_tool_context).await
         }
@@ -1088,6 +1089,34 @@ fn handle_deinit_command(matches: &clap::ArgMatches) -> i32 {
         Ok(()) => EXIT_SUCCESS,
         Err(e) => {
             eprintln!("Error: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
+
+/// Handle the statusline command.
+///
+/// Routes to either the `config` subcommand (dumps builtin config) or the default
+/// mode (reads JSON from stdin and renders styled ANSI output).
+fn handle_statusline_command(matches: &clap::ArgMatches) -> i32 {
+    match matches.subcommand() {
+        Some(("config", _)) => {
+            print!("{}", swissarmyhammer_statusline::dump_config());
+            EXIT_SUCCESS
+        }
+        None => {
+            // Read JSON from stdin
+            let mut input = String::new();
+            if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
+                eprintln!("Failed to read stdin: {}", e);
+                return EXIT_ERROR;
+            }
+            let output = swissarmyhammer_statusline::run(&input);
+            print!("{}", output);
+            EXIT_SUCCESS
+        }
+        Some((cmd, _)) => {
+            eprintln!("Unknown statusline subcommand: {}", cmd);
             EXIT_ERROR
         }
     }

@@ -288,6 +288,27 @@ Examples:
         #[command(subcommand)]
         subcommand: Option<AgentSubcommand>,
     },
+
+    /// Render statusline from Claude Code JSON (stdin) or dump config
+    #[command(long_about = "
+Render a styled statusline for Claude Code integration.
+
+In normal mode, reads JSON from stdin and outputs styled ANSI text.
+Use 'sah statusline config' to dump the full annotated builtin config.
+
+The statusline is configured via YAML with 3-layer stacking:
+  1. Builtin defaults (embedded in binary)
+  2. User config (~/.swissarmyhammer/statusline/config.yaml)
+  3. Project config (.swissarmyhammer/statusline/config.yaml)
+
+Examples:
+  echo '{\"model\":{\"display_name\":\"Opus\"}}' | sah statusline
+  sah statusline config > .swissarmyhammer/statusline/config.yaml
+")]
+    Statusline {
+        #[command(subcommand)]
+        subcommand: Option<StatuslineSubcommand>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -465,6 +486,12 @@ For editor configuration:
         #[arg(long, value_name = "SECONDS")]
         graceful_shutdown_timeout: Option<u64>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StatuslineSubcommand {
+    /// Dump the full annotated builtin config to stdout
+    Config,
 }
 
 impl Cli {

@@ -157,6 +157,34 @@ pub fn merge_deny_bash(settings: &mut Value) -> bool {
     true
 }
 
+/// Merge statusLine configuration into Claude Code settings.
+/// Sets the statusLine.command to `["sah", "statusline"]`.
+/// Returns true if a change was made.
+pub fn merge_statusline(settings: &mut Value) -> bool {
+    let desired = json!({
+        "command": ["sah", "statusline"]
+    });
+
+    if settings.get("statusLine") == Some(&desired) {
+        return false;
+    }
+
+    settings
+        .as_object_mut()
+        .unwrap()
+        .insert("statusLine".to_string(), desired);
+    true
+}
+
+/// Remove statusLine configuration from Claude Code settings.
+/// Returns true if a change was made.
+pub fn remove_statusline(settings: &mut Value) -> bool {
+    settings
+        .as_object_mut()
+        .map(|obj| obj.remove("statusLine").is_some())
+        .unwrap_or(false)
+}
+
 /// Remove "Bash" from permissions.deny in settings.
 /// Returns true if a change was made.
 pub fn remove_deny_bash(settings: &mut Value) -> bool {
@@ -369,6 +397,40 @@ mod tests {
         // Preserves other data
         assert_eq!(root["numStartups"], 100);
         assert_eq!(root["projects"]["/my/proj"]["allowedTools"], json!([]));
+    }
+
+    #[test]
+    fn test_merge_statusline() {
+        let mut settings = json!({});
+        let changed = merge_statusline(&mut settings);
+        assert!(changed);
+        assert_eq!(
+            settings["statusLine"]["command"],
+            json!(["sah", "statusline"])
+        );
+    }
+
+    #[test]
+    fn test_merge_statusline_idempotent() {
+        let mut settings = json!({});
+        merge_statusline(&mut settings);
+        let changed = merge_statusline(&mut settings);
+        assert!(!changed);
+    }
+
+    #[test]
+    fn test_remove_statusline() {
+        let mut settings = json!({"statusLine": {"command": ["sah", "statusline"]}});
+        let changed = remove_statusline(&mut settings);
+        assert!(changed);
+        assert!(settings.get("statusLine").is_none());
+    }
+
+    #[test]
+    fn test_remove_statusline_not_present() {
+        let mut settings = json!({});
+        let changed = remove_statusline(&mut settings);
+        assert!(!changed);
     }
 
     #[test]

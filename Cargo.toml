@@ -43,6 +43,7 @@ members = [
     "swissarmyhammer-kanban",
     "swissarmyhammer-lsp",
     "swissarmyhammer-code-context",
+    "swissarmyhammer-statusline",
     "swissarmyhammer-operations",
     "swissarmyhammer-operations-macros",
     "swissarmyhammer-skills",

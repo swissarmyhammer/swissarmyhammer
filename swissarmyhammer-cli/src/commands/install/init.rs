@@ -27,6 +27,11 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
         install_deny_bash()?;
     }
 
+    // Install statusline in Claude Code settings
+    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
+        install_statusline()?;
+    }
+
     // Create sah-specific project structure
     if matches!(target, InstallTarget::Project | InstallTarget::Local) {
         create_project_structure()?;
@@ -92,6 +97,19 @@ fn install_mcp_all_agents(global: bool) -> Result<(), String> {
         install_project_legacy()?;
     }
 
+    Ok(())
+}
+
+/// Install statusline configuration in .claude/settings.json.
+fn install_statusline() -> Result<(), String> {
+    let path = settings::claude_settings_path();
+    let mut claude_settings = settings::read_settings(&path)?;
+    let changed = settings::merge_statusline(&mut claude_settings);
+    settings::write_settings(&path, &claude_settings)?;
+
+    if changed {
+        println!("Statusline installed in {}", path.display());
+    }
     Ok(())
 }
 

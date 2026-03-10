@@ -8111,6 +8111,7 @@ dependencies = [
  "swissarmyhammer-operations",
  "swissarmyhammer-prompts",
  "swissarmyhammer-skills",
+ "swissarmyhammer-statusline",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "tempfile",
@@ -8544,6 +8545,23 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "swissarmyhammer-statusline"
+version = "0.8.0"
+dependencies = [
+ "dirs",
+ "git2",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "swissarmyhammer-code-context",
+ "swissarmyhammer-directory",
+ "swissarmyhammer-kanban",
+ "swissarmyhammer-treesitter",
+ "tempfile",
  "tracing",
 ]
 

@@ -1763,11 +1763,12 @@ impl CliBuilder {
             .subcommand(Self::build_validate_command())
     }
 
-    /// Add content management commands (prompt, model, agent)
+    /// Add content management commands (prompt, model, agent, statusline)
     fn add_content_commands(cli: Command) -> Command {
         cli.subcommand(Self::build_prompt_command())
             .subcommand(Self::build_model_command())
             .subcommand(Self::build_agent_command())
+            .subcommand(Self::build_statusline_command())
     }
 
     /// Build the prompt command with all its subcommands
@@ -2080,6 +2081,30 @@ impl CliBuilder {
                 long_about: crate::commands::agent::DESCRIPTION,
             },
             Self::build_subcommands_from_specs(&subcommand_specs),
+        )
+    }
+
+    /// Build the statusline command with config subcommand
+    fn build_statusline_command() -> Command {
+        Self::build_command_with_subcommands(
+            CommandConfig {
+                name: "statusline",
+                about: "Render statusline from Claude Code JSON (stdin) or dump config",
+                long_about: "Render a styled statusline for Claude Code integration.\n\n\
+                    In normal mode, reads JSON from stdin and outputs styled ANSI text.\n\
+                    Use 'sah statusline config' to dump the full annotated builtin config.\n\n\
+                    The statusline is configured via YAML with 3-layer stacking:\n\
+                    1. Builtin defaults (embedded in binary)\n\
+                    2. User config (~/.swissarmyhammer/statusline/config.yaml)\n\
+                    3. Project config (.swissarmyhammer/statusline/config.yaml)\n\n\
+                    Examples:\n\
+                      echo '{\"model\":{\"display_name\":\"Opus\"}}' | sah statusline\n\
+                      sah statusline config > .swissarmyhammer/statusline/config.yaml",
+            },
+            vec![
+                Command::new("config")
+                    .about("Dump the full annotated builtin config to stdout"),
+            ],
         )
     }
 }
