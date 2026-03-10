@@ -194,14 +194,32 @@ impl LspDaemon {
                     .unwrap_or_default()
                     .as_millis() as u64;
 
-                // Drain stderr in the background so LSP diagnostics aren't lost
+                // Drain stderr in the background, filtering noise via config
                 if let Some(stderr) = child.stderr.take() {
                     let cmd = self.spec.command.clone();
+                    // Load stderr filter config once at daemon start
+                    let filter_config = {
+                        use swissarmyhammer_code_context::config::{
+                            load_code_context_config, CompiledCodeContextConfig,
+                        };
+                        let raw = load_code_context_config();
+                        CompiledCodeContextConfig::compile(&raw).ok()
+                    };
                     tokio::spawn(async move {
                         use tokio::io::{AsyncBufReadExt, BufReader};
                         let mut lines = BufReader::new(stderr).lines();
                         while let Ok(Some(line)) = lines.next_line().await {
-                            tracing::debug!(cmd = %cmd, "LSP stderr: {}", line);
+                            let filtered = filter_config
+                                .as_ref()
+                                .map(|c| {
+                                    swissarmyhammer_code_context::config::should_filter_stderr(
+                                        &line, c,
+                                    )
+                                })
+                                .unwrap_or(false);
+                            if !filtered {
+                                tracing::debug!(cmd = %cmd, "LSP stderr: {}", line);
+                            }
                         }
                     });
                 }

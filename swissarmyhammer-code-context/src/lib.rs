@@ -18,6 +18,7 @@
 
 pub mod blocking;
 pub mod cleanup;
+pub mod config;
 pub mod db;
 pub mod error;
 pub mod hints;
@@ -33,6 +34,12 @@ pub mod watcher;
 pub mod workspace;
 
 pub use cleanup::{startup_cleanup, CleanupStats};
+pub use config::{
+    load_code_context_config, load_code_context_config_from_paths,
+    CodeContextConfigYaml, CodeContextSettings,
+    CompiledCodeContextConfig, should_filter_stderr,
+    StderrFilterRule, BUILTIN_CONFIG_YAML as CODE_CONTEXT_BUILTIN_CONFIG_YAML,
+};
 pub use error::CodeContextError;
 pub use invalidation::{reextract_file, refresh_edges, InvalidationAction};
 pub use lsp_indexer::{
