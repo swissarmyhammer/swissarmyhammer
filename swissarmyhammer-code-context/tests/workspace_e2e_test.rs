@@ -115,7 +115,7 @@ fn test_workspace_startup_discovers_files() {
 
     // startup_cleanup was already called automatically in workspace.open()
     // Call it again to verify it handles existing files correctly
-    let stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
     // Files should be unchanged since they were already discovered in workspace.open()
@@ -132,7 +132,7 @@ fn test_workspace_startup_discovers_files() {
     );
 
     // Verify get_status returns the correct counts
-    let status = swissarmyhammer_code_context::get_status(&*ws.db()).expect("get_status failed");
+    let status = swissarmyhammer_code_context::get_status(&ws.db()).expect("get_status failed");
 
     assert_eq!(
         status.total_files, 4,
@@ -153,7 +153,7 @@ fn test_startup_cleanup_idempotent() {
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
 
     // First run: files already discovered by workspace.open()
-    let stats1 = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats1 = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("First startup_cleanup failed");
     assert_eq!(
         stats1.files_unchanged, 4,
@@ -161,7 +161,7 @@ fn test_startup_cleanup_idempotent() {
     );
 
     // Second run: all files should be unchanged
-    let stats2 = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats2 = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("Second startup_cleanup failed");
     assert_eq!(stats2.files_added, 0, "Second run should not add new files");
     assert_eq!(
@@ -190,7 +190,7 @@ fn test_startup_cleanup_detects_modifications() {
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
 
     // First run: files already discovered by workspace.open()
-    let stats1 = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats1 = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("First startup_cleanup failed");
     assert_eq!(
         stats1.files_unchanged, 4,
@@ -226,7 +226,7 @@ fn print_result(data: &HashMap<String, i32>) {
     std::fs::write(&main_rs_path, modified_content).unwrap();
 
     // Second run: should detect the modification
-    let stats2 = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats2 = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("Second startup_cleanup failed");
     assert_eq!(
         stats2.files_dirty, 1,
@@ -250,7 +250,7 @@ fn test_startup_cleanup_detects_deletions() {
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
 
     // First run: files already discovered by workspace.open()
-    let stats1 = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats1 = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("First startup_cleanup failed");
     assert_eq!(
         stats1.files_unchanged, 4,
@@ -261,7 +261,7 @@ fn test_startup_cleanup_detects_deletions() {
     std::fs::remove_file(root.join("src/utils.rs")).unwrap();
 
     // Second run: should detect the deletion
-    let stats2 = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats2 = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("Second startup_cleanup failed");
     assert_eq!(
         stats2.files_removed, 1,
@@ -273,7 +273,7 @@ fn test_startup_cleanup_detects_deletions() {
     assert_eq!(stats2.files_unchanged, 3);
 
     // Verify status reflects the deletion
-    let status = swissarmyhammer_code_context::get_status(&*ws.db()).expect("get_status failed");
+    let status = swissarmyhammer_code_context::get_status(&ws.db()).expect("get_status failed");
     assert_eq!(
         status.total_files, 3,
         "Status should report 3 files after deletion"
@@ -292,7 +292,7 @@ fn test_startup_cleanup_detects_new_files() {
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
 
     // First run: files already discovered by workspace.open()
-    let stats1 = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats1 = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("First startup_cleanup failed");
     assert_eq!(
         stats1.files_unchanged, 4,
@@ -307,7 +307,7 @@ fn test_startup_cleanup_detects_new_files() {
     std::fs::write(root.join("src/new_module.rs"), new_module).unwrap();
 
     // Second run: should detect the new file
-    let stats2 = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let stats2 = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("Second startup_cleanup failed");
     assert_eq!(
         stats2.files_added, 1,
@@ -319,7 +319,7 @@ fn test_startup_cleanup_detects_new_files() {
     assert_eq!(stats2.files_unchanged, 4);
 
     // Verify status reflects the new file
-    let status = swissarmyhammer_code_context::get_status(&*ws.db()).expect("get_status failed");
+    let status = swissarmyhammer_code_context::get_status(&ws.db()).expect("get_status failed");
     assert_eq!(
         status.total_files, 5,
         "Status should report 5 files after adding new file"
@@ -336,10 +336,10 @@ fn test_get_status_reflects_file_counts() {
     let root = project.path();
 
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
-    let _stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
-    let status = swissarmyhammer_code_context::get_status(&*ws.db()).expect("get_status failed");
+    let status = swissarmyhammer_code_context::get_status(&ws.db()).expect("get_status failed");
 
     // After startup_cleanup, status should accurately report counts
     assert_eq!(status.total_files, 4);
@@ -366,7 +366,7 @@ fn test_indexing_worker_marks_files_indexed() {
     assert!(ws.is_leader(), "Should be leader");
 
     // Populate dirty files
-    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
     println!(
         "startup_cleanup: added={}, removed={}, dirty={}, unchanged={}",
@@ -377,7 +377,7 @@ fn test_indexing_worker_marks_files_indexed() {
     );
 
     // Verify files are in DB before indexing
-    let before = swissarmyhammer_code_context::get_status(&*ws.db()).expect("get_status failed");
+    let before = swissarmyhammer_code_context::get_status(&ws.db()).expect("get_status failed");
     println!(
         "Before indexing: total={}, ts_indexed={}, lsp_indexed={}",
         before.total_files, before.ts_indexed_files, before.lsp_indexed_files
@@ -400,7 +400,7 @@ fn test_indexing_worker_marks_files_indexed() {
     thread::sleep(Duration::from_secs(2));
 
     // Check status after indexing worker runs
-    let after = swissarmyhammer_code_context::get_status(&*ws.db()).expect("get_status failed");
+    let after = swissarmyhammer_code_context::get_status(&ws.db()).expect("get_status failed");
     println!(
         "After indexing: total={}, ts_indexed={}, lsp_indexed={}",
         after.total_files, after.ts_indexed_files, after.lsp_indexed_files
@@ -438,7 +438,7 @@ fn test_ts_indexing_produces_chunks_and_leaves_lsp_unindexed() {
     // Open workspace and populate dirty files
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
     assert!(ws.is_leader(), "Should be leader");
-    let _stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
     // Spawn the indexing worker and wait for it to finish
@@ -576,7 +576,7 @@ fn test_file_change_triggers_reindexing() {
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
     assert!(ws.is_leader(), "Should be leader");
 
-    let _stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
     let db_path = root.join(".code-context").join("index.db");
@@ -613,7 +613,8 @@ fn test_file_change_triggers_reindexing() {
         let mut stmt = db
             .prepare("SELECT text FROM ts_chunks WHERE file_path LIKE '%lib.rs'")
             .unwrap();
-        let chunks: Vec<String> = stmt.query_map([], |row| row.get(0))
+        let chunks: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -680,7 +681,7 @@ mod tests {
     std::fs::write(&lib_rs_path, modified_lib).unwrap();
 
     // -- Phase 3: detect the change via startup_cleanup --
-    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup after modification failed");
     assert_eq!(
         cleanup_stats.files_dirty, 1,
@@ -742,7 +743,8 @@ mod tests {
         let mut stmt = db
             .prepare("SELECT text FROM ts_chunks WHERE file_path LIKE '%lib.rs'")
             .unwrap();
-        let chunks: Vec<String> = stmt.query_map([], |row| row.get(0))
+        let chunks: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -802,7 +804,7 @@ fn test_file_change_resets_both_index_flags() {
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
     assert!(ws.is_leader(), "Should be leader");
 
-    let _stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
     let db_path = root.join(".code-context").join("index.db");
@@ -878,7 +880,7 @@ pub fn subtract(a: i32, b: i32) -> i32 {
     std::fs::write(&utils_path, modified_utils).unwrap();
 
     // -- Phase 3: run startup_cleanup to detect the change --
-    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup after modification failed");
     assert_eq!(
         cleanup_stats.files_dirty, 1,
@@ -967,7 +969,7 @@ fn test_lsp_reindexing_after_file_change() {
     let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
     assert!(ws.is_leader(), "Should be leader");
 
-    let _stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
     let db_path = root.join(".code-context").join("index.db");
@@ -1100,7 +1102,7 @@ mod tests {
     std::fs::write(&lib_rs_abs, modified_lib).unwrap();
 
     // -- Phase 5: startup_cleanup detects hash change, resets both flags --
-    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(&*ws.db(), root)
+    let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup after modification failed");
     assert_eq!(
         cleanup_stats.files_dirty, 1,

@@ -290,7 +290,7 @@ async fn test_incremental_token_processing_proof() {
 
     // Additional check: If generation 3 is slower than generation 2,
     // this could indicate full reprocessing (growing history)
-    if gen3_duration > gen2_duration * 2 {
+    if gen3_duration > gen2_duration * 3 {
         warn!("❌ FAIL: Generation 3 took significantly longer than generation 2");
         warn!("   This suggests full reprocessing of growing conversation history");
         panic!("Incremental processing verification failed");

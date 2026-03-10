@@ -139,15 +139,15 @@ const PARSEABLE_EXTENSIONS: &[&str] = &[
     "rs", // Python
     "py", "pyi", "pyw", // TypeScript / JavaScript
     "ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", // Go
-    "go", // Java / Kotlin / Scala
+    "go",  // Java / Kotlin / Scala
     "java", "kt", "kts", "scala", "sc", // C / C++
     "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", // C#
     "cs", // Ruby
     "rb", "rake", "gemspec", // PHP
     "php", "phtml", // Swift
     "swift", // Dart
-    "dart", // Lua
-    "lua", // Shell
+    "dart",  // Lua
+    "lua",   // Shell
     "sh", "bash", "zsh", // Config (useful for code context)
     "toml", "yaml", "yml",
 ];

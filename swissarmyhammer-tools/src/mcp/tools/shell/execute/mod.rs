@@ -4228,6 +4228,7 @@ mod tests {
     }
 
     /// Run a command through the shell tool and return its command_id
+    #[allow(dead_code)]
     async fn run_command(command: &str) -> usize {
         run_command_with(&shared_tool(), command).await
     }

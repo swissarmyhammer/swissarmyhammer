@@ -352,7 +352,7 @@ mod tests {
         // F has symbol A, G calls A
         let sym_a = make_symbol("src/f.rs", "A");
         let sym_foo = make_symbol("src/g.rs", "foo");
-        write_symbols(&conn, "src/f.rs", &[sym_a.clone()]).unwrap();
+        write_symbols(&conn, "src/f.rs", std::slice::from_ref(&sym_a)).unwrap();
         write_symbols(&conn, "src/g.rs", &[sym_foo]).unwrap();
 
         let edge = make_edge("src/g.rs", "foo", "src/f.rs", "A");

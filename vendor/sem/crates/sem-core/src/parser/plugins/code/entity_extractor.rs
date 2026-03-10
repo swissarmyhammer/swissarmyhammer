@@ -298,7 +298,7 @@ fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
     node.utf8_text(source).unwrap_or("")
 }
 
-fn map_node_type<'a>(tree_sitter_type: &'a str) -> &'a str {
+fn map_node_type(tree_sitter_type: &str) -> &str {
     match tree_sitter_type {
         "function_declaration" | "function_definition" | "function_item" => "function",
         "method_declaration" | "method_definition" | "method" | "singleton_method" => "method",

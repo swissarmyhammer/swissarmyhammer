@@ -219,7 +219,7 @@ async fn task_untag_removes_tag() {
     let result = engine
         .dispatch_simple(
             "task.untag",
-            &[&format!("tag:bug"), &format!("task:{}", task_id)],
+            &["tag:bug", &format!("task:{}", task_id)],
             None,
         )
         .await

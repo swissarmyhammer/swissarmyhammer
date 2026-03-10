@@ -33,23 +33,19 @@ pub fn compute_semantic_diff(
 
             let before_entities = if let Some(ref content) = file.before_content {
                 let before_path = file.old_file_path.as_deref().unwrap_or(&file.file_path);
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     plugin.extract_entities(content, before_path)
-                })) {
-                    Ok(entities) => entities,
-                    Err(_) => Vec::new(),
-                }
+                }))
+                .unwrap_or_default()
             } else {
                 Vec::new()
             };
 
             let after_entities = if let Some(ref content) = file.after_content {
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     plugin.extract_entities(content, &file.file_path)
-                })) {
-                    Ok(entities) => entities,
-                    Err(_) => Vec::new(),
-                }
+                }))
+                .unwrap_or_default()
             } else {
                 Vec::new()
             };

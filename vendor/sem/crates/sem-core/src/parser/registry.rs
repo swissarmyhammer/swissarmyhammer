@@ -3,6 +3,7 @@ use std::path::Path;
 
 use super::plugin::SemanticParserPlugin;
 
+#[derive(Default)]
 pub struct ParserRegistry {
     plugins: Vec<Box<dyn SemanticParserPlugin>>,
     extension_map: HashMap<String, usize>, // ext → index into plugins
@@ -10,10 +11,7 @@ pub struct ParserRegistry {
 
 impl ParserRegistry {
     pub fn new() -> Self {
-        Self {
-            plugins: Vec::new(),
-            extension_map: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn register(&mut self, plugin: Box<dyn SemanticParserPlugin>) {

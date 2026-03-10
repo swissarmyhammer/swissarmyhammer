@@ -3,6 +3,10 @@ use std::collections::{HashMap, HashSet};
 use super::change::{ChangeType, SemanticChange};
 use super::entity::SemanticEntity;
 
+/// Function that computes similarity between two semantic entities, returning a
+/// score in [0.0, 1.0].
+pub type SimilarityFn<'a> = &'a dyn Fn(&SemanticEntity, &SemanticEntity) -> f64;
+
 pub struct MatchResult {
     pub changes: Vec<SemanticChange>,
 }
@@ -15,7 +19,7 @@ pub fn match_entities(
     before: &[SemanticEntity],
     after: &[SemanticEntity],
     _file_path: &str,
-    similarity_fn: Option<&dyn Fn(&SemanticEntity, &SemanticEntity) -> f64>,
+    similarity_fn: Option<SimilarityFn<'_>>,
     commit_sha: Option<&str>,
     author: Option<&str>,
 ) -> MatchResult {

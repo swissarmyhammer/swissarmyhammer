@@ -728,7 +728,7 @@ fn context_err(e: swissarmyhammer_code_context::CodeContextError) -> McpError {
 /// Returns `Ok(None)` when ready, `Ok(Some(result))` with a progress message when not.
 fn check_ts_readiness(ws: &CodeContextWorkspace) -> Result<Option<CallToolResult>, McpError> {
     let status =
-        swissarmyhammer_code_context::check_blocking_status(&*ws.db(), IndexLayer::TreeSitter)
+        swissarmyhammer_code_context::check_blocking_status(&ws.db(), IndexLayer::TreeSitter)
             .map_err(context_err)?;
     match status {
         BlockingStatus::Ready => Ok(None),
@@ -785,8 +785,8 @@ fn execute_get_symbol(
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let result = swissarmyhammer_code_context::get_symbol(&*ws.db(), query, &options)
-        .map_err(context_err)?;
+    let result =
+        swissarmyhammer_code_context::get_symbol(&ws.db(), query, &options).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -814,7 +814,7 @@ fn execute_search_symbol(
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let results = swissarmyhammer_code_context::search_symbol(&*ws.db(), query, &options)
+    let results = swissarmyhammer_code_context::search_symbol(&ws.db(), query, &options)
         .map_err(context_err)?;
     json_result(&results)
 }
@@ -836,7 +836,7 @@ fn execute_list_symbols(
         return Ok(progress);
     }
     let results =
-        swissarmyhammer_code_context::list_symbols(&*ws.db(), file_path).map_err(context_err)?;
+        swissarmyhammer_code_context::list_symbols(&ws.db(), file_path).map_err(context_err)?;
     json_result(&results)
 }
 
@@ -881,7 +881,7 @@ fn execute_grep_code(
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let result = swissarmyhammer_code_context::grep_code(&*ws.db(), pattern, &options)
+    let result = swissarmyhammer_code_context::grep_code(&ws.db(), pattern, &options)
         .map_err(context_err)?;
     json_result(&result)
 }
@@ -948,7 +948,7 @@ async fn execute_search_code(
         return Ok(progress);
     }
     let result =
-        swissarmyhammer_code_context::search_code(&*ws.db(), embed_result.embedding(), &options)
+        swissarmyhammer_code_context::search_code(&ws.db(), embed_result.embedding(), &options)
             .map_err(context_err)?;
     json_result(&result)
 }
@@ -993,7 +993,7 @@ fn execute_find_duplicates(
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let result = swissarmyhammer_code_context::find_duplicates(&*ws.db(), file_path, &options)
+    let result = swissarmyhammer_code_context::find_duplicates(&ws.db(), file_path, &options)
         .map_err(context_err)?;
     json_result(&result)
 }
@@ -1132,7 +1132,7 @@ fn execute_get_callgraph(
         return Ok(progress);
     }
     let result =
-        swissarmyhammer_code_context::get_callgraph(&*ws.db(), &options).map_err(context_err)?;
+        swissarmyhammer_code_context::get_callgraph(&ws.db(), &options).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1170,7 +1170,7 @@ fn execute_get_blastradius(
         return Ok(progress);
     }
     let result =
-        swissarmyhammer_code_context::get_blastradius(&*ws.db(), &options).map_err(context_err)?;
+        swissarmyhammer_code_context::get_blastradius(&ws.db(), &options).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1359,7 +1359,7 @@ pub(crate) async fn index_discovered_files_async(
 
         indexed += 1;
 
-        if indexed % 100 == 0 {
+        if indexed.is_multiple_of(100) {
             tracing::info!(
                 "code-context: indexed {}/{} files ({} chunks so far)",
                 indexed,
@@ -1414,7 +1414,7 @@ fn execute_get_status(context: &ToolContext) -> Result<CallToolResult, McpError>
         }
     }
 
-    let status = swissarmyhammer_code_context::get_status(&*ws.db()).map_err(context_err)?;
+    let status = swissarmyhammer_code_context::get_status(&ws.db()).map_err(context_err)?;
 
     // Merge LSP daemon status into the response
     let mut result = serde_json::to_value(&status).unwrap_or_default();
@@ -1454,7 +1454,7 @@ fn execute_build_status(
 
     let ws = open_workspace(context)?;
     let result =
-        swissarmyhammer_code_context::build_status(&*ws.db(), layer).map_err(context_err)?;
+        swissarmyhammer_code_context::build_status(&ws.db(), layer).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1463,7 +1463,7 @@ fn execute_build_status(
 /// Wipes all index data from all tables and returns stats about what was cleared.
 fn execute_clear_status(context: &ToolContext) -> Result<CallToolResult, McpError> {
     let ws = open_workspace(context)?;
-    let result = swissarmyhammer_code_context::clear_status(&*ws.db()).map_err(context_err)?;
+    let result = swissarmyhammer_code_context::clear_status(&ws.db()).map_err(context_err)?;
     json_result(&result)
 }
 

@@ -218,7 +218,7 @@ fn create_test_project() -> tempfile::TempDir {
 }
 
 /// Populate the database with chunks and call edges for all source files.
-fn populate_index(conn: &Connection, workspace_root: &Path) {
+fn populate_index(conn: &Connection, _workspace_root: &Path) {
     // Note: startup_cleanup is now called automatically in CodeContextWorkspace::open(),
     // so we just verify that files are in the database. The workspace.open() call
     // already populated indexed_files with the discovered source files.
@@ -272,9 +272,9 @@ fn test_workspace_open_and_leader() {
 fn test_get_status_after_population() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
 
-    let status = get_status(&*ws.db()).unwrap();
+    let status = get_status(&ws.db()).unwrap();
 
     assert!(
         status.total_files >= 3,
@@ -307,7 +307,7 @@ fn test_get_status_after_population() {
 fn test_get_symbol_operations() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
     let opts = GetSymbolOptions::default();
@@ -361,7 +361,7 @@ fn test_get_symbol_operations() {
 fn test_get_symbol_fuzzy_tiers() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
     let opts = GetSymbolOptions::default();
@@ -448,7 +448,7 @@ fn test_get_symbol_fuzzy_tiers() {
 fn test_search_symbol() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
 
@@ -471,7 +471,7 @@ fn test_search_symbol() {
 fn test_list_symbols() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
 
@@ -517,7 +517,7 @@ fn test_list_symbols() {
 fn test_grep_code() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
 
@@ -567,7 +567,7 @@ fn test_grep_code() {
 fn test_get_callgraph() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
 
@@ -637,7 +637,7 @@ fn test_get_callgraph() {
 fn test_get_blastradius() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
 
@@ -685,7 +685,7 @@ fn test_get_blastradius() {
 fn test_build_status_and_blocking() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
 
@@ -724,7 +724,7 @@ fn test_build_status_and_blocking() {
 fn test_clear_status() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
 
@@ -776,7 +776,7 @@ fn test_hints_for_all_operations() {
 fn test_blocking_ready_after_population() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(&*ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
     let conn = &*conn;
 
@@ -956,7 +956,7 @@ fn test_symbol_operations_on_real_repo() {
                     fs::create_dir_all(&dest)?;
                 }
                 copy_files_recursive(&path, &dest)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 fs::copy(&path, &dest)?;
             }
         }
@@ -998,7 +998,7 @@ fn test_symbol_operations_on_real_repo() {
                     format!("{}/{}", prefix, file_name.to_string_lossy())
                 };
                 count += process_dir(&path, &new_prefix, conn)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let rel_path = if prefix.is_empty() {
                     format!("src/{}", file_name.to_string_lossy())
                 } else {
@@ -1080,7 +1080,7 @@ fn test_symbol_operations_on_real_repo() {
     // Test 4: list_symbols on any file should return symbols
     if let Ok(files) = list_symbols(conn, "src/lib.rs") {
         if !files.is_empty() {
-            assert!(files.len() >= 1, "Expected >= 1 symbol in lib.rs");
+            assert!(!files.is_empty(), "Expected >= 1 symbol in lib.rs");
         }
     }
 
@@ -1146,7 +1146,7 @@ fn test_grep_code_on_real_repo() {
                     fs::create_dir_all(&dest)?;
                 }
                 copy_files_recursive(&path, &dest)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 fs::copy(&path, &dest)?;
             }
         }
@@ -1181,7 +1181,7 @@ fn test_grep_code_on_real_repo() {
                     format!("{}/{}", prefix, file_name.to_string_lossy())
                 };
                 process_dir(&path, &new_prefix, conn)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let rel_path = if prefix.is_empty() {
                     format!("src/{}", file_name.to_string_lossy())
                 } else {
@@ -1344,7 +1344,7 @@ fn test_callgraph_and_blastradius_on_real_repo() {
                     fs::create_dir_all(&dest)?;
                 }
                 copy_files_recursive(&path, &dest)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 fs::copy(&path, &dest)?;
             }
         }
@@ -1379,7 +1379,7 @@ fn test_callgraph_and_blastradius_on_real_repo() {
                     format!("{}/{}", prefix, file_name.to_string_lossy())
                 };
                 process_dir(&path, &new_prefix, conn)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let rel_path = if prefix.is_empty() {
                     format!("src/{}", file_name.to_string_lossy())
                 } else {
@@ -2227,7 +2227,6 @@ fn test_ts_call_edges_known_graph() {
 #[ignore]
 fn test_lsp_call_edges_known_graph() {
     use std::process::{Command, Stdio};
-    use swissarmyhammer_code_context::db;
     use swissarmyhammer_code_context::{detect_rust_analyzer, LspJsonRpcClient};
 
     // Guard: skip if rust-analyzer is not installed.

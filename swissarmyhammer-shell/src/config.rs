@@ -67,7 +67,7 @@ impl Default for ShellSettings {
 ///
 /// Contains permit patterns (checked first, short-circuit allow),
 /// deny patterns (checked second, block if matched), and settings.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ShellSecurityConfig {
     /// Patterns that explicitly allow commands. Evaluated before deny patterns.
     /// A permit match short-circuits — the command is allowed even if a deny
@@ -82,16 +82,6 @@ pub struct ShellSecurityConfig {
     /// Validation settings (command length limits, audit logging, etc.).
     #[serde(default)]
     pub settings: ShellSettings,
-}
-
-impl Default for ShellSecurityConfig {
-    fn default() -> Self {
-        Self {
-            permit: Vec::new(),
-            deny: Vec::new(),
-            settings: ShellSettings::default(),
-        }
-    }
 }
 
 /// The builtin config YAML, embedded at compile time.

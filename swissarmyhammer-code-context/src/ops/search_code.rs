@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_roundtrip() {
-        let original = vec![1.0f32, -2.5, 3.14, 0.0];
+        let original = vec![1.0f32, -2.5, std::f32::consts::PI, 0.0];
         let blob = serialize_embedding(&original);
         let recovered = deserialize_embedding(&blob);
         assert_eq!(original, recovered);

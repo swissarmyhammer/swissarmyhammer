@@ -311,7 +311,7 @@ impl ModelResolver {
 
 impl Default for ModelResolver {
     fn default() -> Self {
-        Self::new()
+        Self
     }
 }
 
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn test_model_resolver_creation() {
         let _resolver = ModelResolver::new();
-        let _resolver2 = ModelResolver::default();
+        let _resolver2 = ModelResolver;
     }
 
     #[test]

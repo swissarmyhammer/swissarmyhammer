@@ -123,12 +123,12 @@ impl EntityGraph {
                                 *id != &entity.id
                                     && entity_map
                                         .get(*id)
-                                        .map_or(false, |e| e.file_path == entity.file_path)
+                                        .is_some_and(|e| e.file_path == entity.file_path)
                             })
                             .or_else(|| target_ids.iter().find(|id| *id != &entity.id));
 
                         if let Some(target_id) = target {
-                            let ref_type = infer_ref_type(&entity.content, &ref_name);
+                            let ref_type = infer_ref_type(&entity.content, ref_name);
                             entity_edges.push((entity.id.clone(), target_id.clone(), ref_type));
                         }
                     }
@@ -355,11 +355,11 @@ impl EntityGraph {
             .values()
             .filter(|e| !affected_files.contains(&e.file_path))
             .filter(|e| {
-                self.dependencies.get(&e.id).map_or(false, |deps| {
+                self.dependencies.get(&e.id).is_some_and(|deps| {
                     deps.iter().any(|dep_id| {
                         self.entities
                             .get(dep_id)
-                            .map_or(false, |dep| changed_entity_names.contains(&dep.name))
+                            .is_some_and(|dep| changed_entity_names.contains(&dep.name))
                     })
                 })
             })
@@ -468,12 +468,12 @@ impl EntityGraph {
                             && self
                                 .entities
                                 .get(*id)
-                                .map_or(false, |e| e.file_path == entity.file_path)
+                                .is_some_and(|e| e.file_path == entity.file_path)
                     })
                     .or_else(|| target_ids.iter().find(|id| *id != &entity.id));
 
                 if let Some(target_id) = target {
-                    let ref_type = infer_ref_type(&entity.content, &ref_name);
+                    let ref_type = infer_ref_type(&entity.content, ref_name);
                     self.edges.push(EntityRef {
                         from_entity: entity.id.clone(),
                         to_entity: target_id.clone(),

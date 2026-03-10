@@ -106,7 +106,7 @@ mod tests {
             Box::leak(Box::new(AssignTask::new("", ""))) as &dyn Operation,
             Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
             Box::leak(Box::new(AddActor::new("", ""))) as &dyn Operation,
-            Box::leak(Box::new(ListActors::default())) as &dyn Operation,
+            Box::leak(Box::new(ListActors)) as &dyn Operation,
             Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
         ]
     }

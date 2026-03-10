@@ -540,6 +540,7 @@ mod tests {
     }
 
     /// Insert an LSP symbol.
+    #[allow(clippy::too_many_arguments)]
     fn insert_lsp_symbol(
         conn: &Connection,
         id: &str,
