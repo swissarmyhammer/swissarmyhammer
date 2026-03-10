@@ -330,9 +330,10 @@ impl McpServer {
             shared_client
         });
 
-        // Open workspace and start TS indexing in parallel with LSP startup.
+        // Open workspace and start TS indexing. The workspace holds the
+        // LeaderGuard (flock) — it must stay alive for the server's lifetime.
+        // The task runs indexing then waits forever to keep the guard held.
         let ts_root = workspace_root.clone();
-        // TS indexing is fire-and-forget — runs independently of LSP.
         tokio::spawn(async move {
             use super::tools::code_context::index_discovered_files_async;
             use swissarmyhammer_code_context::CodeContextWorkspace;
@@ -364,6 +365,10 @@ impl McpServer {
                 "code-context: tree-sitter indexing complete for {}",
                 ts_root.display()
             );
+
+            // Keep this task alive so the workspace (and its LeaderGuard) isn't dropped.
+            // The guard holds the flock — dropping it releases leadership.
+            std::future::pending::<()>().await;
         });
 
         // Start file watcher immediately — it marks files dirty for whichever

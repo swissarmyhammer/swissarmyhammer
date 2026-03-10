@@ -39,6 +39,7 @@ pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
 > = std::sync::OnceLock::new();
 
 
+
 // ---------------------------------------------------------------------------
 // Operation structs with Operation trait impls
 // ---------------------------------------------------------------------------

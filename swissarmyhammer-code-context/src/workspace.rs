@@ -156,6 +156,7 @@ impl CodeContextWorkspace {
     pub fn context_dir(&self) -> &Path {
         &self.context_dir
     }
+
 }
 
 #[cfg(test)]
