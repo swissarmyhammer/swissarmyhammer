@@ -404,3 +404,140 @@ fn test_indexing_worker_marks_files_indexed() {
     );
     assert_eq!(after.ts_indexed_percent, 100.0, "All files should be 100% indexed");
 }
+
+// ---------------------------------------------------------------------------
+// Test 8: TS indexing produces real chunks and leaves LSP unindexed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_ts_indexing_produces_chunks_and_leaves_lsp_unindexed() {
+    use std::thread;
+    use std::time::Duration;
+
+    let project = create_test_project();
+    let root = project.path();
+
+    // Open workspace and populate dirty files
+    let ws = CodeContextWorkspace::open(root).expect("Failed to open workspace");
+    assert!(ws.is_leader(), "Should be leader");
+    let _stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
+        .expect("startup_cleanup failed");
+
+    // Spawn the indexing worker and wait for it to finish
+    let db_path = root.join(".code-context").join("index.db");
+    swissarmyhammer_code_context::indexing::spawn_indexing_worker(
+        root.to_path_buf(),
+        db_path,
+        swissarmyhammer_code_context::indexing::IndexingConfig::default(),
+    );
+    thread::sleep(Duration::from_secs(2));
+
+    let db = ws.db();
+
+    // ---------------------------------------------------------------
+    // 1. Every file should have ts_indexed=1 and lsp_indexed=0
+    // ---------------------------------------------------------------
+    let mut stmt = db
+        .prepare("SELECT file_path, ts_indexed, lsp_indexed FROM indexed_files")
+        .expect("Failed to prepare indexed_files query");
+    let rows: Vec<(String, i64, i64)> = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .expect("query_map failed")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("row collection failed");
+
+    assert!(!rows.is_empty(), "indexed_files should not be empty");
+    for (path, ts, lsp) in &rows {
+        assert_eq!(
+            *ts, 1,
+            "ts_indexed should be 1 for {}, got {}",
+            path, ts
+        );
+        assert_eq!(
+            *lsp, 0,
+            "lsp_indexed should still be 0 for {}, got {}",
+            path, lsp
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // 2. ts_chunks table should have rows
+    // ---------------------------------------------------------------
+    let total_chunks: i64 = db
+        .query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))
+        .expect("Failed to count ts_chunks");
+    assert!(
+        total_chunks > 0,
+        "ts_chunks should contain rows after indexing, got 0"
+    );
+    println!("Total ts_chunks rows: {}", total_chunks);
+
+    // ---------------------------------------------------------------
+    // 3. Chunks should span multiple distinct files (at least the .rs files)
+    // ---------------------------------------------------------------
+    let distinct_files: i64 = db
+        .query_row(
+            "SELECT COUNT(DISTINCT file_path) FROM ts_chunks",
+            [],
+            |r| r.get(0),
+        )
+        .expect("Failed to count distinct file_path in ts_chunks");
+    assert!(
+        distinct_files >= 3,
+        "ts_chunks should cover at least 3 distinct .rs files, got {}",
+        distinct_files
+    );
+    println!("Distinct files with chunks: {}", distinct_files);
+
+    // ---------------------------------------------------------------
+    // 4. Chunks from lib.rs should contain real parsed content
+    //    (e.g. the struct name "Config" or function "validate_config")
+    // ---------------------------------------------------------------
+    let mut stmt = db
+        .prepare("SELECT text FROM ts_chunks WHERE file_path LIKE '%lib.rs'")
+        .expect("Failed to prepare lib.rs chunks query");
+    let lib_texts: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .expect("query_map failed")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("row collection failed");
+
+    assert!(
+        !lib_texts.is_empty(),
+        "Should have ts_chunks for lib.rs"
+    );
+
+    let all_lib_text = lib_texts.join("\n");
+    let has_config = all_lib_text.contains("Config");
+    let has_validate = all_lib_text.contains("validate_config");
+    assert!(
+        has_config || has_validate,
+        "lib.rs chunks should contain 'Config' or 'validate_config', but got:\n{}",
+        all_lib_text
+    );
+
+    // ---------------------------------------------------------------
+    // 5. Every chunk row should have valid byte/line metadata
+    // ---------------------------------------------------------------
+    let bad_chunks: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM ts_chunks
+             WHERE start_byte IS NULL
+                OR end_byte IS NULL
+                OR start_line IS NULL
+                OR end_line IS NULL
+                OR text IS NULL
+                OR end_byte < start_byte
+                OR end_line < start_line",
+            [],
+            |r| r.get(0),
+        )
+        .expect("Failed to query for bad chunks");
+    assert_eq!(
+        bad_chunks, 0,
+        "All chunks should have valid non-null metadata with end >= start, found {} bad rows",
+        bad_chunks
+    );
+}
