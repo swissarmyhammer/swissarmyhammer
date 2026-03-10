@@ -38,6 +38,7 @@ pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
     std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>
 > = std::sync::OnceLock::new();
 
+
 // ---------------------------------------------------------------------------
 // Operation structs with Operation trait impls
 // ---------------------------------------------------------------------------
