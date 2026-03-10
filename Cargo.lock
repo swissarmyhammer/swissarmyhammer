@@ -8394,6 +8394,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "swissarmyhammer-code-context",
  "swissarmyhammer-project-detection",
  "thiserror 1.0.69",
  "tokio",

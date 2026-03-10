@@ -17,6 +17,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+use swissarmyhammer_code_context::LspJsonRpcClient;
+
 use crate::error::LspError;
 use crate::types::{LspDaemonState, OwnedLspServerSpec};
 
@@ -48,7 +50,16 @@ pub struct LspDaemon {
     /// Workspace root URI passed to the LSP server.
     workspace_root: PathBuf,
     /// Current child process handle (if running).
+    ///
+    /// After a successful handshake, stdin and stdout are taken from this handle
+    /// and given to `client`. The `Child` is retained for `try_wait()` health
+    /// checks and `kill()` on shutdown.
     child: Option<Child>,
+    /// JSON-RPC client created after a successful initialize handshake.
+    ///
+    /// Owns the child process's stdin/stdout pipes. Dropped and recreated on
+    /// daemon restart.
+    client: Option<LspJsonRpcClient>,
     /// Consecutive failure count for backoff calculation.
     consecutive_failures: u32,
     /// Observable state — subscribers get notified on every transition.
@@ -74,6 +85,7 @@ impl LspDaemon {
             spec,
             workspace_root,
             child: None,
+            client: None,
             consecutive_failures: 0,
             state_tx,
             state_rx,
@@ -93,6 +105,15 @@ impl LspDaemon {
     /// Return the command name for this daemon's server.
     pub fn command(&self) -> &str {
         &self.spec.command
+    }
+
+    /// Return a mutable reference to the JSON-RPC client, if the server is running.
+    ///
+    /// Returns `None` if the daemon has not been started, failed to start, or
+    /// has been shut down. The client is created after a successful `initialize`
+    /// handshake and dropped on shutdown or restart.
+    pub fn client(&mut self) -> Option<&mut LspJsonRpcClient> {
+        self.client.as_mut()
     }
 
     // -- lifecycle --------------------------------------------------------
@@ -164,6 +185,30 @@ impl LspDaemon {
                     });
                 }
 
+                // Take stdin/stdout from the child and create the JSON-RPC client.
+                // The child handle is retained for health checks and shutdown.
+                // Convert tokio async pipes to std blocking pipes via OwnedFd.
+                let client = match (child.stdin.take(), child.stdout.take()) {
+                    (Some(tokio_stdin), Some(tokio_stdout)) => {
+                        match (tokio_stdin.into_owned_fd(), tokio_stdout.into_owned_fd()) {
+                            (Ok(stdin_fd), Ok(stdout_fd)) => {
+                                let std_stdin: std::process::ChildStdin = stdin_fd.into();
+                                let std_stdout: std::process::ChildStdout = stdout_fd.into();
+                                Some(LspJsonRpcClient::new(std_stdin, std_stdout))
+                            }
+                            (Err(e), _) | (_, Err(e)) => {
+                                warn!(cmd = &self.spec.command, %e, "Failed to convert pipes to std");
+                                None
+                            }
+                        }
+                    }
+                    _ => {
+                        warn!(cmd = &self.spec.command, "stdin/stdout unavailable after handshake");
+                        None
+                    }
+                };
+
+                self.client = client;
                 self.child = Some(child);
                 self.consecutive_failures = 0;
                 self.set_state(LspDaemonState::Running {
@@ -205,6 +250,7 @@ impl LspDaemon {
             Ok(Some(status)) => {
                 let reason = format!("process exited: {status}");
                 warn!(cmd = self.spec.command, %status, "LSP server exited unexpectedly");
+                self.client = None;
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -213,6 +259,7 @@ impl LspDaemon {
             Err(e) => {
                 let reason = format!("try_wait error: {e}");
                 warn!(cmd = self.spec.command, %e, "Error checking LSP server health");
+                self.client = None;
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -257,10 +304,14 @@ impl LspDaemon {
 
     /// Gracefully shut down the LSP server.
     ///
-    /// Sends the `shutdown` request, waits for the response, sends the `exit`
-    /// notification. If the process does not exit within [`SHUTDOWN_GRACE_SECS`],
-    /// sends SIGKILL.
+    /// Drops the JSON-RPC client (closing stdin/stdout pipes), then waits for
+    /// the child process to exit. If it does not exit within
+    /// [`SHUTDOWN_GRACE_SECS`], the process is killed on drop.
     pub async fn shutdown(&mut self) {
+        // Drop the client first — this closes the stdin/stdout pipes,
+        // which signals the LSP server to exit.
+        self.client = None;
+
         let child = match self.child.take() {
             Some(c) => c,
             None => {

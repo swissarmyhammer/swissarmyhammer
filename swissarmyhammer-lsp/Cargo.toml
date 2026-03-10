@@ -9,6 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
 swissarmyhammer-project-detection = { path = "../swissarmyhammer-project-detection" }
 lsp-types = { workspace = true }
 tokio = { workspace = true }

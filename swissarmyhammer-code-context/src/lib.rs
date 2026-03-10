@@ -76,4 +76,4 @@ pub use workspace::{CodeContextWorkspace, WorkspaceMode};
 pub use lsp_server::{
     detect_rust_analyzer, find_executable, start_lsp_server, LspServerConfig, LspServerHandle,
 };
-pub use lsp_communication::{LspJsonRpcClient, LspCollectionResult, collect_and_persist_symbols};
+pub use lsp_communication::{LspJsonRpcClient, LspCollectionResult, collect_and_persist_symbols, parse_document_symbols};

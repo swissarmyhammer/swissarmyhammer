@@ -5,7 +5,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::Child;
+use std::process::{ChildStdin, ChildStdout};
 use serde_json::{json, Value};
 use tracing::{debug, warn};
 use rusqlite::Connection;
@@ -96,23 +96,34 @@ pub fn parse_document_symbols(response: &Value) -> Result<Vec<DocumentSymbol>, C
 }
 
 /// JSON-RPC request/response handler for LSP communication.
+///
+/// Communicates with an LSP server process over stdin/stdout pipes using
+/// the JSON-RPC 2.0 protocol with Content-Length framing.
 pub struct LspJsonRpcClient {
-    /// Child process handle
-    process: Child,
-    /// Current request ID (incremented for each request)
+    /// Writable pipe to the LSP server's stdin.
+    stdin: ChildStdin,
+    /// Buffered reader over the LSP server's stdout.
+    reader: BufReader<ChildStdout>,
+    /// Current request ID (incremented for each request).
     request_id: u32,
 }
 
 impl LspJsonRpcClient {
-    /// Create a new JSON-RPC client from an already-spawned LSP process.
+    /// Create a new JSON-RPC client from an LSP process's stdin and stdout pipes.
+    ///
+    /// The caller retains ownership of the `Child` handle for lifecycle management
+    /// (health checks via `try_wait()`, shutdown via `kill()`). This client only
+    /// needs the I/O pipes to send requests and read responses.
     ///
     /// # Arguments
-    /// * `process` - The spawned child process with stdin/stdout connected
-    pub fn new(process: Child) -> Result<Self, CodeContextError> {
-        Ok(Self {
-            process,
+    /// * `stdin` - The child process's stdin pipe (obtained via `child.stdin.take()`)
+    /// * `stdout` - The child process's stdout pipe (obtained via `child.stdout.take()`)
+    pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
+        Self {
+            stdin,
+            reader: BufReader::new(stdout),
             request_id: 1,
-        })
+        }
     }
 
     /// Send a JSON-RPC request and read the response.
@@ -135,24 +146,16 @@ impl LspJsonRpcClient {
         let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
 
         // Write request
-        {
-            let stdin = self.process.stdin.as_mut()
-                .ok_or_else(|| CodeContextError::LspError("stdin unavailable".into()))?;
-            stdin.write_all(msg.as_bytes())
-                .map_err(|e| CodeContextError::LspError(format!("write failed: {}", e)))?;
-            stdin.flush()
-                .map_err(|e| CodeContextError::LspError(format!("flush failed: {}", e)))?;
-        }
+        self.stdin.write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write failed: {}", e)))?;
+        self.stdin.flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush failed: {}", e)))?;
 
         debug!("Sent LSP request: {} (id={})", method, expected_id);
 
         // Read response — loop to skip notifications (no "id" field)
-        let stdout = self.process.stdout.as_mut()
-            .ok_or_else(|| CodeContextError::LspError("stdout unavailable".into()))?;
-        let mut reader = BufReader::new(stdout);
-
         loop {
-            let response = read_jsonrpc_response(&mut reader)?;
+            let response = read_jsonrpc_response(&mut self.reader)?;
 
             // Notifications have no "id" field — skip them
             if response.get("id").is_none() {
@@ -300,14 +303,77 @@ impl LspJsonRpcClient {
         }).to_string();
         let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
 
-        if let Some(stdin) = self.process.stdin.as_mut() {
-            stdin.write_all(msg.as_bytes())
-                .map_err(|e| CodeContextError::LspError(format!("write initialized failed: {}", e)))?;
-            stdin.flush()
-                .map_err(|e| CodeContextError::LspError(format!("flush initialized failed: {}", e)))?;
-        }
+        self.stdin.write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write initialized failed: {}", e)))?;
+        self.stdin.flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush initialized failed: {}", e)))?;
 
         debug!("LSP server initialized");
+        Ok(())
+    }
+
+    /// Send a `textDocument/didOpen` notification to the LSP server.
+    ///
+    /// This informs the server that a document has been opened by the client,
+    /// which is required before the server will respond to requests for that document.
+    ///
+    /// # Arguments
+    /// * `file_path` - Absolute path to the file
+    /// * `language_id` - Language identifier (e.g., "rust", "python")
+    /// * `text` - Full text content of the file
+    pub fn send_did_open(
+        &mut self,
+        file_path: &Path,
+        language_id: &str,
+        text: &str,
+    ) -> Result<(), CodeContextError> {
+        let uri = format!("file://{}", file_path.to_string_lossy());
+
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text
+                }
+            }
+        });
+
+        let json_str = notification.to_string();
+        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
+
+        self.stdin.write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write didOpen failed: {}", e)))?;
+        self.stdin.flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush didOpen failed: {}", e)))?;
+
+        debug!("Sent textDocument/didOpen for {}", file_path.display());
+        Ok(())
+    }
+
+    /// Send the LSP `shutdown` request followed by `exit` notification.
+    ///
+    /// This cleanly terminates the LSP server. The caller is responsible for
+    /// waiting on the `Child` process handle after calling this method.
+    pub fn shutdown(mut self) -> Result<(), CodeContextError> {
+        // Send shutdown request (expects a response)
+        let _response = self.send_request("shutdown", json!(null))?;
+
+        // Send exit notification (no response expected)
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "exit"
+        });
+        let json_str = notification.to_string();
+        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
+
+        let _ = self.stdin.write_all(msg.as_bytes());
+        let _ = self.stdin.flush();
+
+        debug!("LSP server shut down");
         Ok(())
     }
 

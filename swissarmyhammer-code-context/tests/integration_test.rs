@@ -1841,3 +1841,183 @@ fn test_end_to_end_real_project_validation() {
 
     println!("\n✅ End-to-end validation PASSED: All 6 operations work on real project data");
 }
+
+// ---------------------------------------------------------------------------
+// Real LSP integration test (requires rust-analyzer installed)
+// ---------------------------------------------------------------------------
+
+/// End-to-end test that spawns a real rust-analyzer process, sends LSP
+/// requests for document symbols, and verifies that symbols are correctly
+/// parsed and persisted to the database.
+///
+/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Run with: `cargo test -p swissarmyhammer-code-context -- test_real_lsp_document_symbols --ignored --nocapture`
+#[test]
+#[ignore]
+fn test_real_lsp_document_symbols() {
+    use std::process::{Command, Stdio};
+    use swissarmyhammer_code_context::{LspJsonRpcClient, detect_rust_analyzer};
+    use swissarmyhammer_code_context::db;
+
+    // -- Guard: skip if rust-analyzer is not installed -----------------------
+    if detect_rust_analyzer().is_none() {
+        println!("SKIPPED: rust-analyzer not found in PATH");
+        return;
+    }
+
+    // -- Step 1: Create a temp Rust project with known source ----------------
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Cargo.toml
+    let cargo_toml = r#"[package]
+name = "lsp-test-fixture"
+version = "0.1.0"
+edition = "2021"
+"#;
+    fs::write(root.join("Cargo.toml"), cargo_toml).unwrap();
+
+    // src/lib.rs with a struct and functions that rust-analyzer can parse
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let lib_rs_content = r#"/// A simple configuration holder.
+pub struct Config {
+    pub name: String,
+    pub port: u16,
+}
+
+impl Config {
+    /// Create a new Config with defaults.
+    pub fn new(name: &str, port: u16) -> Self {
+        Config {
+            name: name.to_string(),
+            port,
+        }
+    }
+
+    /// Return the display name.
+    pub fn display_name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// Top-level helper function.
+pub fn greet(config: &Config) -> String {
+    format!("Hello from {} on port {}", config.display_name(), config.port)
+}
+"#;
+    let lib_rs_path = src_dir.join("lib.rs");
+    fs::write(&lib_rs_path, lib_rs_content).unwrap();
+
+    println!("Created test project at {}", root.display());
+
+    // -- Step 2: Spawn rust-analyzer ----------------------------------------
+    let mut child = Command::new("rust-analyzer")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rust-analyzer");
+
+    let stdin = child.stdin.take().expect("Failed to take stdin");
+    let stdout = child.stdout.take().expect("Failed to take stdout");
+
+    let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+    // -- Step 3 & 4: Send initialize + initialized --------------------------
+    client.initialize(root)
+        .expect("LSP initialize failed");
+    println!("LSP server initialized");
+
+    // -- Step 5: Open the document via textDocument/didOpen ------------------
+    client.send_did_open(&lib_rs_path, "rust", lib_rs_content)
+        .expect("didOpen failed");
+    println!("Sent textDocument/didOpen for src/lib.rs");
+
+    // Give rust-analyzer a moment to process the file. It needs to parse
+    // the project before it can respond to documentSymbol requests.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    // -- Step 6: Send textDocument/documentSymbol ---------------------------
+    let result = client.collect_file_symbols(&lib_rs_path)
+        .expect("collect_file_symbols failed");
+
+    println!("documentSymbol result: {} symbols, error: {:?}",
+        result.symbol_count, result.error);
+
+    assert!(result.error.is_none(),
+        "documentSymbol should not error: {:?}", result.error);
+    assert!(result.symbol_count > 0,
+        "Should have found at least 1 symbol, got 0");
+
+    // -- Step 7: Verify expected symbol names are present --------------------
+    // Re-send documentSymbol to also get the parsed symbols for name verification.
+    // Use the lower-level send_request path via collect_and_persist_file_symbols
+    // which will also do step 8.
+
+    // Set up an in-memory database for persistence
+    let conn = Connection::open_in_memory().unwrap();
+    db::configure_connection(&conn).unwrap();
+    db::create_schema(&conn).unwrap();
+
+    // Insert the file row so foreign key constraints are satisfied
+    conn.execute(
+        "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+         VALUES ('src/lib.rs', X'AABBCCDD', ?1, strftime('%s','now'))",
+        [lib_rs_content.len() as i64],
+    ).unwrap();
+
+    // -- Step 8: Persist symbols using collect_and_persist_file_symbols ------
+    let persist_result = client.collect_and_persist_file_symbols(
+        &conn,
+        &lib_rs_path,
+        "src/lib.rs",
+    ).expect("collect_and_persist_file_symbols failed");
+
+    println!("Persisted {} symbols for src/lib.rs", persist_result.symbol_count);
+
+    assert!(persist_result.error.is_none(),
+        "persist should not error: {:?}", persist_result.error);
+    assert!(persist_result.symbol_count >= 4,
+        "Expected at least 4 symbols (Config, new, display_name, greet), got {}",
+        persist_result.symbol_count);
+
+    // Verify expected symbol names in the database
+    let symbol_names: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM lsp_symbols WHERE file_path = 'src/lib.rs' ORDER BY name"
+        ).unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    println!("Symbol names in DB: {:?}", symbol_names);
+
+    assert!(symbol_names.contains(&"Config".to_string()),
+        "Should contain 'Config' struct, got: {:?}", symbol_names);
+    assert!(symbol_names.contains(&"new".to_string()),
+        "Should contain 'new' method, got: {:?}", symbol_names);
+    assert!(symbol_names.contains(&"display_name".to_string()),
+        "Should contain 'display_name' method, got: {:?}", symbol_names);
+    assert!(symbol_names.contains(&"greet".to_string()),
+        "Should contain 'greet' function, got: {:?}", symbol_names);
+
+    // -- Step 9: Verify lsp_indexed = 1 for the file ------------------------
+    let lsp_indexed: i64 = conn.query_row(
+        "SELECT lsp_indexed FROM indexed_files WHERE file_path = 'src/lib.rs'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+
+    assert_eq!(lsp_indexed, 1,
+        "lsp_indexed should be 1 after persist, got {}", lsp_indexed);
+    println!("lsp_indexed = 1 confirmed for src/lib.rs");
+
+    // -- Cleanup: shut down rust-analyzer -----------------------------------
+    client.shutdown().expect("LSP shutdown failed");
+    let _ = child.wait();
+
+    println!("\nReal LSP integration test PASSED");
+}
