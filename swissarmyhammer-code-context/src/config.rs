@@ -51,7 +51,7 @@ impl Default for CodeContextSettings {
 ///
 /// Contains stderr filter patterns and settings. Multiple config files
 /// are merged with additive filter lists and overriding settings.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct CodeContextConfigYaml {
     /// Patterns that suppress matching LSP stderr lines from debug logs.
     #[serde(default)]
@@ -60,15 +60,6 @@ pub struct CodeContextConfigYaml {
     /// Behavior settings (log level, etc.).
     #[serde(default)]
     pub settings: CodeContextSettings,
-}
-
-impl Default for CodeContextConfigYaml {
-    fn default() -> Self {
-        Self {
-            stderr_filters: Vec::new(),
-            settings: CodeContextSettings::default(),
-        }
-    }
 }
 
 /// The builtin config YAML, embedded at compile time.

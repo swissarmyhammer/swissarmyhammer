@@ -195,7 +195,7 @@ fn parse_and_extract_chunks(file_path: &Path) -> Result<Vec<(usize, String)>, Co
 
         // If adding this line would exceed chunk size, start a new chunk
         if start_byte > 0
-            && chunks.last().map_or(false, |(_, chunk): &(usize, String)| {
+            && chunks.last().is_some_and(|(_, chunk): &(usize, String)| {
                 chunk.len() + line_with_newline.len() > CHUNK_SIZE
             })
         {

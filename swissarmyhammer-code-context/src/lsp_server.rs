@@ -179,8 +179,7 @@ fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), Cod
 
                     // Check if process is still running
                     match child.try_wait() {
-                        Ok(Some(_)) => Err(io::Error::new(
-                            io::ErrorKind::Other,
+                        Ok(Some(_)) => Err(io::Error::other(
                             "LSP server process exited immediately",
                         ))?,
                         Ok(None) => {
@@ -222,8 +221,7 @@ fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), Cod
                 std::thread::sleep(Duration::from_millis(100));
 
                 match child.try_wait() {
-                    Ok(Some(_)) => Err(io::Error::new(
-                        io::ErrorKind::Other,
+                    Ok(Some(_)) => Err(io::Error::other(
                         "LSP server process exited immediately",
                     ))?,
                     Ok(None) => {
