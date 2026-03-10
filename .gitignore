@@ -43,7 +43,7 @@ TEST_RESULTS.md
 TEST_RESULTS_SUMMARY.md
 DOCUMENTATION_REVIEW.md
 scratch/
-ideas/
+# ideas/ — unignored; spec files are committed
 
 # Project documentation and status files in .swissarmyhammer/
 .swissarmyhammer/*.md
