@@ -9,12 +9,11 @@ use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::code_context::CodeContextTool;
 use tokio::sync::Mutex as TokioMutex;
 
-/// Test calling code_context tool with the swissarmyhammer-tools project
-/// This is what should happen when the user is working on the project
+/// Test calling code_context tool with the workspace root project.
+/// Uses CARGO_MANIFEST_DIR to find the project, so it works on CI too.
 #[tokio::test]
 async fn test_code_context_on_real_project() {
-    let project_root =
-        PathBuf::from("/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools");
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Set up the context as it would be in real MCP usage
     let git_ops = Arc::new(TokioMutex::new(None));

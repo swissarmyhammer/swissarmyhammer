@@ -91,13 +91,14 @@ mod tests {
 
     #[test]
     fn test_detect_rust_project() {
-        let root = Path::new("/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools");
-        assert_eq!(detect_project_type(root), Some("rust".to_string()));
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname = \"test\"\n").unwrap();
+        assert_eq!(detect_project_type(tmp.path()), Some("rust".to_string()));
     }
 
     #[test]
     fn test_detect_no_project() {
-        let root = Path::new("/tmp");
-        assert!(detect_project_type(root).is_none());
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(detect_project_type(tmp.path()).is_none());
     }
 }
