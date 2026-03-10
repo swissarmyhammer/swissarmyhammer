@@ -329,7 +329,7 @@ mod tests {
 
         assert!(agent_config.quiet);
         assert!(matches!(
-            agent_config.executor,
+            agent_config.executor(),
             swissarmyhammer_config::ModelExecutorConfig::ClaudeCode(_)
         ));
     }
@@ -342,7 +342,7 @@ mod tests {
 
         assert!(agent_config.quiet);
         assert!(matches!(
-            agent_config.executor,
+            agent_config.executor(),
             swissarmyhammer_config::ModelExecutorConfig::LlamaAgent(_)
         ));
     }

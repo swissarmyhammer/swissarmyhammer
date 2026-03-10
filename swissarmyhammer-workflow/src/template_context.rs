@@ -442,7 +442,7 @@ impl WorkflowTemplateContext {
 
     /// Get LlamaAgent configuration if available
     pub fn get_llama_config(&self) -> Option<LlamaAgentConfig> {
-        match &self.get_agent_config().executor {
+        match self.get_agent_config().executor() {
             swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(config) => {
                 Some(config.clone())
             }
@@ -499,14 +499,15 @@ impl WorkflowTemplateContext {
 
     /// Update the MCP port in an agent config
     fn update_agent_config_mcp_port(&self, agent_config: &mut ModelConfig, port: u16) {
-        if let ModelConfig {
-            executor:
-                swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(ref mut llama_config),
-            ..
-        } = agent_config
-        {
-            llama_config.mcp_server.port = port;
-            tracing::debug!("Updated LlamaAgent MCP server port to {}", port);
+        // Update the first matching LlamaAgent executor entry
+        for entry in &mut agent_config.executors {
+            if let swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(ref mut llama_config) =
+                &mut entry.executor
+            {
+                llama_config.mcp_server.port = port;
+                tracing::debug!("Updated LlamaAgent MCP server port to {}", port);
+                return;
+            }
         }
     }
 

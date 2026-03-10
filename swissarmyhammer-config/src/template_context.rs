@@ -867,6 +867,7 @@ impl From<TemplateContext> for HashMap<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ExecutorEntry;
     use serde_json::json;
     use std::env;
     use std::fs;
@@ -1111,24 +1112,27 @@ version = "1.0.0"
         // Set up agent config directly under the "agent" key (sah.yaml style)
         let agent_config = ModelConfig {
             quiet: false,
-            executor: ModelExecutorConfig::LlamaAgent(LlamaAgentConfig {
-                model: LlmModelConfig {
-                    source: ModelSource::HuggingFace {
-                        repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
-                        filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
-                        folder: None,
+            executors: vec![ExecutorEntry {
+                executor: ModelExecutorConfig::LlamaAgent(LlamaAgentConfig {
+                    model: LlmModelConfig {
+                        source: ModelSource::HuggingFace {
+                            repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
+                            filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
+                            folder: None,
+                        },
+                        batch_size: 256,
+                        use_hf_params: true,
+                        debug: false,
                     },
-                    batch_size: 256,
-                    use_hf_params: true,
-                    debug: false,
-                },
-                mcp_server: McpServerConfig {
-                    port: 0,
-                    timeout_seconds: 30,
-                },
+                    mcp_server: McpServerConfig {
+                        port: 0,
+                        timeout_seconds: 30,
+                    },
 
-                repetition_detection: Default::default(),
-            }),
+                    repetition_detection: Default::default(),
+                }),
+                platform: None,
+            }],
         };
 
         context.set(
@@ -1140,7 +1144,7 @@ version = "1.0.0"
         let retrieved_config = context.get_agent_config(None);
 
         // Verify it's the correct config type and not the default
-        match retrieved_config.executor {
+        match retrieved_config.executor() {
             ModelExecutorConfig::LlamaAgent(llama_config) => match &llama_config.model.source {
                 ModelSource::HuggingFace { repo, filename, .. } => {
                     assert!(

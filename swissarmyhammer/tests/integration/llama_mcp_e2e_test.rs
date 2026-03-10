@@ -179,7 +179,7 @@ async fn test_llama_agent_config_creation() {
 
     assert!(agent_config.quiet, "Test configuration should be quiet");
 
-    match &agent_config.executor {
+    match agent_config.executor() {
         swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(_llama_exec_config) => {
             info!("Agent executor configuration validated");
             info!("Agent type: LlamaAgent with integrated MCP server");

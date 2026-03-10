@@ -199,9 +199,10 @@ pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;
 pub use error::{ConfigurationError, ConfigurationResult};
 pub use model::{
-    parse_model_config, parse_model_description, ClaudeCodeConfig, LlamaAgentConfig,
-    LlmModelConfig, McpServerConfig, ModelConfig, ModelConfigSource, ModelError,
-    ModelExecutorConfig, ModelExecutorType, ModelInfo, ModelManager, ModelPaths, ModelSource,
+    parse_model_config, parse_model_description, ClaudeCodeConfig, EmbeddingModelConfig,
+    ExecutorEntry, LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig,
+    ModelConfigSource, ModelError, ModelExecutorConfig, ModelExecutorType, ModelInfo,
+    ModelManager, ModelPaths, ModelSource, Platform,
 };
 pub use provider::ConfigurationProvider;
 pub use template_context::TemplateContext;
@@ -416,6 +417,11 @@ pub const DEFAULT_DEBUG_MODE: bool = false;
 
 /// Default quiet mode flag
 pub const DEFAULT_QUIET_MODE: bool = false;
+
+/// Helper for serde default
+pub fn default_quiet() -> bool {
+    DEFAULT_QUIET_MODE
+}
 
 /// Default MCP server port (0 = random)
 pub const DEFAULT_MCP_PORT: u16 = 0;

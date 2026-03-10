@@ -57,11 +57,11 @@ async fn test_llama_model_config_preserved_in_context() {
 
     assert!(
         matches!(
-            context.model_config().executor,
+            context.model_config().executor(),
             ModelExecutorConfig::LlamaAgent(_)
         ),
         "Context should preserve the LlamaAgent model config, got {:?}",
-        context.model_config().executor
+        context.model_config().executor()
     );
 }
 
@@ -77,7 +77,7 @@ async fn test_claude_model_config_preserved_in_context() {
 
     assert!(
         matches!(
-            context.model_config().executor,
+            context.model_config().executor(),
             ModelExecutorConfig::ClaudeCode(_)
         ),
         "Context should preserve the ClaudeCode model config"
@@ -104,7 +104,7 @@ async fn test_validator_blocks_with_llama_model_config() {
 
     // Verify model config survived
     assert!(matches!(
-        context.model_config().executor,
+        context.model_config().executor(),
         ModelExecutorConfig::LlamaAgent(_)
     ));
 
@@ -160,7 +160,7 @@ async fn test_chain_passes_with_llama_model_config_nonmatching_tool() {
     let context = create_context_with_model(&temp, "no_secrets_clean_code.json", llama_config);
 
     assert!(matches!(
-        context.model_config().executor,
+        context.model_config().executor(),
         ModelExecutorConfig::LlamaAgent(_)
     ));
 

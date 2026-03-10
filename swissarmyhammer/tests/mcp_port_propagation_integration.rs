@@ -19,10 +19,8 @@ use swissarmyhammer_workflow::{MermaidParser, StateId, WorkflowRun};
 /// Helper function to assert that a context has a LlamaAgent config with the expected port
 fn assert_llama_config_has_port(context: &WorkflowTemplateContext, expected_port: u16) {
     let agent_config = context.get_agent_config();
-    if let swissarmyhammer_config::model::ModelConfig {
-        executor: swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(llama_config),
-        ..
-    } = agent_config
+    if let swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(llama_config) =
+        agent_config.executor()
     {
         assert_eq!(
             llama_config.mcp_server.port, expected_port,
