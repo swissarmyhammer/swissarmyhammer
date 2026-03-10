@@ -315,9 +315,7 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
                 name: check_names::RUST_ANALYZER.to_string(),
                 status: CheckStatus::Warning,
                 message: "rust-analyzer not found in PATH".to_string(),
-                fix: Some(
-                    "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
-                ),
+                fix: Some("Install rust-analyzer: rustup component add rust-analyzer".to_string()),
             });
         }
     }

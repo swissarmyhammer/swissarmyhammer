@@ -14,8 +14,8 @@
 //! Uses the `swissarmyhammer-code-context` crate for all operations,
 //! opening a `CodeContextWorkspace` from the `ToolContext` working directory.
 
-pub mod schema;
 pub mod doctor;
+pub mod schema;
 pub mod watcher;
 
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
@@ -35,7 +35,7 @@ use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 /// Global LSP supervisor handle, initialized once at MCP startup.
 /// Used by `get status` to report LSP server state and by `server.rs` for init.
 pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
-    std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>
+    std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>,
 > = std::sync::OnceLock::new();
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,9 @@ static SEARCH_SYMBOL_PARAMS: &[ParamMeta] = &[
         .param_type(ParamType::String)
         .required(),
     ParamMeta::new("kind")
-        .description("Filter by symbol kind: function, method, struct, class, interface, module, etc.")
+        .description(
+            "Filter by symbol kind: function, method, struct, class, interface, module, etc.",
+        )
         .param_type(ParamType::String),
     ParamMeta::new("max_results")
         .description("Maximum number of results to return")
@@ -518,8 +520,7 @@ fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpErro
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
 
     // Find the git repository root from the working directory
-    let workspace_root = find_git_repository_root_from(&working_dir)
-        .unwrap_or(working_dir);
+    let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
 
     CodeContextWorkspace::open(&workspace_root).map_err(|e| {
         McpError::internal_error(
@@ -537,10 +538,7 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpErro
 
     Ok(CallToolResult {
         content: vec![Annotated::new(
-            RawContent::Text(RawTextContent {
-                text,
-                meta: None,
-            }),
+            RawContent::Text(RawTextContent { text, meta: None }),
             None,
         )],
         is_error: Some(false),
@@ -558,8 +556,9 @@ fn context_err(e: swissarmyhammer_code_context::CodeContextError) -> McpError {
 ///
 /// Returns `Ok(None)` when ready, `Ok(Some(result))` with a progress message when not.
 fn check_ts_readiness(ws: &CodeContextWorkspace) -> Result<Option<CallToolResult>, McpError> {
-    let status = swissarmyhammer_code_context::check_blocking_status(ws.db(), IndexLayer::TreeSitter)
-        .map_err(context_err)?;
+    let status =
+        swissarmyhammer_code_context::check_blocking_status(ws.db(), IndexLayer::TreeSitter)
+            .map_err(context_err)?;
     match status {
         BlockingStatus::Ready => Ok(None),
         BlockingStatus::NotReady {
@@ -605,7 +604,10 @@ fn execute_get_symbol(
         .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
 
     let options = GetSymbolOptions {
-        max_results: args.get("max_results").and_then(|v| v.as_u64()).map(|n| n as usize),
+        max_results: args
+            .get("max_results")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
     };
 
     let ws = open_workspace(context)?;
@@ -631,7 +633,10 @@ fn execute_search_symbol(
 
     let options = SearchSymbolOptions {
         kind: args.get("kind").and_then(|v| v.as_str()).map(String::from),
-        max_results: args.get("max_results").and_then(|v| v.as_u64()).map(|n| n as usize),
+        max_results: args
+            .get("max_results")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
     };
 
     let ws = open_workspace(context)?;
@@ -653,9 +658,7 @@ fn execute_list_symbols(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            McpError::invalid_params("Missing required parameter 'file_path'", None)
-        })?;
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
 
     let ws = open_workspace(context)?;
     if let Some(progress) = check_ts_readiness(&ws)? {
@@ -697,7 +700,10 @@ fn execute_grep_code(
     let options = GrepOptions {
         language,
         files,
-        max_results: args.get("max_results").and_then(|v| v.as_u64()).map(|n| n as usize),
+        max_results: args
+            .get("max_results")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
     };
 
     let ws = open_workspace(context)?;
@@ -748,15 +754,16 @@ async fn execute_search_code(
 
     // Embed the query text
     use swissarmyhammer_embedding::{Embedder, TextEmbedder};
-    let embedder = Embedder::default().await.map_err(|e| {
-        McpError::internal_error(format!("Failed to create embedder: {}", e), None)
-    })?;
+    let embedder = Embedder::default()
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to create embedder: {}", e), None))?;
     embedder.load().await.map_err(|e| {
         McpError::internal_error(format!("Failed to load embedding model: {}", e), None)
     })?;
-    let embed_result = embedder.embed_text(query).await.map_err(|e| {
-        McpError::internal_error(format!("Failed to embed query: {}", e), None)
-    })?;
+    let embed_result = embedder
+        .embed_text(query)
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to embed query: {}", e), None))?;
 
     let options = SearchCodeOptions {
         top_k,
@@ -769,12 +776,9 @@ async fn execute_search_code(
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let result = swissarmyhammer_code_context::search_code(
-        ws.db(),
-        embed_result.embedding(),
-        &options,
-    )
-    .map_err(context_err)?;
+    let result =
+        swissarmyhammer_code_context::search_code(ws.db(), embed_result.embedding(), &options)
+            .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -788,9 +792,7 @@ fn execute_find_duplicates(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            McpError::invalid_params("Missing required parameter 'file_path'", None)
-        })?;
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
 
     let min_similarity = args
         .get("min_similarity")
@@ -861,11 +863,11 @@ fn execute_query_ast(
         .working_dir
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-    let workspace_root =
-        find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
+    let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
 
     // Get file paths: either from explicit list or by scanning DB for files with matching extensions
-    let file_paths: Vec<String> = if let Some(files) = args.get("files").and_then(|v| v.as_array()) {
+    let file_paths: Vec<String> = if let Some(files) = args.get("files").and_then(|v| v.as_array())
+    {
         files
             .iter()
             .filter_map(|item| item.as_str().map(String::from))
@@ -904,9 +906,14 @@ fn execute_query_ast(
 
     let options = QueryAstOptions { max_results };
 
-    let result =
-        swissarmyhammer_code_context::query_ast(&workspace_root, &ts_language, &file_paths, query_str, &options)
-            .map_err(context_err)?;
+    let result = swissarmyhammer_code_context::query_ast(
+        &workspace_root,
+        &ts_language,
+        &file_paths,
+        query_str,
+        &options,
+    )
+    .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -969,11 +976,12 @@ fn execute_get_blastradius(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            McpError::invalid_params("Missing required parameter 'file_path'", None)
-        })?;
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
 
-    let symbol = args.get("symbol").and_then(|v| v.as_str()).map(String::from);
+    let symbol = args
+        .get("symbol")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let max_hops = args
         .get("max_hops")
         .and_then(|v| v.as_u64())
@@ -1005,51 +1013,63 @@ fn execute_get_blastradius(
 /// until the entire scan (including embedding) completes.
 pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
     use std::sync::Arc;
-    use swissarmyhammer_treesitter::{chunk::chunk_file, ChunkSource, LanguageRegistry, ParsedFile};
+    use swissarmyhammer_treesitter::{
+        chunk::chunk_file, ChunkSource, LanguageRegistry, ParsedFile,
+    };
 
     let db_path = workspace_root.join(".code-context").join("index.db");
     if !db_path.exists() {
-        tracing::info!("code-context: database not found at {}, skipping tree-sitter indexing", db_path.display());
+        tracing::info!(
+            "code-context: database not found at {}, skipping tree-sitter indexing",
+            db_path.display()
+        );
         return;
     }
 
     let db = match rusqlite::Connection::open(&db_path) {
         Ok(conn) => {
-            if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;") {
+            if let Err(e) =
+                conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
+            {
                 tracing::warn!("code-context: failed to configure DB connection: {}", e);
                 return;
             }
             conn
         }
         Err(e) => {
-            tracing::warn!("code-context: failed to open DB for tree-sitter indexing: {}", e);
+            tracing::warn!(
+                "code-context: failed to open DB for tree-sitter indexing: {}",
+                e
+            );
             return;
         }
     };
 
     // Query all dirty files from the DB (populated by startup_cleanup)
-    let dirty_files: Vec<String> = match db.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed = 0") {
-        Ok(mut stmt) => {
-            match stmt.query_map([], |row| row.get::<_, String>(0)) {
+    let dirty_files: Vec<String> =
+        match db.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed = 0") {
+            Ok(mut stmt) => match stmt.query_map([], |row| row.get::<_, String>(0)) {
                 Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
                 Err(e) => {
                     tracing::warn!("code-context: failed to query dirty files: {}", e);
                     return;
                 }
+            },
+            Err(e) => {
+                tracing::warn!("code-context: failed to prepare dirty files query: {}", e);
+                return;
             }
-        }
-        Err(e) => {
-            tracing::warn!("code-context: failed to prepare dirty files query: {}", e);
-            return;
-        }
-    };
+        };
 
     if dirty_files.is_empty() {
         tracing::info!("code-context: no dirty files to index");
         return;
     }
 
-    tracing::info!("code-context: indexing {} dirty files incrementally", dirty_files.len());
+    tracing::info!(
+        "code-context: indexing {} dirty files incrementally",
+        dirty_files.len()
+    );
 
     let lang_registry = LanguageRegistry::global();
     let total = dirty_files.len();
@@ -1131,7 +1151,11 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
         for chunk in &chunks {
             if let Some(content) = chunk.source.content() {
                 let (start_byte, end_byte) = match &chunk.source {
-                    ChunkSource::Parsed { start_byte, end_byte, .. } => (*start_byte, *end_byte),
+                    ChunkSource::Parsed {
+                        start_byte,
+                        end_byte,
+                        ..
+                    } => (*start_byte, *end_byte),
                     _ => continue,
                 };
 
@@ -1182,10 +1206,12 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
         total_chunks += chunks_written;
 
         // Log progress every 100 files
-        if indexed % 100 == 0 {
+        if indexed.is_multiple_of(100) {
             tracing::info!(
                 "code-context: indexed {}/{} files ({} chunks so far)",
-                indexed, total, total_chunks
+                indexed,
+                total,
+                total_chunks
             );
         }
 
@@ -1194,12 +1220,22 @@ pub(crate) async fn index_discovered_files_async(workspace_root: &Path) {
     }
 
     // Summary
-    let chunk_count: i64 = db.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0)).unwrap_or(0);
-    let symbol_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0)).unwrap_or(0);
-    let edge_count: i64 = db.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0)).unwrap_or(0);
+    let chunk_count: i64 = db
+        .query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))
+        .unwrap_or(0);
+    let symbol_count: i64 = db
+        .query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0))
+        .unwrap_or(0);
+    let edge_count: i64 = db
+        .query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0))
+        .unwrap_or(0);
     tracing::info!(
         "code-context: indexing complete — {}/{} files, {} chunks, {} symbols, {} call edges",
-        indexed, total, chunk_count, symbol_count, edge_count
+        indexed,
+        total,
+        chunk_count,
+        symbol_count,
+        edge_count
     );
 }
 

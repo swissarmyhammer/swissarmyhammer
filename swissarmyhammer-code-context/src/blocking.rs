@@ -53,11 +53,8 @@ pub fn check_blocking_status(
     conn: &Connection,
     layer: IndexLayer,
 ) -> Result<BlockingStatus, CodeContextError> {
-    let total_files: u64 = conn.query_row(
-        "SELECT COUNT(*) FROM indexed_files",
-        [],
-        |r| r.get(0),
-    )?;
+    let total_files: u64 =
+        conn.query_row("SELECT COUNT(*) FROM indexed_files", [], |r| r.get(0))?;
 
     if total_files == 0 {
         return Ok(BlockingStatus::Ready);

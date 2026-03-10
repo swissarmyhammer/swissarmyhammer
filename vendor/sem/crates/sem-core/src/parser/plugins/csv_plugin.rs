@@ -29,7 +29,7 @@ impl SemanticParserPlugin for CsvParserPlugin {
 
         for (i, &line) in lines.iter().enumerate().skip(1) {
             let cells = parse_csv_line(line, separator);
-            let row_id = if cells.first().map_or(true, |c| c.is_empty()) {
+            let row_id = if cells.first().is_none_or(|c| c.is_empty()) {
                 format!("row_{i}")
             } else {
                 cells[0].clone()
@@ -38,10 +38,7 @@ impl SemanticParserPlugin for CsvParserPlugin {
 
             let mut metadata = HashMap::new();
             for (j, header) in headers.iter().enumerate() {
-                metadata.insert(
-                    header.clone(),
-                    cells.get(j).cloned().unwrap_or_default(),
-                );
+                metadata.insert(header.clone(), cells.get(j).cloned().unwrap_or_default());
             }
 
             entities.push(SemanticEntity {

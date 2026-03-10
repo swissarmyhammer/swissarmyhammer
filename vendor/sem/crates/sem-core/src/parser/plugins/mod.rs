@@ -1,11 +1,11 @@
 pub mod code;
-pub mod json;
-pub mod yaml;
-pub mod toml_plugin;
 pub mod csv_plugin;
-pub mod markdown;
-pub mod vue;
 pub mod fallback;
+pub mod json;
+pub mod markdown;
+pub mod toml_plugin;
+pub mod vue;
+pub mod yaml;
 
 use crate::parser::registry::ParserRegistry;
 

@@ -20,8 +20,8 @@ use swissarmyhammer_operations::{
     generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
 };
 
-use crate::mcp::tool_registry::{McpTool, ToolContext};
 use super::diff;
+use crate::mcp::tool_registry::{McpTool, ToolContext};
 
 /// Request structure for git changes operation
 #[derive(Debug, Deserialize, Serialize)]
@@ -100,8 +100,12 @@ impl Operation for GetChanges {
 static GET_CHANGES: Lazy<GetChanges> = Lazy::new(GetChanges::default);
 static GET_DIFF: Lazy<diff::GetDiff> = Lazy::new(diff::GetDiff::default);
 
-pub static GIT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> =
-    Lazy::new(|| vec![&*GET_CHANGES as &dyn Operation, &*GET_DIFF as &dyn Operation]);
+pub static GIT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
+    vec![
+        &*GET_CHANGES as &dyn Operation,
+        &*GET_DIFF as &dyn Operation,
+    ]
+});
 
 /// Tool for listing changed files on a git branch
 #[derive(Default)]
@@ -159,9 +163,8 @@ impl GitChangesTool {
                 )
             })?;
 
-            diff::execute_inline_diff(lt, rt, lang).map_err(|e| {
-                rmcp::ErrorData::internal_error(e, None)
-            })?
+            diff::execute_inline_diff(lt, rt, lang)
+                .map_err(|e| rmcp::ErrorData::internal_error(e, None))?
         } else if left.is_some() || right.is_some() {
             // File mode
             let l = left.ok_or_else(|| {
@@ -180,16 +183,14 @@ impl GitChangesTool {
             // Determine working directory
             let working_dir = self.resolve_working_dir(context).await?;
 
-            diff::execute_file_diff(l, r, &working_dir).map_err(|e| {
-                rmcp::ErrorData::internal_error(e, None)
-            })?
+            diff::execute_file_diff(l, r, &working_dir)
+                .map_err(|e| rmcp::ErrorData::internal_error(e, None))?
         } else {
             // Auto-detect mode
             let working_dir = self.resolve_working_dir(context).await?;
 
-            diff::execute_auto_diff(&working_dir).map_err(|e| {
-                rmcp::ErrorData::internal_error(e, None)
-            })?
+            diff::execute_auto_diff(&working_dir)
+                .map_err(|e| rmcp::ErrorData::internal_error(e, None))?
         };
 
         Ok(CallToolResult {

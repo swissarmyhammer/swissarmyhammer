@@ -34,9 +34,7 @@ pub enum InvalidationAction {
 /// Returns a `Vec<String>` of all `lsp_symbols.id` values where
 /// `file_path` matches.
 pub fn get_symbol_ids(conn: &Connection, file_path: &str) -> Result<Vec<String>, CodeContextError> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT id FROM lsp_symbols WHERE file_path = ?1",
-    )?;
+    let mut stmt = conn.prepare_cached("SELECT id FROM lsp_symbols WHERE file_path = ?1")?;
     let ids: Vec<String> = stmt
         .query_map([file_path], |row| row.get(0))?
         .collect::<Result<_, _>>()?;

@@ -70,9 +70,7 @@ impl LspSupervisorManager {
         let mut specs_by_command: HashMap<String, OwnedLspServerSpec> = HashMap::new();
         for project in &projects {
             for spec in servers_for_project(project.project_type) {
-                specs_by_command
-                    .entry(spec.command.clone())
-                    .or_insert(spec);
+                specs_by_command.entry(spec.command.clone()).or_insert(spec);
             }
         }
 
@@ -117,10 +115,7 @@ impl LspSupervisorManager {
 
     /// Gracefully shut down all managed daemons.
     pub async fn shutdown(&mut self) {
-        info!(
-            count = self.daemons.len(),
-            "Shutting down all LSP daemons"
-        );
+        info!(count = self.daemons.len(), "Shutting down all LSP daemons");
         for (cmd, daemon) in self.daemons.iter_mut() {
             info!(cmd, "Shutting down LSP daemon");
             daemon.shutdown().await;

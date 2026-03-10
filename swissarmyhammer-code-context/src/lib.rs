@@ -31,18 +31,23 @@ pub mod ts_callgraph;
 pub mod watcher;
 pub mod workspace;
 
+pub use blocking::{check_blocking_status, BlockingStatus, IndexLayer};
 pub use cleanup::{startup_cleanup, CleanupStats};
 pub use error::CodeContextError;
+pub use hints::hint_for_operation;
 pub use invalidation::{reextract_file, refresh_edges, InvalidationAction};
+pub use lsp_communication::{collect_and_persist_symbols, LspCollectionResult, LspJsonRpcClient};
 pub use lsp_indexer::{
     build_qualified_path, build_symbol_id, flatten_symbols, mark_lsp_indexed, write_edges,
     write_symbols, CallEdge, FlatSymbol,
 };
-pub use ts_callgraph::{
-    ensure_ts_symbols, extract_call_names, generate_ts_call_edges, resolve_callees,
-    write_ts_edges, CallSite, ResolvedCallee,
+pub use lsp_server::{
+    detect_rust_analyzer, find_executable, start_lsp_server, LspServerConfig, LspServerHandle,
 };
-pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
+pub use ops::find_duplicates::{
+    find_duplicates, ChunkRef, DuplicateGroup, DuplicateMatch, FindDuplicatesOptions,
+    FindDuplicatesResult,
+};
 pub use ops::get_blastradius::{
     get_blastradius, AffectedSymbol, BlastRadius, BlastRadiusOptions, HopLevel,
 };
@@ -53,27 +58,20 @@ pub use ops::get_symbol::{
     get_symbol, symbol_kind_name, GetSymbolOptions, GetSymbolResult, MatchTier, SymbolLocation,
     SymbolMatch,
 };
-pub use ops::find_duplicates::{
-    find_duplicates, ChunkRef, DuplicateGroup, DuplicateMatch, FindDuplicatesOptions,
-    FindDuplicatesResult,
-};
 pub use ops::grep_code::{grep_code, GrepMatch, GrepOptions, GrepResult, MatchPosition};
-pub use ops::query_ast::{
-    query_ast, AstCapture, AstMatch, QueryAstOptions, QueryAstResult,
-};
+pub use ops::list_symbol::list_symbols;
+pub use ops::query_ast::{query_ast, AstCapture, AstMatch, QueryAstOptions, QueryAstResult};
 pub use ops::search_code::{
     search_code, serialize_embedding, SearchCodeMatch, SearchCodeOptions, SearchCodeResult,
 };
-pub use ops::list_symbol::list_symbols;
 pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
-pub use blocking::{check_blocking_status, BlockingStatus, IndexLayer};
-pub use hints::hint_for_operation;
 pub use ops::status::{
     build_status, clear_status, get_status, BuildLayer, BuildStatusResult, ClearStatusResult,
     StatusReport,
 };
-pub use workspace::{CodeContextWorkspace, WorkspaceMode};
-pub use lsp_server::{
-    detect_rust_analyzer, find_executable, start_lsp_server, LspServerConfig, LspServerHandle,
+pub use ts_callgraph::{
+    ensure_ts_symbols, extract_call_names, generate_ts_call_edges, resolve_callees, write_ts_edges,
+    CallSite, ResolvedCallee,
 };
-pub use lsp_communication::{LspJsonRpcClient, LspCollectionResult, collect_and_persist_symbols};
+pub use watcher::{FanoutWatcher, FileEvent, WatcherHandler};
+pub use workspace::{CodeContextWorkspace, WorkspaceMode};

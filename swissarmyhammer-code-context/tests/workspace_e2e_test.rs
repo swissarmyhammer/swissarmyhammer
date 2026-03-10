@@ -132,8 +132,7 @@ fn test_workspace_startup_discovers_files() {
     );
 
     // Verify get_status returns the correct counts
-    let status = swissarmyhammer_code_context::get_status(ws.db())
-        .expect("get_status failed");
+    let status = swissarmyhammer_code_context::get_status(ws.db()).expect("get_status failed");
 
     assert_eq!(
         status.total_files, 4,
@@ -156,15 +155,15 @@ fn test_startup_cleanup_idempotent() {
     // First run: files already discovered by workspace.open()
     let stats1 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("First startup_cleanup failed");
-    assert_eq!(stats1.files_unchanged, 4, "Files should be unchanged after workspace.open() auto-discovered them");
+    assert_eq!(
+        stats1.files_unchanged, 4,
+        "Files should be unchanged after workspace.open() auto-discovered them"
+    );
 
     // Second run: all files should be unchanged
     let stats2 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("Second startup_cleanup failed");
-    assert_eq!(
-        stats2.files_added, 0,
-        "Second run should not add new files"
-    );
+    assert_eq!(stats2.files_added, 0, "Second run should not add new files");
     assert_eq!(
         stats2.files_removed, 0,
         "Second run should not remove files"
@@ -193,7 +192,10 @@ fn test_startup_cleanup_detects_modifications() {
     // First run: files already discovered by workspace.open()
     let stats1 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("First startup_cleanup failed");
-    assert_eq!(stats1.files_unchanged, 4, "Files should be unchanged after workspace.open() auto-discovered them");
+    assert_eq!(
+        stats1.files_unchanged, 4,
+        "Files should be unchanged after workspace.open() auto-discovered them"
+    );
 
     // Modify one file
     let main_rs_path = root.join("src/main.rs");
@@ -250,7 +252,10 @@ fn test_startup_cleanup_detects_deletions() {
     // First run: files already discovered by workspace.open()
     let stats1 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("First startup_cleanup failed");
-    assert_eq!(stats1.files_unchanged, 4, "Files should be unchanged after workspace.open() auto-discovered them");
+    assert_eq!(
+        stats1.files_unchanged, 4,
+        "Files should be unchanged after workspace.open() auto-discovered them"
+    );
 
     // Delete one file
     std::fs::remove_file(root.join("src/utils.rs")).unwrap();
@@ -268,8 +273,7 @@ fn test_startup_cleanup_detects_deletions() {
     assert_eq!(stats2.files_unchanged, 3);
 
     // Verify status reflects the deletion
-    let status = swissarmyhammer_code_context::get_status(ws.db())
-        .expect("get_status failed");
+    let status = swissarmyhammer_code_context::get_status(ws.db()).expect("get_status failed");
     assert_eq!(
         status.total_files, 3,
         "Status should report 3 files after deletion"
@@ -290,7 +294,10 @@ fn test_startup_cleanup_detects_new_files() {
     // First run: files already discovered by workspace.open()
     let stats1 = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("First startup_cleanup failed");
-    assert_eq!(stats1.files_unchanged, 4, "Files should be unchanged after workspace.open() auto-discovered them");
+    assert_eq!(
+        stats1.files_unchanged, 4,
+        "Files should be unchanged after workspace.open() auto-discovered them"
+    );
 
     // Add a new file
     let new_module = r#"pub fn new_function() -> String {
@@ -312,8 +319,7 @@ fn test_startup_cleanup_detects_new_files() {
     assert_eq!(stats2.files_unchanged, 4);
 
     // Verify status reflects the new file
-    let status = swissarmyhammer_code_context::get_status(ws.db())
-        .expect("get_status failed");
+    let status = swissarmyhammer_code_context::get_status(ws.db()).expect("get_status failed");
     assert_eq!(
         status.total_files, 5,
         "Status should report 5 files after adding new file"
@@ -333,8 +339,7 @@ fn test_get_status_reflects_file_counts() {
     let _stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("startup_cleanup failed");
 
-    let status = swissarmyhammer_code_context::get_status(ws.db())
-        .expect("get_status failed");
+    let status = swissarmyhammer_code_context::get_status(ws.db()).expect("get_status failed");
 
     // After startup_cleanup, status should accurately report counts
     assert_eq!(status.total_files, 4);
@@ -363,16 +368,25 @@ fn test_indexing_worker_marks_files_indexed() {
     // Populate dirty files
     let cleanup_stats = swissarmyhammer_code_context::startup_cleanup(ws.db(), root)
         .expect("startup_cleanup failed");
-    println!("startup_cleanup: added={}, removed={}, dirty={}, unchanged={}",
-        cleanup_stats.files_added, cleanup_stats.files_removed, cleanup_stats.files_dirty, cleanup_stats.files_unchanged);
+    println!(
+        "startup_cleanup: added={}, removed={}, dirty={}, unchanged={}",
+        cleanup_stats.files_added,
+        cleanup_stats.files_removed,
+        cleanup_stats.files_dirty,
+        cleanup_stats.files_unchanged
+    );
 
     // Verify files are in DB before indexing
-    let before = swissarmyhammer_code_context::get_status(ws.db())
-        .expect("get_status failed");
-    println!("Before indexing: total={}, ts_indexed={}, lsp_indexed={}",
-        before.total_files, before.ts_indexed_files, before.lsp_indexed_files);
+    let before = swissarmyhammer_code_context::get_status(ws.db()).expect("get_status failed");
+    println!(
+        "Before indexing: total={}, ts_indexed={}, lsp_indexed={}",
+        before.total_files, before.ts_indexed_files, before.lsp_indexed_files
+    );
     assert_eq!(before.total_files, 4, "Should have 4 files in database");
-    assert_eq!(before.ts_indexed_files, 0, "No files should be indexed initially");
+    assert_eq!(
+        before.ts_indexed_files, 0,
+        "No files should be indexed initially"
+    );
 
     // Explicitly spawn the indexing worker (no longer auto-started by workspace open)
     let db_path = root.join(".code-context").join("index.db");
@@ -386,10 +400,11 @@ fn test_indexing_worker_marks_files_indexed() {
     thread::sleep(Duration::from_secs(2));
 
     // Check status after indexing worker runs
-    let after = swissarmyhammer_code_context::get_status(ws.db())
-        .expect("get_status failed");
-    println!("After indexing: total={}, ts_indexed={}, lsp_indexed={}",
-        after.total_files, after.ts_indexed_files, after.lsp_indexed_files);
+    let after = swissarmyhammer_code_context::get_status(ws.db()).expect("get_status failed");
+    println!(
+        "After indexing: total={}, ts_indexed={}, lsp_indexed={}",
+        after.total_files, after.ts_indexed_files, after.lsp_indexed_files
+    );
 
     // Indexing worker should have marked files as indexed
     // Even if tree-sitter parsing is placeholder, files should be marked ts_indexed=1
@@ -402,5 +417,8 @@ fn test_indexing_worker_marks_files_indexed() {
         after.ts_indexed_files, 4,
         "All 4 files should be marked as indexed"
     );
-    assert_eq!(after.ts_indexed_percent, 100.0, "All files should be 100% indexed");
+    assert_eq!(
+        after.ts_indexed_percent, 100.0,
+        "All files should be 100% indexed"
+    );
 }

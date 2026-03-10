@@ -498,8 +498,8 @@ impl Workspace {
         context: &IndexContext,
         _db: &Arc<IndexDatabase>,
     ) -> Result<()> {
-        use swissarmyhammer_code_context::{generate_ts_call_edges, write_ts_edges};
         use swissarmyhammer_code_context::CodeContextWorkspace;
+        use swissarmyhammer_code_context::{generate_ts_call_edges, write_ts_edges};
 
         let registry = crate::language::LanguageRegistry::global();
 
@@ -515,7 +515,10 @@ impl Workspace {
 
         // For each parsed file, extract symbols and write edges
         let files = context.files();
-        tracing::info!("Writing tree-sitter symbols and edges for {} files", files.len());
+        tracing::info!(
+            "Writing tree-sitter symbols and edges for {} files",
+            files.len()
+        );
 
         for file_path in files {
             // Get the ParsedFile
@@ -537,18 +540,27 @@ impl Workspace {
             let file_path_str = file_path.to_str().unwrap_or("");
 
             // Generate call edges using tree-sitter heuristic
-            let edges = match generate_ts_call_edges(cc_conn, file_path_str, &parsed.source, ts_language) {
-                Ok(edges) => edges,
-                Err(e) => {
-                    tracing::warn!("Failed to generate call edges for {}: {}", file_path.display(), e);
-                    Vec::new()
-                }
-            };
+            let edges =
+                match generate_ts_call_edges(cc_conn, file_path_str, &parsed.source, ts_language) {
+                    Ok(edges) => edges,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to generate call edges for {}: {}",
+                            file_path.display(),
+                            e
+                        );
+                        Vec::new()
+                    }
+                };
 
             // Write edges to code-context database
             if !edges.is_empty() {
                 if let Err(e) = write_ts_edges(cc_conn, file_path_str, &edges) {
-                    tracing::warn!("Failed to write call edges for {}: {}", file_path.display(), e);
+                    tracing::warn!(
+                        "Failed to write call edges for {}: {}",
+                        file_path.display(),
+                        e
+                    );
                 }
             }
 
@@ -557,7 +569,11 @@ impl Workspace {
                 "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?1",
                 [file_path_str],
             ) {
-                tracing::warn!("Failed to mark {} as ts_indexed: {}", file_path.display(), e);
+                tracing::warn!(
+                    "Failed to mark {} as ts_indexed: {}",
+                    file_path.display(),
+                    e
+                );
             }
         }
 

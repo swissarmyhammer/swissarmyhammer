@@ -9,16 +9,16 @@ use std::path::Path;
 use rusqlite::Connection;
 use tree_sitter::Language;
 
-use swissarmyhammer_code_context::{
-    check_blocking_status, clear_status, ensure_ts_symbols, generate_ts_call_edges,
-    get_blastradius, get_callgraph, get_status, get_symbol, grep_code, hint_for_operation,
-    list_symbols, search_symbol, startup_cleanup, write_ts_edges, BlockingStatus, BlastRadiusOptions,
-    BuildLayer, CallGraphDirection, CallGraphOptions, CodeContextWorkspace, GetSymbolOptions,
-    GrepOptions, IndexLayer, MatchTier, SearchSymbolOptions, start_lsp_server, detect_rust_analyzer,
-    collect_and_persist_symbols,
-};
-use lsp_types::{DocumentSymbol, SymbolKind, Position, Range};
+use lsp_types::{DocumentSymbol, Position, Range, SymbolKind};
 use swissarmyhammer_code_context::ops::status::build_status;
+use swissarmyhammer_code_context::{
+    check_blocking_status, clear_status, collect_and_persist_symbols, detect_rust_analyzer,
+    ensure_ts_symbols, generate_ts_call_edges, get_blastradius, get_callgraph, get_status,
+    get_symbol, grep_code, hint_for_operation, list_symbols, search_symbol, start_lsp_server,
+    startup_cleanup, write_ts_edges, BlastRadiusOptions, BlockingStatus, BuildLayer,
+    CallGraphDirection, CallGraphOptions, CodeContextWorkspace, GetSymbolOptions, GrepOptions,
+    IndexLayer, MatchTier, SearchSymbolOptions,
+};
 
 // ---------------------------------------------------------------------------
 // Source file contents for the test project
@@ -173,10 +173,7 @@ fn extract_chunks(file_path: &str, source: &str) -> Vec<ChunkInfo> {
                                 end_byte: method.end_byte(),
                                 start_line: method.start_position().row as u32,
                                 end_line: method.end_position().row as u32,
-                                text: method
-                                    .utf8_text(source.as_bytes())
-                                    .unwrap()
-                                    .to_string(),
+                                text: method.utf8_text(source.as_bytes()).unwrap().to_string(),
                                 symbol_path,
                             });
                         }
@@ -321,14 +318,24 @@ fn test_get_symbol_operations() {
         "expected results for 'Server', got empty"
     );
     assert!(
-        result.symbols.iter().any(|r| r.file_path == "src/server.rs"),
+        result
+            .symbols
+            .iter()
+            .any(|r| r.file_path == "src/server.rs"),
         "expected Server in src/server.rs, got: {:?}",
-        result.symbols.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        result
+            .symbols
+            .iter()
+            .map(|r| &r.file_path)
+            .collect::<Vec<_>>()
     );
 
     // Get "validate" -- should match AuthService::validate.
     let result = get_symbol(conn, "validate", &opts).unwrap();
-    assert!(!result.symbols.is_empty(), "expected results for 'validate'");
+    assert!(
+        !result.symbols.is_empty(),
+        "expected results for 'validate'"
+    );
     assert!(
         result.symbols.iter().any(|r| r.file_path == "src/auth.rs"),
         "expected validate in src/auth.rs"
@@ -336,7 +343,10 @@ fn test_get_symbol_operations() {
 
     // Get "handle_request" -- should match Server::handle_request.
     let result = get_symbol(conn, "handle_request", &opts).unwrap();
-    assert!(!result.symbols.is_empty(), "expected results for 'handle_request'");
+    assert!(
+        !result.symbols.is_empty(),
+        "expected results for 'handle_request'"
+    );
     assert!(
         result
             .symbols
@@ -379,7 +389,11 @@ fn test_get_symbol_fuzzy_tiers() {
         .iter()
         .map(|s| s.qualified_path.as_str())
         .collect();
-    assert!(paths.contains(&"Server::new"), "missing Server::new in {:?}", paths);
+    assert!(
+        paths.contains(&"Server::new"),
+        "missing Server::new in {:?}",
+        paths
+    );
     assert!(
         paths.contains(&"AuthService::new"),
         "missing AuthService::new in {:?}",
@@ -441,15 +455,10 @@ fn test_search_symbol() {
         "expected results for fuzzy search 'auth'"
     );
 
-    let qpaths: Vec<&str> = results
-        .iter()
-        .map(|s| s.qualified_path.as_str())
-        .collect();
+    let qpaths: Vec<&str> = results.iter().map(|s| s.qualified_path.as_str()).collect();
     // Should include auth-related symbols.
     assert!(
-        qpaths
-            .iter()
-            .any(|p| p.to_lowercase().contains("auth")),
+        qpaths.iter().any(|p| p.to_lowercase().contains("auth")),
         "expected auth-related symbols in results: {:?}",
         qpaths
     );
@@ -463,16 +472,10 @@ fn test_list_symbols() {
     let conn = ws.db();
 
     let results = list_symbols(conn, "src/server.rs").unwrap();
-    assert!(
-        !results.is_empty(),
-        "expected symbols in src/server.rs"
-    );
+    assert!(!results.is_empty(), "expected symbols in src/server.rs");
 
     let names: Vec<&str> = results.iter().map(|s| s.name.as_str()).collect();
-    let qpaths: Vec<&str> = results
-        .iter()
-        .map(|s| s.qualified_path.as_str())
-        .collect();
+    let qpaths: Vec<&str> = results.iter().map(|s| s.qualified_path.as_str()).collect();
 
     // Should contain Server struct, new, handle_request, port.
     assert!(
@@ -520,7 +523,11 @@ fn test_grep_code() {
         "expected grep matches for 'token'"
     );
 
-    let files: Vec<&str> = result.matches.iter().map(|m| m.file_path.as_str()).collect();
+    let files: Vec<&str> = result
+        .matches
+        .iter()
+        .map(|m| m.file_path.as_str())
+        .collect();
     assert!(
         files.contains(&"src/server.rs"),
         "expected 'token' match in src/server.rs, got: {:?}",
@@ -721,10 +728,7 @@ fn test_clear_status() {
     let result = clear_status(conn).unwrap();
     assert!(result.files_deleted > 0, "expected files to be deleted");
     assert!(result.chunks_deleted > 0, "expected chunks to be deleted");
-    assert!(
-        result.symbols_deleted > 0,
-        "expected symbols to be deleted"
-    );
+    assert!(result.symbols_deleted > 0, "expected symbols to be deleted");
     assert!(!result.hint.is_empty());
 
     // Verify status shows zeros.
@@ -751,11 +755,7 @@ fn test_hints_for_all_operations() {
 
     for op in &operations {
         let hint = hint_for_operation(op);
-        assert!(
-            !hint.is_empty(),
-            "hint for '{}' should be non-empty",
-            op
-        );
+        assert!(!hint.is_empty(), "hint for '{}' should be non-empty", op);
     }
 
     // Unknown operation also returns non-empty hint.
@@ -796,7 +796,10 @@ fn test_startup_cleanup_populates_indexed_files() {
     // After workspace.open(), startup_cleanup has already been called automatically,
     // so files are in the database. Calling again shows them as unchanged.
     let stats = startup_cleanup(conn, dir.path()).unwrap();
-    assert_eq!(stats.files_added, 0, "startup_cleanup already ran in workspace.open()");
+    assert_eq!(
+        stats.files_added, 0,
+        "startup_cleanup already ran in workspace.open()"
+    );
     assert!(
         stats.files_unchanged >= 3,
         "expected at least 3 files unchanged, got {}",
@@ -917,7 +920,10 @@ fn test_symbol_operations_on_real_repo() {
 
     // Verify the source exists
     if !real_src.exists() {
-        eprintln!("Warning: real repo source not found at {:?}, skipping test", real_src);
+        eprintln!(
+            "Warning: real repo source not found at {:?}, skipping test",
+            real_src
+        );
         return;
     }
 
@@ -994,7 +1000,9 @@ fn test_symbol_operations_on_real_repo() {
 
                 // Ensure symbols and generate call edges
                 if ensure_ts_symbols(conn, &rel_path).is_ok() {
-                    if let Ok(edges) = generate_ts_call_edges(conn, &rel_path, &source, rust_language()) {
+                    if let Ok(edges) =
+                        generate_ts_call_edges(conn, &rel_path, &source, rust_language())
+                    {
                         let _ = write_ts_edges(conn, &rel_path, &edges);
                     }
                 }
@@ -1004,9 +1012,12 @@ fn test_symbol_operations_on_real_repo() {
         Ok(count)
     }
 
-    let files_processed =
-        process_dir(&src_copy, "", conn).expect("Failed to process files");
-    assert!(files_processed > 5, "Expected to process >5 files, got {}", files_processed);
+    let files_processed = process_dir(&src_copy, "", conn).expect("Failed to process files");
+    assert!(
+        files_processed > 5,
+        "Expected to process >5 files, got {}",
+        files_processed
+    );
 
     // Mark all files as ts_indexed
     conn.execute(
@@ -1030,8 +1041,7 @@ fn test_symbol_operations_on_real_repo() {
 
     // Test 2: get_symbol should find common functions (more forgiving search)
     // Try to find something simple that exists in any Rust code
-    let result = get_symbol(conn, "new", &GetSymbolOptions::default())
-        .expect("get_symbol failed");
+    let result = get_symbol(conn, "new", &GetSymbolOptions::default()).expect("get_symbol failed");
     assert!(
         !result.symbols.is_empty(),
         "Expected to find function 'new' (common pattern)"
@@ -1057,10 +1067,7 @@ fn test_symbol_operations_on_real_repo() {
     // Test 4: list_symbols on any file should return symbols
     if let Ok(files) = list_symbols(conn, "src/lib.rs") {
         if !files.is_empty() {
-            assert!(
-                files.len() >= 1,
-                "Expected >= 1 symbol in lib.rs"
-            );
+            assert!(files.len() >= 1, "Expected >= 1 symbol in lib.rs");
         }
     }
 
@@ -1175,7 +1182,9 @@ fn test_grep_code_on_real_repo() {
 
                 // Ensure symbols and call edges
                 if ensure_ts_symbols(conn, &rel_path).is_ok() {
-                    if let Ok(edges) = generate_ts_call_edges(conn, &rel_path, &source, rust_language()) {
+                    if let Ok(edges) =
+                        generate_ts_call_edges(conn, &rel_path, &source, rust_language())
+                    {
                         let _ = write_ts_edges(conn, &rel_path, &edges);
                     }
                 }
@@ -1194,8 +1203,7 @@ fn test_grep_code_on_real_repo() {
     .unwrap();
 
     // Test 1: grep_code with "pub fn" pattern should find many functions
-    let result = grep_code(conn, r"pub\s+fn", &GrepOptions::default())
-        .expect("grep_code failed");
+    let result = grep_code(conn, r"pub\s+fn", &GrepOptions::default()).expect("grep_code failed");
 
     assert!(
         !result.matches.is_empty(),
@@ -1212,10 +1220,7 @@ fn test_grep_code_on_real_repo() {
 
     // Verify matches have proper structure (file path, line numbers, source text)
     for m in &result.matches {
-        assert!(
-            !m.file_path.is_empty(),
-            "Match should have file path"
-        );
+        assert!(!m.file_path.is_empty(), "Match should have file path");
         assert!(
             m.start_line > 0,
             "Match should have valid start line number"
@@ -1236,8 +1241,7 @@ fn test_grep_code_on_real_repo() {
         language: Some(vec!["rs".to_string()]),
         ..Default::default()
     };
-    let rs_result = grep_code(conn, "fn", &rs_opts)
-        .expect("grep_code with language filter failed");
+    let rs_result = grep_code(conn, "fn", &rs_opts).expect("grep_code with language filter failed");
 
     // Should find function definitions
     assert!(
@@ -1267,15 +1271,18 @@ fn test_grep_code_on_real_repo() {
     // Test 4: Empty pattern should handle gracefully
     let empty_result = grep_code(conn, "", &GrepOptions::default());
     // Empty pattern may return empty or all results, but shouldn't panic
-    assert!(empty_result.is_ok(), "grep_code should handle empty pattern");
+    assert!(
+        empty_result.is_ok(),
+        "grep_code should handle empty pattern"
+    );
 
     // Test 5: Max results limit should be respected
     let limited_opts = GrepOptions {
         max_results: Some(3),
         ..Default::default()
     };
-    let limited_result = grep_code(conn, "fn", &limited_opts)
-        .expect("grep_code with max_results failed");
+    let limited_result =
+        grep_code(conn, "fn", &limited_opts).expect("grep_code with max_results failed");
 
     assert!(
         limited_result.matches.len() <= 3,
@@ -1285,7 +1292,8 @@ fn test_grep_code_on_real_repo() {
 
     println!(
         "✓ grep_code test passed: found {} 'pub fn' matches, {} total with 'fn' pattern",
-        fn_count, rs_result.matches.len()
+        fn_count,
+        rs_result.matches.len()
     );
 }
 
@@ -1371,7 +1379,9 @@ fn test_callgraph_and_blastradius_on_real_repo() {
 
                 // Ensure symbols and IMPORTANTLY generate call edges
                 if ensure_ts_symbols(conn, &rel_path).is_ok() {
-                    if let Ok(edges) = generate_ts_call_edges(conn, &rel_path, &source, rust_language()) {
+                    if let Ok(edges) =
+                        generate_ts_call_edges(conn, &rel_path, &source, rust_language())
+                    {
                         // This is key - write the call edges so blast radius and callgraph work
                         let _ = write_ts_edges(conn, &rel_path, &edges);
                     }
@@ -1540,7 +1550,6 @@ fn test_callgraph_and_blastradius_on_real_repo() {
         }
     }
 
-
     // Test 7: Verify call graph edges have proper structure
     if !cg_inbound.edges.is_empty() {
         let first_edge = &cg_inbound.edges[0];
@@ -1613,8 +1622,13 @@ fn test_lsp_server_startup() {
             handle.error.is_some(),
             "if LSP startup failed, error message should be provided"
         );
-        println!("ℹ LSP server startup failed (expected in some environments): {}",
-            handle.error.as_ref().unwrap_or(&"unknown error".to_string()));
+        println!(
+            "ℹ LSP server startup failed (expected in some environments): {}",
+            handle
+                .error
+                .as_ref()
+                .unwrap_or(&"unknown error".to_string())
+        );
     }
 }
 
@@ -1662,18 +1676,16 @@ fn test_collect_lsp_symbols_and_persist() {
             deprecated: None,
             range: Range::new(Position::new(5, 0), Position::new(15, 1)),
             selection_range: Range::new(Position::new(5, 0), Position::new(5, 10)),
-            children: Some(vec![
-                DocumentSymbol {
-                    name: "new".to_string(),
-                    detail: None,
-                    kind: SymbolKind::METHOD,
-                    tags: None,
-                    deprecated: None,
-                    range: Range::new(Position::new(8, 4), Position::new(12, 5)),
-                    selection_range: Range::new(Position::new(8, 4), Position::new(8, 7)),
-                    children: None,
-                },
-            ]),
+            children: Some(vec![DocumentSymbol {
+                name: "new".to_string(),
+                detail: None,
+                kind: SymbolKind::METHOD,
+                tags: None,
+                deprecated: None,
+                range: Range::new(Position::new(8, 4), Position::new(12, 5)),
+                selection_range: Range::new(Position::new(8, 4), Position::new(8, 7)),
+                children: None,
+            }]),
         },
     ];
 
@@ -1684,28 +1696,36 @@ fn test_collect_lsp_symbols_and_persist() {
         "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
          VALUES (?, X'00112233', 1024, 1000)",
         [test_file],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Collect and persist symbols
     let symbol_count = collect_and_persist_symbols(conn, test_file, &symbols).unwrap();
 
     // Verify symbols were persisted
-    assert_eq!(symbol_count, 3, "Expected 3 symbols (greet, Config, Config::new)");
+    assert_eq!(
+        symbol_count, 3,
+        "Expected 3 symbols (greet, Config, Config::new)"
+    );
 
     // Verify status shows lsp_indexed_files increased
     let status = get_status(conn).unwrap();
-    println!("Status after LSP collection: lsp_indexed={}", status.lsp_indexed_files);
+    println!(
+        "Status after LSP collection: lsp_indexed={}",
+        status.lsp_indexed_files
+    );
 
     // Verify we can query the symbols
     let results = list_symbols(conn, test_file).unwrap();
 
     // Should have symbols from LSP
-    let lsp_symbols: Vec<_> = results.iter()
-        .filter(|s| s.source == "lsp")
-        .collect();
+    let lsp_symbols: Vec<_> = results.iter().filter(|s| s.source == "lsp").collect();
 
     if !lsp_symbols.is_empty() {
-        println!("✓ Collected {} LSP symbols from src/lib.rs", lsp_symbols.len());
+        println!(
+            "✓ Collected {} LSP symbols from src/lib.rs",
+            lsp_symbols.len()
+        );
         assert!(
             lsp_symbols.iter().any(|s| s.name == "greet"),
             "expected 'greet' function in symbols"
@@ -1730,41 +1750,31 @@ fn test_end_to_end_real_project_validation() {
 
     // Step 2: Populate database with tree-sitter data (includes discovery)
     populate_index(conn, root);
-    println!(
-        "✓ Setup: Discovered files and populated database"
-    );
+    println!("✓ Setup: Discovered files and populated database");
 
     // Step 3: Verify get_status shows data
     let status = get_status(conn).unwrap();
     assert!(status.total_files >= 3, "Should have at least 3 files");
     println!(
         "✓ Status: {} total files, {} with ts_indexed",
-        status.total_files,
-        status.ts_indexed_files
+        status.total_files, status.ts_indexed_files
     );
 
     // Step 4: Test search_symbol returns results
-    let search_results = search_symbol(
-        conn,
-        "new",
-        &SearchSymbolOptions::default(),
-    )
-    .unwrap();
+    let search_results = search_symbol(conn, "new", &SearchSymbolOptions::default()).unwrap();
     assert!(
         !search_results.is_empty(),
         "search_symbol should find 'new' method"
     );
-    println!("✓ search_symbol: {} results for 'new'", search_results.len());
+    println!(
+        "✓ search_symbol: {} results for 'new'",
+        search_results.len()
+    );
 
     // Step 5: Test get_symbol returns source_text
     if let Some(match_) = search_results.first() {
         let query_path = &match_.qualified_path;
-        let get_result = get_symbol(
-            conn,
-            query_path,
-            &GetSymbolOptions::default(),
-        )
-        .unwrap();
+        let get_result = get_symbol(conn, query_path, &GetSymbolOptions::default()).unwrap();
 
         if !get_result.symbols.is_empty() {
             if let Some(sym) = get_result.symbols.first() {
@@ -1776,7 +1786,10 @@ fn test_end_to_end_real_project_validation() {
             }
         } else {
             // If exact match doesn't work, just verify the query doesn't crash
-            println!("✓ get_symbol: Executed for '{}' (0 exact matches, fuzzy matching may apply)", query_path);
+            println!(
+                "✓ get_symbol: Executed for '{}' (0 exact matches, fuzzy matching may apply)",
+                query_path
+            );
         }
     }
 
@@ -1794,7 +1807,10 @@ fn test_end_to_end_real_project_validation() {
         !grep_results.matches.is_empty(),
         "grep_code should find 'fn' keyword"
     );
-    println!("✓ grep_code: {} matches for 'fn'", grep_results.matches.len());
+    println!(
+        "✓ grep_code: {} matches for 'fn'",
+        grep_results.matches.len()
+    );
 
     // Step 7: Test get_callgraph works
     let cg_result = get_callgraph(
@@ -1805,11 +1821,11 @@ fn test_end_to_end_real_project_validation() {
             max_depth: 1,
         },
     );
-    assert!(
-        cg_result.is_ok(),
-        "get_callgraph should not crash"
+    assert!(cg_result.is_ok(), "get_callgraph should not crash");
+    println!(
+        "✓ get_callgraph: {} edges from 'new'",
+        cg_result.unwrap().edges.len()
     );
-    println!("✓ get_callgraph: {} edges from 'new'", cg_result.unwrap().edges.len());
 
     // Step 8: Test get_blastradius works
     let blast_result = get_blastradius(
@@ -1820,13 +1836,8 @@ fn test_end_to_end_real_project_validation() {
             max_hops: 2,
         },
     );
-    assert!(
-        blast_result.is_ok(),
-        "get_blastradius should not crash"
-    );
-    println!(
-        "✓ get_blastradius: Computed impact for src/lib.rs"
-    );
+    assert!(blast_result.is_ok(), "get_blastradius should not crash");
+    println!("✓ get_blastradius: Computed impact for src/lib.rs");
 
     // Step 9: Test list_symbols works
     let list_result = list_symbols(conn, "src/lib.rs").unwrap();

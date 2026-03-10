@@ -207,16 +207,13 @@ fn try_resolve_by_location(
          LIMIT 1",
     )?;
 
-    let result = stmt.query_row(
-        rusqlite::params![file_path, line, char_pos],
-        |row| {
-            Ok(CallGraphNode {
-                symbol_id: row.get(0)?,
-                name: row.get(1)?,
-                file_path: row.get(2)?,
-            })
-        },
-    );
+    let result = stmt.query_row(rusqlite::params![file_path, line, char_pos], |row| {
+        Ok(CallGraphNode {
+            symbol_id: row.get(0)?,
+            name: row.get(1)?,
+            file_path: row.get(2)?,
+        })
+    });
 
     match result {
         Ok(node) => Ok(Some(node)),
@@ -227,9 +224,7 @@ fn try_resolve_by_location(
 
 /// Resolve by name or qualified path suffix.
 fn resolve_by_name(conn: &Connection, name: &str) -> Result<CallGraphNode, CodeContextError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, file_path FROM lsp_symbols",
-    )?;
+    let mut stmt = conn.prepare("SELECT id, name, file_path FROM lsp_symbols")?;
 
     let suffix = format!("::{}", name);
 
@@ -560,10 +555,18 @@ mod tests {
 
         assert_eq!(result.edges.len(), 2);
 
-        let lsp_edge = result.edges.iter().find(|e| e.callee.name == "fn_y").unwrap();
+        let lsp_edge = result
+            .edges
+            .iter()
+            .find(|e| e.callee.name == "fn_y")
+            .unwrap();
         assert_eq!(lsp_edge.source, "lsp");
 
-        let ts_edge = result.edges.iter().find(|e| e.callee.name == "fn_z").unwrap();
+        let ts_edge = result
+            .edges
+            .iter()
+            .find(|e| e.callee.name == "fn_z")
+            .unwrap();
         assert_eq!(ts_edge.source, "treesitter");
     }
 
@@ -571,7 +574,13 @@ mod tests {
     fn test_no_edges() {
         let conn = test_db();
         insert_file(&conn, "src/lonely.rs");
-        insert_symbol(&conn, "lsp:src/lonely.rs:lonely", "lonely", 12, "src/lonely.rs");
+        insert_symbol(
+            &conn,
+            "lsp:src/lonely.rs:lonely",
+            "lonely",
+            12,
+            "src/lonely.rs",
+        );
 
         let result = get_callgraph(
             &conn,

@@ -1,8 +1,8 @@
 use tree_sitter::{Node, Tree};
 
+use super::languages::LanguageConfig;
 use crate::model::entity::{build_entity_id, SemanticEntity};
 use crate::utils::hash::{content_hash, structural_hash};
-use super::languages::LanguageConfig;
 
 pub fn extract_entities(
     tree: &Tree,
@@ -210,7 +210,10 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
     }
 
     // For C# property_declaration, namespace_declaration, struct_declaration
-    if node_type == "property_declaration" || node_type == "namespace_declaration" || node_type == "struct_declaration" {
+    if node_type == "property_declaration"
+        || node_type == "namespace_declaration"
+        || node_type == "struct_declaration"
+    {
         if let Some(name_node) = node.child_by_field_name("name") {
             return Some(node_text(name_node, source).to_string());
         }
@@ -225,7 +228,10 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
     }
 
     // For C struct/enum/union specifiers, try the 'name' field
-    if node_type == "struct_specifier" || node_type == "enum_specifier" || node_type == "union_specifier" {
+    if node_type == "struct_specifier"
+        || node_type == "enum_specifier"
+        || node_type == "union_specifier"
+    {
         if let Some(name_node) = node.child_by_field_name("name") {
             return Some(node_text(name_node, source).to_string());
         }
@@ -252,17 +258,23 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
 /// Extract the name from a C declarator (handles pointer_declarator, function_declarator, etc.)
 fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
     match node.kind() {
-        "identifier" | "type_identifier" | "field_identifier" => Some(node_text(node, source).to_string()),
+        "identifier" | "type_identifier" | "field_identifier" => {
+            Some(node_text(node, source).to_string())
+        }
         "qualified_identifier" | "scoped_identifier" => {
             // For C++ qualified names like ClassName::method, return the full qualified name
             Some(node_text(node, source).to_string())
         }
-        "pointer_declarator" | "function_declarator" | "array_declarator" | "parenthesized_declarator" => {
+        "pointer_declarator"
+        | "function_declarator"
+        | "array_declarator"
+        | "parenthesized_declarator" => {
             if let Some(inner) = node.child_by_field_name("declarator") {
                 extract_declarator_name(inner, source)
             } else {
                 let mut cursor = node.walk();
-                let result = node.named_children(&mut cursor)
+                let result = node
+                    .named_children(&mut cursor)
                     .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
                     .map(|c| node_text(c, source).to_string());
                 result
@@ -273,7 +285,8 @@ fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
                 return Some(node_text(name, source).to_string());
             }
             let mut cursor = node.walk();
-            let result = node.named_children(&mut cursor)
+            let result = node
+                .named_children(&mut cursor)
                 .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
                 .map(|c| node_text(c, source).to_string());
             result
@@ -285,7 +298,7 @@ fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
     node.utf8_text(source).unwrap_or("")
 }
 
-fn map_node_type<'a>(tree_sitter_type: &'a str) -> &'a str {
+fn map_node_type(tree_sitter_type: &str) -> &str {
     match tree_sitter_type {
         "function_declaration" | "function_definition" | "function_item" => "function",
         "method_declaration" | "method_definition" | "method" | "singleton_method" => "method",
@@ -299,7 +312,9 @@ fn map_node_type<'a>(tree_sitter_type: &'a str) -> &'a str {
         "trait_item" => "trait",
         "mod_item" | "module" | "namespace_definition" | "namespace_declaration" => "module",
         "export_statement" => "export",
-        "lexical_declaration" | "variable_declaration" | "var_declaration" | "declaration" => "variable",
+        "lexical_declaration" | "variable_declaration" | "var_declaration" | "declaration" => {
+            "variable"
+        }
         "const_declaration" | "const_item" => "constant",
         "static_item" => "static",
         "decorated_definition" => "decorated_definition",
@@ -313,7 +328,11 @@ fn map_node_type<'a>(tree_sitter_type: &'a str) -> &'a str {
 }
 
 /// Extract entity info from a call node (Elixir macros like def, defmodule, etc.)
-fn extract_call_entity(node: Node, config: &LanguageConfig, source: &[u8]) -> Option<(String, &'static str)> {
+fn extract_call_entity(
+    node: Node,
+    config: &LanguageConfig,
+    source: &[u8],
+) -> Option<(String, &'static str)> {
     let target = node.child_by_field_name("target")?;
     if target.kind() != "identifier" {
         return None;
@@ -338,13 +357,12 @@ fn extract_call_entity(node: Node, config: &LanguageConfig, source: &[u8]) -> Op
 
     // Get arguments node (child by kind, not field name)
     let mut cursor = node.walk();
-    let args = node.named_children(&mut cursor)
+    let args = node
+        .named_children(&mut cursor)
         .find(|c| c.kind() == "arguments")?;
 
     let name = match keyword {
-        "defmodule" | "defprotocol" => {
-            extract_first_alias_or_identifier(args, source)?
-        }
+        "defmodule" | "defprotocol" => extract_first_alias_or_identifier(args, source)?,
         "defimpl" => {
             let base = extract_first_alias_or_identifier(args, source)?;
             if let Some(target) = extract_keyword_value(args, "for", source) {
@@ -377,7 +395,8 @@ fn extract_fn_name_from_arg(node: Node, source: &[u8]) -> Option<String> {
                 Some(node_text(fn_target, source).to_string())
             } else {
                 let mut c = node.walk();
-                let id = node.named_children(&mut c)
+                let id = node
+                    .named_children(&mut c)
                     .find(|n| n.kind() == "identifier")?;
                 Some(node_text(id, source).to_string())
             }

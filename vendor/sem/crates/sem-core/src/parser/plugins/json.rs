@@ -37,8 +37,7 @@ impl SemanticParserPlugin for JsonParserPlugin {
                 trim_trailing_blanks(&lines, entry.start_line, closing)
             };
 
-            let entity_content = lines[entry.start_line - 1..end_line]
-                .join("\n");
+            let entity_content = lines[entry.start_line - 1..end_line].join("\n");
 
             // Compute a structural_hash over just the value (excluding the key name)
             // so that rename detection works: "timeout": 30 → "request_timeout": 30

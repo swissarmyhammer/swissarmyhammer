@@ -43,10 +43,7 @@ impl SemanticParserPlugin for MarkdownParserPlugin {
                 let name = caps[2].trim().to_string();
 
                 // Find parent: pop headings with >= level
-                while section_stack
-                    .last()
-                    .map_or(false, |(l, _)| *l >= level)
-                {
+                while section_stack.last().is_some_and(|(l, _)| *l >= level) {
                     section_stack.pop();
                 }
 
@@ -67,16 +64,14 @@ impl SemanticParserPlugin for MarkdownParserPlugin {
                 sec.lines.push(line.to_string());
             } else {
                 // Content before first heading — preamble
-                if !line.trim().is_empty() {
-                    if current_section.is_none() {
-                        current_section = Some(Section {
-                            level: 0,
-                            name: "(preamble)".to_string(),
-                            start_line: i + 1,
-                            lines: vec![line.to_string()],
-                            parent_id: None,
-                        });
-                    }
+                if !line.trim().is_empty() && current_section.is_none() {
+                    current_section = Some(Section {
+                        level: 0,
+                        name: "(preamble)".to_string(),
+                        start_line: i + 1,
+                        lines: vec![line.to_string()],
+                        parent_id: None,
+                    });
                 }
             }
         }

@@ -137,10 +137,7 @@ pub fn write_symbols(
     file_path: &str,
     symbols: &[FlatSymbol],
 ) -> Result<usize, CodeContextError> {
-    conn.execute(
-        "DELETE FROM lsp_symbols WHERE file_path = ?1",
-        [file_path],
-    )?;
+    conn.execute("DELETE FROM lsp_symbols WHERE file_path = ?1", [file_path])?;
 
     let mut stmt = conn.prepare_cached(
         "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char, detail)
@@ -197,10 +194,7 @@ pub fn write_edges(
 }
 
 /// Mark a file as LSP-indexed by setting `lsp_indexed = 1` in `indexed_files`.
-pub fn mark_lsp_indexed(
-    conn: &Connection,
-    file_path: &str,
-) -> Result<(), CodeContextError> {
+pub fn mark_lsp_indexed(conn: &Connection, file_path: &str) -> Result<(), CodeContextError> {
     conn.execute(
         "UPDATE indexed_files SET lsp_indexed = 1 WHERE file_path = ?1",
         [file_path],

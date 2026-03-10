@@ -175,9 +175,7 @@ fn find_roots(
     file_path: &str,
     symbol_name: Option<&str>,
 ) -> Result<Vec<(String, String)>, CodeContextError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name FROM lsp_symbols WHERE file_path = ?1",
-    )?;
+    let mut stmt = conn.prepare("SELECT id, name FROM lsp_symbols WHERE file_path = ?1")?;
 
     let rows = stmt.query_map([file_path], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))

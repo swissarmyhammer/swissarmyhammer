@@ -18,8 +18,8 @@ use swissarmyhammer_code_context::{FanoutWatcher, FileEvent};
 /// Source file extensions worth tracking for code context indexing.
 const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp", "rb", "swift",
-    "kt", "cs", "lua", "zig", "hs", "ml", "ex", "exs", "erl", "clj", "scala", "r", "jl",
-    "toml", "yaml", "yml", "json", "sh", "bash", "zsh",
+    "kt", "cs", "lua", "zig", "hs", "ml", "ex", "exs", "erl", "clj", "scala", "r", "jl", "toml",
+    "yaml", "yml", "json", "sh", "bash", "zsh",
 ];
 
 /// Check if a path is a source file we should index.
@@ -167,9 +167,8 @@ async fn run_watcher(
                 // Open DB connection and process events
                 let conn = match Connection::open(&db_path) {
                     Ok(c) => {
-                        let _ = c.execute_batch(
-                            "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;",
-                        );
+                        let _ =
+                            c.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
                         c
                     }
                     Err(e) => {

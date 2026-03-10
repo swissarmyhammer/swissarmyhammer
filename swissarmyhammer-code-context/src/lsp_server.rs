@@ -108,7 +108,11 @@ pub fn start_lsp_server(language: &str, project_root: &Path) -> LspServerHandle 
     // Try to start the server
     match spawn_server(&config, project_root) {
         Ok(_) => {
-            info!("LSP server started for {}: {}", language, config.executable.display());
+            info!(
+                "LSP server started for {}: {}",
+                language,
+                config.executable.display()
+            );
             LspServerHandle {
                 language: language.to_string(),
                 started: true,
@@ -150,7 +154,9 @@ fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), Cod
     // Check if executable exists
     if !config.executable.exists() {
         // Try to find it in PATH
-        if let Some(exe_path) = find_executable(config.executable.file_name().unwrap().to_str().unwrap()) {
+        if let Some(exe_path) =
+            find_executable(config.executable.file_name().unwrap().to_str().unwrap())
+        {
             // Executable found in PATH, use that
             let mut cmd = Command::new(&exe_path);
             cmd.current_dir(project_root)
@@ -165,10 +171,7 @@ fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), Cod
             // Spawn but don't wait - we just want to verify it starts
             match cmd.spawn() {
                 Ok(mut child) => {
-                    debug!(
-                        "LSP server process spawned with PID: {:?}",
-                        child.id()
-                    );
+                    debug!("LSP server process spawned with PID: {:?}", child.id());
 
                     // Try to wait briefly with timeout to catch immediate errors
                     // In a real implementation, this would establish JSON-RPC communication
@@ -177,10 +180,7 @@ fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), Cod
                     // Check if process is still running
                     match child.try_wait() {
                         Ok(Some(_)) => {
-                            Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                "LSP server process exited immediately",
-                            ))?
+                            Err(io::Error::other("LSP server process exited immediately"))?
                         }
                         Ok(None) => {
                             // Process still running, good!
@@ -221,10 +221,7 @@ fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), Cod
                 std::thread::sleep(Duration::from_millis(100));
 
                 match child.try_wait() {
-                    Ok(Some(_)) => Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "LSP server process exited immediately",
-                    ))?,
+                    Ok(Some(_)) => Err(io::Error::other("LSP server process exited immediately"))?,
                     Ok(None) => {
                         debug!("LSP server process is running");
                         Ok(())
@@ -246,13 +243,20 @@ mod tests {
         // Most systems have 'ls' or 'cmd' available
         let exe = if cfg!(windows) { "cmd" } else { "ls" };
         let result = find_executable(exe);
-        assert!(result.is_some(), "Common executable {} should be found", exe);
+        assert!(
+            result.is_some(),
+            "Common executable {} should be found",
+            exe
+        );
     }
 
     #[test]
     fn test_find_nonexistent_executable() {
         let result = find_executable("this_exe_should_not_exist_anywhere_12345");
-        assert!(result.is_none(), "Nonexistent executable should not be found");
+        assert!(
+            result.is_none(),
+            "Nonexistent executable should not be found"
+        );
     }
 
     #[test]

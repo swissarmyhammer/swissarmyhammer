@@ -3,16 +3,16 @@
 //! Handles JSON-RPC protocol with LSP server processes.
 //! Sends requests for symbols and collects results for database persistence.
 
+use rusqlite::Connection;
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::Child;
-use serde_json::{json, Value};
 use tracing::{debug, warn};
-use rusqlite::Connection;
 
 use crate::error::CodeContextError;
-use crate::lsp_indexer::{flatten_symbols, write_symbols, write_edges, mark_lsp_indexed, CallEdge};
-use lsp_types::{DocumentSymbol, CallHierarchyItem, CallHierarchyOutgoingCall};
+use crate::lsp_indexer::{flatten_symbols, mark_lsp_indexed, write_edges, write_symbols, CallEdge};
+use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, DocumentSymbol};
 
 /// Result of collecting symbols from LSP server for a file.
 #[derive(Debug)]
@@ -54,7 +54,10 @@ pub fn collect_and_persist_symbols(
     // Mark file as lsp_indexed
     mark_lsp_indexed(conn, file_path)?;
 
-    debug!("Collected and persisted {} symbols for {}", symbol_count, file_path);
+    debug!(
+        "Collected and persisted {} symbols for {}",
+        symbol_count, file_path
+    );
     Ok(symbol_count)
 }
 
@@ -68,10 +71,7 @@ pub fn collect_and_persist_symbols(
 pub fn parse_document_symbols(response: &Value) -> Result<Vec<DocumentSymbol>, CodeContextError> {
     // Check for JSON-RPC error first
     if let Some(error) = response.get("error") {
-        return Err(CodeContextError::LspError(format!(
-            "LSP error: {}",
-            error
-        )));
+        return Err(CodeContextError::LspError(format!("LSP error: {}", error)));
     }
 
     // Extract the "result" field from the JSON-RPC response
@@ -88,9 +88,9 @@ pub fn parse_document_symbols(response: &Value) -> Result<Vec<DocumentSymbol>, C
 
     // Try to parse as DocumentSymbol[]
     let symbols: Vec<DocumentSymbol> = serde_json::from_value(Value::Array(result.clone()))
-        .map_err(|e| CodeContextError::LspError(format!(
-            "failed to parse DocumentSymbol array: {}", e
-        )))?;
+        .map_err(|e| {
+            CodeContextError::LspError(format!("failed to parse DocumentSymbol array: {}", e))
+        })?;
 
     Ok(symbols)
 }
@@ -136,18 +136,26 @@ impl LspJsonRpcClient {
 
         // Write request
         {
-            let stdin = self.process.stdin.as_mut()
+            let stdin = self
+                .process
+                .stdin
+                .as_mut()
                 .ok_or_else(|| CodeContextError::LspError("stdin unavailable".into()))?;
-            stdin.write_all(msg.as_bytes())
+            stdin
+                .write_all(msg.as_bytes())
                 .map_err(|e| CodeContextError::LspError(format!("write failed: {}", e)))?;
-            stdin.flush()
+            stdin
+                .flush()
                 .map_err(|e| CodeContextError::LspError(format!("flush failed: {}", e)))?;
         }
 
         debug!("Sent LSP request: {} (id={})", method, expected_id);
 
         // Read response — loop to skip notifications (no "id" field)
-        let stdout = self.process.stdout.as_mut()
+        let stdout = self
+            .process
+            .stdout
+            .as_mut()
             .ok_or_else(|| CodeContextError::LspError("stdout unavailable".into()))?;
         let mut reader = BufReader::new(stdout);
 
@@ -156,7 +164,13 @@ impl LspJsonRpcClient {
 
             // Notifications have no "id" field — skip them
             if response.get("id").is_none() {
-                debug!("Skipping LSP notification: {}", response.get("method").and_then(|v| v.as_str()).unwrap_or("unknown"));
+                debug!(
+                    "Skipping LSP notification: {}",
+                    response
+                        .get("method")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                );
                 continue;
             }
 
@@ -165,7 +179,10 @@ impl LspJsonRpcClient {
                 if id.as_u64() == Some(expected_id as u64) {
                     return Ok(response);
                 }
-                warn!("Unexpected response id: expected {}, got {}", expected_id, id);
+                warn!(
+                    "Unexpected response id: expected {}, got {}",
+                    expected_id, id
+                );
             }
 
             return Ok(response);
@@ -194,23 +211,21 @@ impl LspJsonRpcClient {
         });
 
         match self.send_request("textDocument/documentSymbol", params) {
-            Ok(response) => {
-                match parse_document_symbols(&response) {
-                    Ok(symbols) => {
-                        let symbol_count = count_symbols_recursive(&symbols);
-                        Ok(LspCollectionResult {
-                            file_path: file_path_str,
-                            symbol_count,
-                            error: None,
-                        })
-                    }
-                    Err(e) => Ok(LspCollectionResult {
+            Ok(response) => match parse_document_symbols(&response) {
+                Ok(symbols) => {
+                    let symbol_count = count_symbols_recursive(&symbols);
+                    Ok(LspCollectionResult {
                         file_path: file_path_str,
-                        symbol_count: 0,
-                        error: Some(e.to_string()),
-                    }),
+                        symbol_count,
+                        error: None,
+                    })
                 }
-            }
+                Err(e) => Ok(LspCollectionResult {
+                    file_path: file_path_str,
+                    symbol_count: 0,
+                    error: Some(e.to_string()),
+                }),
+            },
             Err(e) => Ok(LspCollectionResult {
                 file_path: file_path_str,
                 symbol_count: 0,
@@ -238,23 +253,21 @@ impl LspJsonRpcClient {
         });
 
         match self.send_request("textDocument/documentSymbol", params) {
-            Ok(response) => {
-                match parse_document_symbols(&response) {
-                    Ok(symbols) => {
-                        let count = collect_and_persist_symbols(conn, relative_path, &symbols)?;
-                        Ok(LspCollectionResult {
-                            file_path: file_path_str,
-                            symbol_count: count,
-                            error: None,
-                        })
-                    }
-                    Err(e) => Ok(LspCollectionResult {
+            Ok(response) => match parse_document_symbols(&response) {
+                Ok(symbols) => {
+                    let count = collect_and_persist_symbols(conn, relative_path, &symbols)?;
+                    Ok(LspCollectionResult {
                         file_path: file_path_str,
-                        symbol_count: 0,
-                        error: Some(e.to_string()),
-                    }),
+                        symbol_count: count,
+                        error: None,
+                    })
                 }
-            }
+                Err(e) => Ok(LspCollectionResult {
+                    file_path: file_path_str,
+                    symbol_count: 0,
+                    error: Some(e.to_string()),
+                }),
+            },
             Err(e) => Ok(LspCollectionResult {
                 file_path: file_path_str,
                 symbol_count: 0,
@@ -288,7 +301,8 @@ impl LspJsonRpcClient {
         // Check for errors
         if let Some(error) = response.get("error") {
             return Err(CodeContextError::LspError(format!(
-                "LSP initialize error: {}", error
+                "LSP initialize error: {}",
+                error
             )));
         }
 
@@ -297,14 +311,17 @@ impl LspJsonRpcClient {
             "jsonrpc": "2.0",
             "method": "initialized",
             "params": {}
-        }).to_string();
+        })
+        .to_string();
         let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
 
         if let Some(stdin) = self.process.stdin.as_mut() {
-            stdin.write_all(msg.as_bytes())
-                .map_err(|e| CodeContextError::LspError(format!("write initialized failed: {}", e)))?;
-            stdin.flush()
-                .map_err(|e| CodeContextError::LspError(format!("flush initialized failed: {}", e)))?;
+            stdin.write_all(msg.as_bytes()).map_err(|e| {
+                CodeContextError::LspError(format!("write initialized failed: {}", e))
+            })?;
+            stdin.flush().map_err(|e| {
+                CodeContextError::LspError(format!("flush initialized failed: {}", e))
+            })?;
         }
 
         debug!("LSP server initialized");
@@ -348,10 +365,11 @@ impl LspJsonRpcClient {
                 "position": { "line": sym.start_line, "character": sym.start_char }
             });
 
-            let prepare_response = match self.send_request("textDocument/prepareCallHierarchy", prepare_params) {
-                Ok(r) => r,
-                Err(_) => continue, // Server may not support call hierarchy
-            };
+            let prepare_response =
+                match self.send_request("textDocument/prepareCallHierarchy", prepare_params) {
+                    Ok(r) => r,
+                    Err(_) => continue, // Server may not support call hierarchy
+                };
 
             let items = parse_call_hierarchy_items(&prepare_response)?;
             if items.is_empty() {
@@ -364,10 +382,11 @@ impl LspJsonRpcClient {
                     .map_err(|e| CodeContextError::LspError(format!("serialize item: {}", e)))?
             });
 
-            let outgoing_response = match self.send_request("callHierarchy/outgoingCalls", outgoing_params) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
+            let outgoing_response =
+                match self.send_request("callHierarchy/outgoingCalls", outgoing_params) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
 
             let outgoing_calls = parse_outgoing_calls(&outgoing_response)?;
 
@@ -376,8 +395,8 @@ impl LspJsonRpcClient {
                 let callee_qpath = call.to.name.clone();
                 let callee_id = format!("lsp:{}:{}", callee_file, callee_qpath);
 
-                let from_ranges_json = serde_json::to_string(&call.from_ranges)
-                    .unwrap_or_else(|_| "[]".to_string());
+                let from_ranges_json =
+                    serde_json::to_string(&call.from_ranges).unwrap_or_else(|_| "[]".to_string());
 
                 all_edges.push(CallEdge {
                     caller_id: sym.id.clone(),
@@ -390,7 +409,11 @@ impl LspJsonRpcClient {
             }
         }
 
-        debug!("Collected {} LSP call edges for {}", all_edges.len(), relative_path);
+        debug!(
+            "Collected {} LSP call edges for {}",
+            all_edges.len(),
+            relative_path
+        );
         Ok(all_edges)
     }
 
@@ -410,37 +433,39 @@ impl LspJsonRpcClient {
 }
 
 /// Parse a `textDocument/prepareCallHierarchy` response into CallHierarchyItem array.
-pub fn parse_call_hierarchy_items(response: &Value) -> Result<Vec<CallHierarchyItem>, CodeContextError> {
+pub fn parse_call_hierarchy_items(
+    response: &Value,
+) -> Result<Vec<CallHierarchyItem>, CodeContextError> {
     if let Some(error) = response.get("error") {
         return Err(CodeContextError::LspError(format!("LSP error: {}", error)));
     }
 
     match response.get("result") {
-        Some(Value::Array(arr)) => {
-            serde_json::from_value(Value::Array(arr.clone()))
-                .map_err(|e| CodeContextError::LspError(format!("parse CallHierarchyItem: {}", e)))
-        }
+        Some(Value::Array(arr)) => serde_json::from_value(Value::Array(arr.clone()))
+            .map_err(|e| CodeContextError::LspError(format!("parse CallHierarchyItem: {}", e))),
         Some(Value::Null) | None => Ok(Vec::new()),
         Some(other) => Err(CodeContextError::LspError(format!(
-            "unexpected prepareCallHierarchy result: {}", other
+            "unexpected prepareCallHierarchy result: {}",
+            other
         ))),
     }
 }
 
 /// Parse a `callHierarchy/outgoingCalls` response.
-pub fn parse_outgoing_calls(response: &Value) -> Result<Vec<CallHierarchyOutgoingCall>, CodeContextError> {
+pub fn parse_outgoing_calls(
+    response: &Value,
+) -> Result<Vec<CallHierarchyOutgoingCall>, CodeContextError> {
     if let Some(error) = response.get("error") {
         return Err(CodeContextError::LspError(format!("LSP error: {}", error)));
     }
 
     match response.get("result") {
-        Some(Value::Array(arr)) => {
-            serde_json::from_value(Value::Array(arr.clone()))
-                .map_err(|e| CodeContextError::LspError(format!("parse OutgoingCalls: {}", e)))
-        }
+        Some(Value::Array(arr)) => serde_json::from_value(Value::Array(arr.clone()))
+            .map_err(|e| CodeContextError::LspError(format!("parse OutgoingCalls: {}", e))),
         Some(Value::Null) | None => Ok(Vec::new()),
         Some(other) => Err(CodeContextError::LspError(format!(
-            "unexpected outgoingCalls result: {}", other
+            "unexpected outgoingCalls result: {}",
+            other
         ))),
     }
 }
@@ -470,9 +495,15 @@ fn uri_to_relative_path(uri: &str, reference_path: &Path) -> String {
 
 /// Count symbols recursively including children.
 fn count_symbols_recursive(symbols: &[DocumentSymbol]) -> usize {
-    symbols.iter().map(|s| {
-        1 + s.children.as_ref().map_or(0, |c| count_symbols_recursive(c))
-    }).sum()
+    symbols
+        .iter()
+        .map(|s| {
+            1 + s
+                .children
+                .as_ref()
+                .map_or(0, |c| count_symbols_recursive(c))
+        })
+        .sum()
 }
 
 /// Read a single JSON-RPC message from a reader using Content-Length framing.
@@ -482,10 +513,13 @@ fn read_jsonrpc_response<R: BufRead>(reader: &mut R) -> Result<Value, CodeContex
     // Read headers until blank line
     loop {
         let mut line = String::new();
-        let n = reader.read_line(&mut line)
+        let n = reader
+            .read_line(&mut line)
             .map_err(|e| CodeContextError::LspError(format!("read header: {}", e)))?;
         if n == 0 {
-            return Err(CodeContextError::LspError("unexpected EOF reading headers".into()));
+            return Err(CodeContextError::LspError(
+                "unexpected EOF reading headers".into(),
+            ));
         }
 
         let trimmed = line.trim();
@@ -494,10 +528,10 @@ fn read_jsonrpc_response<R: BufRead>(reader: &mut R) -> Result<Value, CodeContex
         }
 
         if let Some(val) = trimmed.strip_prefix("Content-Length:") {
-            content_length = Some(
-                val.trim().parse::<usize>()
-                    .map_err(|e| CodeContextError::LspError(format!("bad Content-Length: {}", e)))?,
-            );
+            content_length =
+                Some(val.trim().parse::<usize>().map_err(|e| {
+                    CodeContextError::LspError(format!("bad Content-Length: {}", e))
+                })?);
         }
     }
 
@@ -505,7 +539,8 @@ fn read_jsonrpc_response<R: BufRead>(reader: &mut R) -> Result<Value, CodeContex
         .ok_or_else(|| CodeContextError::LspError("missing Content-Length header".into()))?;
 
     let mut body = vec![0u8; length];
-    reader.read_exact(&mut body)
+    reader
+        .read_exact(&mut body)
         .map_err(|e| CodeContextError::LspError(format!("read body: {}", e)))?;
 
     serde_json::from_slice(&body)
@@ -665,39 +700,37 @@ mod tests {
     #[test]
     fn test_count_symbols_recursive() {
         #[allow(deprecated)]
-        let symbols = vec![
-            DocumentSymbol {
-                name: "Outer".to_string(),
-                detail: None,
-                kind: SymbolKind::STRUCT,
-                tags: None,
-                deprecated: None,
-                range: Range::new(Position::new(0, 0), Position::new(10, 0)),
-                selection_range: Range::new(Position::new(0, 0), Position::new(0, 5)),
-                children: Some(vec![
-                    DocumentSymbol {
-                        name: "inner1".to_string(),
-                        detail: None,
-                        kind: SymbolKind::METHOD,
-                        tags: None,
-                        deprecated: None,
-                        range: Range::new(Position::new(1, 0), Position::new(3, 0)),
-                        selection_range: Range::new(Position::new(1, 0), Position::new(1, 6)),
-                        children: None,
-                    },
-                    DocumentSymbol {
-                        name: "inner2".to_string(),
-                        detail: None,
-                        kind: SymbolKind::METHOD,
-                        tags: None,
-                        deprecated: None,
-                        range: Range::new(Position::new(4, 0), Position::new(6, 0)),
-                        selection_range: Range::new(Position::new(4, 0), Position::new(4, 6)),
-                        children: None,
-                    },
-                ]),
-            },
-        ];
+        let symbols = vec![DocumentSymbol {
+            name: "Outer".to_string(),
+            detail: None,
+            kind: SymbolKind::STRUCT,
+            tags: None,
+            deprecated: None,
+            range: Range::new(Position::new(0, 0), Position::new(10, 0)),
+            selection_range: Range::new(Position::new(0, 0), Position::new(0, 5)),
+            children: Some(vec![
+                DocumentSymbol {
+                    name: "inner1".to_string(),
+                    detail: None,
+                    kind: SymbolKind::METHOD,
+                    tags: None,
+                    deprecated: None,
+                    range: Range::new(Position::new(1, 0), Position::new(3, 0)),
+                    selection_range: Range::new(Position::new(1, 0), Position::new(1, 6)),
+                    children: None,
+                },
+                DocumentSymbol {
+                    name: "inner2".to_string(),
+                    detail: None,
+                    kind: SymbolKind::METHOD,
+                    tags: None,
+                    deprecated: None,
+                    range: Range::new(Position::new(4, 0), Position::new(6, 0)),
+                    selection_range: Range::new(Position::new(4, 0), Position::new(4, 6)),
+                    children: None,
+                },
+            ]),
+        }];
         assert_eq!(count_symbols_recursive(&symbols), 3);
     }
 

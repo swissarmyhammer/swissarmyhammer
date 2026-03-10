@@ -95,7 +95,10 @@ async fn test_mcp_get_status_discovers_files() {
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), serde_json::json!("get status"));
 
-    let result = tool.execute(args, &context).await.expect("get status failed");
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("get status failed");
     assert_eq!(result.is_error, Some(false));
 
     let text = match &result.content[0].raw {
@@ -103,8 +106,7 @@ async fn test_mcp_get_status_discovers_files() {
         _ => panic!("Expected text content"),
     };
 
-    let response: serde_json::Value =
-        serde_json::from_str(text).expect("Failed to parse response");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Failed to parse response");
 
     // After startup_cleanup in get_status, should discover at least 3 files:
     // Cargo.toml, main.rs, lib.rs
@@ -133,30 +135,34 @@ async fn test_mcp_get_status_is_idempotent() {
     let result1 = {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("get status"));
-        let result = tool.execute(args, &context).await.expect("get status 1 failed");
+        let result = tool
+            .execute(args, &context)
+            .await
+            .expect("get status 1 failed");
 
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("Expected text content"),
         };
 
-        serde_json::from_str::<serde_json::Value>(text)
-            .expect("Failed to parse response 1")
+        serde_json::from_str::<serde_json::Value>(text).expect("Failed to parse response 1")
     };
 
     // Second call
     let result2 = {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("get status"));
-        let result = tool.execute(args, &context).await.expect("get status 2 failed");
+        let result = tool
+            .execute(args, &context)
+            .await
+            .expect("get status 2 failed");
 
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("Expected text content"),
         };
 
-        serde_json::from_str::<serde_json::Value>(text)
-            .expect("Failed to parse response 2")
+        serde_json::from_str::<serde_json::Value>(text).expect("Failed to parse response 2")
     };
 
     // Both should report the same file count
@@ -183,19 +189,24 @@ async fn test_mcp_detects_new_files() {
     let initial_count = {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("get status"));
-        let result = tool.execute(args, &context).await.expect("get status 1 failed");
+        let result = tool
+            .execute(args, &context)
+            .await
+            .expect("get status 1 failed");
 
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("Expected text content"),
         };
 
-        serde_json::from_str::<serde_json::Value>(text)
-            .unwrap()["total_files"]
+        serde_json::from_str::<serde_json::Value>(text).unwrap()["total_files"]
             .as_u64()
             .unwrap()
     };
-    assert!(initial_count >= 3, "Should discover at least 3 files initially");
+    assert!(
+        initial_count >= 3,
+        "Should discover at least 3 files initially"
+    );
 
     // Add a new file to the project
     std::fs::write(
@@ -218,23 +229,27 @@ async fn test_mcp_detects_new_files() {
     let final_count = {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("get status"));
-        let result = tool.execute(args, &context).await.expect("get status 2 failed");
+        let result = tool
+            .execute(args, &context)
+            .await
+            .expect("get status 2 failed");
 
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("Expected text content"),
         };
 
-        serde_json::from_str::<serde_json::Value>(text)
-            .unwrap()["total_files"]
+        serde_json::from_str::<serde_json::Value>(text).unwrap()["total_files"]
             .as_u64()
             .unwrap()
     };
 
     assert_eq!(
-        final_count, initial_count + 1,
+        final_count,
+        initial_count + 1,
         "Should detect the new file. Before: {}, After: {}",
-        initial_count, final_count
+        initial_count,
+        final_count
     );
 }
 
@@ -253,15 +268,17 @@ async fn test_mcp_detects_deleted_files() {
     let initial_count = {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("get status"));
-        let result = tool.execute(args, &context).await.expect("get status 1 failed");
+        let result = tool
+            .execute(args, &context)
+            .await
+            .expect("get status 1 failed");
 
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("Expected text content"),
         };
 
-        serde_json::from_str::<serde_json::Value>(text)
-            .unwrap()["total_files"]
+        serde_json::from_str::<serde_json::Value>(text).unwrap()["total_files"]
             .as_u64()
             .unwrap()
     };
@@ -284,22 +301,26 @@ async fn test_mcp_detects_deleted_files() {
     let final_count = {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("get status"));
-        let result = tool.execute(args, &context).await.expect("get status 2 failed");
+        let result = tool
+            .execute(args, &context)
+            .await
+            .expect("get status 2 failed");
 
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("Expected text content"),
         };
 
-        serde_json::from_str::<serde_json::Value>(text)
-            .unwrap()["total_files"]
+        serde_json::from_str::<serde_json::Value>(text).unwrap()["total_files"]
             .as_u64()
             .unwrap()
     };
 
     assert_eq!(
-        final_count, initial_count - 1,
+        final_count,
+        initial_count - 1,
         "Should detect the deleted file. Before: {}, After: {}",
-        initial_count, final_count
+        initial_count,
+        final_count
     );
 }

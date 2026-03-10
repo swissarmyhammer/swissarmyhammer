@@ -145,9 +145,8 @@ fn load_candidates(conn: &Connection) -> Result<Vec<Candidate>, CodeContextError
 
     // LSP symbols
     {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, kind, file_path, start_line FROM lsp_symbols",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, name, kind, file_path, start_line FROM lsp_symbols")?;
 
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -285,8 +284,22 @@ mod tests {
         insert_file(conn, "src/auth.rs");
 
         // LSP symbols
-        insert_lsp_symbol(conn, "lsp:src/lib.rs:MyStruct", "MyStruct", 23, "src/lib.rs", 0);
-        insert_lsp_symbol(conn, "lsp:src/lib.rs:MyStruct::new", "new", 12, "src/lib.rs", 5);
+        insert_lsp_symbol(
+            conn,
+            "lsp:src/lib.rs:MyStruct",
+            "MyStruct",
+            23,
+            "src/lib.rs",
+            0,
+        );
+        insert_lsp_symbol(
+            conn,
+            "lsp:src/lib.rs:MyStruct::new",
+            "new",
+            12,
+            "src/lib.rs",
+            5,
+        );
         insert_lsp_symbol(
             conn,
             "lsp:src/lib.rs:MyStruct::authenticate",
@@ -295,7 +308,14 @@ mod tests {
             "src/lib.rs",
             10,
         );
-        insert_lsp_symbol(conn, "lsp:src/auth.rs:AuthService", "AuthService", 5, "src/auth.rs", 0);
+        insert_lsp_symbol(
+            conn,
+            "lsp:src/auth.rs:AuthService",
+            "AuthService",
+            5,
+            "src/auth.rs",
+            0,
+        );
         insert_lsp_symbol(
             conn,
             "lsp:src/auth.rs:AuthService::validate",
@@ -318,8 +338,7 @@ mod tests {
         let conn = test_db();
         seed_fixtures(&conn);
 
-        let results =
-            search_symbol(&conn, "auth", &SearchSymbolOptions::default()).unwrap();
+        let results = search_symbol(&conn, "auth", &SearchSymbolOptions::default()).unwrap();
 
         assert!(
             results.len() >= 2,
@@ -368,12 +387,8 @@ mod tests {
         let conn = test_db();
         seed_fixtures(&conn);
 
-        let results = search_symbol(
-            &conn,
-            "zzzznonexistent",
-            &SearchSymbolOptions::default(),
-        )
-        .unwrap();
+        let results =
+            search_symbol(&conn, "zzzznonexistent", &SearchSymbolOptions::default()).unwrap();
 
         assert!(results.is_empty());
     }

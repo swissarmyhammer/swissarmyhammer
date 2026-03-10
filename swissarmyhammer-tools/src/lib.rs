@@ -73,8 +73,7 @@ pub use health_registry::collect_all_health_checks;
 pub use mcp::McpServer;
 pub use mcp::{
     register_code_context_tools, register_file_tools, register_git_tools, register_js_tools,
-    register_kanban_tools, register_questions_tools, register_shell_tools,
-    register_web_tools,
+    register_kanban_tools, register_questions_tools, register_shell_tools, register_web_tools,
 };
 pub use mcp::{ToolContext, ToolRegistry};
 

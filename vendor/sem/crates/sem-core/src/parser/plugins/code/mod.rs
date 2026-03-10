@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use crate::model::entity::SemanticEntity;
 use crate::parser::plugin::SemanticParserPlugin;
-use languages::{get_all_code_extensions, get_language_config};
 use entity_extractor::extract_entities;
+use languages::{get_all_code_extensions, get_language_config};
 
 pub struct CodeParserPlugin;
 
@@ -103,11 +103,26 @@ enum Status {
         let entities = plugin.extract_entities(code, "UserService.java");
         let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
         let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
-        eprintln!("Java entities: {:?}", names.iter().zip(types.iter()).collect::<Vec<_>>());
+        eprintln!(
+            "Java entities: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
 
-        assert!(names.contains(&"UserService"), "Should find class UserService, got: {:?}", names);
-        assert!(names.contains(&"Repository"), "Should find interface Repository, got: {:?}", names);
-        assert!(names.contains(&"Status"), "Should find enum Status, got: {:?}", names);
+        assert!(
+            names.contains(&"UserService"),
+            "Should find class UserService, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Repository"),
+            "Should find interface Repository, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Status"),
+            "Should find enum Status, got: {:?}",
+            names
+        );
     }
 
     #[test]
@@ -126,11 +141,28 @@ public class Calculator {
         let plugin = CodeParserPlugin;
         let entities = plugin.extract_entities(code, "Calculator.java");
         let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
-        eprintln!("Java nested: {:?}", entities.iter().map(|e| (&e.name, &e.entity_type, &e.parent_id)).collect::<Vec<_>>());
+        eprintln!(
+            "Java nested: {:?}",
+            entities
+                .iter()
+                .map(|e| (&e.name, &e.entity_type, &e.parent_id))
+                .collect::<Vec<_>>()
+        );
 
-        assert!(names.contains(&"Calculator"), "Should find Calculator class");
-        assert!(names.contains(&"add"), "Should find add method, got: {:?}", names);
-        assert!(names.contains(&"subtract"), "Should find subtract method, got: {:?}", names);
+        assert!(
+            names.contains(&"Calculator"),
+            "Should find Calculator class"
+        );
+        assert!(
+            names.contains(&"add"),
+            "Should find add method, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"subtract"),
+            "Should find subtract method, got: {:?}",
+            names
+        );
 
         // Methods should have Calculator as parent
         let add = entities.iter().find(|e| e.name == "add").unwrap();
@@ -175,13 +207,36 @@ int main() {
         let entities = plugin.extract_entities(code, "main.c");
         let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
         let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
-        eprintln!("C entities: {:?}", names.iter().zip(types.iter()).collect::<Vec<_>>());
+        eprintln!(
+            "C entities: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
 
-        assert!(names.contains(&"greet"), "Should find greet function, got: {:?}", names);
-        assert!(names.contains(&"add"), "Should find add function, got: {:?}", names);
-        assert!(names.contains(&"main"), "Should find main function, got: {:?}", names);
-        assert!(names.contains(&"Point"), "Should find Point struct, got: {:?}", names);
-        assert!(names.contains(&"Color"), "Should find Color enum, got: {:?}", names);
+        assert!(
+            names.contains(&"greet"),
+            "Should find greet function, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"add"),
+            "Should find add function, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"main"),
+            "Should find main function, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Point"),
+            "Should find Point struct, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Color"),
+            "Should find Color enum, got: {:?}",
+            names
+        );
     }
 
     #[test]
@@ -258,13 +313,39 @@ func helper(x: Int) -> Int {
         let plugin = CodeParserPlugin;
         let entities = plugin.extract_entities(code, "UserService.swift");
         let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
-        eprintln!("Swift entities: {:?}", entities.iter().map(|e| (&e.name, &e.entity_type)).collect::<Vec<_>>());
+        eprintln!(
+            "Swift entities: {:?}",
+            entities
+                .iter()
+                .map(|e| (&e.name, &e.entity_type))
+                .collect::<Vec<_>>()
+        );
 
-        assert!(names.contains(&"UserService"), "Should find class UserService, got: {:?}", names);
-        assert!(names.contains(&"Point"), "Should find struct Point, got: {:?}", names);
-        assert!(names.contains(&"Status"), "Should find enum Status, got: {:?}", names);
-        assert!(names.contains(&"Repository"), "Should find protocol Repository, got: {:?}", names);
-        assert!(names.contains(&"helper"), "Should find function helper, got: {:?}", names);
+        assert!(
+            names.contains(&"UserService"),
+            "Should find class UserService, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Point"),
+            "Should find struct Point, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Status"),
+            "Should find enum Status, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Repository"),
+            "Should find protocol Repository, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"helper"),
+            "Should find function helper, got: {:?}",
+            names
+        );
     }
 
     #[test]
@@ -303,17 +384,43 @@ end
         let entities = plugin.extract_entities(code, "accounts.ex");
         let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
         let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
-        eprintln!("Elixir entities: {:?}", names.iter().zip(types.iter()).collect::<Vec<_>>());
+        eprintln!(
+            "Elixir entities: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
 
-        assert!(names.contains(&"MyApp.Accounts"), "Should find module, got: {:?}", names);
-        assert!(names.contains(&"create_user"), "Should find def, got: {:?}", names);
-        assert!(names.contains(&"validate"), "Should find defp, got: {:?}", names);
-        assert!(names.contains(&"is_admin"), "Should find defmacro, got: {:?}", names);
-        assert!(names.contains(&"Printable"), "Should find defprotocol, got: {:?}", names);
+        assert!(
+            names.contains(&"MyApp.Accounts"),
+            "Should find module, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"create_user"),
+            "Should find def, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"validate"),
+            "Should find defp, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"is_admin"),
+            "Should find defmacro, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Printable"),
+            "Should find defprotocol, got: {:?}",
+            names
+        );
 
         // Verify nesting: create_user should have MyApp.Accounts as parent
         let create_user = entities.iter().find(|e| e.name == "create_user").unwrap();
-        assert!(create_user.parent_id.is_some(), "create_user should be nested under module");
+        assert!(
+            create_user.parent_id.is_some(),
+            "create_user should be nested under module"
+        );
     }
 
     #[test]
@@ -335,11 +442,27 @@ echo "main script"
         let entities = plugin.extract_entities(code, "deploy.sh");
         let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
         let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
-        eprintln!("Bash entities: {:?}", names.iter().zip(types.iter()).collect::<Vec<_>>());
+        eprintln!(
+            "Bash entities: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
 
-        assert!(names.contains(&"greet"), "Should find greet(), got: {:?}", names);
-        assert!(names.contains(&"deploy"), "Should find function deploy, got: {:?}", names);
-        assert_eq!(entities.len(), 2, "Should only find functions, got: {:?}", names);
+        assert!(
+            names.contains(&"greet"),
+            "Should find greet(), got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"deploy"),
+            "Should find function deploy, got: {:?}",
+            names
+        );
+        assert_eq!(
+            entities.len(),
+            2,
+            "Should only find functions, got: {:?}",
+            names
+        );
     }
 
     #[test]

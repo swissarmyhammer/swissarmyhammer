@@ -13,7 +13,8 @@ use tokio::sync::Mutex as TokioMutex;
 /// This is what should happen when the user is working on the project
 #[tokio::test]
 async fn test_code_context_on_real_project() {
-    let project_root = PathBuf::from("/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools");
+    let project_root =
+        PathBuf::from("/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools");
 
     // Set up the context as it would be in real MCP usage
     let git_ops = Arc::new(TokioMutex::new(None));
@@ -26,7 +27,10 @@ async fn test_code_context_on_real_project() {
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), serde_json::json!("get status"));
 
-    let result = tool.execute(args, &ctx).await.expect("Tool execution failed");
+    let result = tool
+        .execute(args, &ctx)
+        .await
+        .expect("Tool execution failed");
     assert_eq!(result.is_error, Some(false), "Tool should not error");
 
     let text = match &result.content[0].raw {
@@ -34,8 +38,7 @@ async fn test_code_context_on_real_project() {
         _ => panic!("Expected text content"),
     };
 
-    let response: serde_json::Value = serde_json::from_str(text)
-        .expect("Failed to parse response");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Failed to parse response");
 
     // The critical assertion: files should be discovered
     let total_files = response["total_files"]
@@ -43,10 +46,14 @@ async fn test_code_context_on_real_project() {
         .expect("total_files field missing");
 
     println!("Files discovered: {}", total_files);
-    println!("Full response:\n{}", serde_json::to_string_pretty(&response).unwrap());
+    println!(
+        "Full response:\n{}",
+        serde_json::to_string_pretty(&response).unwrap()
+    );
 
     // On the swissarmyhammer-tools project, we should discover at least some files
-    assert!(total_files > 0,
+    assert!(
+        total_files > 0,
         "Expected to discover files from swissarmyhammer-tools project, got {}",
         total_files
     );

@@ -40,13 +40,13 @@ pub fn list_symbols(
 
         let rows = stmt.query_map([file_path], |row| {
             Ok((
-                row.get::<_, String>(0)?, // id
-                row.get::<_, String>(1)?, // name
-                row.get::<_, i32>(2)?,    // kind
-                row.get::<_, u32>(3)?,    // start_line
-                row.get::<_, u32>(4)?,    // start_char
-                row.get::<_, u32>(5)?,    // end_line
-                row.get::<_, u32>(6)?,    // end_char
+                row.get::<_, String>(0)?,         // id
+                row.get::<_, String>(1)?,         // name
+                row.get::<_, i32>(2)?,            // kind
+                row.get::<_, u32>(3)?,            // start_line
+                row.get::<_, u32>(4)?,            // start_char
+                row.get::<_, u32>(5)?,            // end_line
+                row.get::<_, u32>(6)?,            // end_char
                 row.get::<_, Option<String>>(7)?, // detail
             ))
         })?;
@@ -209,7 +209,10 @@ mod tests {
             "MyStruct",
             23,
             "src/lib.rs",
-            0, 0, 20, 1,
+            0,
+            0,
+            20,
+            1,
         );
         insert_lsp_symbol(
             conn,
@@ -217,7 +220,10 @@ mod tests {
             "new",
             12,
             "src/lib.rs",
-            5, 4, 8, 5,
+            5,
+            4,
+            8,
+            5,
         );
         insert_lsp_symbol(
             conn,
@@ -225,7 +231,10 @@ mod tests {
             "authenticate",
             6,
             "src/lib.rs",
-            10, 4, 15, 5,
+            10,
+            4,
+            15,
+            5,
         );
 
         // LSP symbols in src/auth.rs
@@ -235,7 +244,10 @@ mod tests {
             "AuthService",
             5,
             "src/auth.rs",
-            0, 0, 30, 1,
+            0,
+            0,
+            30,
+            1,
         );
         insert_lsp_symbol(
             conn,
@@ -243,7 +255,10 @@ mod tests {
             "validate",
             6,
             "src/auth.rs",
-            15, 4, 20, 5,
+            15,
+            4,
+            20,
+            5,
         );
 
         // Tree-sitter chunks (overlapping with LSP)
@@ -265,7 +280,9 @@ mod tests {
 
         // Should be sorted by start_line
         assert!(
-            results.windows(2).all(|w| w[0].start_line <= w[1].start_line),
+            results
+                .windows(2)
+                .all(|w| w[0].start_line <= w[1].start_line),
             "results should be sorted by start_line"
         );
 

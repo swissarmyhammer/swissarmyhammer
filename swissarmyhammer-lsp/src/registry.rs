@@ -4,14 +4,15 @@
 //! or falls back to hardcoded defaults if YAML files are not found.
 //! Servers are detected automatically based on project type.
 
+use once_cell::sync::Lazy;
 use std::time::Duration;
 use swissarmyhammer_project_detection::ProjectType;
-use once_cell::sync::Lazy;
 
 use crate::types::{LspServerSpec, OwnedLspServerSpec};
 
 /// Lazy-initialized registry of owned LSP server specs loaded from YAML
-static OWNED_SERVERS: Lazy<Vec<OwnedLspServerSpec>> = Lazy::new(crate::yaml_loader::load_lsp_servers);
+static OWNED_SERVERS: Lazy<Vec<OwnedLspServerSpec>> =
+    Lazy::new(crate::yaml_loader::load_lsp_servers);
 
 /// Built-in server registry — kept for API compatibility
 /// Returns a static reference to the first registered Rust server for backward compatibility
@@ -44,7 +45,10 @@ mod tests {
     #[test]
     fn test_rust_server_found() {
         let servers = servers_for_project(ProjectType::Rust);
-        assert!(!servers.is_empty(), "Should find at least one server for Rust");
+        assert!(
+            !servers.is_empty(),
+            "Should find at least one server for Rust"
+        );
         let rust_server = servers.iter().find(|s| s.command == "rust-analyzer");
         assert!(rust_server.is_some(), "Should find rust-analyzer");
         let spec = rust_server.unwrap();

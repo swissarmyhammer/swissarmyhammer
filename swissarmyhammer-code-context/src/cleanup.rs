@@ -87,10 +87,7 @@ pub fn startup_cleanup(
         match disk_map.get(db_path.as_str()) {
             None => {
                 // File no longer on disk -- delete (CASCADE)
-                conn.execute(
-                    "DELETE FROM indexed_files WHERE file_path = ?1",
-                    [db_path],
-                )?;
+                conn.execute("DELETE FROM indexed_files WHERE file_path = ?1", [db_path])?;
                 stats.files_removed += 1;
             }
             Some((disk_hash, _size)) => {
@@ -139,32 +136,19 @@ pub fn startup_cleanup(
 /// and indexing time on binary files, protobuf, images, etc.
 const PARSEABLE_EXTENSIONS: &[&str] = &[
     // Rust
-    "rs",
-    // Python
-    "py", "pyi", "pyw",
-    // TypeScript / JavaScript
-    "ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx",
-    // Go
-    "go",
-    // Java / Kotlin / Scala
-    "java", "kt", "kts", "scala", "sc",
-    // C / C++
-    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh",
-    // C#
-    "cs",
-    // Ruby
-    "rb", "rake", "gemspec",
-    // PHP
-    "php", "phtml",
-    // Swift
-    "swift",
-    // Dart
-    "dart",
-    // Lua
-    "lua",
-    // Shell
-    "sh", "bash", "zsh",
-    // Config (useful for code context)
+    "rs", // Python
+    "py", "pyi", "pyw", // TypeScript / JavaScript
+    "ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", // Go
+    "go",  // Java / Kotlin / Scala
+    "java", "kt", "kts", "scala", "sc", // C / C++
+    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", // C#
+    "cs", // Ruby
+    "rb", "rake", "gemspec", // PHP
+    "php", "phtml", // Swift
+    "swift", // Dart
+    "dart",  // Lua
+    "lua",   // Shell
+    "sh", "bash", "zsh", // Config (useful for code context)
     "toml", "yaml", "yml",
 ];
 

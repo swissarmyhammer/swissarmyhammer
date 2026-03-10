@@ -232,12 +232,7 @@ static CPP_CONFIG: LanguageConfig = LanguageConfig {
 static RUBY_CONFIG: LanguageConfig = LanguageConfig {
     id: "ruby",
     extensions: &[".rb"],
-    entity_node_types: &[
-        "method",
-        "singleton_method",
-        "class",
-        "module",
-    ],
+    entity_node_types: &["method", "singleton_method", "class", "module"],
     container_node_types: &["body_statement"],
     call_entity_identifiers: &[],
     get_language: get_ruby,
@@ -321,9 +316,18 @@ static ELIXIR_CONFIG: LanguageConfig = LanguageConfig {
     entity_node_types: &[],
     container_node_types: &["do_block"],
     call_entity_identifiers: &[
-        "defmodule", "def", "defp", "defmacro", "defmacrop",
-        "defguard", "defguardp", "defprotocol", "defimpl",
-        "defstruct", "defexception", "defdelegate",
+        "defmodule",
+        "def",
+        "defp",
+        "defmacro",
+        "defmacrop",
+        "defguard",
+        "defguardp",
+        "defprotocol",
+        "defimpl",
+        "defstruct",
+        "defexception",
+        "defdelegate",
     ],
     get_language: get_elixir,
 };
@@ -366,12 +370,9 @@ pub fn get_language_config(extension: &str) -> Option<&'static LanguageConfig> {
 pub fn get_all_code_extensions() -> &'static [&'static str] {
     // All unique extensions across all language configs
     static EXTENSIONS: &[&str] = &[
-        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs",
-        ".java", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx",
-        ".rb", ".cs", ".php", ".f90", ".f95", ".f03", ".f08", ".f", ".for",
-        ".swift",
-        ".ex", ".exs",
-        ".sh",
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".c", ".h",
+        ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".rb", ".cs", ".php", ".f90", ".f95", ".f03",
+        ".f08", ".f", ".for", ".swift", ".ex", ".exs", ".sh",
     ];
     EXTENSIONS
 }

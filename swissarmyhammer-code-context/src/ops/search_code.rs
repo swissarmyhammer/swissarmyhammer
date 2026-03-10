@@ -298,20 +298,35 @@ mod tests {
 
         // Chunk A: very similar to query
         insert_chunk_with_embedding(
-            &conn, "src/main.rs", 1, 5, Some("main"),
-            "fn main() {}", &[0.9, 0.1, 0.0],
+            &conn,
+            "src/main.rs",
+            1,
+            5,
+            Some("main"),
+            "fn main() {}",
+            &[0.9, 0.1, 0.0],
         );
 
         // Chunk B: somewhat similar
         insert_chunk_with_embedding(
-            &conn, "src/main.rs", 6, 10, Some("helper"),
-            "fn helper() {}", &[0.5, 0.5, 0.0],
+            &conn,
+            "src/main.rs",
+            6,
+            10,
+            Some("helper"),
+            "fn helper() {}",
+            &[0.5, 0.5, 0.0],
         );
 
         // Chunk C: not similar (orthogonal)
         insert_chunk_with_embedding(
-            &conn, "src/main.rs", 11, 15, None,
-            "const X: i32 = 1;", &[0.0, 0.0, 1.0],
+            &conn,
+            "src/main.rs",
+            11,
+            15,
+            None,
+            "const X: i32 = 1;",
+            &[0.0, 0.0, 1.0],
         );
 
         let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
@@ -332,13 +347,15 @@ mod tests {
         let query = vec![1.0, 0.0];
 
         insert_chunk_with_embedding(
-            &conn, "src/lib.rs", 1, 3, None,
-            "fn has_embedding() {}", &[1.0, 0.0],
+            &conn,
+            "src/lib.rs",
+            1,
+            3,
+            None,
+            "fn has_embedding() {}",
+            &[1.0, 0.0],
         );
-        insert_chunk_without_embedding(
-            &conn, "src/lib.rs", 4, 6,
-            "fn no_embedding() {}",
-        );
+        insert_chunk_without_embedding(&conn, "src/lib.rs", 4, 6, "fn no_embedding() {}");
 
         let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
 
@@ -358,8 +375,13 @@ mod tests {
         for i in 0..5 {
             let text = format!("fn func_{i}() {{}}");
             insert_chunk_with_embedding(
-                &conn, "src/lib.rs", i * 3 + 1, i * 3 + 3, None,
-                &text, &[1.0 - (i as f32 * 0.01), 0.1],
+                &conn,
+                "src/lib.rs",
+                i * 3 + 1,
+                i * 3 + 3,
+                None,
+                &text,
+                &[1.0 - (i as f32 * 0.01), 0.1],
             );
         }
 
@@ -384,14 +406,16 @@ mod tests {
 
         // High similarity
         insert_chunk_with_embedding(
-            &conn, "src/lib.rs", 1, 3, None,
-            "fn close() {}", &[0.99, 0.1],
+            &conn,
+            "src/lib.rs",
+            1,
+            3,
+            None,
+            "fn close() {}",
+            &[0.99, 0.1],
         );
         // Low similarity
-        insert_chunk_with_embedding(
-            &conn, "src/lib.rs", 4, 6, None,
-            "fn far() {}", &[0.1, 0.99],
-        );
+        insert_chunk_with_embedding(&conn, "src/lib.rs", 4, 6, None, "fn far() {}", &[0.1, 0.99]);
 
         let opts = SearchCodeOptions {
             min_similarity: 0.9,
