@@ -69,12 +69,24 @@ Use `kanban` with `op: "init board"`, `name: "<workspace name>"` — name it gen
 
 For each work item, create a card immediately: use `kanban` with `op: "add task"`, `title: "<imperative verb phrase>"`, `description: "<detailed context>"`.
 
-Each card's description should include:
-- What specifically to do, with enough context for autonomous execution
-- Full paths of files to create or modify
-- How to verify the task is done (test command, expected behavior)
+Each card's description MUST include these sections:
 
-Include a markdown checklist in the description to break the work into individual steps (e.g., `- [ ] step one\n- [ ] step two`).
+```
+## What
+<what to implement — full paths of files to create or modify, approach, context>
+
+## Acceptance Criteria
+- [ ] <observable outcome that proves the work is done>
+- [ ] <another criterion>
+
+## Tests
+- [ ] <specific test to write or update, with file path>
+- [ ] <test command to run and expected result>
+```
+
+A card without acceptance criteria and tests is not a valid card. These sections ensure the definition of "done" is unambiguous and verifiable when the card is picked up for implementation.
+
+Then add subtasks for individual steps: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`.
 
 ### Set dependencies between cards
 
@@ -100,20 +112,40 @@ If there are unresolved questions, add a kanban card for each one so they are tr
 3. Update the kanban cards based on feedback. Continue the discussion until the user is satisfied.
 4. Let the user decide when the plan is ready — do not exit plan mode yourself. The board is ready for execution when the user says so.
 
+## Card Sizing
+
+Every card should be a single, focused unit of work. Use these limits:
+
+| Dimension | Target | Split when |
+|-----------|--------|------------|
+| Lines of code | 200–500 generated or modified | > 500 lines |
+| Files touched | 2–4 files | > 5 files |
+| Subtasks | 3–5 per card | > 5 subtasks |
+| Concerns | 1 per card | Multiple distinct concerns |
+
+**The subtask cap is the most important constraint.** More than 5 subtasks means the card bundles multiple concerns — extract related subtasks into their own cards with `depends_on` links.
+
+A subtask is a single code change: add a function, modify a struct, update a test file. If a subtask feels like a project, it should be its own card.
+
+**How to split:** Look for seam lines — different files, different layers (data model vs. API vs. UI), different concerns (validation vs. persistence). Extract each group into its own card, link with dependencies, and ensure each card independently passes tests when complete.
+
+Small cards (50–100 lines) are fine. Two small cards with a dependency beat one mega-card with a long checklist.
+
 ## What Makes a Good Plan
 
 - **Specific file paths** for every change, not vague descriptions.
 - **Code references** — mention specific functions, types, and patterns by name.
-- **Bounded tasks** — each one completable in a single focused session.
-- **Independent verification** — each task has its own success criterion.
+- **Right-sized cards** — each card targets 200–500 lines, 2–4 files, and 3–5 subtasks.
+- **Acceptance criteria on every card** — observable outcomes that prove the work is done, not vague descriptions of intent.
+- **Tests on every card** — specific test files to create or update, plus the test command and expected result. A card without tests is incomplete.
 - **Sufficient context** — someone reading only the task description (not the spec) should understand what to do.
-- **Test-inclusive** — every task ends with running tests.
 
 ## Anti-Patterns to Avoid
 
 - **Skipping exploration** — jumping to a plan without reading code leads to wrong assumptions.
 - **Unbounded searches** — searching `**/*.rs` returns thousands of results. Scope searches to specific directories.
 - **Vague tasks** — "improve error handling" is not actionable. "Add Result return type to parse_config and propagate errors to callers in main.rs and cli.rs" is.
-- **Monolithic tasks** — if a task touches more than 3-4 files, it should probably be split.
+- **Mega-cards** — if a card has more than 5 subtasks or touches more than 5 files, split it along natural seam lines.
 - **Missing dependencies** — tasks that assume prior work was done but don't declare it.
 - **No verification** — tasks without a way to confirm "done" are tasks that never finish.
+- **Missing tests and acceptance criteria** — every card must have explicit `## Acceptance Criteria` and `## Tests` sections. Without these, the card is not actionable.

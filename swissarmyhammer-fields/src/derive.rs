@@ -111,10 +111,7 @@ mod tests {
             fields: &HashMap<String, serde_json::Value>,
             _schema: &EntityDef,
         ) -> serde_json::Value {
-            let title = fields
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let title = fields.get("title").and_then(|v| v.as_str()).unwrap_or("");
             serde_json::Value::String(title.to_uppercase())
         }
 

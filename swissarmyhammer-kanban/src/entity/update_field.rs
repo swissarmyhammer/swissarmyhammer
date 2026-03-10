@@ -107,14 +107,12 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
             let fields_ctx = ectx.fields();
             let field_def = fields_ctx.get_field_by_name(&self.field_name);
             if let Some(field_def) = field_def {
-                if let swissarmyhammer_fields::FieldType::Computed { ref derive } = field_def.type_ {
+                if let swissarmyhammer_fields::FieldType::Computed { ref derive } = field_def.type_
+                {
                     let handler = ctx.derive_registry().get(derive).ok_or_else(|| {
                         KanbanError::InvalidValue {
                             field: self.field_name.clone(),
-                            message: format!(
-                                "no derive handler registered for '{}'",
-                                derive
-                            ),
+                            message: format!("no derive handler registered for '{}'", derive),
                         }
                     })?;
                     if !handler.writable() {
@@ -129,12 +127,12 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
                         .await
                         .map_err(KanbanError::from_entity_error)?;
 
-                    handler.apply(&mut entity.fields, entity_def, &self.value).map_err(|e| {
-                        KanbanError::InvalidValue {
+                    handler
+                        .apply(&mut entity.fields, entity_def, &self.value)
+                        .map_err(|e| KanbanError::InvalidValue {
                             field: self.field_name.clone(),
                             message: e.to_string(),
-                        }
-                    })?;
+                        })?;
 
                     ectx.write(&entity).await?;
 
@@ -367,14 +365,22 @@ mod tests {
         // The body should now contain both tags
         let body = result["body"].as_str().unwrap();
         let tags = crate::tag_parser::parse_tags(body);
-        assert!(tags.contains(&"original".to_string()), "original tag preserved");
-        assert!(tags.contains(&"added".to_string()), "new tag added via derive handler");
+        assert!(
+            tags.contains(&"original".to_string()),
+            "original tag preserved"
+        );
+        assert!(
+            tags.contains(&"added".to_string()),
+            "new tag added via derive handler"
+        );
 
         // Tag entity for "added" should have been auto-created
         let ectx = ctx.entity_context().await.unwrap();
         let tag_entities = ectx.list("tag").await.unwrap();
         assert!(
-            tag_entities.iter().any(|t| t.get_str("tag_name") == Some("added")),
+            tag_entities
+                .iter()
+                .any(|t| t.get_str("tag_name") == Some("added")),
             "Tag entity 'added' should have been auto-created"
         );
     }
@@ -395,16 +401,18 @@ mod tests {
 
         // "progress" is a computed field with derive: parse-body-progress
         // but no DeriveHandler is registered for it in kanban_derive_registry
-        let cmd = UpdateEntityField::new(
-            "task",
-            &task_id,
-            "progress",
-            serde_json::json!(0.5),
-        );
+        let cmd = UpdateEntityField::new("task", &task_id, "progress", serde_json::json!(0.5));
         let result = cmd.execute(&ctx).await.into_result();
-        assert!(result.is_err(), "Should fail when no derive handler registered");
+        assert!(
+            result.is_err(),
+            "Should fail when no derive handler registered"
+        );
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("no derive handler"), "Error should mention missing handler: {}", err);
+        assert!(
+            err.contains("no derive handler"),
+            "Error should mention missing handler: {}",
+            err
+        );
     }
 
     #[tokio::test]

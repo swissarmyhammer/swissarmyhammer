@@ -22,11 +22,7 @@ use crate::tag_parser;
 pub struct ParseBodyTags;
 
 impl DeriveHandler for ParseBodyTags {
-    fn compute(
-        &self,
-        fields: &HashMap<String, Value>,
-        schema: &EntityDef,
-    ) -> Value {
+    fn compute(&self, fields: &HashMap<String, Value>, schema: &EntityDef) -> Value {
         let body_field = schema.body_field.as_deref().unwrap_or("body");
         let body = fields
             .get(body_field)
@@ -146,11 +142,7 @@ mod tests {
         );
 
         handler
-            .apply(
-                &mut fields,
-                &schema,
-                &serde_json::json!(["bug", "feature"]),
-            )
+            .apply(&mut fields, &schema, &serde_json::json!(["bug", "feature"]))
             .unwrap();
 
         let body = fields["body"].as_str().unwrap();
@@ -241,10 +233,7 @@ mod tests {
 
         let result = handler.apply(&mut fields, &schema, &serde_json::json!("not-an-array"));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("expected array"));
+        assert!(result.unwrap_err().to_string().contains("expected array"));
     }
 
     #[test]
