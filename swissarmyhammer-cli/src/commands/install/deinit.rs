@@ -1,401 +1,51 @@
 //! Remove sah from all detected AI coding agents (skills + MCP).
-
-use std::fs;
+//!
+//! Delegates to composable `Initializable` components registered in `super::components`.
 
 use crate::cli::InstallTarget;
+use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope, InitStatus};
 
-use super::settings;
+use super::components;
 
 /// Uninstall sah from all detected AI coding agents.
+///
+/// Creates an `InitRegistry`, registers all components, and runs `deinit` in
+/// reverse priority order. The `remove_directory` flag controls whether
+/// `ProjectStructure` removes `.swissarmyhammer/` and `.prompts/`.
 pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {
+    let scope: InitScope = target.into();
     let global = matches!(target, InstallTarget::User);
 
-    // Remove MCP server from all detected agents
-    uninstall_mcp_all_agents(global)?;
+    let mut registry = InitRegistry::new();
+    components::register_all(&mut registry, global, remove_directory);
 
-    // Handle Claude Code local-scope config specifically
-    if matches!(target, InstallTarget::Local) {
-        uninstall_claude_local_scope()?;
-    }
+    let results = registry.run_all_deinit(&scope);
 
-    // Remove Bash deny rule from Claude Code settings
-    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
-        uninstall_deny_bash()?;
-    }
-
-    // Always remove builtin skills from .skills/ store and agent dirs
-    // (init always installs them, so deinit should always remove them)
-    uninstall_builtin_skills(global)?;
-
-    // Always remove builtin agents from .agents/ store and agent dirs
-    uninstall_builtin_agents(global)?;
-
-    // Clean up lockfile entries for builtin skills and agents
-    uninstall_lockfile_entries()?;
-
-    // Remove directories if requested
-    if remove_directory {
-        let cwd = std::env::current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?;
-
-        // Remove sah-specific directories
-        let sah_dir = cwd.join(".swissarmyhammer");
-        if sah_dir.exists() {
-            fs::remove_dir_all(&sah_dir)
-                .map_err(|e| format!("Failed to remove {}: {}", sah_dir.display(), e))?;
-            println!("Removed {}", sah_dir.display());
-        }
-
-        let prompts_dir = cwd.join(".prompts");
-        if prompts_dir.exists() {
-            fs::remove_dir_all(&prompts_dir)
-                .map_err(|e| format!("Failed to remove {}: {}", prompts_dir.display(), e))?;
-            println!("Removed {}", prompts_dir.display());
-        }
-    }
-
-    Ok(())
-}
-
-/// Remove sah MCP server from all detected agents using mirdan's mcp_config.
-fn uninstall_mcp_all_agents(global: bool) -> Result<(), String> {
-    let config = mirdan::agents::load_agents_config()
-        .map_err(|e| format!("Failed to load agents config: {}", e))?;
-    let agents = mirdan::agents::get_detected_agents(&config);
-
-    let mut removed_count = 0;
-    for agent in &agents {
-        if let Some(mcp_def) = &agent.def.mcp_config {
-            let config_path = if global {
-                mirdan::agents::agent_global_mcp_config(&agent.def)
-            } else {
-                mirdan::agents::agent_project_mcp_config(&agent.def)
-            };
-            if let Some(config_path) = config_path {
-                match mirdan::mcp_config::unregister_mcp_server(
-                    &config_path,
-                    &mcp_def.servers_key,
-                    "sah",
-                ) {
-                    Ok(true) => {
-                        println!(
-                            "sah MCP server removed from {} ({})",
-                            agent.def.name,
-                            config_path.display()
-                        );
-                        removed_count += 1;
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: failed to remove MCP from {}: {}",
-                            agent.def.name, e
-                        );
-                    }
-                }
+    // Display results and check for errors
+    let mut has_errors = false;
+    for r in &results {
+        match r.status {
+            InitStatus::Ok => {}    // component already printed its messages
+            InitStatus::Warning => eprintln!("Warning: {}", r.message),
+            InitStatus::Error => {
+                eprintln!("Error: {}", r.message);
+                has_errors = true;
             }
+            InitStatus::Skipped => {} // silent
         }
     }
 
-    if removed_count == 0 {
-        // Fallback: try legacy project-level removal
-        uninstall_project_legacy()?;
-    }
-
-    Ok(())
-}
-
-/// Remove "Bash" from permissions.deny in .claude/settings.json.
-fn uninstall_deny_bash() -> Result<(), String> {
-    let path = settings::claude_settings_path();
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let mut claude_settings = settings::read_settings(&path)?;
-    let changed = settings::remove_deny_bash(&mut claude_settings);
-
-    if changed {
-        settings::write_settings(&path, &claude_settings)?;
-        println!("Bash tool deny rule removed from {}", path.display());
-    }
-    Ok(())
-}
-
-/// Legacy project-level uninstall via .mcp.json (backward compat fallback).
-fn uninstall_project_legacy() -> Result<(), String> {
-    let path = settings::mcp_json_path();
-    if !path.exists() {
-        println!("No {} file found, nothing to uninstall", path.display());
-        return Ok(());
-    }
-
-    let mut mcp_settings = settings::read_settings(&path)?;
-    let changed = settings::remove_mcp_server(&mut mcp_settings);
-
-    if let Some(mcp_servers) = mcp_settings.get("mcpServers").and_then(|m| m.as_object()) {
-        if mcp_servers.is_empty() {
-            mcp_settings.as_object_mut().unwrap().remove("mcpServers");
-        }
-    }
-
-    if mcp_settings == serde_json::json!({}) {
-        fs::remove_file(&path)
-            .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
-        println!(
-            "sah MCP server uninstalled, removed empty {}",
-            path.display()
-        );
-    } else if changed {
-        settings::write_settings(&path, &mcp_settings)?;
-        println!("sah MCP server uninstalled from {}", path.display());
+    if has_errors {
+        Err("Some components failed to deinitialize".to_string())
     } else {
-        println!("sah MCP server was not configured in {}", path.display());
-    }
-
-    Ok(())
-}
-
-/// Uninstall from local scope: `~/.claude.json` under `projects.<project-path>.mcpServers`.
-fn uninstall_claude_local_scope() -> Result<(), String> {
-    let path = settings::claude_json_path();
-    let key = settings::project_key()?;
-
-    if !path.exists() {
-        println!("No {} file found, nothing to uninstall", path.display());
-        return Ok(());
-    }
-
-    let mut root = settings::read_settings(&path)?;
-
-    let changed = if let Some(projects) = root.get_mut("projects") {
-        if let Some(entry) = projects.get_mut(&key) {
-            let changed = settings::remove_mcp_server(entry);
-            if let Some(mcp_servers) = entry.get("mcpServers").and_then(|m| m.as_object()) {
-                if mcp_servers.is_empty() {
-                    entry.as_object_mut().unwrap().remove("mcpServers");
-                }
-            }
-            changed
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    if changed {
-        settings::write_settings(&path, &root)?;
-        println!(
-            "sah MCP server uninstalled from {} (local scope, project: {})",
-            path.display(),
-            key
-        );
-    } else {
-        println!(
-            "sah MCP server was not configured in {} (local scope, project: {})",
-            path.display(),
-            key
-        );
-    }
-
-    Ok(())
-}
-
-/// Remove builtin skill symlinks from agent directories and clean up the .skills/ store.
-///
-/// Only removes symlinks that point into the .skills/ store. Never removes
-/// directories — agent skill directories like .github/copilot/skills/ are
-/// left intact even if empty.
-fn uninstall_builtin_skills(global: bool) -> Result<(), String> {
-    use swissarmyhammer_skills::SkillResolver;
-
-    let store_dir = mirdan::store::skill_store_dir(global);
-
-    let config = mirdan::agents::load_agents_config()
-        .map_err(|e| format!("Failed to load agents config: {}", e))?;
-    let agents = mirdan::agents::get_detected_agents(&config);
-
-    let resolver = SkillResolver::new();
-    let builtins = resolver.resolve_builtins();
-    let builtin_names: Vec<String> = builtins.keys().cloned().collect();
-
-    // Collect link directories from detected agents
-    let link_dirs: Vec<std::path::PathBuf> = agents
-        .iter()
-        .map(|agent| {
-            if global {
-                mirdan::agents::agent_global_skill_dir(&agent.def)
-            } else {
-                mirdan::agents::agent_project_skill_dir(&agent.def)
-            }
-        })
-        .collect();
-
-    let symlink_policies: Vec<_> = agents
-        .iter()
-        .map(|agent| agent.def.symlink_policy.clone())
-        .collect();
-
-    remove_store_entries(
-        &store_dir,
-        &builtin_names,
-        &link_dirs,
-        &symlink_policies,
-        "skill",
-    );
-
-    Ok(())
-}
-
-/// Remove builtin agent symlinks from coding agent directories and clean up the .agents/ store.
-///
-/// Mirrors `uninstall_builtin_skills` but for the agent store.
-fn uninstall_builtin_agents(global: bool) -> Result<(), String> {
-    use swissarmyhammer_agents::AgentResolver;
-
-    let store_dir = mirdan::store::agent_store_dir(global);
-
-    let config = mirdan::agents::load_agents_config()
-        .map_err(|e| format!("Failed to load agents config: {}", e))?;
-    let agents = mirdan::agents::get_detected_agents(&config);
-
-    let resolver = AgentResolver::new();
-    let builtins = resolver.resolve_builtins();
-    let builtin_names: Vec<String> = builtins.keys().cloned().collect();
-
-    // Collect link directories from detected agents (filtering out agents without agent dirs)
-    let mut link_dirs: Vec<std::path::PathBuf> = Vec::new();
-    let mut symlink_policies: Vec<mirdan::agents::SymlinkPolicy> = Vec::new();
-
-    for agent in &agents {
-        let agent_dir = if global {
-            mirdan::agents::agent_global_agent_dir(&agent.def)
-        } else {
-            mirdan::agents::agent_project_agent_dir(&agent.def)
-        };
-        if let Some(dir) = agent_dir {
-            link_dirs.push(dir);
-            symlink_policies.push(agent.def.symlink_policy.clone());
-        }
-    }
-
-    remove_store_entries(
-        &store_dir,
-        &builtin_names,
-        &link_dirs,
-        &symlink_policies,
-        "agent",
-    );
-
-    Ok(())
-}
-
-/// Remove named entries from a store directory and their symlinks from link directories.
-///
-/// This is the shared filesystem logic for both skill and agent uninstall.
-/// Extracted for testability — the caller resolves names and directories,
-/// this function does the filesystem work.
-fn remove_store_entries(
-    store_dir: &std::path::Path,
-    names: &[String],
-    link_dirs: &[std::path::PathBuf],
-    symlink_policies: &[mirdan::agents::SymlinkPolicy],
-    kind: &str,
-) {
-    for name in names {
-        let store_path = store_dir.join(name);
-
-        // Remove symlinks from each link directory
-        for (dir, policy) in link_dirs.iter().zip(symlink_policies.iter()) {
-            let link_name = mirdan::store::symlink_name(name, policy);
-            let link_path = dir.join(&link_name);
-            remove_if_symlink(&link_path);
-        }
-
-        // Remove entry from the store
-        if store_path.exists() {
-            if let Err(e) = fs::remove_dir_all(&store_path) {
-                eprintln!(
-                    "Warning: failed to remove store entry {}: {}",
-                    store_path.display(),
-                    e
-                );
-            } else {
-                println!("Removed {} store: {}", kind, store_path.display());
-            }
-        }
-    }
-
-    // Remove the store directory if empty
-    if store_dir.exists() {
-        if let Ok(entries) = fs::read_dir(store_dir) {
-            if entries.count() == 0 {
-                let _ = fs::remove_dir(store_dir);
-            }
-        }
-    }
-}
-
-/// Remove lockfile entries for all builtin skills and agents.
-///
-/// init writes entries to mirdan-lock.json; deinit must clean them up
-/// so that the lockfile doesn't contain stale references.
-fn uninstall_lockfile_entries() -> Result<(), String> {
-    use swissarmyhammer_agents::AgentResolver;
-    use swissarmyhammer_skills::SkillResolver;
-
-    let project_root =
-        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
-
-    let lockfile_path = project_root.join("mirdan-lock.json");
-    if !lockfile_path.exists() {
-        return Ok(());
-    }
-
-    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
-        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
-
-    let skill_resolver = SkillResolver::new();
-    for name in skill_resolver.resolve_builtins().keys() {
-        lockfile.remove_package(name);
-    }
-
-    let agent_resolver = AgentResolver::new();
-    for name in agent_resolver.resolve_builtins().keys() {
-        lockfile.remove_package(name);
-    }
-
-    lockfile
-        .save(&project_root)
-        .map_err(|e| format!("Failed to save lockfile: {}", e))?;
-
-    println!("Lockfile entries cleaned up");
-    Ok(())
-}
-
-/// Remove a path only if it is a symlink. Returns true if removed.
-///
-/// This is the safety-critical function: it ensures deinit never deletes
-/// real directories or files that weren't created by `sah init`.
-fn remove_if_symlink(path: &std::path::Path) -> bool {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            if let Err(e) = std::fs::remove_file(path) {
-                eprintln!("Warning: failed to remove {}: {}", path.display(), e);
-                false
-            } else {
-                println!("Removed skill link: {}", path.display());
-                true
-            }
-        }
-        _ => false,
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::components::{remove_if_symlink, remove_store_entries};
+    use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
 

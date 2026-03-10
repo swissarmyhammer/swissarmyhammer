@@ -4,6 +4,7 @@
 //! server registration in Claude Code settings files and scaffold the project
 //! directory structure.
 
+pub mod components;
 pub mod deinit;
 pub mod init;
 pub mod settings;
