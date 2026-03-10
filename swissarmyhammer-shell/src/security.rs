@@ -203,12 +203,11 @@ impl ShellSecurityValidator {
 
     /// Create a new validator from a [`ShellSecurityConfig`] with permit/deny rules.
     pub fn from_config(config: &crate::config::ShellSecurityConfig) -> Result<Self> {
-        let compiled_config =
-            crate::config::CompiledShellConfig::compile(config).map_err(|e| {
-                SwissArmyHammerError::Other {
-                    message: format!("Failed to compile pattern '{}': {}", e.pattern, e.source),
-                }
-            })?;
+        let compiled_config = crate::config::CompiledShellConfig::compile(config).map_err(|e| {
+            SwissArmyHammerError::Other {
+                message: format!("Failed to compile pattern '{}': {}", e.pattern, e.source),
+            }
+        })?;
 
         // Build a legacy policy for backwards compat
         let policy = ShellSecurityPolicy {

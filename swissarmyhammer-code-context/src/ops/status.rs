@@ -82,14 +82,12 @@ pub fn get_status(conn: &Connection) -> Result<StatusReport, CodeContextError> {
         0.0
     };
 
-    let ts_chunk_count: u64 =
-        conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))?;
+    let ts_chunk_count: u64 = conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))?;
 
-    let files_with_chunks: u64 = conn.query_row(
-        "SELECT COUNT(DISTINCT file_path) FROM ts_chunks",
-        [],
-        |r| r.get(0),
-    )?;
+    let files_with_chunks: u64 =
+        conn.query_row("SELECT COUNT(DISTINCT file_path) FROM ts_chunks", [], |r| {
+            r.get(0)
+        })?;
 
     let files_with_symbols: u64 = conn.query_row(
         "SELECT COUNT(DISTINCT file_path) FROM lsp_symbols",
@@ -172,14 +170,8 @@ pub fn build_status(
     layer: BuildLayer,
 ) -> Result<BuildStatusResult, CodeContextError> {
     let (sql, layer_name) = match layer {
-        BuildLayer::TreeSitter => (
-            "UPDATE indexed_files SET ts_indexed = 0",
-            "treesitter",
-        ),
-        BuildLayer::Lsp => (
-            "UPDATE indexed_files SET lsp_indexed = 0",
-            "lsp",
-        ),
+        BuildLayer::TreeSitter => ("UPDATE indexed_files SET ts_indexed = 0", "treesitter"),
+        BuildLayer::Lsp => ("UPDATE indexed_files SET lsp_indexed = 0", "lsp"),
         BuildLayer::Both => (
             "UPDATE indexed_files SET ts_indexed = 0, lsp_indexed = 0",
             "both",
@@ -340,7 +332,10 @@ mod tests {
 
         let report = get_status(&conn).unwrap();
 
-        assert_eq!(report.lsp_indexed_files, 1, "1 file with LSP data (Running)");
+        assert_eq!(
+            report.lsp_indexed_files, 1,
+            "1 file with LSP data (Running)"
+        );
         assert_eq!(
             report.total_files - report.lsp_indexed_files,
             1,

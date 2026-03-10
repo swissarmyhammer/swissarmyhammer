@@ -102,8 +102,12 @@ impl McpTool for QuestionTool {
 }
 
 impl swissarmyhammer_common::lifecycle::Initializable for QuestionTool {
-    fn name(&self) -> &str { "Question" }
-    fn category(&self) -> &str { "tools" }
+    fn name(&self) -> &str {
+        "Question"
+    }
+    fn category(&self) -> &str {
+        "tools"
+    }
 }
 
 impl Doctorable for QuestionTool {

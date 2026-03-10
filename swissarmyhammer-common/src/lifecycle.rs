@@ -37,19 +37,35 @@ pub struct InitResult {
 
 impl InitResult {
     pub fn ok(name: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { name: name.into(), status: InitStatus::Ok, message: message.into() }
+        Self {
+            name: name.into(),
+            status: InitStatus::Ok,
+            message: message.into(),
+        }
     }
 
     pub fn warning(name: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { name: name.into(), status: InitStatus::Warning, message: message.into() }
+        Self {
+            name: name.into(),
+            status: InitStatus::Warning,
+            message: message.into(),
+        }
     }
 
     pub fn error(name: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { name: name.into(), status: InitStatus::Error, message: message.into() }
+        Self {
+            name: name.into(),
+            status: InitStatus::Error,
+            message: message.into(),
+        }
     }
 
     pub fn skipped(name: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { name: name.into(), status: InitStatus::Skipped, message: message.into() }
+        Self {
+            name: name.into(),
+            status: InitStatus::Skipped,
+            message: message.into(),
+        }
     }
 }
 
@@ -70,22 +86,34 @@ pub trait Initializable {
     fn category(&self) -> &str;
 
     /// Priority for ordering — lower runs first. Default 0.
-    fn priority(&self) -> i32 { 0 }
+    fn priority(&self) -> i32 {
+        0
+    }
 
     /// Whether this component should participate in lifecycle operations.
-    fn is_applicable(&self, _scope: &InitScope) -> bool { true }
+    fn is_applicable(&self, _scope: &InitScope) -> bool {
+        true
+    }
 
     /// One-time project setup. Called by `sah init`.
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> { vec![] }
+    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+        vec![]
+    }
 
     /// One-time project teardown. Called by `sah deinit`.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> { vec![] }
+    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+        vec![]
+    }
 
     /// Start runtime background work. Called explicitly by serve/connect.
-    fn start(&self) -> Vec<InitResult> { vec![] }
+    fn start(&self) -> Vec<InitResult> {
+        vec![]
+    }
 
     /// Stop runtime background work. Called on shutdown.
-    fn stop(&self) -> Vec<InitResult> { vec![] }
+    fn stop(&self) -> Vec<InitResult> {
+        vec![]
+    }
 }
 
 /// Registry that collects `Initializable` components and runs lifecycle operations
@@ -96,7 +124,9 @@ pub struct InitRegistry {
 
 impl InitRegistry {
     pub fn new() -> Self {
-        Self { components: Vec::new() }
+        Self {
+            components: Vec::new(),
+        }
     }
 
     pub fn register<T: Initializable + 'static>(&mut self, component: T) {
@@ -185,7 +215,12 @@ mod tests {
 
     impl TestComponent {
         fn new(name: &'static str, priority: i32) -> Self {
-            Self { name, category: "test", priority, applicable_scopes: None }
+            Self {
+                name,
+                category: "test",
+                priority,
+                applicable_scopes: None,
+            }
         }
 
         fn with_scopes(mut self, scopes: Vec<InitScope>) -> Self {
@@ -195,9 +230,15 @@ mod tests {
     }
 
     impl Initializable for TestComponent {
-        fn name(&self) -> &str { self.name }
-        fn category(&self) -> &str { self.category }
-        fn priority(&self) -> i32 { self.priority }
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn category(&self) -> &str {
+            self.category
+        }
+        fn priority(&self) -> i32 {
+            self.priority
+        }
 
         fn is_applicable(&self, scope: &InitScope) -> bool {
             match &self.applicable_scopes {
@@ -207,11 +248,17 @@ mod tests {
         }
 
         fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
-            vec![InitResult::ok(self.name, format!("{} initialized", self.name))]
+            vec![InitResult::ok(
+                self.name,
+                format!("{} initialized", self.name),
+            )]
         }
 
         fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
-            vec![InitResult::ok(self.name, format!("{} deinitialized", self.name))]
+            vec![InitResult::ok(
+                self.name,
+                format!("{} deinitialized", self.name),
+            )]
         }
 
         fn start(&self) -> Vec<InitResult> {
@@ -260,11 +307,14 @@ mod tests {
             .map(|r| (r.name.as_str(), r.status))
             .collect();
 
-        assert_eq!(statuses, vec![
-            ("project-only", InitStatus::Ok),
-            ("local-only", InitStatus::Skipped),
-            ("everywhere", InitStatus::Ok),
-        ]);
+        assert_eq!(
+            statuses,
+            vec![
+                ("project-only", InitStatus::Ok),
+                ("local-only", InitStatus::Skipped),
+                ("everywhere", InitStatus::Ok),
+            ]
+        );
     }
 
     #[test]
@@ -285,8 +335,12 @@ mod tests {
     fn test_default_empty_impls() {
         struct Minimal;
         impl Initializable for Minimal {
-            fn name(&self) -> &str { "minimal" }
-            fn category(&self) -> &str { "test" }
+            fn name(&self) -> &str {
+                "minimal"
+            }
+            fn category(&self) -> &str {
+                "test"
+            }
         }
 
         let mut reg = InitRegistry::new();

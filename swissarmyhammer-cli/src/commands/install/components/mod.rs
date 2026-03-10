@@ -485,10 +485,7 @@ impl Initializable for ProjectStructure {
             sah_dir.root().display()
         );
 
-        vec![InitResult::ok(
-            self.name(),
-            "Project structure initialized",
-        )]
+        vec![InitResult::ok(self.name(), "Project structure initialized")]
     }
 
     /// Remove `.swissarmyhammer/` and `.prompts/` directories if `remove_directory` is true.
@@ -532,10 +529,7 @@ impl Initializable for ProjectStructure {
             println!("Removed {}", prompts_dir.display());
         }
 
-        vec![InitResult::ok(
-            self.name(),
-            "Project directories removed",
-        )]
+        vec![InitResult::ok(self.name(), "Project directories removed")]
     }
 }
 
@@ -645,16 +639,20 @@ impl Initializable for SkillDeployment {
             }
 
             // Deploy via mirdan: store copy + agent symlinks
-            let targets =
-                match mirdan::install::deploy_skill_to_agents(name, &skill_dir, None, self.global) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return vec![InitResult::error(
-                            self.name(),
-                            format!("Failed to deploy skill '{}': {}", name, e),
-                        )];
-                    }
-                };
+            let targets = match mirdan::install::deploy_skill_to_agents(
+                name,
+                &skill_dir,
+                None,
+                self.global,
+            ) {
+                Ok(t) => t,
+                Err(e) => {
+                    return vec![InitResult::error(
+                        self.name(),
+                        format!("Failed to deploy skill '{}': {}", name, e),
+                    )];
+                }
+            };
 
             // Record in lockfile
             let version = skill
@@ -906,16 +904,20 @@ impl Initializable for AgentDeployment {
             }
 
             // Deploy via mirdan: store copy + coding agent symlinks
-            let targets =
-                match mirdan::install::deploy_agent_to_agents(name, &agent_dir, None, self.global) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return vec![InitResult::error(
-                            self.name(),
-                            format!("Failed to deploy agent '{}': {}", name, e),
-                        )];
-                    }
-                };
+            let targets = match mirdan::install::deploy_agent_to_agents(
+                name,
+                &agent_dir,
+                None,
+                self.global,
+            ) {
+                Ok(t) => t,
+                Err(e) => {
+                    return vec![InitResult::error(
+                        self.name(),
+                        format!("Failed to deploy agent '{}': {}", name, e),
+                    )];
+                }
+            };
 
             // Record in lockfile
             lockfile.add_package(
@@ -1117,10 +1119,7 @@ impl Initializable for LockfileCleanup {
         }
 
         println!("Lockfile entries cleaned up");
-        vec![InitResult::ok(
-            self.name(),
-            "Lockfile entries cleaned up",
-        )]
+        vec![InitResult::ok(self.name(), "Lockfile entries cleaned up")]
     }
 }
 

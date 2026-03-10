@@ -76,9 +76,8 @@ pub fn query_ast(
     options: &QueryAstOptions,
 ) -> Result<QueryAstResult, CodeContextError> {
     // Compile the query upfront so we fail fast on bad syntax
-    let ts_query = tree_sitter::Query::new(language, query_str).map_err(|e| {
-        CodeContextError::QueryError(format!("Invalid S-expression query: {}", e))
-    })?;
+    let ts_query = tree_sitter::Query::new(language, query_str)
+        .map_err(|e| CodeContextError::QueryError(format!("Invalid S-expression query: {}", e)))?;
 
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(language).map_err(|e| {
@@ -167,11 +166,7 @@ mod tests {
     #[test]
     fn test_simple_function_query() {
         let dir = TempDir::new().unwrap();
-        let file = setup_rust_file(
-            &dir,
-            "test.rs",
-            "fn hello() {}\nfn world() {}\n",
-        );
+        let file = setup_rust_file(&dir, "test.rs", "fn hello() {}\nfn world() {}\n");
 
         let result = query_ast(
             dir.path(),
@@ -244,11 +239,7 @@ mod tests {
     #[test]
     fn test_multiple_captures() {
         let dir = TempDir::new().unwrap();
-        let file = setup_rust_file(
-            &dir,
-            "test.rs",
-            "fn greet(name: &str) {}\n",
-        );
+        let file = setup_rust_file(&dir, "test.rs", "fn greet(name: &str) {}\n");
 
         let result = query_ast(
             dir.path(),
@@ -290,11 +281,7 @@ mod tests {
     #[test]
     fn test_capture_line_numbers() {
         let dir = TempDir::new().unwrap();
-        let file = setup_rust_file(
-            &dir,
-            "test.rs",
-            "\n\nfn on_line_two() {}\n",
-        );
+        let file = setup_rust_file(&dir, "test.rs", "\n\nfn on_line_two() {}\n");
 
         let result = query_ast(
             dir.path(),

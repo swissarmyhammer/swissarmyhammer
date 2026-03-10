@@ -254,7 +254,11 @@ mod tests {
         assert!(!result.truncated);
 
         // Both function chunks should match
-        let paths: Vec<&str> = result.matches.iter().map(|m| m.file_path.as_str()).collect();
+        let paths: Vec<&str> = result
+            .matches
+            .iter()
+            .map(|m| m.file_path.as_str())
+            .collect();
         assert!(paths.iter().all(|p| *p == "src/main.rs"));
 
         // Each match should have at least one position
@@ -326,8 +330,12 @@ mod tests {
         insert_file(&conn, "src/main.rs");
         insert_chunk(&conn, "src/main.rs", 1, 3, None, "let x = 42;");
 
-        let result =
-            grep_code(&conn, "this_will_never_match_anything", &GrepOptions::default()).unwrap();
+        let result = grep_code(
+            &conn,
+            "this_will_never_match_anything",
+            &GrepOptions::default(),
+        )
+        .unwrap();
 
         assert!(result.matches.is_empty());
         assert_eq!(result.total_chunks_searched, 1);
@@ -343,7 +351,10 @@ mod tests {
 
         match result {
             Err(CodeContextError::Pattern(msg)) => {
-                assert!(msg.contains("unclosed"), "expected unclosed bracket error: {msg}");
+                assert!(
+                    msg.contains("unclosed"),
+                    "expected unclosed bracket error: {msg}"
+                );
             }
             other => panic!("expected Pattern error, got: {other:?}"),
         }

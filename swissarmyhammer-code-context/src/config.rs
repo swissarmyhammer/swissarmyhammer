@@ -72,8 +72,7 @@ impl Default for CodeContextConfigYaml {
 }
 
 /// The builtin config YAML, embedded at compile time.
-pub const BUILTIN_CONFIG_YAML: &str =
-    include_str!("../../builtin/code-context/config.yaml");
+pub const BUILTIN_CONFIG_YAML: &str = include_str!("../../builtin/code-context/config.yaml");
 
 /// Parse a YAML string into a [`CodeContextConfigYaml`].
 pub fn parse_code_context_config(yaml: &str) -> Result<CodeContextConfigYaml, serde_yaml::Error> {
@@ -109,7 +108,10 @@ pub fn load_code_context_config() -> CodeContextConfigYaml {
     vfs.use_dot_directory_paths();
 
     if let Err(e) = vfs.load_all() {
-        warn!("Failed to load code-context config overlays: {}. Using builtin only.", e);
+        warn!(
+            "Failed to load code-context config overlays: {}. Using builtin only.",
+            e
+        );
     }
 
     merge_config_stack(&vfs)
@@ -132,7 +134,11 @@ pub fn load_code_context_config_from_paths(overlay_paths: &[PathBuf]) -> CodeCon
             FileSource::Local
         };
         if let Err(e) = vfs.load_files_from_dir(path, source) {
-            warn!("Failed to load code-context config from {}: {}", path.display(), e);
+            warn!(
+                "Failed to load code-context config from {}: {}",
+                path.display(),
+                e
+            );
         }
     }
 
@@ -383,7 +389,10 @@ settings:
         let config = load_code_context_config_from_paths(&[overlay_dir]);
 
         // Builtin filters + project filter
-        assert!(config.stderr_filters.iter().any(|r| r.pattern == "custom pattern"));
+        assert!(config
+            .stderr_filters
+            .iter()
+            .any(|r| r.pattern == "custom pattern"));
         // Project settings override
         assert_eq!(config.settings.stderr_log_level, "off");
     }
@@ -431,7 +440,10 @@ settings:
         };
         let compiled = CompiledCodeContextConfig::compile(&config).unwrap();
 
-        assert!(should_filter_stderr("some inference diagnostic here", &compiled));
+        assert!(should_filter_stderr(
+            "some inference diagnostic here",
+            &compiled
+        ));
         assert!(should_filter_stderr("", &compiled));
         assert!(should_filter_stderr("   ", &compiled));
     }
@@ -447,8 +459,14 @@ settings:
         };
         let compiled = CompiledCodeContextConfig::compile(&config).unwrap();
 
-        assert!(!should_filter_stderr("Actual error: file not found", &compiled));
-        assert!(!should_filter_stderr("WARNING: something important", &compiled));
+        assert!(!should_filter_stderr(
+            "Actual error: file not found",
+            &compiled
+        ));
+        assert!(!should_filter_stderr(
+            "WARNING: something important",
+            &compiled
+        ));
     }
 
     #[test]

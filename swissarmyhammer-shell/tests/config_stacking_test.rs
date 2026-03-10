@@ -233,17 +233,21 @@ settings:
     // A 2000-char env value should pass with 4096 limit
     let mut env = HashMap::new();
     env.insert("BIG_VAR".to_string(), "x".repeat(2000));
-    assert!(ShellSecurityValidator::validate_environment_variables_with_settings(
-        &env,
-        config.settings.max_env_value_length
-    )
-    .is_ok());
+    assert!(
+        ShellSecurityValidator::validate_environment_variables_with_settings(
+            &env,
+            config.settings.max_env_value_length
+        )
+        .is_ok()
+    );
 
     // A 5000-char env value should fail even with 4096 limit
     env.insert("TOO_BIG".to_string(), "x".repeat(5000));
-    assert!(ShellSecurityValidator::validate_environment_variables_with_settings(
-        &env,
-        config.settings.max_env_value_length
-    )
-    .is_err());
+    assert!(
+        ShellSecurityValidator::validate_environment_variables_with_settings(
+            &env,
+            config.settings.max_env_value_length
+        )
+        .is_err()
+    );
 }

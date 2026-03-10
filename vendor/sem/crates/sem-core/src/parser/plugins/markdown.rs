@@ -43,10 +43,7 @@ impl SemanticParserPlugin for MarkdownParserPlugin {
                 let name = caps[2].trim().to_string();
 
                 // Find parent: pop headings with >= level
-                while section_stack
-                    .last()
-                    .map_or(false, |(l, _)| *l >= level)
-                {
+                while section_stack.last().map_or(false, |(l, _)| *l >= level) {
                     section_stack.pop();
                 }
 

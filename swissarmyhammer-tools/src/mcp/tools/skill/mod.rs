@@ -114,8 +114,12 @@ fn convert_result(
 }
 
 impl swissarmyhammer_common::lifecycle::Initializable for SkillTool {
-    fn name(&self) -> &str { "Skill" }
-    fn category(&self) -> &str { "tools" }
+    fn name(&self) -> &str {
+        "Skill"
+    }
+    fn category(&self) -> &str {
+        "tools"
+    }
 }
 
 impl swissarmyhammer_common::health::Doctorable for SkillTool {

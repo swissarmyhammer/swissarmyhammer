@@ -266,10 +266,27 @@ mod tests {
         insert_file(&conn, "src/handler.rs");
         insert_file(&conn, "src/legacy.rs");
 
-        let text = "fn validate_input(req: &Request) -> Result<(), Error> { check_fields(req)?; Ok(()) }";
+        let text =
+            "fn validate_input(req: &Request) -> Result<(), Error> { check_fields(req)?; Ok(()) }";
         // Nearly identical embeddings = near-duplicate code
-        insert_chunk(&conn, "src/handler.rs", 10, 15, Some("validate_input"), text, &[0.9, 0.1, 0.0]);
-        insert_chunk(&conn, "src/legacy.rs", 20, 25, Some("check_input"), text, &[0.89, 0.11, 0.01]);
+        insert_chunk(
+            &conn,
+            "src/handler.rs",
+            10,
+            15,
+            Some("validate_input"),
+            text,
+            &[0.9, 0.1, 0.0],
+        );
+        insert_chunk(
+            &conn,
+            "src/legacy.rs",
+            20,
+            25,
+            Some("check_input"),
+            text,
+            &[0.89, 0.11, 0.01],
+        );
 
         let opts = FindDuplicatesOptions {
             min_chunk_bytes: 10,
@@ -319,9 +336,25 @@ mod tests {
         insert_file(&conn, "src/copy2.rs");
 
         let text = "fn process_data(data: &[u8]) -> Vec<u8> { parse(data); transform(data); serialize(data) }";
-        insert_chunk(&conn, "src/main.rs", 1, 5, Some("process_data"), text, &[1.0, 0.0, 0.0]);
+        insert_chunk(
+            &conn,
+            "src/main.rs",
+            1,
+            5,
+            Some("process_data"),
+            text,
+            &[1.0, 0.0, 0.0],
+        );
         insert_chunk(&conn, "src/copy1.rs", 1, 5, None, text, &[0.99, 0.01, 0.0]);
-        insert_chunk(&conn, "src/copy2.rs", 10, 15, None, text, &[0.98, 0.02, 0.0]);
+        insert_chunk(
+            &conn,
+            "src/copy2.rs",
+            10,
+            15,
+            None,
+            text,
+            &[0.98, 0.02, 0.0],
+        );
 
         let opts = FindDuplicatesOptions {
             min_chunk_bytes: 10,
@@ -332,7 +365,9 @@ mod tests {
         assert_eq!(result.groups.len(), 1);
         assert_eq!(result.groups[0].duplicates.len(), 2);
         // Sorted by similarity descending
-        assert!(result.groups[0].duplicates[0].similarity >= result.groups[0].duplicates[1].similarity);
+        assert!(
+            result.groups[0].duplicates[0].similarity >= result.groups[0].duplicates[1].similarity
+        );
     }
 
     #[test]
@@ -340,14 +375,23 @@ mod tests {
         let conn = test_db();
         insert_file(&conn, "src/source.rs");
 
-        let text = "fn repeated_pattern() { setup(); execute(); teardown(); report_results(); finish(); }";
+        let text =
+            "fn repeated_pattern() { setup(); execute(); teardown(); report_results(); finish(); }";
         insert_chunk(&conn, "src/source.rs", 1, 5, None, text, &[1.0, 0.0, 0.0]);
 
         // Create 10 copies in other files
         for i in 0..10 {
             let path = format!("src/copy_{i}.rs");
             insert_file(&conn, &path);
-            insert_chunk(&conn, &path, 1, 5, None, text, &[1.0 - (i as f32 * 0.001), 0.01, 0.0]);
+            insert_chunk(
+                &conn,
+                &path,
+                1,
+                5,
+                None,
+                text,
+                &[1.0 - (i as f32 * 0.001), 0.01, 0.0],
+            );
         }
 
         let opts = FindDuplicatesOptions {
@@ -386,7 +430,8 @@ mod tests {
     fn test_file_not_in_index_returns_empty() {
         let conn = test_db();
         insert_file(&conn, "src/other.rs");
-        let text = "fn something() { let result = compute_value(); process(result); return output_data; }";
+        let text =
+            "fn something() { let result = compute_value(); process(result); return output_data; }";
         insert_chunk(&conn, "src/other.rs", 1, 3, None, text, &[1.0, 0.0]);
 
         let opts = FindDuplicatesOptions {
@@ -402,7 +447,8 @@ mod tests {
     #[test]
     fn test_empty_index() {
         let conn = test_db();
-        let result = find_duplicates(&conn, "src/any.rs", &FindDuplicatesOptions::default()).unwrap();
+        let result =
+            find_duplicates(&conn, "src/any.rs", &FindDuplicatesOptions::default()).unwrap();
 
         assert!(result.groups.is_empty());
         assert_eq!(result.source_chunks, 0);
@@ -419,12 +465,36 @@ mod tests {
         let text_b = "fn high_match_function() { identical_logic(); same_stuff(); matching_code(); result(); }";
 
         // Chunk A has a weaker match
-        insert_chunk(&conn, "src/target.rs", 1, 5, Some("low_match"), text_a, &[1.0, 0.0, 0.0]);
+        insert_chunk(
+            &conn,
+            "src/target.rs",
+            1,
+            5,
+            Some("low_match"),
+            text_a,
+            &[1.0, 0.0, 0.0],
+        );
         insert_chunk(&conn, "src/other.rs", 1, 5, None, text_a, &[0.87, 0.3, 0.0]);
 
         // Chunk B has a stronger match
-        insert_chunk(&conn, "src/target.rs", 10, 15, Some("high_match"), text_b, &[0.0, 1.0, 0.0]);
-        insert_chunk(&conn, "src/other.rs", 10, 15, None, text_b, &[0.01, 0.99, 0.0]);
+        insert_chunk(
+            &conn,
+            "src/target.rs",
+            10,
+            15,
+            Some("high_match"),
+            text_b,
+            &[0.0, 1.0, 0.0],
+        );
+        insert_chunk(
+            &conn,
+            "src/other.rs",
+            10,
+            15,
+            None,
+            text_b,
+            &[0.01, 0.99, 0.0],
+        );
 
         let opts = FindDuplicatesOptions {
             min_similarity: 0.85,

@@ -136,8 +136,7 @@ fn stable() {
     std::fs::write(repo_path.join("src/lib.rs"), modified).unwrap();
 
     // Compare HEAD version to working tree version
-    let result =
-        execute_file_diff("src/lib.rs@HEAD", "src/lib.rs", repo_path).unwrap();
+    let result = execute_file_diff("src/lib.rs@HEAD", "src/lib.rs", repo_path).unwrap();
     let response: DiffResponse = serde_json::from_str(&result).unwrap();
 
     assert_eq!(response.summary.modified, 1, "process() should be modified");
@@ -175,8 +174,7 @@ fn stable() {
     git_cmd(repo_path, &["commit", "-m", "Second commit"]);
 
     // Compare first commit to second
-    let result =
-        execute_file_diff("src/lib.rs@HEAD~1", "src/lib.rs@HEAD", repo_path).unwrap();
+    let result = execute_file_diff("src/lib.rs@HEAD~1", "src/lib.rs@HEAD", repo_path).unwrap();
     let response: DiffResponse = serde_json::from_str(&result).unwrap();
 
     // process and helper both changed
@@ -192,16 +190,8 @@ fn test_file_diff_added_and_deleted_entities() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
 
-    std::fs::write(
-        dir.join("old.rs"),
-        "fn alpha() { 1 }\nfn beta() { 2 }\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("new.rs"),
-        "fn beta() { 2 }\nfn gamma() { 3 }\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("old.rs"), "fn alpha() { 1 }\nfn beta() { 2 }\n").unwrap();
+    std::fs::write(dir.join("new.rs"), "fn beta() { 2 }\nfn gamma() { 3 }\n").unwrap();
 
     let result = execute_file_diff("old.rs", "new.rs", dir).unwrap();
     let response: DiffResponse = serde_json::from_str(&result).unwrap();
@@ -254,7 +244,10 @@ fn stable() {
     let result = execute_auto_diff(repo_path).unwrap();
     let response: DiffResponse = serde_json::from_str(&result).unwrap();
 
-    assert!(response.summary.modified >= 1, "Should detect modified entities");
+    assert!(
+        response.summary.modified >= 1,
+        "Should detect modified entities"
+    );
     assert!(response
         .changes
         .iter()
@@ -354,15 +347,12 @@ fn stable() {
     let result = execute_auto_diff(repo_path).unwrap();
     let response: DiffResponse = serde_json::from_str(&result).unwrap();
 
-    assert!(response.summary.files >= 2, "Should report at least 2 files");
-    assert!(response
-        .changes
-        .iter()
-        .any(|c| c.entity_name == "process"));
-    assert!(response
-        .changes
-        .iter()
-        .any(|c| c.entity_name == "utility"));
+    assert!(
+        response.summary.files >= 2,
+        "Should report at least 2 files"
+    );
+    assert!(response.changes.iter().any(|c| c.entity_name == "process"));
+    assert!(response.changes.iter().any(|c| c.entity_name == "utility"));
 }
 
 #[test]
@@ -451,10 +441,7 @@ async fn test_mcp_dispatch_inline_diff() {
 
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), serde_json::json!("get diff"));
-    args.insert(
-        "left_text".to_string(),
-        serde_json::json!("fn foo() { 1 }"),
-    );
+    args.insert("left_text".to_string(), serde_json::json!("fn foo() { 1 }"));
     args.insert(
         "right_text".to_string(),
         serde_json::json!("fn foo() { 2 }"),
@@ -462,7 +449,11 @@ async fn test_mcp_dispatch_inline_diff() {
     args.insert("language".to_string(), serde_json::json!("rust"));
 
     let result = tool.execute(args, &context).await;
-    assert!(result.is_ok(), "MCP dispatch should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "MCP dispatch should succeed: {:?}",
+        result.err()
+    );
 
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
@@ -503,7 +494,11 @@ fn stable() {
     args.insert("op".to_string(), serde_json::json!("get diff"));
 
     let result = tool.execute(args, &context).await;
-    assert!(result.is_ok(), "Auto-diff via MCP should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Auto-diff via MCP should succeed: {:?}",
+        result.err()
+    );
 
     let call_result = result.unwrap();
     let text = match &call_result.content[0].raw {
@@ -512,10 +507,7 @@ fn stable() {
     };
     let response: DiffResponse = serde_json::from_str(text).unwrap();
     assert!(response.summary.modified >= 1);
-    assert!(response
-        .changes
-        .iter()
-        .any(|c| c.entity_name == "process"));
+    assert!(response.changes.iter().any(|c| c.entity_name == "process"));
 }
 
 #[tokio::test]
@@ -545,14 +537,15 @@ fn stable() {
 
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), serde_json::json!("get diff"));
-    args.insert(
-        "left".to_string(),
-        serde_json::json!("src/lib.rs@HEAD~1"),
-    );
+    args.insert("left".to_string(), serde_json::json!("src/lib.rs@HEAD~1"));
     args.insert("right".to_string(), serde_json::json!("src/lib.rs@HEAD"));
 
     let result = tool.execute(args, &context).await;
-    assert!(result.is_ok(), "File-mode diff via MCP should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "File-mode diff via MCP should succeed: {:?}",
+        result.err()
+    );
 
     let call_result = result.unwrap();
     let text = match &call_result.content[0].raw {
@@ -586,10 +579,7 @@ async fn test_mcp_dispatch_missing_required_params() {
     // Inline mode with left_text but missing right_text
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), serde_json::json!("get diff"));
-    args.insert(
-        "left_text".to_string(),
-        serde_json::json!("fn foo() {}"),
-    );
+    args.insert("left_text".to_string(), serde_json::json!("fn foo() {}"));
 
     let result = tool.execute(args, &context).await;
     assert!(result.is_err());

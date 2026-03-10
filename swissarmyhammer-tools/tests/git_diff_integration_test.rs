@@ -57,12 +57,15 @@ fn process(x: i32) -> i32 {
 
     let result = diff_single_rust_file(before, after);
 
-    assert_eq!(result.modified_count, 1, "Expected exactly 1 modified entity");
+    assert_eq!(
+        result.modified_count, 1,
+        "Expected exactly 1 modified entity"
+    );
     assert_eq!(result.added_count, 0);
     assert_eq!(result.deleted_count, 0);
 
-    let change = find_change_by_name(&result, "process")
-        .expect("Should find a change for 'process'");
+    let change =
+        find_change_by_name(&result, "process").expect("Should find a change for 'process'");
     assert_eq!(change.change_type, ChangeType::Modified);
     assert!(
         change.before_content.is_some(),
@@ -102,13 +105,11 @@ fn gamma() {
     let result = diff_single_rust_file(before, after);
 
     // alpha should be deleted
-    let alpha = find_change_by_name(&result, "alpha")
-        .expect("Should find a change for 'alpha'");
+    let alpha = find_change_by_name(&result, "alpha").expect("Should find a change for 'alpha'");
     assert_eq!(alpha.change_type, ChangeType::Deleted);
 
     // gamma should be added
-    let gamma = find_change_by_name(&result, "gamma")
-        .expect("Should find a change for 'gamma'");
+    let gamma = find_change_by_name(&result, "gamma").expect("Should find a change for 'gamma'");
     assert_eq!(gamma.change_type, ChangeType::Added);
 
     // beta is unchanged -- should NOT appear in changes
@@ -193,13 +194,20 @@ fn new_name(x: i32) -> i32 {
     // due to slight extraction differences.
     //
     // If the engine cannot detect the rename, it will produce an Added + Deleted pair.
-    let has_renamed = result.changes.iter().any(|c| c.change_type == ChangeType::Renamed);
+    let has_renamed = result
+        .changes
+        .iter()
+        .any(|c| c.change_type == ChangeType::Renamed);
     let has_add_delete = result.added_count >= 1 && result.deleted_count >= 1;
 
     assert!(
         has_renamed || has_add_delete,
         "Renaming should produce either a Renamed change or an Added+Deleted pair. Got: {:?}",
-        result.changes.iter().map(|c| (&c.entity_name, c.change_type)).collect::<Vec<_>>()
+        result
+            .changes
+            .iter()
+            .map(|c| (&c.entity_name, c.change_type))
+            .collect::<Vec<_>>()
     );
 
     // Regardless of classification, no Modified change should exist (body is the same)
@@ -229,8 +237,8 @@ struct Config {
 
     let result = diff_single_rust_file(before, after);
 
-    let config_change = find_change_by_name(&result, "Config")
-        .expect("Should find a change for 'Config'");
+    let config_change =
+        find_change_by_name(&result, "Config").expect("Should find a change for 'Config'");
     assert_eq!(
         config_change.change_type,
         ChangeType::Modified,
@@ -268,7 +276,11 @@ fn test_multiple_files() {
     assert_eq!(result.modified_count, 2, "Should have 2 modified entities");
 
     // Verify both entity names appear
-    let names: Vec<&str> = result.changes.iter().map(|c| c.entity_name.as_str()).collect();
+    let names: Vec<&str> = result
+        .changes
+        .iter()
+        .map(|c| c.entity_name.as_str())
+        .collect();
     assert!(names.contains(&"foo"), "Should contain change for foo");
     assert!(names.contains(&"bar"), "Should contain change for bar");
 }
@@ -443,8 +455,8 @@ fn unchanged() {
     let result = compute_semantic_diff(&file_changes, &registry, None, None);
 
     // The process function should be modified
-    let process_change = find_change_by_name(&result, "process")
-        .expect("Should find a change for 'process'");
+    let process_change =
+        find_change_by_name(&result, "process").expect("Should find a change for 'process'");
     assert_eq!(
         process_change.change_type,
         ChangeType::Modified,

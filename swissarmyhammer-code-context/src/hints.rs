@@ -73,11 +73,7 @@ mod tests {
 
         for op in &ops {
             let hint = hint_for_operation(op);
-            assert!(
-                !hint.is_empty(),
-                "hint for '{}' must be non-empty",
-                op
-            );
+            assert!(!hint.is_empty(), "hint for '{}' must be non-empty", op);
         }
     }
 

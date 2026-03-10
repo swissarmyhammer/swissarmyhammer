@@ -131,8 +131,12 @@ impl McpTool for FilesTool {
 impl AgentTool for FilesTool {}
 
 impl swissarmyhammer_common::lifecycle::Initializable for FilesTool {
-    fn name(&self) -> &str { "Files" }
-    fn category(&self) -> &str { "tools" }
+    fn name(&self) -> &str {
+        "Files"
+    }
+    fn category(&self) -> &str {
+        "tools"
+    }
 }
 
 impl Doctorable for FilesTool {

@@ -76,12 +76,10 @@ impl FanoutWatcher {
         // Update the database
         let path_str = event.path().to_string_lossy();
         match event {
-            FileEvent::Deleted(_) => {
-                conn.execute(
-                    "DELETE FROM indexed_files WHERE file_path = ?1",
-                    [&*path_str],
-                )
-            }
+            FileEvent::Deleted(_) => conn.execute(
+                "DELETE FROM indexed_files WHERE file_path = ?1",
+                [&*path_str],
+            ),
             FileEvent::Created(_) | FileEvent::Modified(_) => conn.execute(
                 "UPDATE indexed_files SET ts_indexed = 0, lsp_indexed = 0 WHERE file_path = ?1",
                 [&*path_str],

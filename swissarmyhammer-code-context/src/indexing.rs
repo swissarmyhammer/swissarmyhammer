@@ -7,11 +7,11 @@
 //! 4. Updates indexed flags
 //! 5. Handles LSP requests (placeholder for future LSP integration)
 
+use rayon::prelude::*;
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
-use rusqlite::Connection;
-use rayon::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::error::CodeContextError;
@@ -41,23 +41,19 @@ impl Default for IndexingConfig {
 /// 2. Parses them using tree-sitter
 /// 3. Writes results back to the database
 /// 4. Repeats until no dirty files remain
-pub fn spawn_indexing_worker(
-    workspace_root: PathBuf,
-    db_path: PathBuf,
-    config: IndexingConfig,
-) {
+pub fn spawn_indexing_worker(workspace_root: PathBuf, db_path: PathBuf, config: IndexingConfig) {
     thread::Builder::new()
         .name("code-context-indexer".to_string())
-        .spawn(move || {
-            match run_indexing_worker(&workspace_root, &db_path, config) {
+        .spawn(
+            move || match run_indexing_worker(&workspace_root, &db_path, config) {
                 Ok(()) => {
                     info!("Indexing worker completed successfully");
                 }
                 Err(e) => {
                     warn!("Indexing worker encountered error: {}", e);
                 }
-            }
-        })
+            },
+        )
         .expect("Failed to spawn indexing worker thread");
 }
 
@@ -115,7 +111,10 @@ fn run_indexing_worker(
             // Write results back to database
             for (file_path, chunk_count) in results {
                 if chunk_count == 0 {
-                    debug!("Skipping {} - no chunks extracted, marking indexed to avoid retry loop", file_path);
+                    debug!(
+                        "Skipping {} - no chunks extracted, marking indexed to avoid retry loop",
+                        file_path
+                    );
                     if let Err(e) = mark_ts_indexed(&db, &file_path) {
                         warn!("Failed to mark {} as indexed: {}", file_path, e);
                     }
@@ -136,7 +135,10 @@ fn run_indexing_worker(
                             warn!("Failed to mark {} as indexed: {}", file_path, e);
                         } else {
                             indexed_count += 1;
-                            debug!("Successfully indexed {} with {} chunks", file_path, chunk_count);
+                            debug!(
+                                "Successfully indexed {} with {} chunks",
+                                file_path, chunk_count
+                            );
                         }
                     }
                     Err(e) => {
@@ -144,7 +146,10 @@ fn run_indexing_worker(
                     }
                 }
             }
-            info!("code-context: indexed {} files so far (batch complete)", indexed_count);
+            info!(
+                "code-context: indexed {} files so far (batch complete)",
+                indexed_count
+            );
         }
 
         // Sleep before next iteration (allows new files to be discovered)
@@ -154,13 +159,8 @@ fn run_indexing_worker(
 }
 
 /// Query files that need tree-sitter indexing (ts_indexed=0)
-fn query_dirty_files(
-    db: &Connection,
-    limit: usize,
-) -> Result<Vec<String>, CodeContextError> {
-    let mut stmt = db.prepare(
-        "SELECT file_path FROM indexed_files WHERE ts_indexed=0 LIMIT ?"
-    )?;
+fn query_dirty_files(db: &Connection, limit: usize) -> Result<Vec<String>, CodeContextError> {
+    let mut stmt = db.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed=0 LIMIT ?")?;
 
     let files = stmt
         .query_map([limit as i64], |row| row.get::<_, String>(0))?
@@ -170,10 +170,7 @@ fn query_dirty_files(
 }
 
 /// Mark a file as indexed in the database
-fn mark_ts_indexed(
-    db: &Connection,
-    file_path: &str,
-) -> Result<(), CodeContextError> {
+fn mark_ts_indexed(db: &Connection, file_path: &str) -> Result<(), CodeContextError> {
     db.execute(
         "UPDATE indexed_files SET ts_indexed=1 WHERE file_path=?",
         [file_path],
@@ -185,9 +182,7 @@ fn mark_ts_indexed(
 ///
 /// This is a simple chunking strategy that splits files into chunks of ~1000 bytes.
 /// A more sophisticated implementation would use tree-sitter AST-aware chunking.
-fn parse_and_extract_chunks(
-    file_path: &Path,
-) -> Result<Vec<(usize, String)>, CodeContextError> {
+fn parse_and_extract_chunks(file_path: &Path) -> Result<Vec<(usize, String)>, CodeContextError> {
     let content = std::fs::read_to_string(file_path)?;
 
     const CHUNK_SIZE: usize = 1000; // bytes per chunk
@@ -199,9 +194,11 @@ fn parse_and_extract_chunks(
         let line_with_newline = format!("{}\n", line);
 
         // If adding this line would exceed chunk size, start a new chunk
-        if start_byte > 0 && chunks.last().map_or(false, |(_, chunk): &(usize, String)| {
-            chunk.len() + line_with_newline.len() > CHUNK_SIZE
-        }) {
+        if start_byte > 0
+            && chunks.last().map_or(false, |(_, chunk): &(usize, String)| {
+                chunk.len() + line_with_newline.len() > CHUNK_SIZE
+            })
+        {
             start_byte += chunks.last().unwrap().1.len();
         }
 
@@ -272,8 +269,9 @@ mod tests {
                 symbol_path  TEXT,
                 embedding    BLOB
             );
-            "
-        ).unwrap();
+            ",
+        )
+        .unwrap();
         conn
     }
 
@@ -327,9 +325,9 @@ fn hello() {
         assert!(result.is_ok());
 
         // Verify chunks were written
-        let mut stmt = db.prepare(
-            "SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?"
-        ).unwrap();
+        let mut stmt = db
+            .prepare("SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?")
+            .unwrap();
 
         let count: i64 = stmt.query_row([file_path], |row| row.get(0)).unwrap();
         assert_eq!(count, 2, "Should have 2 chunks in database");
@@ -343,9 +341,9 @@ fn hello() {
         insert_test_file(&db, file_path);
 
         // Verify file is not indexed initially
-        let mut stmt = db.prepare(
-            "SELECT ts_indexed FROM indexed_files WHERE file_path = ?"
-        ).unwrap();
+        let mut stmt = db
+            .prepare("SELECT ts_indexed FROM indexed_files WHERE file_path = ?")
+            .unwrap();
         let initial: i64 = stmt.query_row([file_path], |row| row.get(0)).unwrap();
         assert_eq!(initial, 0, "File should not be indexed initially");
 
@@ -369,7 +367,8 @@ fn hello() {
         db.execute(
             "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = 'file1.rs'",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Query dirty files
         let dirty = query_dirty_files(&db, 10).unwrap();
@@ -394,9 +393,7 @@ fn hello() {
         assert!(write_result.is_ok(), "Writing chunks should succeed");
 
         // Verify chunks count
-        let mut count_stmt = db.prepare(
-            "SELECT COUNT(*) FROM ts_chunks"
-        ).unwrap();
+        let mut count_stmt = db.prepare("SELECT COUNT(*) FROM ts_chunks").unwrap();
         let all_chunks: i64 = count_stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(all_chunks, 2, "Should have 2 chunks total in database");
 

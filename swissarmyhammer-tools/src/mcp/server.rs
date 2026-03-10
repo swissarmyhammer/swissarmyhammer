@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use swissarmyhammer_common::{is_prompt_visible, Pretty, Result, SwissArmyHammerError};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
+use swissarmyhammer_common::{is_prompt_visible, Pretty, Result, SwissArmyHammerError};
 use swissarmyhammer_config::model::{parse_model_config, ModelManager};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
@@ -19,12 +19,11 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 use tokio::sync::{Mutex, RwLock};
 
-
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_file_tools, register_git_tools, register_js_tools, register_kanban_tools,
-    register_code_context_tools, register_questions_tools, register_shell_tools,
-    register_web_tools, ToolContext, ToolRegistry,
+    register_code_context_tools, register_file_tools, register_git_tools, register_js_tools,
+    register_kanban_tools, register_questions_tools, register_shell_tools, register_web_tools,
+    ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -309,7 +308,8 @@ impl McpServer {
             let err_count = results.iter().filter(|r| r.is_err()).count();
             tracing::info!(
                 "code-context: LSP supervisor started — {} servers ok, {} failed",
-                ok_count, err_count
+                ok_count,
+                err_count
             );
             for r in &results {
                 if let Err(e) = r {
@@ -403,7 +403,9 @@ impl McpServer {
         tokio::spawn(async move {
             match lsp_handle.await {
                 Ok(Some(shared_client)) => {
-                    use swissarmyhammer_code_context::{spawn_lsp_indexing_worker, LspWorkerConfig};
+                    use swissarmyhammer_code_context::{
+                        spawn_lsp_indexing_worker, LspWorkerConfig,
+                    };
                     spawn_lsp_indexing_worker(
                         workspace_root.clone(),
                         lsp_db,
@@ -416,9 +418,7 @@ impl McpServer {
                     );
                 }
                 _ => {
-                    tracing::info!(
-                        "code-context: no LSP client available, skipping LSP indexing"
-                    );
+                    tracing::info!("code-context: no LSP client available, skipping LSP indexing");
                 }
             }
 

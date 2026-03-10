@@ -109,11 +109,7 @@ pub fn extract_call_names(source: &str, language: Language) -> Vec<CallSite> {
 }
 
 /// Recursively walk the tree-sitter AST and collect call sites.
-fn walk_tree(
-    cursor: &mut tree_sitter::TreeCursor,
-    source: &[u8],
-    sites: &mut Vec<CallSite>,
-) {
+fn walk_tree(cursor: &mut tree_sitter::TreeCursor, source: &[u8], sites: &mut Vec<CallSite>) {
     loop {
         let node = cursor.node();
         let kind = node.kind();
@@ -123,10 +119,7 @@ fn walk_tree(
         //   Rust: call_expression, method_call_expression
         //   Python: call
         //   JS/TS/Go/Java/C/C++: call_expression
-        if kind == "call_expression"
-            || kind == "method_call_expression"
-            || kind == "call"
-        {
+        if kind == "call_expression" || kind == "method_call_expression" || kind == "call" {
             if let Some(name) = extract_callee_name(node, source) {
                 sites.push(CallSite {
                     callee_name: name,
@@ -202,10 +195,7 @@ pub fn resolve_callees(
 /// Uses `INSERT OR IGNORE` so existing entries (from LSP) are not overwritten.
 ///
 /// Returns the number of symbols created.
-pub fn ensure_ts_symbols(
-    conn: &Connection,
-    file_path: &str,
-) -> Result<usize, CodeContextError> {
+pub fn ensure_ts_symbols(conn: &Connection, file_path: &str) -> Result<usize, CodeContextError> {
     let count = conn.execute(
         "INSERT OR IGNORE INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char)
          SELECT
@@ -250,10 +240,7 @@ pub fn generate_ts_call_edges(
     }
 
     // Collect unique callee names.
-    let mut unique_names: Vec<String> = call_sites
-        .iter()
-        .map(|s| s.callee_name.clone())
-        .collect();
+    let mut unique_names: Vec<String> = call_sites.iter().map(|s| s.callee_name.clone()).collect();
     unique_names.sort();
     unique_names.dedup();
 
@@ -305,18 +292,14 @@ pub fn generate_ts_call_edges(
             .iter()
             .filter(|r| r.callee_name == site.callee_name)
         {
-            let callee_id =
-                format!("ts:{}:{}", resolved.file_path, resolved.symbol_path);
+            let callee_id = format!("ts:{}:{}", resolved.file_path, resolved.symbol_path);
 
             // Skip self-edges.
             if caller_id == callee_id {
                 continue;
             }
 
-            let from_ranges = format!(
-                "[[{},{},{},{}]]",
-                site.start_line, 0, site.end_line, 0
-            );
+            let from_ranges = format!("[[{},{},{},{}]]", site.start_line, 0, site.end_line, 0);
 
             edges.push(CallEdge {
                 caller_id,
@@ -442,10 +425,7 @@ mod tests {
         let sites = extract_call_names(source, rust_language());
 
         let names: Vec<&str> = sites.iter().map(|s| s.callee_name.as_str()).collect();
-        assert!(
-            names.contains(&"method"),
-            "expected 'method' in {names:?}"
-        );
+        assert!(names.contains(&"method"), "expected 'method' in {names:?}");
     }
 
     #[test]
@@ -472,16 +452,7 @@ mod tests {
     fn test_resolve_callees() {
         let conn = open_memory_db();
         seed_file(&conn, "src/lib.rs");
-        seed_chunk(
-            &conn,
-            "src/lib.rs",
-            0,
-            100,
-            0,
-            10,
-            "fn foo() {}",
-            "foo",
-        );
+        seed_chunk(&conn, "src/lib.rs", 0, 100, 0, 10, "fn foo() {}", "foo");
         seed_chunk(
             &conn,
             "src/lib.rs",
@@ -498,8 +469,9 @@ mod tests {
 
         // "foo" should match exactly.
         assert!(
-            resolved.iter().any(|r| r.callee_name == "foo"
-                && r.symbol_path == "foo"),
+            resolved
+                .iter()
+                .any(|r| r.callee_name == "foo" && r.symbol_path == "foo"),
             "expected exact match for 'foo'"
         );
 
@@ -516,20 +488,14 @@ mod tests {
     fn test_no_match_no_error() {
         let conn = open_memory_db();
         seed_file(&conn, "src/lib.rs");
-        seed_chunk(
-            &conn,
-            "src/lib.rs",
-            0,
-            100,
-            0,
-            10,
-            "fn foo() {}",
-            "foo",
-        );
+        seed_chunk(&conn, "src/lib.rs", 0, 100, 0, 10, "fn foo() {}", "foo");
 
         let names = vec!["nonexistent_function".to_string()];
         let resolved = resolve_callees(&conn, &names).unwrap();
-        assert!(resolved.is_empty(), "expected empty result for unknown callee");
+        assert!(
+            resolved.is_empty(),
+            "expected empty result for unknown callee"
+        );
     }
 
     // ── generate_ts_call_edges tests ────────────────────────────────
@@ -565,13 +531,8 @@ mod tests {
             "foo",
         );
 
-        let edges = generate_ts_call_edges(
-            &conn,
-            "src/main.rs",
-            caller_source,
-            rust_language(),
-        )
-        .unwrap();
+        let edges =
+            generate_ts_call_edges(&conn, "src/main.rs", caller_source, rust_language()).unwrap();
 
         assert_eq!(edges.len(), 1, "expected exactly one edge");
         assert_eq!(edges[0].caller_id, "ts:src/main.rs:main");
@@ -609,9 +570,7 @@ mod tests {
             "helper",
         );
 
-        let edges =
-            generate_ts_call_edges(&conn, "src/main.rs", source, rust_language())
-                .unwrap();
+        let edges = generate_ts_call_edges(&conn, "src/main.rs", source, rust_language()).unwrap();
 
         assert!(!edges.is_empty(), "expected at least one edge");
         for edge in &edges {
@@ -652,9 +611,7 @@ mod tests {
             "do_work",
         );
 
-        let edges =
-            generate_ts_call_edges(&conn, "src/main.rs", source, rust_language())
-                .unwrap();
+        let edges = generate_ts_call_edges(&conn, "src/main.rs", source, rust_language()).unwrap();
 
         let count = write_ts_edges(&conn, "src/main.rs", &edges).unwrap();
         assert_eq!(count, 1);

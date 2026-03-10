@@ -34,7 +34,10 @@ impl ParserRegistry {
     }
 
     pub fn get_plugin_by_id(&self, id: &str) -> Option<&dyn SemanticParserPlugin> {
-        self.plugins.iter().find(|p| p.id() == id).map(|p| p.as_ref())
+        self.plugins
+            .iter()
+            .find(|p| p.id() == id)
+            .map(|p| p.as_ref())
     }
 }
 

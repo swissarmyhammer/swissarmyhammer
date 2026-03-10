@@ -123,7 +123,11 @@ impl LspDaemon {
             Ok(_) => None,
             Err(poisoned) => {
                 let guard = poisoned.into_inner();
-                if guard.is_some() { Some(guard) } else { None }
+                if guard.is_some() {
+                    Some(guard)
+                } else {
+                    None
+                }
             }
         }
     }
@@ -242,7 +246,10 @@ impl LspDaemon {
                         }
                     }
                     _ => {
-                        warn!(cmd = &self.spec.command, "stdin/stdout unavailable after handshake");
+                        warn!(
+                            cmd = &self.spec.command,
+                            "stdin/stdout unavailable after handshake"
+                        );
                         None
                     }
                 };
@@ -292,7 +299,9 @@ impl LspDaemon {
             Ok(Some(status)) => {
                 let reason = format!("process exited: {status}");
                 warn!(cmd = self.spec.command, %status, "LSP server exited unexpectedly");
-                if let Ok(mut guard) = self.client.lock() { *guard = None; }
+                if let Ok(mut guard) = self.client.lock() {
+                    *guard = None;
+                }
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -301,7 +310,9 @@ impl LspDaemon {
             Err(e) => {
                 let reason = format!("try_wait error: {e}");
                 warn!(cmd = self.spec.command, %e, "Error checking LSP server health");
-                if let Ok(mut guard) = self.client.lock() { *guard = None; }
+                if let Ok(mut guard) = self.client.lock() {
+                    *guard = None;
+                }
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -352,7 +363,9 @@ impl LspDaemon {
     pub async fn shutdown(&mut self) {
         // Drop the client first — this closes the stdin/stdout pipes,
         // which signals the LSP server to exit.
-        if let Ok(mut guard) = self.client.lock() { *guard = None; }
+        if let Ok(mut guard) = self.client.lock() {
+            *guard = None;
+        }
 
         let child = match self.child.take() {
             Some(c) => c,
@@ -378,7 +391,10 @@ impl LspDaemon {
                 warn!(cmd = self.spec.command, %e, "Error during graceful shutdown");
             }
             Err(_) => {
-                warn!(cmd = self.spec.command, "Shutdown timed out, process should be killed on drop");
+                warn!(
+                    cmd = self.spec.command,
+                    "Shutdown timed out, process should be killed on drop"
+                );
             }
         }
 
@@ -476,9 +492,7 @@ impl LspDaemon {
         };
         let mut buf = vec![0u8; 4096];
         match tokio::time::timeout(Duration::from_secs(1), stderr.read(&mut buf)).await {
-            Ok(Ok(n)) if n > 0 => {
-                String::from_utf8_lossy(&buf[..n]).trim().to_string()
-            }
+            Ok(Ok(n)) if n > 0 => String::from_utf8_lossy(&buf[..n]).trim().to_string(),
             _ => String::new(),
         }
     }
@@ -530,8 +544,8 @@ pub async fn send_jsonrpc_message<W: AsyncWriteExt + Unpin>(
     writer: &mut W,
     message: &serde_json::Value,
 ) -> Result<(), LspError> {
-    let body =
-        serde_json::to_string(message).map_err(|e| LspError::JsonRpc(format!("json encode: {e}")))?;
+    let body = serde_json::to_string(message)
+        .map_err(|e| LspError::JsonRpc(format!("json encode: {e}")))?;
     let header = format!("Content-Length: {}\r\n\r\n", body.len());
 
     writer
@@ -631,10 +645,7 @@ mod tests {
             reason: "crash".into(),
             attempts: 1,
         };
-        assert!(matches!(
-            failed,
-            LspDaemonState::Failed { attempts: 1, .. }
-        ));
+        assert!(matches!(failed, LspDaemonState::Failed { attempts: 1, .. }));
 
         // Failed -> Starting (restart)
         let restarting = LspDaemonState::Starting;
@@ -710,7 +721,10 @@ mod tests {
         let mut reader = BufReader::new(&mut cursor);
         let result = read_jsonrpc_message(&mut reader).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing Content-Length"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing Content-Length"));
     }
 
     #[tokio::test]

@@ -578,7 +578,9 @@ impl ToolContext {
 /// The trait includes optional CLI integration methods that enable dynamic CLI command
 /// generation without requiring modifications to existing tool implementations.
 #[async_trait::async_trait]
-pub trait McpTool: Doctorable + swissarmyhammer_common::lifecycle::Initializable + Send + Sync {
+pub trait McpTool:
+    Doctorable + swissarmyhammer_common::lifecycle::Initializable + Send + Sync
+{
     /// Get the tool's unique identifier name
     ///
     /// The name must be unique within the registry and should follow the

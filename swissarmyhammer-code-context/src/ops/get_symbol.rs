@@ -206,10 +206,7 @@ pub fn get_symbol(
     let max = options.max_results.unwrap_or(usize::MAX);
 
     // Tier 1: Exact match
-    let exact: Vec<&MergedRow> = symbols
-        .iter()
-        .filter(|s| s.symbol_path == query)
-        .collect();
+    let exact: Vec<&MergedRow> = symbols.iter().filter(|s| s.symbol_path == query).collect();
     if !exact.is_empty() {
         return Ok(make_result(query, &exact, MatchTier::Exact, 1000, max));
     }
@@ -308,22 +305,21 @@ fn load_lsp_rows(conn: &Connection) -> Result<Vec<LspRow>, CodeContextError> {
 
     let rows = stmt.query_map([], |row| {
         Ok((
-            row.get::<_, String>(0)?,  // id
-            row.get::<_, String>(1)?,  // name
-            row.get::<_, i32>(2)?,     // kind
-            row.get::<_, String>(3)?,  // file_path
-            row.get::<_, u32>(4)?,     // start_line
-            row.get::<_, u32>(5)?,     // start_char
-            row.get::<_, u32>(6)?,     // end_line
-            row.get::<_, u32>(7)?,     // end_char
+            row.get::<_, String>(0)?,         // id
+            row.get::<_, String>(1)?,         // name
+            row.get::<_, i32>(2)?,            // kind
+            row.get::<_, String>(3)?,         // file_path
+            row.get::<_, u32>(4)?,            // start_line
+            row.get::<_, u32>(5)?,            // start_char
+            row.get::<_, u32>(6)?,            // end_line
+            row.get::<_, u32>(7)?,            // end_char
             row.get::<_, Option<String>>(8)?, // detail
         ))
     })?;
 
     let mut out = Vec::new();
     for row in rows {
-        let (id, name, kind, file_path, start_line, start_char, end_line, end_char, detail) =
-            row?;
+        let (id, name, kind, file_path, start_line, start_char, end_line, end_char, detail) = row?;
         let qpath = qualified_path_from_id(&id, &file_path);
         out.push(LspRow {
             file_path,
@@ -412,10 +408,7 @@ fn load_merged_rows(conn: &Connection) -> Result<Vec<MergedRow>, CodeContextErro
 
 /// Extract the leaf name from a qualified path (e.g. `MyStruct::new` -> `new`).
 fn leaf_name(symbol_path: &str) -> &str {
-    symbol_path
-        .rsplit("::")
-        .next()
-        .unwrap_or(symbol_path)
+    symbol_path.rsplit("::").next().unwrap_or(symbol_path)
 }
 
 /// Extract the qualified path from an `lsp_symbols.id` field.
@@ -653,7 +646,10 @@ mod tests {
             "MyStruct",
             23, // struct
             "src/lib.rs",
-            0, 0, 20, 1,
+            0,
+            0,
+            20,
+            1,
             None,
         );
         insert_lsp_symbol(
@@ -662,7 +658,10 @@ mod tests {
             "new",
             12, // function
             "src/lib.rs",
-            5, 4, 8, 5,
+            5,
+            4,
+            8,
+            5,
             Some("fn() -> MyStruct"),
         );
         insert_lsp_symbol(
@@ -671,7 +670,10 @@ mod tests {
             "AuthService",
             5, // class
             "src/auth.rs",
-            0, 0, 30, 1,
+            0,
+            0,
+            30,
+            1,
             None,
         );
 
@@ -682,7 +684,10 @@ mod tests {
             "validate",
             6, // method
             "src/auth.rs",
-            15, 4, 20, 5,
+            15,
+            4,
+            20,
+            5,
             Some("fn(&self, token: &str) -> bool"),
         );
     }
@@ -708,7 +713,10 @@ mod tests {
         let result = get_symbol(&conn, "new", &GetSymbolOptions::default()).unwrap();
 
         assert_eq!(result.symbols.len(), 2);
-        assert!(result.symbols.iter().all(|s| s.match_tier == MatchTier::Suffix));
+        assert!(result
+            .symbols
+            .iter()
+            .all(|s| s.match_tier == MatchTier::Suffix));
 
         let paths: Vec<&str> = result
             .symbols
@@ -724,8 +732,7 @@ mod tests {
         let conn = test_db();
         seed_ts_fixtures(&conn);
 
-        let result =
-            get_symbol(&conn, "MYSTRUCT::NEW", &GetSymbolOptions::default()).unwrap();
+        let result = get_symbol(&conn, "MYSTRUCT::NEW", &GetSymbolOptions::default()).unwrap();
 
         assert!(!result.symbols.is_empty());
         assert!(result
@@ -746,7 +753,11 @@ mod tests {
         let result = get_symbol(&conn, "auth", &GetSymbolOptions::default()).unwrap();
 
         // "auth" is a substring of "authenticate", "AuthService::new", "AuthService::validate"
-        assert!(result.symbols.len() >= 3, "expected at least 3 matches, got {}", result.symbols.len());
+        assert!(
+            result.symbols.len() >= 3,
+            "expected at least 3 matches, got {}",
+            result.symbols.len()
+        );
 
         let paths: Vec<&str> = result
             .symbols
@@ -763,8 +774,7 @@ mod tests {
         let conn = test_db();
         seed_ts_fixtures(&conn);
 
-        let result =
-            get_symbol(&conn, "zzzznonexistent", &GetSymbolOptions::default()).unwrap();
+        let result = get_symbol(&conn, "zzzznonexistent", &GetSymbolOptions::default()).unwrap();
 
         assert!(result.symbols.is_empty());
     }
@@ -788,14 +798,21 @@ mod tests {
         seed_merged_fixtures(&conn);
 
         // LSP-only symbol (AuthService::validate has no TS chunk)
-        let result = get_symbol(&conn, "AuthService::validate", &GetSymbolOptions::default()).unwrap();
+        let result =
+            get_symbol(&conn, "AuthService::validate", &GetSymbolOptions::default()).unwrap();
 
-        assert!(!result.symbols.is_empty(), "expected LSP-only symbol to be found");
+        assert!(
+            !result.symbols.is_empty(),
+            "expected LSP-only symbol to be found"
+        );
         let sym = &result.symbols[0];
         assert_eq!(sym.qualified_path, "AuthService::validate");
         assert_eq!(sym.source, "lsp");
         assert_eq!(sym.kind, Some("method".to_string()));
-        assert_eq!(sym.detail, Some("fn(&self, token: &str) -> bool".to_string()));
+        assert_eq!(
+            sym.detail,
+            Some("fn(&self, token: &str) -> bool".to_string())
+        );
         assert_eq!(sym.start_char, 4);
         assert_eq!(sym.end_char, 5);
         // LSP-only symbols have empty text
@@ -832,7 +849,10 @@ mod tests {
         // MyStruct exists in both TS and LSP at (src/lib.rs, 0)
         let result = get_symbol(&conn, "MyStruct", &GetSymbolOptions::default()).unwrap();
 
-        let mystruct = result.symbols.iter().find(|s| s.file_path == "src/lib.rs" && s.start_line == 0);
+        let mystruct = result
+            .symbols
+            .iter()
+            .find(|s| s.file_path == "src/lib.rs" && s.start_line == 0);
         assert!(mystruct.is_some(), "expected merged MyStruct result");
         let sym = mystruct.unwrap();
         assert_eq!(sym.source, "merged");
@@ -855,17 +875,26 @@ mod tests {
         // Tier 2: Suffix
         let result = get_symbol(&conn, "new", &GetSymbolOptions::default()).unwrap();
         assert!(!result.symbols.is_empty());
-        assert!(result.symbols.iter().all(|s| s.match_tier == MatchTier::Suffix));
+        assert!(result
+            .symbols
+            .iter()
+            .all(|s| s.match_tier == MatchTier::Suffix));
 
         // Tier 3: Case-insensitive
         let result = get_symbol(&conn, "AUTHSERVICE", &GetSymbolOptions::default()).unwrap();
         assert!(!result.symbols.is_empty());
-        assert!(result.symbols.iter().all(|s| s.match_tier == MatchTier::CaseInsensitive));
+        assert!(result
+            .symbols
+            .iter()
+            .all(|s| s.match_tier == MatchTier::CaseInsensitive));
 
         // Tier 4: Fuzzy
         let result = get_symbol(&conn, "vldt", &GetSymbolOptions::default()).unwrap();
         assert!(!result.symbols.is_empty());
-        assert!(result.symbols.iter().all(|s| s.match_tier == MatchTier::Fuzzy));
+        assert!(result
+            .symbols
+            .iter()
+            .all(|s| s.match_tier == MatchTier::Fuzzy));
     }
 
     #[test]

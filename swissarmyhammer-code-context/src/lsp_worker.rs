@@ -73,12 +73,12 @@ pub fn spawn_lsp_indexing_worker(
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("code-context-lsp-indexer".to_string())
-        .spawn(move || {
-            match run_lsp_indexing_loop(&workspace_root, &db, &client, &config) {
+        .spawn(
+            move || match run_lsp_indexing_loop(&workspace_root, &db, &client, &config) {
                 Ok(()) => info!("LSP indexing worker completed"),
                 Err(e) => warn!("LSP indexing worker error: {}", e),
-            }
-        })
+            },
+        )
         .expect("Failed to spawn LSP indexing worker thread")
 }
 
@@ -132,10 +132,7 @@ fn run_lsp_indexing_loop(
             }
         };
 
-        info!(
-            "LSP indexing: processing {} dirty files",
-            dirty_files.len()
-        );
+        info!("LSP indexing: processing {} dirty files", dirty_files.len());
 
         // 3. Process each file sequentially (LSP is single-threaded I/O)
         for relative_path in &dirty_files {
@@ -212,13 +209,9 @@ fn index_single_file(
 }
 
 /// Query files that need LSP indexing (`lsp_indexed = 0`).
-fn query_lsp_dirty_files(
-    db: &Connection,
-    limit: usize,
-) -> Result<Vec<String>, CodeContextError> {
-    let mut stmt = db.prepare(
-        "SELECT file_path FROM indexed_files WHERE lsp_indexed = 0 LIMIT ?"
-    )?;
+fn query_lsp_dirty_files(db: &Connection, limit: usize) -> Result<Vec<String>, CodeContextError> {
+    let mut stmt =
+        db.prepare("SELECT file_path FROM indexed_files WHERE lsp_indexed = 0 LIMIT ?")?;
     let files = stmt
         .query_map([limit as i64], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -340,8 +333,14 @@ mod tests {
 
     #[test]
     fn test_extension_to_language_id_typescript() {
-        assert_eq!(extension_to_language_id(Path::new("index.ts")), "typescript");
-        assert_eq!(extension_to_language_id(Path::new("App.tsx")), "typescriptreact");
+        assert_eq!(
+            extension_to_language_id(Path::new("index.ts")),
+            "typescript"
+        );
+        assert_eq!(
+            extension_to_language_id(Path::new("App.tsx")),
+            "typescriptreact"
+        );
     }
 
     #[test]
@@ -415,12 +414,9 @@ mod tests {
             children: None,
         }];
 
-        let count = crate::lsp_communication::collect_and_persist_symbols(
-            &db,
-            "src/demo.rs",
-            &symbols,
-        )
-        .unwrap();
+        let count =
+            crate::lsp_communication::collect_and_persist_symbols(&db, "src/demo.rs", &symbols)
+                .unwrap();
         assert_eq!(count, 1);
 
         // Verify lsp_indexed is now 1

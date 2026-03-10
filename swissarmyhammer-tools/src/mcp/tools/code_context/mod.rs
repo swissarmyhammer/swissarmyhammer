@@ -14,8 +14,8 @@
 //! Uses the `swissarmyhammer-code-context` crate for all operations,
 //! opening a `CodeContextWorkspace` from the `ToolContext` working directory.
 
-pub mod schema;
 pub mod doctor;
+pub mod schema;
 pub mod watcher;
 
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
@@ -35,10 +35,8 @@ use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 /// Global LSP supervisor handle, initialized once at MCP startup.
 /// Used by `get status` to report LSP server state and by `server.rs` for init.
 pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
-    std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>
+    std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>,
 > = std::sync::OnceLock::new();
-
-
 
 // ---------------------------------------------------------------------------
 // Operation structs with Operation trait impls
@@ -83,7 +81,9 @@ static SEARCH_SYMBOL_PARAMS: &[ParamMeta] = &[
         .param_type(ParamType::String)
         .required(),
     ParamMeta::new("kind")
-        .description("Filter by symbol kind: function, method, struct, class, interface, module, etc.")
+        .description(
+            "Filter by symbol kind: function, method, struct, class, interface, module, etc.",
+        )
         .param_type(ParamType::String),
     ParamMeta::new("max_results")
         .description("Maximum number of results to return")
@@ -464,10 +464,7 @@ impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
                 if lsp.installed {
                     checks.push(HealthCheck::ok(
                         format!("{} (LSP)", lsp.name),
-                        format!(
-                            "Available at {}",
-                            lsp.path.as_deref().unwrap_or("unknown")
-                        ),
+                        format!("Available at {}", lsp.path.as_deref().unwrap_or("unknown")),
                         cat,
                     ));
                 } else if let Some(ref err) = lsp.error {
@@ -485,7 +482,10 @@ impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
                     ));
                 } else {
                     // Not found at all
-                    let hint = lsp.install_hint.as_deref().unwrap_or("Install the LSP server");
+                    let hint = lsp
+                        .install_hint
+                        .as_deref()
+                        .unwrap_or("Install the LSP server");
                     checks.push(HealthCheck::warning(
                         format!("{} (LSP)", lsp.name),
                         format!("Not found (needed for {} code intelligence)", ptype),
@@ -510,11 +510,20 @@ impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
     }
 }
 impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
-    fn name(&self) -> &str { "code_context" }
-    fn category(&self) -> &str { "tools" }
-    fn priority(&self) -> i32 { 22 }
+    fn name(&self) -> &str {
+        "code_context"
+    }
+    fn category(&self) -> &str {
+        "tools"
+    }
+    fn priority(&self) -> i32 {
+        22
+    }
 
-    fn init(&self, _scope: &swissarmyhammer_common::lifecycle::InitScope) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
+    fn init(
+        &self,
+        _scope: &swissarmyhammer_common::lifecycle::InitScope,
+    ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
 
         // Create .code-context/ directory if in a git repo
@@ -524,14 +533,19 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
                 let cc_dir = root.join(".code-context");
                 if !cc_dir.exists() {
                     if let Err(e) = std::fs::create_dir_all(&cc_dir) {
-                        return vec![InitResult::error("code-context", format!("Failed to create .code-context/: {}", e))];
+                        return vec![InitResult::error(
+                            "code-context",
+                            format!("Failed to create .code-context/: {}", e),
+                        )];
                     }
                 }
                 // Ensure .code-context/ is in .gitignore
                 let gitignore = root.join(".gitignore");
                 let needs_entry = if gitignore.exists() {
                     match std::fs::read_to_string(&gitignore) {
-                        Ok(content) => !content.lines().any(|l| l.trim() == ".code-context" || l.trim() == ".code-context/"),
+                        Ok(content) => !content
+                            .lines()
+                            .any(|l| l.trim() == ".code-context" || l.trim() == ".code-context/"),
                         Err(_) => true,
                     }
                 } else {
@@ -539,17 +553,30 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
                 };
                 if needs_entry {
                     use std::io::Write;
-                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&gitignore) {
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&gitignore)
+                    {
                         let _ = writeln!(f, ".code-context/");
                     }
                 }
-                vec![InitResult::ok("code-context", "Created .code-context/ directory")]
+                vec![InitResult::ok(
+                    "code-context",
+                    "Created .code-context/ directory",
+                )]
             }
-            None => vec![InitResult::skipped("code-context", "No git repository found")],
+            None => vec![InitResult::skipped(
+                "code-context",
+                "No git repository found",
+            )],
         }
     }
 
-    fn deinit(&self, _scope: &swissarmyhammer_common::lifecycle::InitScope) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
+    fn deinit(
+        &self,
+        _scope: &swissarmyhammer_common::lifecycle::InitScope,
+    ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
 
         let root = swissarmyhammer_common::utils::find_git_repository_root();
@@ -558,14 +585,26 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
                 let cc_dir = root.join(".code-context");
                 if cc_dir.exists() {
                     if let Err(e) = std::fs::remove_dir_all(&cc_dir) {
-                        return vec![InitResult::error("code-context", format!("Failed to remove .code-context/: {}", e))];
+                        return vec![InitResult::error(
+                            "code-context",
+                            format!("Failed to remove .code-context/: {}", e),
+                        )];
                     }
-                    vec![InitResult::ok("code-context", "Removed .code-context/ directory")]
+                    vec![InitResult::ok(
+                        "code-context",
+                        "Removed .code-context/ directory",
+                    )]
                 } else {
-                    vec![InitResult::skipped("code-context", ".code-context/ not found")]
+                    vec![InitResult::skipped(
+                        "code-context",
+                        ".code-context/ not found",
+                    )]
                 }
             }
-            None => vec![InitResult::skipped("code-context", "No git repository found")],
+            None => vec![InitResult::skipped(
+                "code-context",
+                "No git repository found",
+            )],
         }
     }
 
@@ -652,8 +691,7 @@ fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpErro
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
 
     // Find the git repository root from the working directory
-    let workspace_root = find_git_repository_root_from(&working_dir)
-        .unwrap_or(working_dir);
+    let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
 
     CodeContextWorkspace::open(&workspace_root).map_err(|e| {
         McpError::internal_error(
@@ -671,10 +709,7 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpErro
 
     Ok(CallToolResult {
         content: vec![Annotated::new(
-            RawContent::Text(RawTextContent {
-                text,
-                meta: None,
-            }),
+            RawContent::Text(RawTextContent { text, meta: None }),
             None,
         )],
         is_error: Some(false),
@@ -692,8 +727,9 @@ fn context_err(e: swissarmyhammer_code_context::CodeContextError) -> McpError {
 ///
 /// Returns `Ok(None)` when ready, `Ok(Some(result))` with a progress message when not.
 fn check_ts_readiness(ws: &CodeContextWorkspace) -> Result<Option<CallToolResult>, McpError> {
-    let status = swissarmyhammer_code_context::check_blocking_status(&*ws.db(), IndexLayer::TreeSitter)
-        .map_err(context_err)?;
+    let status =
+        swissarmyhammer_code_context::check_blocking_status(&*ws.db(), IndexLayer::TreeSitter)
+            .map_err(context_err)?;
     match status {
         BlockingStatus::Ready => Ok(None),
         BlockingStatus::NotReady {
@@ -739,15 +775,18 @@ fn execute_get_symbol(
         .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
 
     let options = GetSymbolOptions {
-        max_results: args.get("max_results").and_then(|v| v.as_u64()).map(|n| n as usize),
+        max_results: args
+            .get("max_results")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
     };
 
     let ws = open_workspace(context)?;
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let result =
-        swissarmyhammer_code_context::get_symbol(&*ws.db(), query, &options).map_err(context_err)?;
+    let result = swissarmyhammer_code_context::get_symbol(&*ws.db(), query, &options)
+        .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -765,7 +804,10 @@ fn execute_search_symbol(
 
     let options = SearchSymbolOptions {
         kind: args.get("kind").and_then(|v| v.as_str()).map(String::from),
-        max_results: args.get("max_results").and_then(|v| v.as_u64()).map(|n| n as usize),
+        max_results: args
+            .get("max_results")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
     };
 
     let ws = open_workspace(context)?;
@@ -787,9 +829,7 @@ fn execute_list_symbols(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            McpError::invalid_params("Missing required parameter 'file_path'", None)
-        })?;
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
 
     let ws = open_workspace(context)?;
     if let Some(progress) = check_ts_readiness(&ws)? {
@@ -831,15 +871,18 @@ fn execute_grep_code(
     let options = GrepOptions {
         language,
         files,
-        max_results: args.get("max_results").and_then(|v| v.as_u64()).map(|n| n as usize),
+        max_results: args
+            .get("max_results")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
     };
 
     let ws = open_workspace(context)?;
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let result =
-        swissarmyhammer_code_context::grep_code(&*ws.db(), pattern, &options).map_err(context_err)?;
+    let result = swissarmyhammer_code_context::grep_code(&*ws.db(), pattern, &options)
+        .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -882,15 +925,16 @@ async fn execute_search_code(
 
     // Embed the query text
     use swissarmyhammer_embedding::{Embedder, TextEmbedder};
-    let embedder = Embedder::default().await.map_err(|e| {
-        McpError::internal_error(format!("Failed to create embedder: {}", e), None)
-    })?;
+    let embedder = Embedder::default()
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to create embedder: {}", e), None))?;
     embedder.load().await.map_err(|e| {
         McpError::internal_error(format!("Failed to load embedding model: {}", e), None)
     })?;
-    let embed_result = embedder.embed_text(query).await.map_err(|e| {
-        McpError::internal_error(format!("Failed to embed query: {}", e), None)
-    })?;
+    let embed_result = embedder
+        .embed_text(query)
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to embed query: {}", e), None))?;
 
     let options = SearchCodeOptions {
         top_k,
@@ -903,12 +947,9 @@ async fn execute_search_code(
     if let Some(progress) = check_ts_readiness(&ws)? {
         return Ok(progress);
     }
-    let result = swissarmyhammer_code_context::search_code(
-        &*ws.db(),
-        embed_result.embedding(),
-        &options,
-    )
-    .map_err(context_err)?;
+    let result =
+        swissarmyhammer_code_context::search_code(&*ws.db(), embed_result.embedding(), &options)
+            .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -922,9 +963,7 @@ fn execute_find_duplicates(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            McpError::invalid_params("Missing required parameter 'file_path'", None)
-        })?;
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
 
     let min_similarity = args
         .get("min_similarity")
@@ -995,11 +1034,11 @@ fn execute_query_ast(
         .working_dir
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-    let workspace_root =
-        find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
+    let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
 
     // Get file paths: either from explicit list or by scanning DB for files with matching extensions
-    let file_paths: Vec<String> = if let Some(files) = args.get("files").and_then(|v| v.as_array()) {
+    let file_paths: Vec<String> = if let Some(files) = args.get("files").and_then(|v| v.as_array())
+    {
         files
             .iter()
             .filter_map(|item| item.as_str().map(String::from))
@@ -1038,9 +1077,14 @@ fn execute_query_ast(
 
     let options = QueryAstOptions { max_results };
 
-    let result =
-        swissarmyhammer_code_context::query_ast(&workspace_root, &ts_language, &file_paths, query_str, &options)
-            .map_err(context_err)?;
+    let result = swissarmyhammer_code_context::query_ast(
+        &workspace_root,
+        &ts_language,
+        &file_paths,
+        query_str,
+        &options,
+    )
+    .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1103,11 +1147,12 @@ fn execute_get_blastradius(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            McpError::invalid_params("Missing required parameter 'file_path'", None)
-        })?;
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
 
-    let symbol = args.get("symbol").and_then(|v| v.as_str()).map(String::from);
+    let symbol = args
+        .get("symbol")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let max_hops = args
         .get("max_hops")
         .and_then(|v| v.as_u64())
@@ -1139,13 +1184,16 @@ pub(crate) async fn index_discovered_files_async(
     db: swissarmyhammer_code_context::SharedDb,
 ) {
     use std::sync::Arc;
-    use swissarmyhammer_treesitter::{chunk::chunk_file, ChunkSource, LanguageRegistry, ParsedFile};
+    use swissarmyhammer_treesitter::{
+        chunk::chunk_file, ChunkSource, LanguageRegistry, ParsedFile,
+    };
 
     // Query all dirty files from the DB (populated by startup_cleanup)
     let dirty_files: Vec<String> = {
         let conn = db.lock().unwrap_or_else(|p| p.into_inner());
         let result: Result<Vec<String>, rusqlite::Error> = (|| {
-            let mut stmt = conn.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed = 0")?;
+            let mut stmt =
+                conn.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed = 0")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             Ok(rows.filter_map(|r| r.ok()).collect())
         })();
@@ -1163,7 +1211,10 @@ pub(crate) async fn index_discovered_files_async(
         return;
     }
 
-    tracing::info!("code-context: indexing {} dirty files incrementally", dirty_files.len());
+    tracing::info!(
+        "code-context: indexing {} dirty files incrementally",
+        dirty_files.len()
+    );
 
     let lang_registry = LanguageRegistry::global();
     let total = dirty_files.len();
@@ -1252,7 +1303,11 @@ pub(crate) async fn index_discovered_files_async(
             for chunk in &chunks {
                 if let Some(content) = chunk.source.content() {
                     let (start_byte, end_byte) = match &chunk.source {
-                        ChunkSource::Parsed { start_byte, end_byte, .. } => (*start_byte, *end_byte),
+                        ChunkSource::Parsed {
+                            start_byte,
+                            end_byte,
+                            ..
+                        } => (*start_byte, *end_byte),
                         _ => continue,
                     };
 
@@ -1307,7 +1362,9 @@ pub(crate) async fn index_discovered_files_async(
         if indexed % 100 == 0 {
             tracing::info!(
                 "code-context: indexed {}/{} files ({} chunks so far)",
-                indexed, total, total_chunks
+                indexed,
+                total,
+                total_chunks
             );
         }
 
@@ -1317,12 +1374,22 @@ pub(crate) async fn index_discovered_files_async(
 
     // Summary
     let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-    let chunk_count: i64 = conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0)).unwrap_or(0);
-    let symbol_count: i64 = conn.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0)).unwrap_or(0);
-    let edge_count: i64 = conn.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0)).unwrap_or(0);
+    let chunk_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))
+        .unwrap_or(0);
+    let symbol_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0))
+        .unwrap_or(0);
+    let edge_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0))
+        .unwrap_or(0);
     tracing::info!(
         "code-context: indexing complete — {}/{} files, {} chunks, {} symbols, {} call edges",
-        indexed, total, chunk_count, symbol_count, edge_count
+        indexed,
+        total,
+        chunk_count,
+        symbol_count,
+        edge_count
     );
 }
 
@@ -1386,7 +1453,8 @@ fn execute_build_status(
     };
 
     let ws = open_workspace(context)?;
-    let result = swissarmyhammer_code_context::build_status(&*ws.db(), layer).map_err(context_err)?;
+    let result =
+        swissarmyhammer_code_context::build_status(&*ws.db(), layer).map_err(context_err)?;
     json_result(&result)
 }
 

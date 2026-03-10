@@ -304,10 +304,7 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
         Some(path) => {
             // Binary exists on PATH — verify it actually works.
             // Rustup shims exist but fail if the component isn't installed.
-            match std::process::Command::new(&path)
-                .arg("--version")
-                .output()
-            {
+            match std::process::Command::new(&path).arg("--version").output() {
                 Ok(output) if output.status.success() => {
                     checks.push(Check {
                         name: check_names::RUST_ANALYZER.to_string(),
@@ -326,14 +323,8 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
                     checks.push(Check {
                         name: check_names::RUST_ANALYZER.to_string(),
                         status: CheckStatus::Error,
-                        message: format!(
-                            "Found at {} but broken: {}",
-                            path.display(),
-                            reason
-                        ),
-                        fix: Some(
-                            "rustup component add rust-analyzer".to_string(),
-                        ),
+                        message: format!("Found at {} but broken: {}", path.display(), reason),
+                        fix: Some("rustup component add rust-analyzer".to_string()),
                     });
                 }
                 Err(e) => {
@@ -345,9 +336,7 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
                             path.display(),
                             e
                         ),
-                        fix: Some(
-                            "rustup component add rust-analyzer".to_string(),
-                        ),
+                        fix: Some("rustup component add rust-analyzer".to_string()),
                     });
                 }
             }
@@ -357,9 +346,7 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
                 name: check_names::RUST_ANALYZER.to_string(),
                 status: CheckStatus::Warning,
                 message: "rust-analyzer not found in PATH".to_string(),
-                fix: Some(
-                    "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
-                ),
+                fix: Some("Install rust-analyzer: rustup component add rust-analyzer".to_string()),
             });
         }
     }

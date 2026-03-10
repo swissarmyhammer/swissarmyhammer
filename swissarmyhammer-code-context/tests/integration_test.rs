@@ -9,16 +9,16 @@ use std::path::Path;
 use rusqlite::Connection;
 use tree_sitter::Language;
 
-use swissarmyhammer_code_context::{
-    check_blocking_status, clear_status, ensure_ts_symbols, generate_ts_call_edges,
-    get_blastradius, get_callgraph, get_status, get_symbol, grep_code, hint_for_operation,
-    list_symbols, search_symbol, startup_cleanup, write_ts_edges, BlockingStatus, BlastRadiusOptions,
-    BuildLayer, CallGraphDirection, CallGraphOptions, CodeContextWorkspace, GetSymbolOptions,
-    GrepOptions, IndexLayer, MatchTier, SearchSymbolOptions, start_lsp_server, detect_rust_analyzer,
-    collect_and_persist_symbols,
-};
-use lsp_types::{DocumentSymbol, SymbolKind, Position, Range};
+use lsp_types::{DocumentSymbol, Position, Range, SymbolKind};
 use swissarmyhammer_code_context::ops::status::build_status;
+use swissarmyhammer_code_context::{
+    check_blocking_status, clear_status, collect_and_persist_symbols, detect_rust_analyzer,
+    ensure_ts_symbols, generate_ts_call_edges, get_blastradius, get_callgraph, get_status,
+    get_symbol, grep_code, hint_for_operation, list_symbols, search_symbol, start_lsp_server,
+    startup_cleanup, write_ts_edges, BlastRadiusOptions, BlockingStatus, BuildLayer,
+    CallGraphDirection, CallGraphOptions, CodeContextWorkspace, GetSymbolOptions, GrepOptions,
+    IndexLayer, MatchTier, SearchSymbolOptions,
+};
 
 // ---------------------------------------------------------------------------
 // Source file contents for the test project
@@ -173,10 +173,7 @@ fn extract_chunks(file_path: &str, source: &str) -> Vec<ChunkInfo> {
                                 end_byte: method.end_byte(),
                                 start_line: method.start_position().row as u32,
                                 end_line: method.end_position().row as u32,
-                                text: method
-                                    .utf8_text(source.as_bytes())
-                                    .unwrap()
-                                    .to_string(),
+                                text: method.utf8_text(source.as_bytes()).unwrap().to_string(),
                                 symbol_path,
                             });
                         }
@@ -275,9 +272,9 @@ fn test_workspace_open_and_leader() {
 fn test_get_status_after_population() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
 
-    let status = get_status(ws.db()).unwrap();
+    let status = get_status(&*ws.db()).unwrap();
 
     assert!(
         status.total_files >= 3,
@@ -310,8 +307,9 @@ fn test_get_status_after_population() {
 fn test_get_symbol_operations() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
     let opts = GetSymbolOptions::default();
 
     // Get "Server" -- should find the struct or impl chunk.
@@ -321,14 +319,24 @@ fn test_get_symbol_operations() {
         "expected results for 'Server', got empty"
     );
     assert!(
-        result.symbols.iter().any(|r| r.file_path == "src/server.rs"),
+        result
+            .symbols
+            .iter()
+            .any(|r| r.file_path == "src/server.rs"),
         "expected Server in src/server.rs, got: {:?}",
-        result.symbols.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        result
+            .symbols
+            .iter()
+            .map(|r| &r.file_path)
+            .collect::<Vec<_>>()
     );
 
     // Get "validate" -- should match AuthService::validate.
     let result = get_symbol(conn, "validate", &opts).unwrap();
-    assert!(!result.symbols.is_empty(), "expected results for 'validate'");
+    assert!(
+        !result.symbols.is_empty(),
+        "expected results for 'validate'"
+    );
     assert!(
         result.symbols.iter().any(|r| r.file_path == "src/auth.rs"),
         "expected validate in src/auth.rs"
@@ -336,7 +344,10 @@ fn test_get_symbol_operations() {
 
     // Get "handle_request" -- should match Server::handle_request.
     let result = get_symbol(conn, "handle_request", &opts).unwrap();
-    assert!(!result.symbols.is_empty(), "expected results for 'handle_request'");
+    assert!(
+        !result.symbols.is_empty(),
+        "expected results for 'handle_request'"
+    );
     assert!(
         result
             .symbols
@@ -350,8 +361,9 @@ fn test_get_symbol_operations() {
 fn test_get_symbol_fuzzy_tiers() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
     let opts = GetSymbolOptions::default();
 
     // Tier 1: Exact match.
@@ -379,7 +391,11 @@ fn test_get_symbol_fuzzy_tiers() {
         .iter()
         .map(|s| s.qualified_path.as_str())
         .collect();
-    assert!(paths.contains(&"Server::new"), "missing Server::new in {:?}", paths);
+    assert!(
+        paths.contains(&"Server::new"),
+        "missing Server::new in {:?}",
+        paths
+    );
     assert!(
         paths.contains(&"AuthService::new"),
         "missing AuthService::new in {:?}",
@@ -432,8 +448,9 @@ fn test_get_symbol_fuzzy_tiers() {
 fn test_search_symbol() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     let results = search_symbol(conn, "auth", &SearchSymbolOptions::default()).unwrap();
     assert!(
@@ -441,15 +458,10 @@ fn test_search_symbol() {
         "expected results for fuzzy search 'auth'"
     );
 
-    let qpaths: Vec<&str> = results
-        .iter()
-        .map(|s| s.qualified_path.as_str())
-        .collect();
+    let qpaths: Vec<&str> = results.iter().map(|s| s.qualified_path.as_str()).collect();
     // Should include auth-related symbols.
     assert!(
-        qpaths
-            .iter()
-            .any(|p| p.to_lowercase().contains("auth")),
+        qpaths.iter().any(|p| p.to_lowercase().contains("auth")),
         "expected auth-related symbols in results: {:?}",
         qpaths
     );
@@ -459,20 +471,15 @@ fn test_search_symbol() {
 fn test_list_symbols() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     let results = list_symbols(conn, "src/server.rs").unwrap();
-    assert!(
-        !results.is_empty(),
-        "expected symbols in src/server.rs"
-    );
+    assert!(!results.is_empty(), "expected symbols in src/server.rs");
 
     let names: Vec<&str> = results.iter().map(|s| s.name.as_str()).collect();
-    let qpaths: Vec<&str> = results
-        .iter()
-        .map(|s| s.qualified_path.as_str())
-        .collect();
+    let qpaths: Vec<&str> = results.iter().map(|s| s.qualified_path.as_str()).collect();
 
     // Should contain Server struct, new, handle_request, port.
     assert!(
@@ -510,8 +517,9 @@ fn test_list_symbols() {
 fn test_grep_code() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // Search for "token" -- should appear in both server.rs and auth.rs.
     let result = grep_code(conn, "token", &GrepOptions::default()).unwrap();
@@ -520,7 +528,11 @@ fn test_grep_code() {
         "expected grep matches for 'token'"
     );
 
-    let files: Vec<&str> = result.matches.iter().map(|m| m.file_path.as_str()).collect();
+    let files: Vec<&str> = result
+        .matches
+        .iter()
+        .map(|m| m.file_path.as_str())
+        .collect();
     assert!(
         files.contains(&"src/server.rs"),
         "expected 'token' match in src/server.rs, got: {:?}",
@@ -555,8 +567,9 @@ fn test_grep_code() {
 fn test_get_callgraph() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // Outbound from handle_request: should call AuthService::new and validate.
     let result = get_callgraph(
@@ -624,8 +637,9 @@ fn test_get_callgraph() {
 fn test_get_blastradius() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // Blast radius for src/auth.rs: server.rs should be affected because
     // handle_request calls AuthService::new and validate.
@@ -671,8 +685,9 @@ fn test_get_blastradius() {
 fn test_build_status_and_blocking() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // After population, blocking status should be Ready.
     let status = check_blocking_status(conn, IndexLayer::TreeSitter).unwrap();
@@ -709,8 +724,9 @@ fn test_build_status_and_blocking() {
 fn test_clear_status() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // Verify there is data before clearing.
     let before = get_status(conn).unwrap();
@@ -721,10 +737,7 @@ fn test_clear_status() {
     let result = clear_status(conn).unwrap();
     assert!(result.files_deleted > 0, "expected files to be deleted");
     assert!(result.chunks_deleted > 0, "expected chunks to be deleted");
-    assert!(
-        result.symbols_deleted > 0,
-        "expected symbols to be deleted"
-    );
+    assert!(result.symbols_deleted > 0, "expected symbols to be deleted");
     assert!(!result.hint.is_empty());
 
     // Verify status shows zeros.
@@ -751,11 +764,7 @@ fn test_hints_for_all_operations() {
 
     for op in &operations {
         let hint = hint_for_operation(op);
-        assert!(
-            !hint.is_empty(),
-            "hint for '{}' should be non-empty",
-            op
-        );
+        assert!(!hint.is_empty(), "hint for '{}' should be non-empty", op);
     }
 
     // Unknown operation also returns non-empty hint.
@@ -767,8 +776,9 @@ fn test_hints_for_all_operations() {
 fn test_blocking_ready_after_population() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&*ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // TreeSitter layer should be Ready (we marked ts_indexed=1 in populate_index).
     let status = check_blocking_status(conn, IndexLayer::TreeSitter).unwrap();
@@ -792,11 +802,15 @@ fn test_startup_cleanup_populates_indexed_files() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // After workspace.open(), startup_cleanup has already been called automatically,
     // so files are in the database. Calling again shows them as unchanged.
     let stats = startup_cleanup(conn, dir.path()).unwrap();
-    assert_eq!(stats.files_added, 0, "startup_cleanup already ran in workspace.open()");
+    assert_eq!(
+        stats.files_added, 0,
+        "startup_cleanup already ran in workspace.open()"
+    );
     assert!(
         stats.files_unchanged >= 3,
         "expected at least 3 files unchanged, got {}",
@@ -816,6 +830,7 @@ fn test_end_to_end_full_pipeline() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // 1. Populate
     populate_index(conn, dir.path());
@@ -917,7 +932,10 @@ fn test_symbol_operations_on_real_repo() {
 
     // Verify the source exists
     if !real_src.exists() {
-        eprintln!("Warning: real repo source not found at {:?}, skipping test", real_src);
+        eprintln!(
+            "Warning: real repo source not found at {:?}, skipping test",
+            real_src
+        );
         return;
     }
 
@@ -950,6 +968,7 @@ fn test_symbol_operations_on_real_repo() {
     // Open workspace and populate index
     let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
     let conn = ws.db();
+    let conn = &*conn;
 
     // Verify files were discovered by workspace.open() (which calls startup_cleanup automatically)
     let cleanup_stats = startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
@@ -994,7 +1013,9 @@ fn test_symbol_operations_on_real_repo() {
 
                 // Ensure symbols and generate call edges
                 if ensure_ts_symbols(conn, &rel_path).is_ok() {
-                    if let Ok(edges) = generate_ts_call_edges(conn, &rel_path, &source, rust_language()) {
+                    if let Ok(edges) =
+                        generate_ts_call_edges(conn, &rel_path, &source, rust_language())
+                    {
                         let _ = write_ts_edges(conn, &rel_path, &edges);
                     }
                 }
@@ -1004,9 +1025,12 @@ fn test_symbol_operations_on_real_repo() {
         Ok(count)
     }
 
-    let files_processed =
-        process_dir(&src_copy, "", conn).expect("Failed to process files");
-    assert!(files_processed > 5, "Expected to process >5 files, got {}", files_processed);
+    let files_processed = process_dir(&src_copy, "", conn).expect("Failed to process files");
+    assert!(
+        files_processed > 5,
+        "Expected to process >5 files, got {}",
+        files_processed
+    );
 
     // Mark all files as ts_indexed
     conn.execute(
@@ -1030,8 +1054,7 @@ fn test_symbol_operations_on_real_repo() {
 
     // Test 2: get_symbol should find common functions (more forgiving search)
     // Try to find something simple that exists in any Rust code
-    let result = get_symbol(conn, "new", &GetSymbolOptions::default())
-        .expect("get_symbol failed");
+    let result = get_symbol(conn, "new", &GetSymbolOptions::default()).expect("get_symbol failed");
     assert!(
         !result.symbols.is_empty(),
         "Expected to find function 'new' (common pattern)"
@@ -1057,10 +1080,7 @@ fn test_symbol_operations_on_real_repo() {
     // Test 4: list_symbols on any file should return symbols
     if let Ok(files) = list_symbols(conn, "src/lib.rs") {
         if !files.is_empty() {
-            assert!(
-                files.len() >= 1,
-                "Expected >= 1 symbol in lib.rs"
-            );
+            assert!(files.len() >= 1, "Expected >= 1 symbol in lib.rs");
         }
     }
 
@@ -1138,6 +1158,7 @@ fn test_grep_code_on_real_repo() {
     // Open workspace and populate index
     let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
     let conn = ws.db();
+    let conn = &*conn;
 
     // Discover files
     startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
@@ -1175,7 +1196,9 @@ fn test_grep_code_on_real_repo() {
 
                 // Ensure symbols and call edges
                 if ensure_ts_symbols(conn, &rel_path).is_ok() {
-                    if let Ok(edges) = generate_ts_call_edges(conn, &rel_path, &source, rust_language()) {
+                    if let Ok(edges) =
+                        generate_ts_call_edges(conn, &rel_path, &source, rust_language())
+                    {
                         let _ = write_ts_edges(conn, &rel_path, &edges);
                     }
                 }
@@ -1194,8 +1217,7 @@ fn test_grep_code_on_real_repo() {
     .unwrap();
 
     // Test 1: grep_code with "pub fn" pattern should find many functions
-    let result = grep_code(conn, r"pub\s+fn", &GrepOptions::default())
-        .expect("grep_code failed");
+    let result = grep_code(conn, r"pub\s+fn", &GrepOptions::default()).expect("grep_code failed");
 
     assert!(
         !result.matches.is_empty(),
@@ -1212,10 +1234,7 @@ fn test_grep_code_on_real_repo() {
 
     // Verify matches have proper structure (file path, line numbers, source text)
     for m in &result.matches {
-        assert!(
-            !m.file_path.is_empty(),
-            "Match should have file path"
-        );
+        assert!(!m.file_path.is_empty(), "Match should have file path");
         assert!(
             m.start_line > 0,
             "Match should have valid start line number"
@@ -1236,8 +1255,7 @@ fn test_grep_code_on_real_repo() {
         language: Some(vec!["rs".to_string()]),
         ..Default::default()
     };
-    let rs_result = grep_code(conn, "fn", &rs_opts)
-        .expect("grep_code with language filter failed");
+    let rs_result = grep_code(conn, "fn", &rs_opts).expect("grep_code with language filter failed");
 
     // Should find function definitions
     assert!(
@@ -1267,15 +1285,18 @@ fn test_grep_code_on_real_repo() {
     // Test 4: Empty pattern should handle gracefully
     let empty_result = grep_code(conn, "", &GrepOptions::default());
     // Empty pattern may return empty or all results, but shouldn't panic
-    assert!(empty_result.is_ok(), "grep_code should handle empty pattern");
+    assert!(
+        empty_result.is_ok(),
+        "grep_code should handle empty pattern"
+    );
 
     // Test 5: Max results limit should be respected
     let limited_opts = GrepOptions {
         max_results: Some(3),
         ..Default::default()
     };
-    let limited_result = grep_code(conn, "fn", &limited_opts)
-        .expect("grep_code with max_results failed");
+    let limited_result =
+        grep_code(conn, "fn", &limited_opts).expect("grep_code with max_results failed");
 
     assert!(
         limited_result.matches.len() <= 3,
@@ -1285,7 +1306,8 @@ fn test_grep_code_on_real_repo() {
 
     println!(
         "✓ grep_code test passed: found {} 'pub fn' matches, {} total with 'fn' pattern",
-        fn_count, rs_result.matches.len()
+        fn_count,
+        rs_result.matches.len()
     );
 }
 
@@ -1334,6 +1356,7 @@ fn test_callgraph_and_blastradius_on_real_repo() {
     // Open workspace and populate index
     let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
     let conn = ws.db();
+    let conn = &*conn;
 
     // Discover files
     startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
@@ -1371,7 +1394,9 @@ fn test_callgraph_and_blastradius_on_real_repo() {
 
                 // Ensure symbols and IMPORTANTLY generate call edges
                 if ensure_ts_symbols(conn, &rel_path).is_ok() {
-                    if let Ok(edges) = generate_ts_call_edges(conn, &rel_path, &source, rust_language()) {
+                    if let Ok(edges) =
+                        generate_ts_call_edges(conn, &rel_path, &source, rust_language())
+                    {
                         // This is key - write the call edges so blast radius and callgraph work
                         let _ = write_ts_edges(conn, &rel_path, &edges);
                     }
@@ -1540,7 +1565,6 @@ fn test_callgraph_and_blastradius_on_real_repo() {
         }
     }
 
-
     // Test 7: Verify call graph edges have proper structure
     if !cg_inbound.edges.is_empty() {
         let first_edge = &cg_inbound.edges[0];
@@ -1613,8 +1637,13 @@ fn test_lsp_server_startup() {
             handle.error.is_some(),
             "if LSP startup failed, error message should be provided"
         );
-        println!("ℹ LSP server startup failed (expected in some environments): {}",
-            handle.error.as_ref().unwrap_or(&"unknown error".to_string()));
+        println!(
+            "ℹ LSP server startup failed (expected in some environments): {}",
+            handle
+                .error
+                .as_ref()
+                .unwrap_or(&"unknown error".to_string())
+        );
     }
 }
 
@@ -1641,6 +1670,7 @@ fn test_collect_lsp_symbols_and_persist() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // Create mock DocumentSymbols (simulating LSP response)
     let symbols = vec![
@@ -1662,18 +1692,16 @@ fn test_collect_lsp_symbols_and_persist() {
             deprecated: None,
             range: Range::new(Position::new(5, 0), Position::new(15, 1)),
             selection_range: Range::new(Position::new(5, 0), Position::new(5, 10)),
-            children: Some(vec![
-                DocumentSymbol {
-                    name: "new".to_string(),
-                    detail: None,
-                    kind: SymbolKind::METHOD,
-                    tags: None,
-                    deprecated: None,
-                    range: Range::new(Position::new(8, 4), Position::new(12, 5)),
-                    selection_range: Range::new(Position::new(8, 4), Position::new(8, 7)),
-                    children: None,
-                },
-            ]),
+            children: Some(vec![DocumentSymbol {
+                name: "new".to_string(),
+                detail: None,
+                kind: SymbolKind::METHOD,
+                tags: None,
+                deprecated: None,
+                range: Range::new(Position::new(8, 4), Position::new(12, 5)),
+                selection_range: Range::new(Position::new(8, 4), Position::new(8, 7)),
+                children: None,
+            }]),
         },
     ];
 
@@ -1684,28 +1712,36 @@ fn test_collect_lsp_symbols_and_persist() {
         "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
          VALUES (?, X'00112233', 1024, 1000)",
         [test_file],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Collect and persist symbols
     let symbol_count = collect_and_persist_symbols(conn, test_file, &symbols).unwrap();
 
     // Verify symbols were persisted
-    assert_eq!(symbol_count, 3, "Expected 3 symbols (greet, Config, Config::new)");
+    assert_eq!(
+        symbol_count, 3,
+        "Expected 3 symbols (greet, Config, Config::new)"
+    );
 
     // Verify status shows lsp_indexed_files increased
     let status = get_status(conn).unwrap();
-    println!("Status after LSP collection: lsp_indexed={}", status.lsp_indexed_files);
+    println!(
+        "Status after LSP collection: lsp_indexed={}",
+        status.lsp_indexed_files
+    );
 
     // Verify we can query the symbols
     let results = list_symbols(conn, test_file).unwrap();
 
     // Should have symbols from LSP
-    let lsp_symbols: Vec<_> = results.iter()
-        .filter(|s| s.source == "lsp")
-        .collect();
+    let lsp_symbols: Vec<_> = results.iter().filter(|s| s.source == "lsp").collect();
 
     if !lsp_symbols.is_empty() {
-        println!("✓ Collected {} LSP symbols from src/lib.rs", lsp_symbols.len());
+        println!(
+            "✓ Collected {} LSP symbols from src/lib.rs",
+            lsp_symbols.len()
+        );
         assert!(
             lsp_symbols.iter().any(|s| s.name == "greet"),
             "expected 'greet' function in symbols"
@@ -1727,44 +1763,35 @@ fn test_end_to_end_real_project_validation() {
     let ws = CodeContextWorkspace::open(root).unwrap();
     assert!(ws.is_leader(), "Should be leader");
     let conn = ws.db();
+    let conn = &*conn;
 
     // Step 2: Populate database with tree-sitter data (includes discovery)
     populate_index(conn, root);
-    println!(
-        "✓ Setup: Discovered files and populated database"
-    );
+    println!("✓ Setup: Discovered files and populated database");
 
     // Step 3: Verify get_status shows data
     let status = get_status(conn).unwrap();
     assert!(status.total_files >= 3, "Should have at least 3 files");
     println!(
         "✓ Status: {} total files, {} with ts_indexed",
-        status.total_files,
-        status.ts_indexed_files
+        status.total_files, status.ts_indexed_files
     );
 
     // Step 4: Test search_symbol returns results
-    let search_results = search_symbol(
-        conn,
-        "new",
-        &SearchSymbolOptions::default(),
-    )
-    .unwrap();
+    let search_results = search_symbol(conn, "new", &SearchSymbolOptions::default()).unwrap();
     assert!(
         !search_results.is_empty(),
         "search_symbol should find 'new' method"
     );
-    println!("✓ search_symbol: {} results for 'new'", search_results.len());
+    println!(
+        "✓ search_symbol: {} results for 'new'",
+        search_results.len()
+    );
 
     // Step 5: Test get_symbol returns source_text
     if let Some(match_) = search_results.first() {
         let query_path = &match_.qualified_path;
-        let get_result = get_symbol(
-            conn,
-            query_path,
-            &GetSymbolOptions::default(),
-        )
-        .unwrap();
+        let get_result = get_symbol(conn, query_path, &GetSymbolOptions::default()).unwrap();
 
         if !get_result.symbols.is_empty() {
             if let Some(sym) = get_result.symbols.first() {
@@ -1776,7 +1803,10 @@ fn test_end_to_end_real_project_validation() {
             }
         } else {
             // If exact match doesn't work, just verify the query doesn't crash
-            println!("✓ get_symbol: Executed for '{}' (0 exact matches, fuzzy matching may apply)", query_path);
+            println!(
+                "✓ get_symbol: Executed for '{}' (0 exact matches, fuzzy matching may apply)",
+                query_path
+            );
         }
     }
 
@@ -1794,7 +1824,10 @@ fn test_end_to_end_real_project_validation() {
         !grep_results.matches.is_empty(),
         "grep_code should find 'fn' keyword"
     );
-    println!("✓ grep_code: {} matches for 'fn'", grep_results.matches.len());
+    println!(
+        "✓ grep_code: {} matches for 'fn'",
+        grep_results.matches.len()
+    );
 
     // Step 7: Test get_callgraph works
     let cg_result = get_callgraph(
@@ -1805,11 +1838,11 @@ fn test_end_to_end_real_project_validation() {
             max_depth: 1,
         },
     );
-    assert!(
-        cg_result.is_ok(),
-        "get_callgraph should not crash"
+    assert!(cg_result.is_ok(), "get_callgraph should not crash");
+    println!(
+        "✓ get_callgraph: {} edges from 'new'",
+        cg_result.unwrap().edges.len()
     );
-    println!("✓ get_callgraph: {} edges from 'new'", cg_result.unwrap().edges.len());
 
     // Step 8: Test get_blastradius works
     let blast_result = get_blastradius(
@@ -1820,13 +1853,8 @@ fn test_end_to_end_real_project_validation() {
             max_hops: 2,
         },
     );
-    assert!(
-        blast_result.is_ok(),
-        "get_blastradius should not crash"
-    );
-    println!(
-        "✓ get_blastradius: Computed impact for src/lib.rs"
-    );
+    assert!(blast_result.is_ok(), "get_blastradius should not crash");
+    println!("✓ get_blastradius: Computed impact for src/lib.rs");
 
     // Step 9: Test list_symbols works
     let list_result = list_symbols(conn, "src/lib.rs").unwrap();
@@ -1856,8 +1884,8 @@ fn test_end_to_end_real_project_validation() {
 #[ignore]
 fn test_real_lsp_document_symbols() {
     use std::process::{Command, Stdio};
-    use swissarmyhammer_code_context::{LspJsonRpcClient, detect_rust_analyzer};
     use swissarmyhammer_code_context::db;
+    use swissarmyhammer_code_context::{detect_rust_analyzer, LspJsonRpcClient};
 
     // -- Guard: skip if rust-analyzer is not installed -----------------------
     if detect_rust_analyzer().is_none() {
@@ -1926,12 +1954,12 @@ pub fn greet(config: &Config) -> String {
     let mut client = LspJsonRpcClient::new(stdin, stdout);
 
     // -- Step 3 & 4: Send initialize + initialized --------------------------
-    client.initialize(root)
-        .expect("LSP initialize failed");
+    client.initialize(root).expect("LSP initialize failed");
     println!("LSP server initialized");
 
     // -- Step 5: Open the document via textDocument/didOpen ------------------
-    client.send_did_open(&lib_rs_path, "rust", lib_rs_content)
+    client
+        .send_did_open(&lib_rs_path, "rust", lib_rs_content)
         .expect("didOpen failed");
     println!("Sent textDocument/didOpen for src/lib.rs");
 
@@ -1940,16 +1968,24 @@ pub fn greet(config: &Config) -> String {
     std::thread::sleep(std::time::Duration::from_secs(5));
 
     // -- Step 6: Send textDocument/documentSymbol ---------------------------
-    let result = client.collect_file_symbols(&lib_rs_path)
+    let result = client
+        .collect_file_symbols(&lib_rs_path)
         .expect("collect_file_symbols failed");
 
-    println!("documentSymbol result: {} symbols, error: {:?}",
-        result.symbol_count, result.error);
+    println!(
+        "documentSymbol result: {} symbols, error: {:?}",
+        result.symbol_count, result.error
+    );
 
-    assert!(result.error.is_none(),
-        "documentSymbol should not error: {:?}", result.error);
-    assert!(result.symbol_count > 0,
-        "Should have found at least 1 symbol, got 0");
+    assert!(
+        result.error.is_none(),
+        "documentSymbol should not error: {:?}",
+        result.error
+    );
+    assert!(
+        result.symbol_count > 0,
+        "Should have found at least 1 symbol, got 0"
+    );
 
     // -- Step 7: Verify expected symbol names are present --------------------
     // Re-send documentSymbol to also get the parsed symbols for name verification.
@@ -1966,28 +2002,35 @@ pub fn greet(config: &Config) -> String {
         "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
          VALUES ('src/lib.rs', X'AABBCCDD', ?1, strftime('%s','now'))",
         [lib_rs_content.len() as i64],
-    ).unwrap();
+    )
+    .unwrap();
 
     // -- Step 8: Persist symbols using collect_and_persist_file_symbols ------
-    let persist_result = client.collect_and_persist_file_symbols(
-        &conn,
-        &lib_rs_path,
-        "src/lib.rs",
-    ).expect("collect_and_persist_file_symbols failed");
+    let persist_result = client
+        .collect_and_persist_file_symbols(&conn, &lib_rs_path, "src/lib.rs")
+        .expect("collect_and_persist_file_symbols failed");
 
-    println!("Persisted {} symbols for src/lib.rs", persist_result.symbol_count);
+    println!(
+        "Persisted {} symbols for src/lib.rs",
+        persist_result.symbol_count
+    );
 
-    assert!(persist_result.error.is_none(),
-        "persist should not error: {:?}", persist_result.error);
-    assert!(persist_result.symbol_count >= 4,
+    assert!(
+        persist_result.error.is_none(),
+        "persist should not error: {:?}",
+        persist_result.error
+    );
+    assert!(
+        persist_result.symbol_count >= 4,
         "Expected at least 4 symbols (Config, new, display_name, greet), got {}",
-        persist_result.symbol_count);
+        persist_result.symbol_count
+    );
 
     // Verify expected symbol names in the database
     let symbol_names: Vec<String> = {
-        let mut stmt = conn.prepare(
-            "SELECT name FROM lsp_symbols WHERE file_path = 'src/lib.rs' ORDER BY name"
-        ).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM lsp_symbols WHERE file_path = 'src/lib.rs' ORDER BY name")
+            .unwrap();
         stmt.query_map([], |row| row.get(0))
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
@@ -1995,24 +2038,41 @@ pub fn greet(config: &Config) -> String {
     };
     println!("Symbol names in DB: {:?}", symbol_names);
 
-    assert!(symbol_names.contains(&"Config".to_string()),
-        "Should contain 'Config' struct, got: {:?}", symbol_names);
-    assert!(symbol_names.contains(&"new".to_string()),
-        "Should contain 'new' method, got: {:?}", symbol_names);
-    assert!(symbol_names.contains(&"display_name".to_string()),
-        "Should contain 'display_name' method, got: {:?}", symbol_names);
-    assert!(symbol_names.contains(&"greet".to_string()),
-        "Should contain 'greet' function, got: {:?}", symbol_names);
+    assert!(
+        symbol_names.contains(&"Config".to_string()),
+        "Should contain 'Config' struct, got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"new".to_string()),
+        "Should contain 'new' method, got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"display_name".to_string()),
+        "Should contain 'display_name' method, got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"greet".to_string()),
+        "Should contain 'greet' function, got: {:?}",
+        symbol_names
+    );
 
     // -- Step 9: Verify lsp_indexed = 1 for the file ------------------------
-    let lsp_indexed: i64 = conn.query_row(
-        "SELECT lsp_indexed FROM indexed_files WHERE file_path = 'src/lib.rs'",
-        [],
-        |r| r.get(0),
-    ).unwrap();
+    let lsp_indexed: i64 = conn
+        .query_row(
+            "SELECT lsp_indexed FROM indexed_files WHERE file_path = 'src/lib.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
 
-    assert_eq!(lsp_indexed, 1,
-        "lsp_indexed should be 1 after persist, got {}", lsp_indexed);
+    assert_eq!(
+        lsp_indexed, 1,
+        "lsp_indexed should be 1 after persist, got {}",
+        lsp_indexed
+    );
     println!("lsp_indexed = 1 confirmed for src/lib.rs");
 
     // -- Cleanup: shut down rust-analyzer -----------------------------------
@@ -2065,6 +2125,7 @@ fn test_ts_call_edges_known_graph() {
     // Step 2: Open workspace (runs startup_cleanup automatically).
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // Step 3: Extract chunks from the known source and insert them.
     let rel_path = "src/main.rs";
@@ -2098,9 +2159,7 @@ fn test_ts_call_edges_known_graph() {
 
     // Step 6: Query lsp_call_edges and collect caller->callee pairs.
     let mut stmt = conn
-        .prepare(
-            "SELECT caller_id, callee_id, source FROM lsp_call_edges WHERE caller_file = ?1",
-        )
+        .prepare("SELECT caller_id, callee_id, source FROM lsp_call_edges WHERE caller_file = ?1")
         .unwrap();
 
     let rows: Vec<(String, String, String)> = stmt
@@ -2112,9 +2171,7 @@ fn test_ts_call_edges_known_graph() {
         .unwrap();
 
     // Helper: extract the short symbol name from a ts: id like "ts:src/main.rs:foo".
-    let short_name = |id: &str| -> String {
-        id.rsplit(':').next().unwrap_or(id).to_string()
-    };
+    let short_name = |id: &str| -> String { id.rsplit(':').next().unwrap_or(id).to_string() };
 
     let edge_pairs: Vec<(String, String)> = rows
         .iter()
@@ -2135,16 +2192,12 @@ fn test_ts_call_edges_known_graph() {
         edge_pairs
     );
     assert!(
-        edge_pairs
-            .iter()
-            .any(|(c, t)| c == "foo" && t == "helper"),
+        edge_pairs.iter().any(|(c, t)| c == "foo" && t == "helper"),
         "expected foo->helper edge, got: {:?}",
         edge_pairs
     );
     assert!(
-        edge_pairs
-            .iter()
-            .any(|(c, t)| c == "bar" && t == "helper"),
+        edge_pairs.iter().any(|(c, t)| c == "bar" && t == "helper"),
         "expected bar->helper edge, got: {:?}",
         edge_pairs
     );
@@ -2174,8 +2227,8 @@ fn test_ts_call_edges_known_graph() {
 #[ignore]
 fn test_lsp_call_edges_known_graph() {
     use std::process::{Command, Stdio};
-    use swissarmyhammer_code_context::{LspJsonRpcClient, detect_rust_analyzer};
     use swissarmyhammer_code_context::db;
+    use swissarmyhammer_code_context::{detect_rust_analyzer, LspJsonRpcClient};
 
     // Guard: skip if rust-analyzer is not installed.
     if detect_rust_analyzer().is_none() {
@@ -2204,6 +2257,7 @@ edition = "2021"
     // Step 2: Open workspace and set up the database.
     let ws = CodeContextWorkspace::open(root).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // Step 3: Spawn rust-analyzer.
     let mut child = Command::new("rust-analyzer")
@@ -2325,11 +2379,7 @@ edition = "2021"
                 println!("LSP call edges in DB:");
                 for (caller, callee, source) in &lsp_rows {
                     println!("  {} -> {} (source={})", caller, callee, source);
-                    assert_eq!(
-                        source, "lsp",
-                        "expected source 'lsp', got '{}'",
-                        source
-                    );
+                    assert_eq!(source, "lsp", "expected source 'lsp', got '{}'", source);
                 }
             } else {
                 println!("NOTE: rust-analyzer returned 0 call edges (callHierarchy may not be fully supported)");
@@ -2365,10 +2415,7 @@ edition = "2021"
 #[ignore]
 fn test_lsp_symbol_lookup_end_to_end() {
     use std::process::{Command, Stdio};
-    use swissarmyhammer_code_context::{
-        LspJsonRpcClient, detect_rust_analyzer,
-        ensure_ts_symbols,
-    };
+    use swissarmyhammer_code_context::{detect_rust_analyzer, ensure_ts_symbols, LspJsonRpcClient};
 
     // -- Guard: skip if rust-analyzer is not installed -----------------------
     if detect_rust_analyzer().is_none() {
@@ -2417,6 +2464,7 @@ pub fn greet(name: &str) -> String {
     // -- Step 2: Open workspace, run startup_cleanup ------------------------
     let ws = CodeContextWorkspace::open(root).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // -- Step 3: Populate TS chunks so source text is available --------------
     let rel_path = "src/lib.rs";
@@ -2433,7 +2481,11 @@ pub fn greet(name: &str) -> String {
     )
     .unwrap();
 
-    println!("TS chunks inserted: {} chunks for {}", chunks.len(), rel_path);
+    println!(
+        "TS chunks inserted: {} chunks for {}",
+        chunks.len(),
+        rel_path
+    );
 
     // -- Step 4: Spawn rust-analyzer ----------------------------------------
     let mut child = Command::new("rust-analyzer")
@@ -2484,10 +2536,7 @@ pub fn greet(name: &str) -> String {
 
     // get_symbol("Config") -- should find the struct with source text
     let result = get_symbol(conn, "Config", &opts).unwrap();
-    println!(
-        "get_symbol('Config'): {} results",
-        result.symbols.len()
-    );
+    println!("get_symbol('Config'): {} results", result.symbols.len());
     assert!(
         !result.symbols.is_empty(),
         "expected get_symbol('Config') to return results"
@@ -2562,7 +2611,11 @@ pub fn greet(name: &str) -> String {
 
     // -- Step 9: Test list_symbols ------------------------------------------
     let list_results = list_symbols(conn, rel_path).unwrap();
-    println!("list_symbols('{}'): {} results", rel_path, list_results.len());
+    println!(
+        "list_symbols('{}'): {} results",
+        rel_path,
+        list_results.len()
+    );
     let list_names: Vec<&str> = list_results.iter().map(|s| s.name.as_str()).collect();
     let list_qpaths: Vec<&str> = list_results
         .iter()
@@ -2601,10 +2654,7 @@ pub fn greet(name: &str) -> String {
     // get_symbol returns merged results with TS source text when both indices
     // have the symbol at the same location.
     let all_result = get_symbol(conn, "Config", &opts).unwrap();
-    let has_text = all_result
-        .symbols
-        .iter()
-        .any(|s| !s.text.is_empty());
+    let has_text = all_result.symbols.iter().any(|s| !s.text.is_empty());
     println!(
         "Source text present: {} (symbols with text: {})",
         has_text,

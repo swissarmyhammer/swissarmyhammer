@@ -95,8 +95,7 @@ impl Default for ShellSecurityConfig {
 }
 
 /// The builtin config YAML, embedded at compile time.
-pub const BUILTIN_CONFIG_YAML: &str =
-    include_str!("../../builtin/shell/config.yaml");
+pub const BUILTIN_CONFIG_YAML: &str = include_str!("../../builtin/shell/config.yaml");
 
 /// Parse a YAML string into a [`ShellSecurityConfig`].
 pub fn parse_shell_config(yaml: &str) -> Result<ShellSecurityConfig, serde_yaml::Error> {
@@ -136,7 +135,10 @@ pub fn load_shell_config() -> ShellSecurityConfig {
     vfs.use_dot_directory_paths();
 
     if let Err(e) = vfs.load_all() {
-        warn!("Failed to load shell config overlays: {}. Using builtin only.", e);
+        warn!(
+            "Failed to load shell config overlays: {}. Using builtin only.",
+            e
+        );
     }
 
     merge_config_stack(&vfs)
@@ -342,7 +344,10 @@ mod tests {
         );
 
         // Permit should be empty in builtin
-        assert!(config.permit.is_empty(), "builtin should have no permit patterns");
+        assert!(
+            config.permit.is_empty(),
+            "builtin should have no permit patterns"
+        );
 
         // Settings should have defaults
         assert_eq!(config.settings.max_command_length, 4096);
@@ -352,23 +357,20 @@ mod tests {
 
     #[test]
     fn test_all_deny_patterns_are_valid_regex() {
-        let config = parse_shell_config(BUILTIN_CONFIG_YAML)
-            .expect("builtin config.yaml should parse");
+        let config =
+            parse_shell_config(BUILTIN_CONFIG_YAML).expect("builtin config.yaml should parse");
 
         for rule in &config.deny {
             regex::Regex::new(&rule.pattern).unwrap_or_else(|e| {
-                panic!(
-                    "deny pattern '{}' is not valid regex: {}",
-                    rule.pattern, e
-                )
+                panic!("deny pattern '{}' is not valid regex: {}", rule.pattern, e)
             });
         }
     }
 
     #[test]
     fn test_all_deny_patterns_have_reasons() {
-        let config = parse_shell_config(BUILTIN_CONFIG_YAML)
-            .expect("builtin config.yaml should parse");
+        let config =
+            parse_shell_config(BUILTIN_CONFIG_YAML).expect("builtin config.yaml should parse");
 
         for rule in &config.deny {
             assert!(
@@ -482,10 +484,7 @@ settings:
     fn test_load_builtin_only_no_overlay_dirs() {
         // Pass empty overlay paths — only builtin should load
         let config = load_shell_config_from_paths(&[]);
-        assert!(
-            !config.deny.is_empty(),
-            "should have builtin deny patterns"
-        );
+        assert!(!config.deny.is_empty(), "should have builtin deny patterns");
     }
 
     #[test]

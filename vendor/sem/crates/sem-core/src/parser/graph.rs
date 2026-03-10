@@ -70,11 +70,7 @@ impl EntityGraph {
     /// Pass 1: Extract all entities from all files using the parser registry.
     /// Pass 2: For each entity, find identifier tokens and resolve them against
     ///         the symbol table to create reference edges.
-    pub fn build(
-        root: &Path,
-        file_paths: &[String],
-        registry: &ParserRegistry,
-    ) -> Self {
+    pub fn build(root: &Path, file_paths: &[String], registry: &ParserRegistry) -> Self {
         // Pass 1: Extract all entities in parallel (file I/O + tree-sitter parsing)
         let all_entities: Vec<SemanticEntity> = file_paths
             .par_iter()
@@ -88,8 +84,10 @@ impl EntityGraph {
             .collect();
 
         // Build symbol table: name → entity IDs (can be multiple with same name)
-        let mut symbol_table: HashMap<String, Vec<String>> = HashMap::with_capacity(all_entities.len());
-        let mut entity_map: HashMap<String, EntityInfo> = HashMap::with_capacity(all_entities.len());
+        let mut symbol_table: HashMap<String, Vec<String>> =
+            HashMap::with_capacity(all_entities.len());
+        let mut entity_map: HashMap<String, EntityInfo> =
+            HashMap::with_capacity(all_entities.len());
 
         for entity in &all_entities {
             symbol_table
@@ -131,11 +129,7 @@ impl EntityGraph {
 
                         if let Some(target_id) = target {
                             let ref_type = infer_ref_type(&entity.content, &ref_name);
-                            entity_edges.push((
-                                entity.id.clone(),
-                                target_id.clone(),
-                                ref_type,
-                            ));
+                            entity_edges.push((entity.id.clone(), target_id.clone(), ref_type));
                         }
                     }
                 }
@@ -176,11 +170,7 @@ impl EntityGraph {
     pub fn get_dependents(&self, entity_id: &str) -> Vec<&EntityInfo> {
         self.dependents
             .get(entity_id)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.entities.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.entities.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -188,11 +178,7 @@ impl EntityGraph {
     pub fn get_dependencies(&self, entity_id: &str) -> Vec<&EntityInfo> {
         self.dependencies
             .get(entity_id)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.entities.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.entities.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -360,10 +346,8 @@ impl EntityGraph {
 
         // Also re-resolve references for entities in OTHER files that might
         // reference entities in changed files (their targets may have changed)
-        let changed_entity_names: HashSet<String> = new_entities
-            .iter()
-            .map(|e| e.name.clone())
-            .collect();
+        let changed_entity_names: HashSet<String> =
+            new_entities.iter().map(|e| e.name.clone()).collect();
 
         // Find entities in unchanged files that reference any changed entity name
         let entities_to_recheck: Vec<String> = self
@@ -371,15 +355,13 @@ impl EntityGraph {
             .values()
             .filter(|e| !affected_files.contains(&e.file_path))
             .filter(|e| {
-                self.dependencies
-                    .get(&e.id)
-                    .map_or(false, |deps| {
-                        deps.iter().any(|dep_id| {
-                            self.entities
-                                .get(dep_id)
-                                .map_or(false, |dep| changed_entity_names.contains(&dep.name))
-                        })
+                self.dependencies.get(&e.id).map_or(false, |deps| {
+                    deps.iter().any(|dep_id| {
+                        self.entities
+                            .get(dep_id)
+                            .map_or(false, |dep| changed_entity_names.contains(&dep.name))
                     })
+                })
             })
             .map(|e| e.id.clone())
             .collect();
@@ -430,8 +412,9 @@ impl EntityGraph {
         }
 
         // Remove edges involving these entities
-        self.edges
-            .retain(|e| !id_set.contains(e.from_entity.as_str()) && !id_set.contains(e.to_entity.as_str()));
+        self.edges.retain(|e| {
+            !id_set.contains(e.from_entity.as_str()) && !id_set.contains(e.to_entity.as_str())
+        });
 
         // Clean up dependency/dependent indexes
         for id in &ids_to_remove {
@@ -544,19 +527,17 @@ fn extract_references_from_content<'a>(content: &'a str, own_name: &str) -> Vec<
 
 static COMMON_LOCAL_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "result", "results", "data", "config", "value", "values",
-        "item", "items", "input", "output", "args", "opts",
-        "name", "path", "file", "line", "count", "index",
-        "temp", "prev", "next", "curr", "current", "node",
-        "left", "right", "root", "head", "tail", "body",
-        "text", "content", "source", "target", "entry",
-        "error", "errors", "message", "response", "request",
-        "context", "state", "props", "event", "handler",
-        "callback", "options", "params", "query", "list",
-        "base", "info", "meta", "kind", "mode", "flag",
-        "size", "length", "width", "height", "start", "stop",
-        "begin", "done", "found", "status", "code", "test",
-    ].into_iter().collect()
+        "result", "results", "data", "config", "value", "values", "item", "items", "input",
+        "output", "args", "opts", "name", "path", "file", "line", "count", "index", "temp", "prev",
+        "next", "curr", "current", "node", "left", "right", "root", "head", "tail", "body", "text",
+        "content", "source", "target", "entry", "error", "errors", "message", "response",
+        "request", "context", "state", "props", "event", "handler", "callback", "options",
+        "params", "query", "list", "base", "info", "meta", "kind", "mode", "flag", "size",
+        "length", "width", "height", "start", "stop", "begin", "done", "found", "status", "code",
+        "test",
+    ]
+    .into_iter()
+    .collect()
 });
 
 /// Names that are overwhelmingly local variables, not entity references.
@@ -592,8 +573,10 @@ fn infer_ref_type(content: &str, ref_name: &str) -> RefType {
     // Check if it's in an import/use statement (line-level, not substring)
     for line in content.lines() {
         let trimmed = line.trim();
-        if (trimmed.starts_with("import ") || trimmed.starts_with("use ")
-            || trimmed.starts_with("from ") || trimmed.starts_with("require("))
+        if (trimmed.starts_with("import ")
+            || trimmed.starts_with("use ")
+            || trimmed.starts_with("from ")
+            || trimmed.starts_with("require("))
             && trimmed.contains(ref_name)
         {
             return RefType::Imports;
@@ -607,52 +590,220 @@ fn infer_ref_type(content: &str, ref_name: &str) -> RefType {
 static KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         // Common across languages
-        "if", "else", "for", "while", "do", "switch", "case", "break",
-        "continue", "return", "try", "catch", "finally", "throw",
-        "new", "delete", "typeof", "instanceof", "in", "of",
-        "true", "false", "null", "undefined", "void", "this",
-        "super", "class", "extends", "implements", "interface",
-        "enum", "const", "let", "var", "function", "async",
-        "await", "yield", "import", "export", "default", "from",
-        "as", "static", "public", "private", "protected",
-        "abstract", "final", "override",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "return",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "new",
+        "delete",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "true",
+        "false",
+        "null",
+        "undefined",
+        "void",
+        "this",
+        "super",
+        "class",
+        "extends",
+        "implements",
+        "interface",
+        "enum",
+        "const",
+        "let",
+        "var",
+        "function",
+        "async",
+        "await",
+        "yield",
+        "import",
+        "export",
+        "default",
+        "from",
+        "as",
+        "static",
+        "public",
+        "private",
+        "protected",
+        "abstract",
+        "final",
+        "override",
         // Rust
-        "fn", "pub", "mod", "use", "struct", "impl", "trait",
-        "where", "type", "self", "Self", "mut", "ref", "match",
-        "loop", "move", "unsafe", "extern", "crate", "dyn",
+        "fn",
+        "pub",
+        "mod",
+        "use",
+        "struct",
+        "impl",
+        "trait",
+        "where",
+        "type",
+        "self",
+        "Self",
+        "mut",
+        "ref",
+        "match",
+        "loop",
+        "move",
+        "unsafe",
+        "extern",
+        "crate",
+        "dyn",
         // Python
-        "def", "elif", "except", "raise", "with",
-        "pass", "lambda", "nonlocal", "global", "assert",
-        "True", "False", "and", "or", "not", "is",
+        "def",
+        "elif",
+        "except",
+        "raise",
+        "with",
+        "pass",
+        "lambda",
+        "nonlocal",
+        "global",
+        "assert",
+        "True",
+        "False",
+        "and",
+        "or",
+        "not",
+        "is",
         // Go
-        "func", "package", "range", "select", "chan", "go",
-        "defer", "map", "make", "append", "len", "cap",
+        "func",
+        "package",
+        "range",
+        "select",
+        "chan",
+        "go",
+        "defer",
+        "map",
+        "make",
+        "append",
+        "len",
+        "cap",
         // C/C++
-        "auto", "register", "volatile", "sizeof", "typedef",
-        "template", "typename", "namespace", "virtual", "inline",
-        "constexpr", "nullptr", "noexcept", "explicit", "friend",
-        "operator", "using", "cout", "endl", "cerr", "cin",
-        "printf", "scanf", "malloc", "free", "NULL", "include",
-        "ifdef", "ifndef", "endif", "define", "pragma",
+        "auto",
+        "register",
+        "volatile",
+        "sizeof",
+        "typedef",
+        "template",
+        "typename",
+        "namespace",
+        "virtual",
+        "inline",
+        "constexpr",
+        "nullptr",
+        "noexcept",
+        "explicit",
+        "friend",
+        "operator",
+        "using",
+        "cout",
+        "endl",
+        "cerr",
+        "cin",
+        "printf",
+        "scanf",
+        "malloc",
+        "free",
+        "NULL",
+        "include",
+        "ifdef",
+        "ifndef",
+        "endif",
+        "define",
+        "pragma",
         // Ruby
-        "end", "then", "elsif", "unless", "until",
-        "begin", "rescue", "ensure", "when", "require",
-        "attr_accessor", "attr_reader", "attr_writer",
-        "puts", "nil", "module", "defined",
+        "end",
+        "then",
+        "elsif",
+        "unless",
+        "until",
+        "begin",
+        "rescue",
+        "ensure",
+        "when",
+        "require",
+        "attr_accessor",
+        "attr_reader",
+        "attr_writer",
+        "puts",
+        "nil",
+        "module",
+        "defined",
         // C#
-        "internal", "sealed", "readonly",
-        "partial", "delegate", "event", "params", "out",
-        "object", "decimal", "sbyte", "ushort", "uint",
-        "ulong", "nint", "nuint", "dynamic",
-        "get", "set", "value", "init", "record",
+        "internal",
+        "sealed",
+        "readonly",
+        "partial",
+        "delegate",
+        "event",
+        "params",
+        "out",
+        "object",
+        "decimal",
+        "sbyte",
+        "ushort",
+        "uint",
+        "ulong",
+        "nint",
+        "nuint",
+        "dynamic",
+        "get",
+        "set",
+        "value",
+        "init",
+        "record",
         // Types (primitives)
-        "string", "number", "boolean", "int", "float", "double",
-        "bool", "char", "byte", "i8", "i16", "i32", "i64",
-        "u8", "u16", "u32", "u64", "f32", "f64", "usize",
-        "isize", "str", "String", "Vec", "Option", "Result",
-        "Box", "Arc", "Rc", "HashMap", "HashSet", "Some",
-        "Ok", "Err",
-    ].into_iter().collect()
+        "string",
+        "number",
+        "boolean",
+        "int",
+        "float",
+        "double",
+        "bool",
+        "char",
+        "byte",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "f32",
+        "f64",
+        "usize",
+        "isize",
+        "str",
+        "String",
+        "Vec",
+        "Option",
+        "Result",
+        "Box",
+        "Arc",
+        "Rc",
+        "HashMap",
+        "HashSet",
+        "Some",
+        "Ok",
+        "Err",
+    ]
+    .into_iter()
+    .collect()
 });
 
 fn is_keyword(word: &str) -> bool {
@@ -759,7 +910,11 @@ mod tests {
         let root = dir.path();
 
         write_file(root, "a.ts", "export function foo() { return bar(); }\n");
-        write_file(root, "b.ts", "export function bar() { return 1; }\nexport function baz() { return 2; }\n");
+        write_file(
+            root,
+            "b.ts",
+            "export function bar() { return 1; }\nexport function baz() { return 2; }\n",
+        );
 
         let mut graph = EntityGraph::build(root, &["a.ts".into(), "b.ts".into()], &registry);
         assert_eq!(graph.entities.len(), 3);
@@ -782,8 +937,16 @@ mod tests {
         // foo should now depend on baz, not bar
         let foo_deps = graph.get_dependencies("a.ts::function::foo");
         let dep_names: Vec<&str> = foo_deps.iter().map(|d| d.name.as_str()).collect();
-        assert!(dep_names.contains(&"baz"), "foo should depend on baz after modification. Deps: {:?}", dep_names);
-        assert!(!dep_names.contains(&"bar"), "foo should no longer depend on bar. Deps: {:?}", dep_names);
+        assert!(
+            dep_names.contains(&"baz"),
+            "foo should depend on baz after modification. Deps: {:?}",
+            dep_names
+        );
+        assert!(
+            !dep_names.contains(&"bar"),
+            "foo should no longer depend on bar. Deps: {:?}",
+            dep_names
+        );
     }
 
     #[test]

@@ -35,7 +35,10 @@ pub fn match_entities(
             matched_after.insert(id);
 
             if before_entity.content_hash != after_entity.content_hash {
-                let structural_change = match (&before_entity.structural_hash, &after_entity.structural_hash) {
+                let structural_change = match (
+                    &before_entity.structural_hash,
+                    &after_entity.structural_hash,
+                ) {
                     (Some(before_sh), Some(after_sh)) => Some(before_sh != after_sh),
                     _ => None,
                 };
@@ -180,7 +183,11 @@ pub fn match_entities(
 
                     // Early exit: skip pairs where token count ratio is too different
                     let b_len = before_lens[bi];
-                    let (min_l, max_l) = if a_len < b_len { (a_len, b_len) } else { (b_len, a_len) };
+                    let (min_l, max_l) = if a_len < b_len {
+                        (a_len, b_len)
+                    } else {
+                        (b_len, a_len)
+                    };
                     if max_l > 0 && (min_l as f64 / max_l as f64) < SIZE_RATIO_CUTOFF {
                         continue;
                     }
@@ -229,7 +236,10 @@ pub fn match_entities(
     }
 
     // Remaining unmatched before = deleted
-    for entity in before.iter().filter(|e| !matched_before.contains(e.id.as_str())) {
+    for entity in before
+        .iter()
+        .filter(|e| !matched_before.contains(e.id.as_str()))
+    {
         changes.push(SemanticChange {
             id: format!("change::deleted::{}", entity.id),
             entity_id: entity.id.clone(),
@@ -248,7 +258,10 @@ pub fn match_entities(
     }
 
     // Remaining unmatched after = added
-    for entity in after.iter().filter(|e| !matched_after.contains(e.id.as_str())) {
+    for entity in after
+        .iter()
+        .filter(|e| !matched_after.contains(e.id.as_str()))
+    {
         changes.push(SemanticChange {
             id: format!("change::added::{}", entity.id),
             entity_id: entity.id.clone(),

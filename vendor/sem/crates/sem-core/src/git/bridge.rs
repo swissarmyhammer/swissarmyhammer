@@ -1,9 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use git2::{
-    Delta, Diff, DiffOptions, ErrorCode, Repository, StatusOptions,
-};
+use git2::{Delta, Diff, DiffOptions, ErrorCode, Repository, StatusOptions};
 use thiserror::Error;
 
 use super::types::{CommitInfo, DiffScope, FileChange, FileStatus};
@@ -32,10 +30,7 @@ impl GitBridge {
                 GitError::Git2(e)
             }
         })?;
-        let repo_root = repo
-            .workdir()
-            .ok_or(GitError::NotARepo)?
-            .to_path_buf();
+        let repo_root = repo.workdir().ok_or(GitError::NotARepo)?.to_path_buf();
         Ok(Self { repo, repo_root })
     }
 
@@ -45,9 +40,9 @@ impl GitBridge {
 
     pub fn get_head_sha(&self) -> Result<String, GitError> {
         let head = self.repo.head()?;
-        let oid = head.target().ok_or_else(|| {
-            git2::Error::from_str("HEAD has no target")
-        })?;
+        let oid = head
+            .target()
+            .ok_or_else(|| git2::Error::from_str("HEAD has no target"))?;
         Ok(oid.to_string())
     }
 
@@ -113,11 +108,9 @@ impl GitBridge {
             Err(_) => None, // No commits yet
         };
 
-        let diff = self.repo.diff_tree_to_index(
-            head_tree.as_ref(),
-            Some(&self.repo.index()?),
-            None,
-        )?;
+        let diff =
+            self.repo
+                .diff_tree_to_index(head_tree.as_ref(), Some(&self.repo.index()?), None)?;
 
         Ok(self.diff_to_file_changes(&diff))
     }
@@ -169,11 +162,9 @@ impl GitBridge {
             None
         };
 
-        let diff = self.repo.diff_tree_to_tree(
-            parent_tree.as_ref(),
-            Some(&tree),
-            None,
-        )?;
+        let diff = self
+            .repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
 
         Ok(self.diff_to_file_changes(&diff))
     }
@@ -185,11 +176,9 @@ impl GitBridge {
         let from_tree = from_obj.peel_to_commit()?.tree()?;
         let to_tree = to_obj.peel_to_commit()?.tree()?;
 
-        let diff = self.repo.diff_tree_to_tree(
-            Some(&from_tree),
-            Some(&to_tree),
-            None,
-        )?;
+        let diff = self
+            .repo
+            .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)?;
 
         Ok(self.diff_to_file_changes(&diff))
     }
@@ -299,8 +288,7 @@ impl GitBridge {
                 let before_tree = self.resolve_tree(&format!("{sha}~1")).ok();
                 for file in files.iter_mut() {
                     if file.status != FileStatus::Deleted {
-                        file.after_content =
-                            self.read_blob_from_tree(&after_tree, &file.file_path);
+                        file.after_content = self.read_blob_from_tree(&after_tree, &file.file_path);
                     }
                     if file.status != FileStatus::Added {
                         file.before_content = before_tree
@@ -314,16 +302,11 @@ impl GitBridge {
                 let before_tree = self.resolve_tree(from)?;
                 for file in files.iter_mut() {
                     if file.status != FileStatus::Deleted {
-                        file.after_content =
-                            self.read_blob_from_tree(&after_tree, &file.file_path);
+                        file.after_content = self.read_blob_from_tree(&after_tree, &file.file_path);
                     }
                     if file.status != FileStatus::Added {
-                        let path = file
-                            .old_file_path
-                            .as_deref()
-                            .unwrap_or(&file.file_path);
-                        file.before_content =
-                            self.read_blob_from_tree(&before_tree, path);
+                        let path = file.old_file_path.as_deref().unwrap_or(&file.file_path);
+                        file.before_content = self.read_blob_from_tree(&before_tree, path);
                     }
                 }
             }
@@ -354,7 +337,6 @@ impl GitBridge {
         let blob = self.repo.find_blob(entry.id).ok()?;
         std::str::from_utf8(blob.content()).ok().map(String::from)
     }
-
 
     pub fn get_log(&self, limit: usize) -> Result<Vec<CommitInfo>, GitError> {
         let mut revwalk = self.repo.revwalk()?;

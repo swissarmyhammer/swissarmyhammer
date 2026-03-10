@@ -108,15 +108,9 @@ pub enum LspDaemonState {
     /// Starting up, waiting for initialize response
     Starting,
     /// Running and healthy, with the child process PID and start timestamp (millis since epoch)
-    Running {
-        pid: u32,
-        since_epoch_ms: u64,
-    },
+    Running { pid: u32, since_epoch_ms: u64 },
     /// Server process died or health check failed
-    Failed {
-        reason: String,
-        attempts: u32,
-    },
+    Failed { reason: String, attempts: u32 },
     /// Binary not found on PATH
     NotFound,
     /// Shutting down gracefully

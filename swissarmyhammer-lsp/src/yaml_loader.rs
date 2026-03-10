@@ -35,7 +35,11 @@ pub fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
         if let Ok(entries) = std::fs::read_dir(&lsp_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false) {
+                if path
+                    .extension()
+                    .map(|e| e == "yaml" || e == "yml")
+                    .unwrap_or(false)
+                {
                     match load_single_server(&path) {
                         Ok(spec) => {
                             debug!("Loaded LSP server config: {}", spec.command);
@@ -66,8 +70,7 @@ pub fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
             file_extensions: vec!["rs".to_string()],
             startup_timeout_secs: 30,
             health_check_interval_secs: 60,
-            install_hint: "Install rust-analyzer: rustup component add rust-analyzer"
-                .to_string(),
+            install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
         });
     }
 

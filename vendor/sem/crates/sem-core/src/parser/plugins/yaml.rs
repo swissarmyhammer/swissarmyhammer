@@ -113,10 +113,7 @@ fn find_top_level_keys(lines: &[&str]) -> Vec<TopLevelKey> {
         if let Some(colon_pos) = line.find(':') {
             let key = line[..colon_pos].trim().to_string();
             if !key.is_empty() {
-                keys.push(TopLevelKey {
-                    key,
-                    line: i + 1,
-                });
+                keys.push(TopLevelKey { key, line: i + 1 });
             }
         }
     }

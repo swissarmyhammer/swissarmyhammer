@@ -25,7 +25,7 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
     let mut has_errors = false;
     for r in &results {
         match r.status {
-            InitStatus::Ok => {}    // component already printed its messages
+            InitStatus::Ok => {} // component already printed its messages
             InitStatus::Warning => eprintln!("Warning: {}", r.message),
             InitStatus::Error => {
                 eprintln!("Error: {}", r.message);

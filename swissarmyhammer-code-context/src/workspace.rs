@@ -153,7 +153,9 @@ impl CodeContextWorkspace {
     /// returned reference across await points.
     pub fn db(&self) -> DbRef<'_> {
         match &self.mode {
-            WorkspaceMode::Leader { db, .. } => DbRef::Shared(db.lock().unwrap_or_else(|p| p.into_inner())),
+            WorkspaceMode::Leader { db, .. } => {
+                DbRef::Shared(db.lock().unwrap_or_else(|p| p.into_inner()))
+            }
             WorkspaceMode::Reader { db } => DbRef::Owned(db),
         }
     }

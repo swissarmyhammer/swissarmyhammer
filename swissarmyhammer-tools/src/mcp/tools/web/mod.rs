@@ -110,8 +110,12 @@ impl McpTool for WebTool {
 }
 
 impl swissarmyhammer_common::lifecycle::Initializable for WebTool {
-    fn name(&self) -> &str { "Web" }
-    fn category(&self) -> &str { "tools" }
+    fn name(&self) -> &str {
+        "Web"
+    }
+    fn category(&self) -> &str {
+        "tools"
+    }
 }
 
 impl Doctorable for WebTool {

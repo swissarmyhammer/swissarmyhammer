@@ -75,7 +75,10 @@ fn get_lsp_servers_for_type(project_type: &str) -> Vec<(&'static str, &'static s
     match project_type {
         "rust" => vec![("rust-analyzer", "rustup component add rust-analyzer")],
         "javascript" => vec![
-            ("typescript-language-server", "npm install -g typescript-language-server typescript"),
+            (
+                "typescript-language-server",
+                "npm install -g typescript-language-server typescript",
+            ),
             ("tsserver", "npm install -g typescript"),
         ],
         "python" => vec![
@@ -101,7 +104,11 @@ pub fn run_doctor(root: &Path) -> DoctorReport {
                 installed,
                 path,
                 error,
-                install_hint: if installed { None } else { Some(hint.to_string()) },
+                install_hint: if installed {
+                    None
+                } else {
+                    Some(hint.to_string())
+                },
             });
         }
     }

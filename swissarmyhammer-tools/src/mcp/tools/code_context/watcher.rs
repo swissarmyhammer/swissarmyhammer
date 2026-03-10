@@ -18,8 +18,8 @@ use swissarmyhammer_code_context::{FanoutWatcher, FileEvent, SharedDb};
 /// Source file extensions worth tracking for code context indexing.
 const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp", "rb", "swift",
-    "kt", "cs", "lua", "zig", "hs", "ml", "ex", "exs", "erl", "clj", "scala", "r", "jl",
-    "toml", "yaml", "yml", "json", "sh", "bash", "zsh",
+    "kt", "cs", "lua", "zig", "hs", "ml", "ex", "exs", "erl", "clj", "scala", "r", "jl", "toml",
+    "yaml", "yml", "json", "sh", "bash", "zsh",
 ];
 
 /// Check if a path is a source file we should index.
@@ -111,7 +111,10 @@ pub(crate) fn process_file_events(
 /// 4. Triggers re-indexing of dirty files
 ///
 /// Returns the `JoinHandle` for the watcher task.
-pub fn start_code_context_watcher(workspace_root: PathBuf, db: SharedDb) -> tokio::task::JoinHandle<()> {
+pub fn start_code_context_watcher(
+    workspace_root: PathBuf,
+    db: SharedDb,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(e) = run_watcher(&workspace_root, &db).await {
             tracing::error!("code-context watcher failed: {}", e);

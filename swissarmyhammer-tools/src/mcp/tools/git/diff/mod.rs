@@ -19,7 +19,6 @@ use sem_core::model::identity::match_entities;
 use sem_core::parser::differ::{compute_semantic_diff, DiffResult};
 use sem_core::parser::plugins::create_default_registry;
 
-
 /// Maps a language name to a file extension for sem-core plugin lookup.
 ///
 /// The registry dispatches by file extension, so we need to construct a
@@ -226,10 +225,9 @@ pub fn execute_inline_diff(
     let before_entities = plugin.extract_entities(left_text, &synthetic_path);
     let after_entities = plugin.extract_entities(right_text, &synthetic_path);
 
-    let sim_fn =
-        |a: &sem_core::model::entity::SemanticEntity,
-         b: &sem_core::model::entity::SemanticEntity|
-         -> f64 { plugin.compute_similarity(a, b) };
+    let sim_fn = |a: &sem_core::model::entity::SemanticEntity,
+                  b: &sem_core::model::entity::SemanticEntity|
+     -> f64 { plugin.compute_similarity(a, b) };
 
     let match_result = match_entities(
         &before_entities,
@@ -336,8 +334,8 @@ pub fn execute_file_diff(
 pub fn execute_auto_diff(working_dir: &std::path::Path) -> Result<String, String> {
     let registry = create_default_registry();
 
-    let bridge = GitBridge::open(working_dir)
-        .map_err(|e| format!("Failed to open git repository: {e}"))?;
+    let bridge =
+        GitBridge::open(working_dir).map_err(|e| format!("Failed to open git repository: {e}"))?;
 
     let (_scope, file_changes) = bridge
         .detect_and_get_files()
@@ -382,9 +380,7 @@ fn read_file_content(
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!(
-                    "git show {refspec}:{file_path} failed: {stderr}"
-                ));
+                return Err(format!("git show {refspec}:{file_path} failed: {stderr}"));
             }
 
             String::from_utf8(output.stdout)
@@ -393,12 +389,8 @@ fn read_file_content(
         None => {
             // Read from disk
             let full_path = working_dir.join(file_path);
-            std::fs::read_to_string(&full_path).map_err(|e| {
-                format!(
-                    "Failed to read file '{}': {e}",
-                    full_path.display()
-                )
-            })
+            std::fs::read_to_string(&full_path)
+                .map_err(|e| format!("Failed to read file '{}': {e}", full_path.display()))
         }
     }
 }
