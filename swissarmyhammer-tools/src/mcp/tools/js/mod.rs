@@ -42,6 +42,7 @@ impl JsTool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(JsTool);
+crate::impl_empty_initializable!(JsTool);
 
 #[async_trait]
 impl McpTool for JsTool {

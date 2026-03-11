@@ -290,7 +290,7 @@ async fn test_incremental_token_processing_proof() {
 
     // Additional check: If generation 3 is slower than generation 2,
     // this could indicate full reprocessing (growing history)
-    if gen3_duration > gen2_duration * 2 {
+    if gen3_duration > gen2_duration * 3 {
         warn!("WARNING: Generation 3 took significantly longer than generation 2");
         warn!("   This may indicate full reprocessing, but can also be CI runner variance");
         warn!(

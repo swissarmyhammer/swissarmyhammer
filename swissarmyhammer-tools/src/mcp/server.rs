@@ -298,11 +298,10 @@ impl McpServer {
             workspace_root.display()
         );
 
-        // Start LSP supervisor in parallel with tree-sitter indexing.
-        // LSP servers (e.g. rust-analyzer) take 30-120s to warm up, so
-        // launching early overlaps with tree-sitter scanning.
+        // Start LSP supervisor — it spawns rust-analyzer and does the handshake.
+        // After handshake, we grab the shared client Arc for the indexing worker.
         let lsp_root = workspace_root.clone();
-        tokio::spawn(async move {
+        let lsp_handle = tokio::spawn(async move {
             let mut supervisor = swissarmyhammer_lsp::LspSupervisorManager::new(lsp_root);
             let results = supervisor.start().await;
             let ok_count = results.iter().filter(|r| r.is_ok()).count();
@@ -318,58 +317,119 @@ impl McpServer {
                 }
             }
 
+            // Grab the shared client handle from rust-analyzer daemon.
+            // This is the same Arc the daemon uses — the worker shares it.
+            let shared_client = supervisor
+                .get_daemon("rust-analyzer")
+                .map(|d| d.shared_client());
+
             // Store supervisor for status queries and periodic health checks
             use super::tools::code_context::LSP_SUPERVISOR;
             let _ = LSP_SUPERVISOR.set(Arc::new(tokio::sync::Mutex::new(supervisor)));
 
-            // Periodic health check loop (every 60s)
+            shared_client
+        });
+
+        // Open the workspace as leader. This creates the single write connection
+        // and holds the flock via LeaderGuard. ALL writers share this one connection.
+        use swissarmyhammer_code_context::CodeContextWorkspace;
+
+        tracing::info!(
+            "code-context: opening workspace for {}",
+            workspace_root.display()
+        );
+        let ws = match CodeContextWorkspace::open(&workspace_root) {
+            Ok(ws) => {
+                tracing::info!(
+                    "code-context: workspace opened as {}",
+                    if ws.is_leader() { "leader" } else { "reader" }
+                );
+                ws
+            }
+            Err(e) => {
+                tracing::warn!("code-context: failed to open workspace: {}", e);
+                return;
+            }
+        };
+
+        // Extract the shared write connection. Only the leader has one.
+        let shared_db = ws.shared_db();
+
+        // Keep the workspace (and its LeaderGuard) alive forever.
+        // The guard holds the flock — dropping it releases leadership.
+        tokio::spawn(async move {
+            let _ws = ws;
+            std::future::pending::<()>().await;
+        });
+
+        // All workers below share the single write connection.
+        // If we're not leader (shared_db is None), skip write-side work.
+        let shared_db = match shared_db {
+            Some(db) => db,
+            None => {
+                tracing::info!("code-context: reader mode — skipping indexing workers");
+                return;
+            }
+        };
+
+        // Start tree-sitter indexing
+        let ts_root = workspace_root.clone();
+        let ts_db = std::sync::Arc::clone(&shared_db);
+        tokio::spawn(async move {
+            use super::tools::code_context::index_discovered_files_async;
+            tracing::info!(
+                "code-context: starting tree-sitter indexing for {}",
+                ts_root.display()
+            );
+            index_discovered_files_async(&ts_root, ts_db).await;
+            tracing::info!(
+                "code-context: tree-sitter indexing complete for {}",
+                ts_root.display()
+            );
+        });
+
+        // Start file watcher — marks files dirty and re-indexes via shared connection
+        let watcher_root = workspace_root.clone();
+        let watcher_db = std::sync::Arc::clone(&shared_db);
+        tokio::spawn(async move {
+            use super::tools::code_context::watcher::start_code_context_watcher;
+            let _watcher_handle = start_code_context_watcher(watcher_root, watcher_db);
+            // Keep this task alive so the watcher handle isn't dropped
+            std::future::pending::<()>().await;
+        });
+
+        // Once the LSP supervisor is ready, start the LSP indexing worker.
+        let lsp_db = std::sync::Arc::clone(&shared_db);
+        tokio::spawn(async move {
+            match lsp_handle.await {
+                Ok(Some(shared_client)) => {
+                    use swissarmyhammer_code_context::{
+                        spawn_lsp_indexing_worker, LspWorkerConfig,
+                    };
+                    spawn_lsp_indexing_worker(
+                        workspace_root.clone(),
+                        lsp_db,
+                        shared_client,
+                        LspWorkerConfig::default(),
+                    );
+                    tracing::info!(
+                        "code-context: LSP indexing worker started for {}",
+                        workspace_root.display()
+                    );
+                }
+                _ => {
+                    tracing::info!("code-context: no LSP client available, skipping LSP indexing");
+                }
+            }
+
+            // LSP health check loop (runs forever)
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                use super::tools::code_context::LSP_SUPERVISOR;
                 if let Some(sup) = LSP_SUPERVISOR.get() {
                     sup.lock().await.health_check_all().await;
                 }
             }
-        });
-
-        tokio::spawn(async move {
-            use super::tools::code_context::index_discovered_files_async;
-            use swissarmyhammer_code_context::CodeContextWorkspace;
-
-            // 1. Open the workspace first — this creates .code-context/index.db,
-            //    sets up the schema, runs startup_cleanup (file discovery + hashing),
-            //    and acquires the leader lock.
-            tracing::info!(
-                "code-context: opening workspace for {}",
-                workspace_root.display()
-            );
-            let _ws = match CodeContextWorkspace::open(&workspace_root) {
-                Ok(ws) => {
-                    tracing::info!(
-                        "code-context: workspace opened as {} with DB ready",
-                        if ws.is_leader() { "leader" } else { "reader" }
-                    );
-                    ws
-                }
-                Err(e) => {
-                    tracing::warn!("code-context: failed to open workspace: {}", e);
-                    return;
-                }
-            };
-
-            // 2. Now the DB exists and has files discovered. Run tree-sitter indexing.
-            tracing::info!(
-                "code-context: starting tree-sitter indexing for {}",
-                workspace_root.display()
-            );
-            index_discovered_files_async(&workspace_root).await;
-            tracing::info!(
-                "code-context: indexing complete for {}",
-                workspace_root.display()
-            );
-
-            // 3. Start file watcher to keep index in sync with filesystem changes.
-            use super::tools::code_context::watcher::start_code_context_watcher;
-            let _watcher_handle = start_code_context_watcher(workspace_root);
         });
     }
 
@@ -1132,6 +1192,19 @@ impl ServerHandler for McpServer {
         // only when an MCP client actually connects — not in the constructor.
         if let Some(ref work_dir) = self.work_dir {
             Self::initialize_code_context(work_dir);
+        }
+
+        // Run Initializable::start() on all registered tools
+        {
+            let registry = self.tool_registry.read().await;
+            for tool in registry.iter_tools() {
+                let results = tool.start();
+                for r in &results {
+                    if r.status == swissarmyhammer_common::lifecycle::InitStatus::Error {
+                        tracing::warn!("Tool start error: {} — {}", r.name, r.message);
+                    }
+                }
+            }
         }
 
         Ok(InitializeResult {

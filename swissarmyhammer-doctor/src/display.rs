@@ -26,10 +26,18 @@ pub struct VerboseCheckResult {
 
 impl From<&Check> for CheckResult {
     fn from(check: &Check) -> Self {
+        // For errors/warnings with a fix hint, append it to the message
+        // so users see the remediation even without --verbose
+        let message = match (&check.status, &check.fix) {
+            (CheckStatus::Error | CheckStatus::Warning, Some(fix)) => {
+                format!("{}\n  Fix: {}", check.message, fix)
+            }
+            _ => check.message.clone(),
+        };
         Self {
             status: format_check_status(&check.status),
             name: check.name.clone(),
-            message: check.message.clone(),
+            message,
         }
     }
 }
@@ -212,6 +220,31 @@ mod tests {
         let check = create_error_check();
         let result = VerboseCheckResult::from(&check);
         assert_eq!(result.fix, "No fix available");
+    }
+
+    #[test]
+    fn test_check_result_appends_fix_for_errors() {
+        let check = Check {
+            name: "Broken Tool".to_string(),
+            status: CheckStatus::Error,
+            message: "Not working".to_string(),
+            fix: Some("run the fix command".to_string()),
+        };
+        let result = CheckResult::from(&check);
+        assert!(result.message.contains("Not working"));
+        assert!(result.message.contains("Fix: run the fix command"));
+    }
+
+    #[test]
+    fn test_check_result_no_fix_for_ok() {
+        let check = Check {
+            name: "Good Tool".to_string(),
+            status: CheckStatus::Ok,
+            message: "All good".to_string(),
+            fix: Some("should not appear".to_string()),
+        };
+        let result = CheckResult::from(&check);
+        assert_eq!(result.message, "All good");
     }
 
     #[test]

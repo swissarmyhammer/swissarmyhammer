@@ -22,7 +22,7 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     };
 
     let conn = ws.db();
-    let status = match swissarmyhammer_code_context::get_status(conn) {
+    let status = match swissarmyhammer_code_context::get_status(&conn) {
         Ok(s) => s,
         Err(_) => return ModuleOutput::hidden(),
     };

@@ -218,7 +218,7 @@ fn create_test_project() -> tempfile::TempDir {
 }
 
 /// Populate the database with chunks and call edges for all source files.
-fn populate_index(conn: &Connection, workspace_root: &Path) {
+fn populate_index(conn: &Connection, _workspace_root: &Path) {
     // Note: startup_cleanup is now called automatically in CodeContextWorkspace::open(),
     // so we just verify that files are in the database. The workspace.open() call
     // already populated indexed_files with the discovered source files.
@@ -272,9 +272,9 @@ fn test_workspace_open_and_leader() {
 fn test_get_status_after_population() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
 
-    let status = get_status(ws.db()).unwrap();
+    let status = get_status(&ws.db()).unwrap();
 
     assert!(
         status.total_files >= 3,
@@ -307,8 +307,9 @@ fn test_get_status_after_population() {
 fn test_get_symbol_operations() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
     let opts = GetSymbolOptions::default();
 
     // Get "Server" -- should find the struct or impl chunk.
@@ -360,8 +361,9 @@ fn test_get_symbol_operations() {
 fn test_get_symbol_fuzzy_tiers() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
     let opts = GetSymbolOptions::default();
 
     // Tier 1: Exact match.
@@ -446,8 +448,9 @@ fn test_get_symbol_fuzzy_tiers() {
 fn test_search_symbol() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     let results = search_symbol(conn, "auth", &SearchSymbolOptions::default()).unwrap();
     assert!(
@@ -468,8 +471,9 @@ fn test_search_symbol() {
 fn test_list_symbols() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     let results = list_symbols(conn, "src/server.rs").unwrap();
     assert!(!results.is_empty(), "expected symbols in src/server.rs");
@@ -513,8 +517,9 @@ fn test_list_symbols() {
 fn test_grep_code() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // Search for "token" -- should appear in both server.rs and auth.rs.
     let result = grep_code(conn, "token", &GrepOptions::default()).unwrap();
@@ -562,8 +567,9 @@ fn test_grep_code() {
 fn test_get_callgraph() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // Outbound from handle_request: should call AuthService::new and validate.
     let result = get_callgraph(
@@ -631,8 +637,9 @@ fn test_get_callgraph() {
 fn test_get_blastradius() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // Blast radius for src/auth.rs: server.rs should be affected because
     // handle_request calls AuthService::new and validate.
@@ -678,8 +685,9 @@ fn test_get_blastradius() {
 fn test_build_status_and_blocking() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // After population, blocking status should be Ready.
     let status = check_blocking_status(conn, IndexLayer::TreeSitter).unwrap();
@@ -716,8 +724,9 @@ fn test_build_status_and_blocking() {
 fn test_clear_status() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // Verify there is data before clearing.
     let before = get_status(conn).unwrap();
@@ -767,8 +776,9 @@ fn test_hints_for_all_operations() {
 fn test_blocking_ready_after_population() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
-    populate_index(ws.db(), dir.path());
+    populate_index(&ws.db(), dir.path());
     let conn = ws.db();
+    let conn = &*conn;
 
     // TreeSitter layer should be Ready (we marked ts_indexed=1 in populate_index).
     let status = check_blocking_status(conn, IndexLayer::TreeSitter).unwrap();
@@ -792,6 +802,7 @@ fn test_startup_cleanup_populates_indexed_files() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // After workspace.open(), startup_cleanup has already been called automatically,
     // so files are in the database. Calling again shows them as unchanged.
@@ -819,6 +830,7 @@ fn test_end_to_end_full_pipeline() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // 1. Populate
     populate_index(conn, dir.path());
@@ -944,7 +956,7 @@ fn test_symbol_operations_on_real_repo() {
                     fs::create_dir_all(&dest)?;
                 }
                 copy_files_recursive(&path, &dest)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 fs::copy(&path, &dest)?;
             }
         }
@@ -956,6 +968,7 @@ fn test_symbol_operations_on_real_repo() {
     // Open workspace and populate index
     let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
     let conn = ws.db();
+    let conn = &*conn;
 
     // Verify files were discovered by workspace.open() (which calls startup_cleanup automatically)
     let cleanup_stats = startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
@@ -985,7 +998,7 @@ fn test_symbol_operations_on_real_repo() {
                     format!("{}/{}", prefix, file_name.to_string_lossy())
                 };
                 count += process_dir(&path, &new_prefix, conn)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let rel_path = if prefix.is_empty() {
                     format!("src/{}", file_name.to_string_lossy())
                 } else {
@@ -1067,7 +1080,7 @@ fn test_symbol_operations_on_real_repo() {
     // Test 4: list_symbols on any file should return symbols
     if let Ok(files) = list_symbols(conn, "src/lib.rs") {
         if !files.is_empty() {
-            assert!(files.len() >= 1, "Expected >= 1 symbol in lib.rs");
+            assert!(!files.is_empty(), "Expected >= 1 symbol in lib.rs");
         }
     }
 
@@ -1133,7 +1146,7 @@ fn test_grep_code_on_real_repo() {
                     fs::create_dir_all(&dest)?;
                 }
                 copy_files_recursive(&path, &dest)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 fs::copy(&path, &dest)?;
             }
         }
@@ -1145,6 +1158,7 @@ fn test_grep_code_on_real_repo() {
     // Open workspace and populate index
     let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
     let conn = ws.db();
+    let conn = &*conn;
 
     // Discover files
     startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
@@ -1167,7 +1181,7 @@ fn test_grep_code_on_real_repo() {
                     format!("{}/{}", prefix, file_name.to_string_lossy())
                 };
                 process_dir(&path, &new_prefix, conn)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let rel_path = if prefix.is_empty() {
                     format!("src/{}", file_name.to_string_lossy())
                 } else {
@@ -1330,7 +1344,7 @@ fn test_callgraph_and_blastradius_on_real_repo() {
                     fs::create_dir_all(&dest)?;
                 }
                 copy_files_recursive(&path, &dest)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 fs::copy(&path, &dest)?;
             }
         }
@@ -1342,6 +1356,7 @@ fn test_callgraph_and_blastradius_on_real_repo() {
     // Open workspace and populate index
     let ws = CodeContextWorkspace::open(tmp.path()).expect("Failed to open workspace");
     let conn = ws.db();
+    let conn = &*conn;
 
     // Discover files
     startup_cleanup(conn, tmp.path()).expect("startup_cleanup failed");
@@ -1364,7 +1379,7 @@ fn test_callgraph_and_blastradius_on_real_repo() {
                     format!("{}/{}", prefix, file_name.to_string_lossy())
                 };
                 process_dir(&path, &new_prefix, conn)?;
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let rel_path = if prefix.is_empty() {
                     format!("src/{}", file_name.to_string_lossy())
                 } else {
@@ -1655,6 +1670,7 @@ fn test_collect_lsp_symbols_and_persist() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     let conn = ws.db();
+    let conn = &*conn;
 
     // Create mock DocumentSymbols (simulating LSP response)
     let symbols = vec![
@@ -1747,6 +1763,7 @@ fn test_end_to_end_real_project_validation() {
     let ws = CodeContextWorkspace::open(root).unwrap();
     assert!(ws.is_leader(), "Should be leader");
     let conn = ws.db();
+    let conn = &*conn;
 
     // Step 2: Populate database with tree-sitter data (includes discovery)
     populate_index(conn, root);
@@ -1851,4 +1868,825 @@ fn test_end_to_end_real_project_validation() {
     );
 
     println!("\n✅ End-to-end validation PASSED: All 6 operations work on real project data");
+}
+
+// ---------------------------------------------------------------------------
+// Real LSP integration test (requires rust-analyzer installed)
+// ---------------------------------------------------------------------------
+
+/// End-to-end test that spawns a real rust-analyzer process, sends LSP
+/// requests for document symbols, and verifies that symbols are correctly
+/// parsed and persisted to the database.
+///
+/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Run with: `cargo test -p swissarmyhammer-code-context -- test_real_lsp_document_symbols --ignored --nocapture`
+#[test]
+#[ignore]
+fn test_real_lsp_document_symbols() {
+    use std::process::{Command, Stdio};
+    use swissarmyhammer_code_context::db;
+    use swissarmyhammer_code_context::{detect_rust_analyzer, LspJsonRpcClient};
+
+    // -- Guard: skip if rust-analyzer is not installed -----------------------
+    if detect_rust_analyzer().is_none() {
+        println!("SKIPPED: rust-analyzer not found in PATH");
+        return;
+    }
+
+    // -- Step 1: Create a temp Rust project with known source ----------------
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Cargo.toml
+    let cargo_toml = r#"[package]
+name = "lsp-test-fixture"
+version = "0.1.0"
+edition = "2021"
+"#;
+    fs::write(root.join("Cargo.toml"), cargo_toml).unwrap();
+
+    // src/lib.rs with a struct and functions that rust-analyzer can parse
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let lib_rs_content = r#"/// A simple configuration holder.
+pub struct Config {
+    pub name: String,
+    pub port: u16,
+}
+
+impl Config {
+    /// Create a new Config with defaults.
+    pub fn new(name: &str, port: u16) -> Self {
+        Config {
+            name: name.to_string(),
+            port,
+        }
+    }
+
+    /// Return the display name.
+    pub fn display_name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// Top-level helper function.
+pub fn greet(config: &Config) -> String {
+    format!("Hello from {} on port {}", config.display_name(), config.port)
+}
+"#;
+    let lib_rs_path = src_dir.join("lib.rs");
+    fs::write(&lib_rs_path, lib_rs_content).unwrap();
+
+    println!("Created test project at {}", root.display());
+
+    // -- Step 2: Spawn rust-analyzer ----------------------------------------
+    let mut child = Command::new("rust-analyzer")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rust-analyzer");
+
+    let stdin = child.stdin.take().expect("Failed to take stdin");
+    let stdout = child.stdout.take().expect("Failed to take stdout");
+
+    let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+    // -- Step 3 & 4: Send initialize + initialized --------------------------
+    client.initialize(root).expect("LSP initialize failed");
+    println!("LSP server initialized");
+
+    // -- Step 5: Open the document via textDocument/didOpen ------------------
+    client
+        .send_did_open(&lib_rs_path, "rust", lib_rs_content)
+        .expect("didOpen failed");
+    println!("Sent textDocument/didOpen for src/lib.rs");
+
+    // Give rust-analyzer a moment to process the file. It needs to parse
+    // the project before it can respond to documentSymbol requests.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    // -- Step 6: Send textDocument/documentSymbol ---------------------------
+    let result = client
+        .collect_file_symbols(&lib_rs_path)
+        .expect("collect_file_symbols failed");
+
+    println!(
+        "documentSymbol result: {} symbols, error: {:?}",
+        result.symbol_count, result.error
+    );
+
+    assert!(
+        result.error.is_none(),
+        "documentSymbol should not error: {:?}",
+        result.error
+    );
+    assert!(
+        result.symbol_count > 0,
+        "Should have found at least 1 symbol, got 0"
+    );
+
+    // -- Step 7: Verify expected symbol names are present --------------------
+    // Re-send documentSymbol to also get the parsed symbols for name verification.
+    // Use the lower-level send_request path via collect_and_persist_file_symbols
+    // which will also do step 8.
+
+    // Set up an in-memory database for persistence
+    let conn = Connection::open_in_memory().unwrap();
+    db::configure_connection(&conn).unwrap();
+    db::create_schema(&conn).unwrap();
+
+    // Insert the file row so foreign key constraints are satisfied
+    conn.execute(
+        "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+         VALUES ('src/lib.rs', X'AABBCCDD', ?1, strftime('%s','now'))",
+        [lib_rs_content.len() as i64],
+    )
+    .unwrap();
+
+    // -- Step 8: Persist symbols using collect_and_persist_file_symbols ------
+    let persist_result = client
+        .collect_and_persist_file_symbols(&conn, &lib_rs_path, "src/lib.rs")
+        .expect("collect_and_persist_file_symbols failed");
+
+    println!(
+        "Persisted {} symbols for src/lib.rs",
+        persist_result.symbol_count
+    );
+
+    assert!(
+        persist_result.error.is_none(),
+        "persist should not error: {:?}",
+        persist_result.error
+    );
+    assert!(
+        persist_result.symbol_count >= 4,
+        "Expected at least 4 symbols (Config, new, display_name, greet), got {}",
+        persist_result.symbol_count
+    );
+
+    // Verify expected symbol names in the database
+    let symbol_names: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM lsp_symbols WHERE file_path = 'src/lib.rs' ORDER BY name")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    println!("Symbol names in DB: {:?}", symbol_names);
+
+    assert!(
+        symbol_names.contains(&"Config".to_string()),
+        "Should contain 'Config' struct, got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"new".to_string()),
+        "Should contain 'new' method, got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"display_name".to_string()),
+        "Should contain 'display_name' method, got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"greet".to_string()),
+        "Should contain 'greet' function, got: {:?}",
+        symbol_names
+    );
+
+    // -- Step 9: Verify lsp_indexed = 1 for the file ------------------------
+    let lsp_indexed: i64 = conn
+        .query_row(
+            "SELECT lsp_indexed FROM indexed_files WHERE file_path = 'src/lib.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(
+        lsp_indexed, 1,
+        "lsp_indexed should be 1 after persist, got {}",
+        lsp_indexed
+    );
+    println!("lsp_indexed = 1 confirmed for src/lib.rs");
+
+    // -- Cleanup: shut down rust-analyzer -----------------------------------
+    client.shutdown().expect("LSP shutdown failed");
+    let _ = child.wait();
+
+    println!("\nReal LSP integration test PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// Call edge verification tests (TS and LSP sources independently)
+// ---------------------------------------------------------------------------
+
+/// Source code with a known call graph for edge verification tests.
+///
+/// Call graph:
+///   main -> foo, main -> bar
+///   foo  -> helper
+///   bar  -> helper
+const KNOWN_CALL_GRAPH_RS: &str = r#"fn main() {
+    foo();
+    bar();
+}
+
+fn foo() {
+    helper();
+}
+
+fn bar() {
+    helper();
+}
+
+fn helper() {}
+"#;
+
+/// Verify that tree-sitter heuristic call edges match a known call graph.
+///
+/// Given simple Rust source with explicit `main->foo`, `main->bar`,
+/// `foo->helper`, `bar->helper` relationships, this test extracts chunks,
+/// generates TS call edges, and verifies the edges stored in `lsp_call_edges`
+/// have the correct caller/callee pairs and `source = 'treesitter'`.
+#[test]
+fn test_ts_call_edges_known_graph() {
+    // Step 1: Create a temp project with the known call-graph source.
+    let dir = tempfile::tempdir().unwrap();
+    let src_dir = dir.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(src_dir.join("main.rs"), KNOWN_CALL_GRAPH_RS).unwrap();
+
+    // Step 2: Open workspace (runs startup_cleanup automatically).
+    let ws = CodeContextWorkspace::open(dir.path()).unwrap();
+    let conn = ws.db();
+    let conn = &*conn;
+
+    // Step 3: Extract chunks from the known source and insert them.
+    let rel_path = "src/main.rs";
+    let chunks = extract_chunks(rel_path, KNOWN_CALL_GRAPH_RS);
+    assert!(
+        chunks.len() >= 4,
+        "expected at least 4 chunks (main, foo, bar, helper), got {}",
+        chunks.len()
+    );
+    for chunk in &chunks {
+        insert_chunk(conn, chunk);
+    }
+
+    // Step 4: Ensure synthetic lsp_symbols exist for the file's chunks.
+    let sym_count = ensure_ts_symbols(conn, rel_path).unwrap();
+    assert!(
+        sym_count >= 4,
+        "expected at least 4 synthetic symbols, got {}",
+        sym_count
+    );
+
+    // Step 5: Generate and write TS call edges.
+    let edges =
+        generate_ts_call_edges(conn, rel_path, KNOWN_CALL_GRAPH_RS, rust_language()).unwrap();
+    let written = write_ts_edges(conn, rel_path, &edges).unwrap();
+    assert!(
+        written >= 4,
+        "expected at least 4 edges written (main->foo, main->bar, foo->helper, bar->helper), got {}",
+        written
+    );
+
+    // Step 6: Query lsp_call_edges and collect caller->callee pairs.
+    let mut stmt = conn
+        .prepare("SELECT caller_id, callee_id, source FROM lsp_call_edges WHERE caller_file = ?1")
+        .unwrap();
+
+    let rows: Vec<(String, String, String)> = stmt
+        .query_map([rel_path], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    // Helper: extract the short symbol name from a ts: id like "ts:src/main.rs:foo".
+    let short_name = |id: &str| -> String { id.rsplit(':').next().unwrap_or(id).to_string() };
+
+    let edge_pairs: Vec<(String, String)> = rows
+        .iter()
+        .map(|(caller, callee, _)| (short_name(caller), short_name(callee)))
+        .collect();
+
+    println!("TS call edges found: {:?}", edge_pairs);
+
+    // Step 7: Verify expected edges exist.
+    assert!(
+        edge_pairs.iter().any(|(c, t)| c == "main" && t == "foo"),
+        "expected main->foo edge, got: {:?}",
+        edge_pairs
+    );
+    assert!(
+        edge_pairs.iter().any(|(c, t)| c == "main" && t == "bar"),
+        "expected main->bar edge, got: {:?}",
+        edge_pairs
+    );
+    assert!(
+        edge_pairs.iter().any(|(c, t)| c == "foo" && t == "helper"),
+        "expected foo->helper edge, got: {:?}",
+        edge_pairs
+    );
+    assert!(
+        edge_pairs.iter().any(|(c, t)| c == "bar" && t == "helper"),
+        "expected bar->helper edge, got: {:?}",
+        edge_pairs
+    );
+
+    // Step 8: Verify all edges have source = 'treesitter'.
+    for (caller_id, callee_id, source) in &rows {
+        assert_eq!(
+            source, "treesitter",
+            "edge {}->{}  expected source 'treesitter', got '{}'",
+            caller_id, callee_id, source
+        );
+    }
+
+    println!(
+        "test_ts_call_edges_known_graph PASSED: {} edges verified",
+        rows.len()
+    );
+}
+
+/// Verify that LSP-sourced call edges work for a known call graph using
+/// a real rust-analyzer process.
+///
+/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Run with:
+///   cargo test -p swissarmyhammer-code-context -- test_lsp_call_edges_known_graph --ignored --nocapture
+#[test]
+#[ignore]
+fn test_lsp_call_edges_known_graph() {
+    use std::process::{Command, Stdio};
+    use swissarmyhammer_code_context::{detect_rust_analyzer, LspJsonRpcClient};
+
+    // Guard: skip if rust-analyzer is not installed.
+    if detect_rust_analyzer().is_none() {
+        println!("SKIPPED: rust-analyzer not found in PATH");
+        return;
+    }
+
+    // Step 1: Create a temp Rust project with the known call-graph source.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let cargo_toml = r#"[package]
+name = "call-edge-test"
+version = "0.1.0"
+edition = "2021"
+"#;
+    fs::write(root.join("Cargo.toml"), cargo_toml).unwrap();
+
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    let main_rs_path = src_dir.join("main.rs");
+    fs::write(&main_rs_path, KNOWN_CALL_GRAPH_RS).unwrap();
+
+    println!("Created test project at {}", root.display());
+
+    // Step 2: Open workspace and set up the database.
+    let ws = CodeContextWorkspace::open(root).unwrap();
+    let conn = ws.db();
+    let conn = &*conn;
+
+    // Step 3: Spawn rust-analyzer.
+    let mut child = Command::new("rust-analyzer")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rust-analyzer");
+
+    let stdin = child.stdin.take().expect("Failed to take stdin");
+    let stdout = child.stdout.take().expect("Failed to take stdout");
+    let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+    // Step 4: Initialize LSP and open the document.
+    client.initialize(root).expect("LSP initialize failed");
+    println!("LSP server initialized");
+
+    client
+        .send_did_open(&main_rs_path, "rust", KNOWN_CALL_GRAPH_RS)
+        .expect("didOpen failed");
+    println!("Sent textDocument/didOpen for src/main.rs");
+
+    // Give rust-analyzer time to parse the project.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    // Step 5: Collect and persist LSP symbols.
+    let rel_path = "src/main.rs";
+    let persist_result = client
+        .collect_and_persist_file_symbols(conn, &main_rs_path, rel_path)
+        .expect("collect_and_persist_file_symbols failed");
+
+    println!(
+        "LSP symbols: {} persisted, error: {:?}",
+        persist_result.symbol_count, persist_result.error
+    );
+    assert!(
+        persist_result.error.is_none(),
+        "documentSymbol should not error: {:?}",
+        persist_result.error
+    );
+    assert!(
+        persist_result.symbol_count >= 4,
+        "Expected at least 4 symbols (main, foo, bar, helper), got {}",
+        persist_result.symbol_count
+    );
+
+    // Step 6: Verify lsp_indexed = 1 for the file.
+    let lsp_indexed: i64 = conn
+        .query_row(
+            "SELECT lsp_indexed FROM indexed_files WHERE file_path = ?1",
+            [rel_path],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        lsp_indexed, 1,
+        "lsp_indexed should be 1 after persist, got {}",
+        lsp_indexed
+    );
+    println!("lsp_indexed = 1 confirmed for {}", rel_path);
+
+    // Step 7: Verify LSP symbols are in the database.
+    let symbol_names: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM lsp_symbols WHERE file_path = ?1 ORDER BY name")
+            .unwrap();
+        stmt.query_map([rel_path], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    println!("LSP symbol names in DB: {:?}", symbol_names);
+
+    assert!(
+        symbol_names.contains(&"main".to_string()),
+        "Should contain 'main', got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"foo".to_string()),
+        "Should contain 'foo', got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"bar".to_string()),
+        "Should contain 'bar', got: {:?}",
+        symbol_names
+    );
+    assert!(
+        symbol_names.contains(&"helper".to_string()),
+        "Should contain 'helper', got: {:?}",
+        symbol_names
+    );
+
+    // Step 8: Attempt to collect LSP call edges via callHierarchy/outgoingCalls.
+    // This may not be supported by all rust-analyzer versions, so we handle
+    // gracefully if it fails.
+    match client.collect_and_persist_call_edges(conn, &main_rs_path, rel_path) {
+        Ok(edge_count) => {
+            println!("LSP call edges persisted: {}", edge_count);
+
+            if edge_count > 0 {
+                // Query and verify LSP edges.
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT caller_id, callee_id, source FROM lsp_call_edges
+                         WHERE caller_file = ?1 AND source = 'lsp'",
+                    )
+                    .unwrap();
+
+                let lsp_rows: Vec<(String, String, String)> = stmt
+                    .query_map([rel_path], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+
+                println!("LSP call edges in DB:");
+                for (caller, callee, source) in &lsp_rows {
+                    println!("  {} -> {} (source={})", caller, callee, source);
+                    assert_eq!(source, "lsp", "expected source 'lsp', got '{}'", source);
+                }
+            } else {
+                println!("NOTE: rust-analyzer returned 0 call edges (callHierarchy may not be fully supported)");
+            }
+        }
+        Err(e) => {
+            println!(
+                "NOTE: LSP call edge collection failed (callHierarchy may not be supported): {}",
+                e
+            );
+        }
+    }
+
+    // Cleanup: shut down rust-analyzer.
+    client.shutdown().expect("LSP shutdown failed");
+    let _ = child.wait();
+
+    println!("\ntest_lsp_call_edges_known_graph PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// LSP symbol lookup end-to-end test
+// ---------------------------------------------------------------------------
+
+/// Proves that after real LSP indexing plus TS chunk extraction, the
+/// `get_symbol`, `search_symbol`, and `list_symbols` operations return
+/// correct results with non-empty source text.
+///
+/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Run with:
+///   cargo test --test integration_test -- test_lsp_symbol_lookup_end_to_end --ignored --nocapture
+#[test]
+#[ignore]
+fn test_lsp_symbol_lookup_end_to_end() {
+    use std::process::{Command, Stdio};
+    use swissarmyhammer_code_context::{detect_rust_analyzer, ensure_ts_symbols, LspJsonRpcClient};
+
+    // -- Guard: skip if rust-analyzer is not installed -----------------------
+    if detect_rust_analyzer().is_none() {
+        println!("SKIPPED: rust-analyzer not found in PATH");
+        return;
+    }
+
+    // -- Step 1: Create a temp Rust project with known source ---------------
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let cargo_toml = r#"[package]
+name = "lsp-lookup-test"
+version = "0.1.0"
+edition = "2021"
+"#;
+    fs::write(root.join("Cargo.toml"), cargo_toml).unwrap();
+
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let lib_rs_content = r#"pub struct Config {
+    pub name: String,
+    pub port: u16,
+}
+
+impl Config {
+    pub fn new(name: String, port: u16) -> Self {
+        Self { name, port }
+    }
+
+    pub fn display_name(&self) -> String {
+        format!("{} (port {})", self.name, self.port)
+    }
+}
+
+pub fn greet(name: &str) -> String {
+    format!("Hello, {}", name)
+}
+"#;
+    let lib_rs_path = src_dir.join("lib.rs");
+    fs::write(&lib_rs_path, lib_rs_content).unwrap();
+
+    println!("Created test project at {}", root.display());
+
+    // -- Step 2: Open workspace, run startup_cleanup ------------------------
+    let ws = CodeContextWorkspace::open(root).unwrap();
+    let conn = ws.db();
+    let conn = &*conn;
+
+    // -- Step 3: Populate TS chunks so source text is available --------------
+    let rel_path = "src/lib.rs";
+    let chunks = extract_chunks(rel_path, lib_rs_content);
+    for chunk in &chunks {
+        insert_chunk(conn, chunk);
+    }
+    // Create synthetic lsp_symbols from TS chunks (needed for merging).
+    ensure_ts_symbols(conn, rel_path).unwrap();
+    // Mark TS indexed.
+    conn.execute(
+        "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?1",
+        [rel_path],
+    )
+    .unwrap();
+
+    println!(
+        "TS chunks inserted: {} chunks for {}",
+        chunks.len(),
+        rel_path
+    );
+
+    // -- Step 4: Spawn rust-analyzer ----------------------------------------
+    let mut child = Command::new("rust-analyzer")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rust-analyzer");
+
+    let stdin = child.stdin.take().expect("Failed to take stdin");
+    let stdout = child.stdout.take().expect("Failed to take stdout");
+    let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+    // -- Step 5: Initialize and open the document ---------------------------
+    client.initialize(root).expect("LSP initialize failed");
+    println!("LSP server initialized");
+
+    client
+        .send_did_open(&lib_rs_path, "rust", lib_rs_content)
+        .expect("didOpen failed");
+    println!("Sent textDocument/didOpen for src/lib.rs");
+
+    // Give rust-analyzer time to parse.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    // -- Step 6: Persist LSP symbols ----------------------------------------
+    let persist_result = client
+        .collect_and_persist_file_symbols(conn, &lib_rs_path, rel_path)
+        .expect("collect_and_persist_file_symbols failed");
+
+    println!(
+        "Persisted {} LSP symbols, error: {:?}",
+        persist_result.symbol_count, persist_result.error
+    );
+    assert!(
+        persist_result.error.is_none(),
+        "documentSymbol should not error: {:?}",
+        persist_result.error
+    );
+    assert!(
+        persist_result.symbol_count >= 4,
+        "Expected at least 4 symbols (Config, new, display_name, greet), got {}",
+        persist_result.symbol_count
+    );
+
+    // -- Step 7: Test get_symbol --------------------------------------------
+    let opts = GetSymbolOptions::default();
+
+    // get_symbol("Config") -- should find the struct with source text
+    let result = get_symbol(conn, "Config", &opts).unwrap();
+    println!("get_symbol('Config'): {} results", result.symbols.len());
+    assert!(
+        !result.symbols.is_empty(),
+        "expected get_symbol('Config') to return results"
+    );
+    let config_sym = result
+        .symbols
+        .iter()
+        .find(|s| s.name == "Config")
+        .expect("expected a symbol named 'Config'");
+    assert_eq!(
+        config_sym.file_path, rel_path,
+        "Config should be in src/lib.rs"
+    );
+    // Should be merged (both TS and LSP data present).
+    println!(
+        "  Config source={}, kind={:?}, text_len={}",
+        config_sym.source,
+        config_sym.kind,
+        config_sym.text.len()
+    );
+
+    // get_symbol("greet") -- should find the function
+    let result = get_symbol(conn, "greet", &opts).unwrap();
+    assert!(
+        !result.symbols.is_empty(),
+        "expected get_symbol('greet') to return results"
+    );
+    let greet_sym = result
+        .symbols
+        .iter()
+        .find(|s| s.name == "greet")
+        .expect("expected a symbol named 'greet'");
+    assert_eq!(
+        greet_sym.file_path, rel_path,
+        "greet should be in src/lib.rs"
+    );
+    println!(
+        "  greet source={}, kind={:?}, text_len={}",
+        greet_sym.source,
+        greet_sym.kind,
+        greet_sym.text.len()
+    );
+
+    // -- Step 8: Test search_symbol -----------------------------------------
+    let search_opts = SearchSymbolOptions::default();
+
+    // search_symbol("Config") -- should find Config struct
+    let results = search_symbol(conn, "Config", &search_opts).unwrap();
+    println!("search_symbol('Config'): {} results", results.len());
+    assert!(
+        !results.is_empty(),
+        "expected search_symbol('Config') to return results"
+    );
+    assert!(
+        results.iter().any(|s| s.name == "Config"),
+        "expected 'Config' in search_symbol results, got: {:?}",
+        results.iter().map(|s| &s.name).collect::<Vec<_>>()
+    );
+
+    // search_symbol("greet") -- should find greet function
+    let results = search_symbol(conn, "greet", &search_opts).unwrap();
+    println!("search_symbol('greet'): {} results", results.len());
+    assert!(
+        !results.is_empty(),
+        "expected search_symbol('greet') to return results"
+    );
+    assert!(
+        results.iter().any(|s| s.name == "greet"),
+        "expected 'greet' in search_symbol results, got: {:?}",
+        results.iter().map(|s| &s.name).collect::<Vec<_>>()
+    );
+
+    // -- Step 9: Test list_symbols ------------------------------------------
+    let list_results = list_symbols(conn, rel_path).unwrap();
+    println!(
+        "list_symbols('{}'): {} results",
+        rel_path,
+        list_results.len()
+    );
+    let list_names: Vec<&str> = list_results.iter().map(|s| s.name.as_str()).collect();
+    let list_qpaths: Vec<&str> = list_results
+        .iter()
+        .map(|s| s.qualified_path.as_str())
+        .collect();
+    println!("  names: {:?}", list_names);
+    println!("  qualified_paths: {:?}", list_qpaths);
+
+    assert!(
+        list_names.contains(&"Config") || list_qpaths.iter().any(|p| p.contains("Config")),
+        "expected Config in list_symbols results"
+    );
+    assert!(
+        list_names.contains(&"new") || list_qpaths.iter().any(|p| p.contains("new")),
+        "expected new in list_symbols results"
+    );
+    assert!(
+        list_names.contains(&"display_name")
+            || list_qpaths.iter().any(|p| p.contains("display_name")),
+        "expected display_name in list_symbols results"
+    );
+    assert!(
+        list_names.contains(&"greet") || list_qpaths.iter().any(|p| p.contains("greet")),
+        "expected greet in list_symbols results"
+    );
+
+    // Results should be sorted by start_line.
+    assert!(
+        list_results
+            .windows(2)
+            .all(|w| w[0].start_line <= w[1].start_line),
+        "expected list_symbols results sorted by start_line"
+    );
+
+    // -- Step 10: Verify source text is non-empty for at least one result ---
+    // get_symbol returns merged results with TS source text when both indices
+    // have the symbol at the same location.
+    let all_result = get_symbol(conn, "Config", &opts).unwrap();
+    let has_text = all_result.symbols.iter().any(|s| !s.text.is_empty());
+    println!(
+        "Source text present: {} (symbols with text: {})",
+        has_text,
+        all_result
+            .symbols
+            .iter()
+            .filter(|s| !s.text.is_empty())
+            .count()
+    );
+    assert!(
+        has_text,
+        "expected at least one get_symbol result to have non-empty source text"
+    );
+
+    // Verify the source text actually contains meaningful content.
+    let text_sym = all_result
+        .symbols
+        .iter()
+        .find(|s| !s.text.is_empty())
+        .unwrap();
+    assert!(
+        text_sym.text.contains("Config") || text_sym.text.contains("struct"),
+        "expected source text to contain 'Config' or 'struct', got: {}",
+        &text_sym.text[..text_sym.text.len().min(200)]
+    );
+    println!(
+        "  Source text snippet: {}",
+        &text_sym.text[..text_sym.text.len().min(120)]
+    );
+
+    // -- Cleanup: shut down rust-analyzer -----------------------------------
+    client.shutdown().expect("LSP shutdown failed");
+    let _ = child.wait();
+
+    println!("\ntest_lsp_symbol_lookup_end_to_end PASSED");
 }

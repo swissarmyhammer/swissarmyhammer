@@ -32,6 +32,7 @@ pub mod glob_utils;
 pub mod health;
 pub mod id_types;
 pub mod interactive_prompts;
+pub mod lifecycle;
 pub mod parameter_conditions;
 pub mod parameters;
 pub mod prompt_visibility;

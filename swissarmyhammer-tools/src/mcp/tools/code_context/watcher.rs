@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
 use rusqlite::Connection;
-use swissarmyhammer_code_context::{FanoutWatcher, FileEvent};
+use swissarmyhammer_code_context::{FanoutWatcher, FileEvent, SharedDb};
 
 /// Source file extensions worth tracking for code context indexing.
 const SOURCE_EXTENSIONS: &[&str] = &[
@@ -103,6 +103,7 @@ pub(crate) fn process_file_events(
 
 /// Start watching the workspace for file changes.
 ///
+/// Uses the leader's shared write connection for all DB operations.
 /// Spawns a background tokio task that:
 /// 1. Watches `workspace_root` recursively with a 1-second debounce
 /// 2. Converts notify events to `FileEvent`s
@@ -110,9 +111,12 @@ pub(crate) fn process_file_events(
 /// 4. Triggers re-indexing of dirty files
 ///
 /// Returns the `JoinHandle` for the watcher task.
-pub fn start_code_context_watcher(workspace_root: PathBuf) -> tokio::task::JoinHandle<()> {
+pub fn start_code_context_watcher(
+    workspace_root: PathBuf,
+    db: SharedDb,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        if let Err(e) = run_watcher(&workspace_root).await {
+        if let Err(e) = run_watcher(&workspace_root, &db).await {
             tracing::error!("code-context watcher failed: {}", e);
         }
     })
@@ -120,6 +124,7 @@ pub fn start_code_context_watcher(workspace_root: PathBuf) -> tokio::task::JoinH
 
 async fn run_watcher(
     workspace_root: &Path,
+    db: &SharedDb,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut debouncer, mut event_rx) =
         AsyncDebouncer::new_with_channel(Duration::from_secs(1), None).await?;
@@ -133,7 +138,6 @@ async fn run_watcher(
         workspace_root.display()
     );
 
-    let db_path = workspace_root.join(".code-context").join("index.db");
     let fanout = FanoutWatcher::new();
     let ws_root = workspace_root.to_path_buf();
 
@@ -164,30 +168,20 @@ async fn run_watcher(
                     file_events.len()
                 );
 
-                // Open DB connection and process events
-                let conn = match Connection::open(&db_path) {
-                    Ok(c) => {
-                        let _ =
-                            c.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-                        c
-                    }
-                    Err(e) => {
-                        tracing::warn!("code-context watcher: failed to open DB: {}", e);
-                        continue;
-                    }
-                };
+                // Lock DB and process events
+                {
+                    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+                    let result = process_file_events(&conn, &fanout, &file_events);
+                    tracing::info!(
+                        "code-context watcher: {} dirty, {} deleted, {} errors",
+                        result.dirty_count,
+                        result.deleted_count,
+                        result.error_count,
+                    );
+                }
 
-                let result = process_file_events(&conn, &fanout, &file_events);
-                tracing::info!(
-                    "code-context watcher: {} dirty, {} deleted, {} errors",
-                    result.dirty_count,
-                    result.deleted_count,
-                    result.error_count,
-                );
-                drop(conn);
-
-                // Re-index dirty files
-                super::index_discovered_files_async(&ws_root).await;
+                // Re-index dirty files using the shared connection
+                super::index_discovered_files_async(&ws_root, std::sync::Arc::clone(db)).await;
             }
             Err(errors) => {
                 for error in errors {
@@ -204,6 +198,7 @@ async fn run_watcher(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
     use swissarmyhammer_code_context::db::{configure_connection, create_schema};
 
     // -----------------------------------------------------------------------

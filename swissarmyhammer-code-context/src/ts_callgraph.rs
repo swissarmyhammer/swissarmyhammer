@@ -377,6 +377,7 @@ mod tests {
     }
 
     /// Insert a ts_chunk with a symbol path.
+    #[allow(clippy::too_many_arguments)]
     fn seed_chunk(
         conn: &Connection,
         file_path: &str,

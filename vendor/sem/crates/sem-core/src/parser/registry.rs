@@ -10,16 +10,16 @@ pub struct ParserRegistry {
 
 impl Default for ParserRegistry {
     fn default() -> Self {
-        Self::new()
+        Self {
+            plugins: Vec::new(),
+            extension_map: HashMap::new(),
+        }
     }
 }
 
 impl ParserRegistry {
     pub fn new() -> Self {
-        Self {
-            plugins: Vec::new(),
-            extension_map: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn register(&mut self, plugin: Box<dyn SemanticParserPlugin>) {

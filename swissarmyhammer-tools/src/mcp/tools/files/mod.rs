@@ -130,6 +130,15 @@ impl McpTool for FilesTool {
 #[async_trait]
 impl AgentTool for FilesTool {}
 
+impl swissarmyhammer_common::lifecycle::Initializable for FilesTool {
+    fn name(&self) -> &str {
+        "Files"
+    }
+    fn category(&self) -> &str {
+        "tools"
+    }
+}
+
 impl Doctorable for FilesTool {
     fn name(&self) -> &str {
         "Files"

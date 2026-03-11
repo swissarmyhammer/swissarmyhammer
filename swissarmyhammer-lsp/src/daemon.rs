@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
@@ -16,6 +17,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWrit
 use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
+
+use swissarmyhammer_code_context::{LspJsonRpcClient, SharedLspClient};
 
 use crate::error::LspError;
 use crate::types::{LspDaemonState, OwnedLspServerSpec};
@@ -48,7 +51,17 @@ pub struct LspDaemon {
     /// Workspace root URI passed to the LSP server.
     workspace_root: PathBuf,
     /// Current child process handle (if running).
+    ///
+    /// After a successful handshake, stdin and stdout are taken from this handle
+    /// and given to `client`. The `Child` is retained for `try_wait()` health
+    /// checks and `kill()` on shutdown.
     child: Option<Child>,
+    /// JSON-RPC client created after a successful initialize handshake.
+    ///
+    /// Stored behind `Arc<Mutex<Option<...>>>` so external consumers (like the
+    /// LSP indexing worker) can share access to the client without owning the
+    /// daemon. The `Option` is `None` when the daemon is not running.
+    client: SharedLspClient,
     /// Consecutive failure count for backoff calculation.
     consecutive_failures: u32,
     /// Observable state — subscribers get notified on every transition.
@@ -74,6 +87,7 @@ impl LspDaemon {
             spec,
             workspace_root,
             child: None,
+            client: Arc::new(Mutex::new(None)),
             consecutive_failures: 0,
             state_tx,
             state_rx,
@@ -93,6 +107,38 @@ impl LspDaemon {
     /// Return the command name for this daemon's server.
     pub fn command(&self) -> &str {
         &self.spec.command
+    }
+
+    /// Return a mutable reference to the JSON-RPC client, if the server is running.
+    ///
+    /// Returns `None` if the daemon has not been started, failed to start, or
+    /// has been shut down. The client is created after a successful `initialize`
+    /// handshake and dropped on shutdown or restart.
+    ///
+    /// **Note**: This locks the internal `Mutex`. For long-running background work,
+    /// prefer [`shared_client()`] and lock externally.
+    pub fn client(&self) -> Option<std::sync::MutexGuard<'_, Option<LspJsonRpcClient>>> {
+        match self.client.lock() {
+            Ok(guard) if guard.is_some() => Some(guard),
+            Ok(_) => None,
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                if guard.is_some() {
+                    Some(guard)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Return a cloneable handle to the shared LSP client.
+    ///
+    /// The returned `Arc<Mutex<Option<LspJsonRpcClient>>>` can be passed to
+    /// background workers (e.g. the LSP indexing worker) so they can send
+    /// requests through the same LSP process.
+    pub fn shared_client(&self) -> SharedLspClient {
+        Arc::clone(&self.client)
     }
 
     // -- lifecycle --------------------------------------------------------
@@ -151,6 +197,67 @@ impl LspDaemon {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
+
+                // Drain stderr in the background, filtering noise via config
+                if let Some(stderr) = child.stderr.take() {
+                    let cmd = self.spec.command.clone();
+                    // Load stderr filter config once at daemon start
+                    let filter_config = {
+                        use swissarmyhammer_code_context::config::{
+                            load_code_context_config, CompiledCodeContextConfig,
+                        };
+                        let raw = load_code_context_config();
+                        CompiledCodeContextConfig::compile(&raw).ok()
+                    };
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncBufReadExt, BufReader};
+                        let mut lines = BufReader::new(stderr).lines();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            let filtered = filter_config
+                                .as_ref()
+                                .map(|c| {
+                                    swissarmyhammer_code_context::config::should_filter_stderr(
+                                        &line, c,
+                                    )
+                                })
+                                .unwrap_or(false);
+                            if !filtered {
+                                tracing::debug!(cmd = %cmd, "LSP stderr: {}", line);
+                            }
+                        }
+                    });
+                }
+
+                // Take stdin/stdout from the child and create the JSON-RPC client.
+                // The child handle is retained for health checks and shutdown.
+                // Convert tokio async pipes to std blocking pipes via OwnedFd.
+                let client = match (child.stdin.take(), child.stdout.take()) {
+                    (Some(tokio_stdin), Some(tokio_stdout)) => {
+                        match (tokio_stdin.into_owned_fd(), tokio_stdout.into_owned_fd()) {
+                            (Ok(stdin_fd), Ok(stdout_fd)) => {
+                                let std_stdin: std::process::ChildStdin = stdin_fd.into();
+                                let std_stdout: std::process::ChildStdout = stdout_fd.into();
+                                Some(LspJsonRpcClient::new(std_stdin, std_stdout))
+                            }
+                            (Err(e), _) | (_, Err(e)) => {
+                                warn!(cmd = &self.spec.command, %e, "Failed to convert pipes to std");
+                                None
+                            }
+                        }
+                    }
+                    _ => {
+                        warn!(
+                            cmd = &self.spec.command,
+                            "stdin/stdout unavailable after handshake"
+                        );
+                        None
+                    }
+                };
+
+                // Store the client in the shared Arc<Mutex<Option<...>>>
+                if let Ok(mut guard) = self.client.lock() {
+                    *guard = client;
+                }
                 self.child = Some(child);
                 self.consecutive_failures = 0;
                 self.set_state(LspDaemonState::Running {
@@ -192,6 +299,9 @@ impl LspDaemon {
             Ok(Some(status)) => {
                 let reason = format!("process exited: {status}");
                 warn!(cmd = self.spec.command, %status, "LSP server exited unexpectedly");
+                if let Ok(mut guard) = self.client.lock() {
+                    *guard = None;
+                }
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -200,6 +310,9 @@ impl LspDaemon {
             Err(e) => {
                 let reason = format!("try_wait error: {e}");
                 warn!(cmd = self.spec.command, %e, "Error checking LSP server health");
+                if let Ok(mut guard) = self.client.lock() {
+                    *guard = None;
+                }
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -244,10 +357,16 @@ impl LspDaemon {
 
     /// Gracefully shut down the LSP server.
     ///
-    /// Sends the `shutdown` request, waits for the response, sends the `exit`
-    /// notification. If the process does not exit within [`SHUTDOWN_GRACE_SECS`],
-    /// sends SIGKILL.
+    /// Drops the JSON-RPC client (closing stdin/stdout pipes), then waits for
+    /// the child process to exit. If it does not exit within
+    /// [`SHUTDOWN_GRACE_SECS`], the process is killed on drop.
     pub async fn shutdown(&mut self) {
+        // Drop the client first — this closes the stdin/stdout pipes,
+        // which signals the LSP server to exit.
+        if let Ok(mut guard) = self.client.lock() {
+            *guard = None;
+        }
+
         let child = match self.child.take() {
             Some(c) => c,
             None => {
@@ -340,8 +459,19 @@ impl LspDaemon {
         // Send initialize request
         send_jsonrpc_message(&mut writer, &init_params).await?;
 
-        // Read initialize response
-        let _response = read_jsonrpc_message(&mut reader).await?;
+        // Read initialize response — on EOF, capture stderr for diagnostics
+        let _response = match read_jsonrpc_message(&mut reader).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                let stderr_context = Self::capture_stderr(child).await;
+                let msg = if stderr_context.is_empty() {
+                    e.to_string()
+                } else {
+                    format!("{e}; stderr: {stderr_context}")
+                };
+                return Err(LspError::HandshakeFailed(msg));
+            }
+        };
 
         // Send initialized notification
         let initialized = json!({
@@ -352,6 +482,19 @@ impl LspDaemon {
         send_jsonrpc_message(&mut writer, &initialized).await?;
 
         Ok(())
+    }
+
+    /// Read whatever the child has written to stderr (best-effort, with timeout).
+    async fn capture_stderr(child: &mut Child) -> String {
+        use tokio::io::AsyncReadExt;
+        let Some(stderr) = child.stderr.as_mut() else {
+            return String::new();
+        };
+        let mut buf = vec![0u8; 4096];
+        match tokio::time::timeout(Duration::from_secs(1), stderr.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => String::from_utf8_lossy(&buf[..n]).trim().to_string(),
+            _ => String::new(),
+        }
     }
 
     /// Send `shutdown` + `exit` and wait for the child to exit.

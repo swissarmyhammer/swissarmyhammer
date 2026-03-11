@@ -132,6 +132,30 @@ impl DirectoryConfig for ShellConfig {
     }
 }
 
+/// Configuration for `.code-context` directories.
+///
+/// Code context uses this configuration for managing the code index database,
+/// LSP server state, and stacked YAML config overlays for stderr filtering.
+#[derive(Debug, Clone, Copy)]
+pub struct CodeContextConfig;
+
+impl DirectoryConfig for CodeContextConfig {
+    const DIR_NAME: &'static str = ".code-context";
+    const GITIGNORE_CONTENT: &'static str = r#"# Code context index
+# This file is automatically created by swissarmyhammer-directory
+
+# Database and temp files
+*.db
+*.db-wal
+*.db-shm
+*.log
+"#;
+
+    fn init_subdirs() -> &'static [&'static str] {
+        &[]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +179,13 @@ mod tests {
         assert_eq!(ShellConfig::DIR_NAME, ".shell");
         assert!(ShellConfig::GITIGNORE_CONTENT.contains("*.log"));
         assert!(ShellConfig::init_subdirs().is_empty());
+    }
+
+    #[test]
+    fn test_code_context_config() {
+        assert_eq!(CodeContextConfig::DIR_NAME, ".code-context");
+        assert!(CodeContextConfig::GITIGNORE_CONTENT.contains("*.db"));
+        assert!(CodeContextConfig::GITIGNORE_CONTENT.contains("*.log"));
+        assert!(CodeContextConfig::init_subdirs().is_empty());
     }
 }

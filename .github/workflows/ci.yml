@@ -19,6 +19,8 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install rust-analyzer
+        run: rustup component add rust-analyzer
       - uses: Swatinem/rust-cache@v2
       - name: Install dependencies
         run: cargo install --locked cargo-nextest

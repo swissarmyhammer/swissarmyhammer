@@ -302,13 +302,44 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
     // Check for rust-analyzer
     match detect_rust_analyzer() {
         Some(path) => {
-            let path_display = path.display().to_string();
-            checks.push(Check {
-                name: check_names::RUST_ANALYZER.to_string(),
-                status: CheckStatus::Ok,
-                message: format!("Available at {}", path_display),
-                fix: None,
-            });
+            // Binary exists on PATH — verify it actually works.
+            // Rustup shims exist but fail if the component isn't installed.
+            match std::process::Command::new(&path).arg("--version").output() {
+                Ok(output) if output.status.success() => {
+                    checks.push(Check {
+                        name: check_names::RUST_ANALYZER.to_string(),
+                        status: CheckStatus::Ok,
+                        message: format!("Available at {}", path.display()),
+                        fix: None,
+                    });
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let reason = if stderr.is_empty() {
+                        format!("exited with status {}", output.status)
+                    } else {
+                        stderr
+                    };
+                    checks.push(Check {
+                        name: check_names::RUST_ANALYZER.to_string(),
+                        status: CheckStatus::Error,
+                        message: format!("Found at {} but broken: {}", path.display(), reason),
+                        fix: Some("rustup component add rust-analyzer".to_string()),
+                    });
+                }
+                Err(e) => {
+                    checks.push(Check {
+                        name: check_names::RUST_ANALYZER.to_string(),
+                        status: CheckStatus::Error,
+                        message: format!(
+                            "Found at {} but failed to execute: {}",
+                            path.display(),
+                            e
+                        ),
+                        fix: Some("rustup component add rust-analyzer".to_string()),
+                    });
+                }
+            }
         }
         None => {
             checks.push(Check {
@@ -397,17 +428,21 @@ mod tests {
             .find(|c| c.name == check_names::RUST_ANALYZER)
             .unwrap();
 
-        // Check should have a status (Ok or Warning)
+        // Check should have a status (Ok, Warning, or Error)
         match rust_analyzer_check.status {
             CheckStatus::Ok => {
-                // rust-analyzer was found
+                // rust-analyzer was found and works
                 assert!(rust_analyzer_check.message.contains("Available at"));
             }
+            CheckStatus::Error => {
+                // rust-analyzer binary found but broken (e.g. rustup shim without component)
+                assert!(rust_analyzer_check.message.contains("broken"));
+                assert!(rust_analyzer_check.fix.is_some());
+            }
             CheckStatus::Warning => {
-                // rust-analyzer was not found
+                // rust-analyzer was not found at all
                 assert!(rust_analyzer_check.message.contains("not found in PATH"));
             }
-            _ => panic!("Unexpected check status"),
         }
     }
 }

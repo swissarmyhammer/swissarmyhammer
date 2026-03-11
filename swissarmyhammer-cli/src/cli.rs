@@ -68,6 +68,16 @@ pub enum InstallTarget {
     User,
 }
 
+impl From<InstallTarget> for swissarmyhammer_common::lifecycle::InitScope {
+    fn from(target: InstallTarget) -> Self {
+        match target {
+            InstallTarget::Project => Self::Project,
+            InstallTarget::Local => Self::Local,
+            InstallTarget::User => Self::User,
+        }
+    }
+}
+
 impl std::fmt::Display for InstallTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

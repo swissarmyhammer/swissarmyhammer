@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet};
 use super::change::{ChangeType, SemanticChange};
 use super::entity::SemanticEntity;
 
-/// Type alias for the similarity function used in entity matching.
-type SimilarityFn<'a> = &'a dyn Fn(&SemanticEntity, &SemanticEntity) -> f64;
+/// Function that computes similarity between two semantic entities, returning a
+/// score in [0.0, 1.0].
+pub type SimilarityFn<'a> = &'a dyn Fn(&SemanticEntity, &SemanticEntity) -> f64;
 
 pub struct MatchResult {
     pub changes: Vec<SemanticChange>,

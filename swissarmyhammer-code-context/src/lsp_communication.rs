@@ -7,12 +7,15 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::Child;
-use tracing::{debug, warn};
+use std::process::{ChildStdin, ChildStdout};
+use tracing::{debug, trace, warn};
 
 use crate::error::CodeContextError;
 use crate::lsp_indexer::{flatten_symbols, mark_lsp_indexed, write_edges, write_symbols, CallEdge};
-use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, DocumentSymbol};
+use lsp_types::{
+    CallHierarchyItem, CallHierarchyOutgoingCall, DocumentSymbol, DocumentSymbolResponse,
+    SymbolInformation,
+};
 
 /// Result of collecting symbols from LSP server for a file.
 #[derive(Debug)]
@@ -67,7 +70,9 @@ pub fn collect_and_persist_symbols(
 /// - `DocumentSymbol[]` (hierarchical, preferred)
 /// - `SymbolInformation[]` (flat, legacy)
 ///
-/// We only handle the `DocumentSymbol[]` form here.
+/// Both formats are supported. `SymbolInformation` items are converted to
+/// flat `DocumentSymbol` entries (no children, `range` = `selection_range` =
+/// the symbol's `location.range`).
 pub fn parse_document_symbols(response: &Value) -> Result<Vec<DocumentSymbol>, CodeContextError> {
     // Check for JSON-RPC error first
     if let Some(error) = response.get("error") {
@@ -86,33 +91,72 @@ pub fn parse_document_symbols(response: &Value) -> Result<Vec<DocumentSymbol>, C
         }
     };
 
-    // Try to parse as DocumentSymbol[]
-    let symbols: Vec<DocumentSymbol> = serde_json::from_value(Value::Array(result.clone()))
+    if result.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Use lsp-types' DocumentSymbolResponse which handles both formats
+    let dsr: DocumentSymbolResponse = serde_json::from_value(Value::Array(result.clone()))
         .map_err(|e| {
-            CodeContextError::LspError(format!("failed to parse DocumentSymbol array: {}", e))
+            CodeContextError::LspError(format!("failed to parse documentSymbol response: {}", e))
         })?;
 
-    Ok(symbols)
+    match dsr {
+        DocumentSymbolResponse::Nested(symbols) => Ok(symbols),
+        DocumentSymbolResponse::Flat(infos) => Ok(symbol_information_to_document_symbols(infos)),
+    }
+}
+
+/// Convert legacy `SymbolInformation[]` to `DocumentSymbol[]`.
+///
+/// Each `SymbolInformation` becomes a flat `DocumentSymbol` with no children.
+/// The `range` and `selection_range` are both set to `location.range`.
+#[allow(deprecated)]
+fn symbol_information_to_document_symbols(infos: Vec<SymbolInformation>) -> Vec<DocumentSymbol> {
+    infos
+        .into_iter()
+        .map(|si| DocumentSymbol {
+            name: si.name,
+            detail: si.container_name,
+            kind: si.kind,
+            tags: si.tags,
+            deprecated: si.deprecated,
+            range: si.location.range,
+            selection_range: si.location.range,
+            children: None,
+        })
+        .collect()
 }
 
 /// JSON-RPC request/response handler for LSP communication.
+///
+/// Communicates with an LSP server process over stdin/stdout pipes using
+/// the JSON-RPC 2.0 protocol with Content-Length framing.
 pub struct LspJsonRpcClient {
-    /// Child process handle
-    process: Child,
-    /// Current request ID (incremented for each request)
+    /// Writable pipe to the LSP server's stdin.
+    stdin: ChildStdin,
+    /// Buffered reader over the LSP server's stdout.
+    reader: BufReader<ChildStdout>,
+    /// Current request ID (incremented for each request).
     request_id: u32,
 }
 
 impl LspJsonRpcClient {
-    /// Create a new JSON-RPC client from an already-spawned LSP process.
+    /// Create a new JSON-RPC client from an LSP process's stdin and stdout pipes.
+    ///
+    /// The caller retains ownership of the `Child` handle for lifecycle management
+    /// (health checks via `try_wait()`, shutdown via `kill()`). This client only
+    /// needs the I/O pipes to send requests and read responses.
     ///
     /// # Arguments
-    /// * `process` - The spawned child process with stdin/stdout connected
-    pub fn new(process: Child) -> Result<Self, CodeContextError> {
-        Ok(Self {
-            process,
+    /// * `stdin` - The child process's stdin pipe (obtained via `child.stdin.take()`)
+    /// * `stdout` - The child process's stdout pipe (obtained via `child.stdout.take()`)
+    pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
+        Self {
+            stdin,
+            reader: BufReader::new(stdout),
             request_id: 1,
-        })
+        }
     }
 
     /// Send a JSON-RPC request and read the response.
@@ -135,36 +179,22 @@ impl LspJsonRpcClient {
         let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
 
         // Write request
-        {
-            let stdin = self
-                .process
-                .stdin
-                .as_mut()
-                .ok_or_else(|| CodeContextError::LspError("stdin unavailable".into()))?;
-            stdin
-                .write_all(msg.as_bytes())
-                .map_err(|e| CodeContextError::LspError(format!("write failed: {}", e)))?;
-            stdin
-                .flush()
-                .map_err(|e| CodeContextError::LspError(format!("flush failed: {}", e)))?;
-        }
+        self.stdin
+            .write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write failed: {}", e)))?;
+        self.stdin
+            .flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush failed: {}", e)))?;
 
         debug!("Sent LSP request: {} (id={})", method, expected_id);
 
         // Read response — loop to skip notifications (no "id" field)
-        let stdout = self
-            .process
-            .stdout
-            .as_mut()
-            .ok_or_else(|| CodeContextError::LspError("stdout unavailable".into()))?;
-        let mut reader = BufReader::new(stdout);
-
         loop {
-            let response = read_jsonrpc_response(&mut reader)?;
+            let response = read_jsonrpc_response(&mut self.reader)?;
 
             // Notifications have no "id" field — skip them
             if response.get("id").is_none() {
-                debug!(
+                trace!(
                     "Skipping LSP notification: {}",
                     response
                         .get("method")
@@ -315,16 +345,113 @@ impl LspJsonRpcClient {
         .to_string();
         let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
 
-        if let Some(stdin) = self.process.stdin.as_mut() {
-            stdin.write_all(msg.as_bytes()).map_err(|e| {
-                CodeContextError::LspError(format!("write initialized failed: {}", e))
-            })?;
-            stdin.flush().map_err(|e| {
-                CodeContextError::LspError(format!("flush initialized failed: {}", e))
-            })?;
-        }
+        self.stdin
+            .write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write initialized failed: {}", e)))?;
+        self.stdin
+            .flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush initialized failed: {}", e)))?;
 
         debug!("LSP server initialized");
+        Ok(())
+    }
+
+    /// Send a `textDocument/didOpen` notification to the LSP server.
+    ///
+    /// This informs the server that a document has been opened by the client,
+    /// which is required before the server will respond to requests for that document.
+    ///
+    /// # Arguments
+    /// * `file_path` - Absolute path to the file
+    /// * `language_id` - Language identifier (e.g., "rust", "python")
+    /// * `text` - Full text content of the file
+    pub fn send_did_open(
+        &mut self,
+        file_path: &Path,
+        language_id: &str,
+        text: &str,
+    ) -> Result<(), CodeContextError> {
+        let uri = format!("file://{}", file_path.to_string_lossy());
+
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text
+                }
+            }
+        });
+
+        let json_str = notification.to_string();
+        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
+
+        self.stdin
+            .write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write didOpen failed: {}", e)))?;
+        self.stdin
+            .flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush didOpen failed: {}", e)))?;
+
+        debug!("Sent textDocument/didOpen for {}", file_path.display());
+        Ok(())
+    }
+
+    /// Send a `textDocument/didClose` notification to the LSP server.
+    ///
+    /// This informs the server that the client is no longer interested in
+    /// the document. Should be called after indexing to avoid "duplicate
+    /// didOpen" warnings on re-indexing.
+    pub fn send_did_close(&mut self, file_path: &Path) -> Result<(), CodeContextError> {
+        let uri = format!("file://{}", file_path.to_string_lossy());
+
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didClose",
+            "params": {
+                "textDocument": {
+                    "uri": uri
+                }
+            }
+        });
+
+        let json_str = notification.to_string();
+        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
+
+        self.stdin
+            .write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write didClose failed: {}", e)))?;
+        self.stdin
+            .flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush didClose failed: {}", e)))?;
+
+        debug!("Sent textDocument/didClose for {}", file_path.display());
+        Ok(())
+    }
+
+    /// Send the LSP `shutdown` request followed by `exit` notification.
+    ///
+    /// This cleanly terminates the LSP server. The caller is responsible for
+    /// waiting on the `Child` process handle after calling this method.
+    pub fn shutdown(mut self) -> Result<(), CodeContextError> {
+        // Send shutdown request (expects a response)
+        let _response = self.send_request("shutdown", json!(null))?;
+
+        // Send exit notification (no response expected)
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "exit"
+        });
+        let json_str = notification.to_string();
+        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
+
+        let _ = self.stdin.write_all(msg.as_bytes());
+        let _ = self.stdin.flush();
+
+        debug!("LSP server shut down");
         Ok(())
     }
 
@@ -695,6 +822,55 @@ mod tests {
         });
         let result = parse_document_symbols(&response);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_document_symbols_flat_symbol_information() {
+        // Simulate a response with SymbolInformation[] (legacy flat format)
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "MyStruct",
+                    "kind": 23,  // SymbolKind::STRUCT
+                    "location": {
+                        "uri": "file:///workspace/src/lib.rs",
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 10, "character": 1}
+                        }
+                    }
+                },
+                {
+                    "name": "my_fn",
+                    "kind": 12,  // SymbolKind::FUNCTION
+                    "location": {
+                        "uri": "file:///workspace/src/lib.rs",
+                        "range": {
+                            "start": {"line": 12, "character": 0},
+                            "end": {"line": 20, "character": 1}
+                        }
+                    },
+                    "containerName": "MyStruct"
+                }
+            ]
+        });
+
+        let symbols = parse_document_symbols(&response).unwrap();
+        assert_eq!(symbols.len(), 2);
+
+        assert_eq!(symbols[0].name, "MyStruct");
+        assert_eq!(symbols[0].kind, SymbolKind::STRUCT);
+        assert_eq!(symbols[0].range.start.line, 0);
+        assert_eq!(symbols[0].range.end.line, 10);
+        assert!(symbols[0].children.is_none());
+
+        assert_eq!(symbols[1].name, "my_fn");
+        assert_eq!(symbols[1].kind, SymbolKind::FUNCTION);
+        // container_name is mapped to detail
+        assert_eq!(symbols[1].detail, Some("MyStruct".to_string()));
+        assert_eq!(symbols[1].range.start.line, 12);
     }
 
     #[test]

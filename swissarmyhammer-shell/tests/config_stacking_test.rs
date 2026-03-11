@@ -43,10 +43,10 @@ permit:
     );
 
     // `sudo apt install foo` matches permit → allowed
-    assert!(eval(&[project.clone()], "sudo apt install foo").is_ok());
+    assert!(eval(std::slice::from_ref(&project), "sudo apt install foo").is_ok());
 
     // `sudo reboot` does NOT match permit → still denied by builtin
-    assert!(eval(&[project], "sudo reboot").is_err());
+    assert!(eval(std::slice::from_ref(&project), "sudo reboot").is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -68,10 +68,10 @@ deny:
     );
 
     // `docker rm container` matches the user deny → blocked
-    assert!(eval(&[user.clone()], "docker rm my-container").is_err());
+    assert!(eval(std::slice::from_ref(&user), "docker rm my-container").is_err());
 
     // `docker ps` is not denied by anything → allowed
-    assert!(eval(&[user], "docker ps").is_ok());
+    assert!(eval(std::slice::from_ref(&user), "docker ps").is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ permit:
 
     // Re-load with the overlay — same command is now permitted
     assert!(
-        eval(&[project.clone()], "eval dangerous_thing").is_ok(),
+        eval(std::slice::from_ref(&project), "eval dangerous_thing").is_ok(),
         "eval should be allowed after overlay permits it"
     );
 

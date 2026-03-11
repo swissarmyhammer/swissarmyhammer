@@ -188,7 +188,7 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
     // Collect health checks from all MCP tools
     let mut all_checks = Vec::new();
     for tool in tool_registry.iter_tools() {
-        if tool.is_applicable() {
+        if Doctorable::is_applicable(tool) {
             all_checks.extend(tool.run_health_checks());
         }
     }

@@ -278,6 +278,7 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(KanbanTool);
+crate::impl_empty_initializable!(KanbanTool);
 
 #[async_trait]
 impl McpTool for KanbanTool {

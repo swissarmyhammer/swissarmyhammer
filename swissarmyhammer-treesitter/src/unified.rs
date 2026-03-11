@@ -540,22 +540,26 @@ impl Workspace {
             let file_path_str = file_path.to_str().unwrap_or("");
 
             // Generate call edges using tree-sitter heuristic
-            let edges =
-                match generate_ts_call_edges(cc_conn, file_path_str, &parsed.source, ts_language) {
-                    Ok(edges) => edges,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to generate call edges for {}: {}",
-                            file_path.display(),
-                            e
-                        );
-                        Vec::new()
-                    }
-                };
+            let edges = match generate_ts_call_edges(
+                &cc_conn,
+                file_path_str,
+                &parsed.source,
+                ts_language,
+            ) {
+                Ok(edges) => edges,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to generate call edges for {}: {}",
+                        file_path.display(),
+                        e
+                    );
+                    Vec::new()
+                }
+            };
 
             // Write edges to code-context database
             if !edges.is_empty() {
-                if let Err(e) = write_ts_edges(cc_conn, file_path_str, &edges) {
+                if let Err(e) = write_ts_edges(&cc_conn, file_path_str, &edges) {
                     tracing::warn!(
                         "Failed to write call edges for {}: {}",
                         file_path.display(),

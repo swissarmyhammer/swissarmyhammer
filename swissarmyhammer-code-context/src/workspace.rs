@@ -3,6 +3,7 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use swissarmyhammer_leader_election::{ElectionConfig, ElectionError, LeaderElection, LeaderGuard};
@@ -15,18 +16,27 @@ const CONTEXT_DIR: &str = ".code-context";
 /// Database filename
 const DB_NAME: &str = "index.db";
 
+/// Shared write connection to the code-context database.
+///
+/// SQLite allows exactly one writer at a time. The leader creates a single
+/// read-write connection and wraps it in `Arc<Mutex<>>`. All writers
+/// (TS indexer, LSP worker, file watcher) share this handle. Readers open
+/// their own read-only connections — WAL mode lets them read concurrently
+/// without blocking the writer.
+pub type SharedDb = Arc<Mutex<Connection>>;
+
 /// The mode this workspace is operating in
 pub enum WorkspaceMode {
     /// Leader: owns the lock, writes to the DB, runs indexers
     Leader {
-        /// The database connection (read-write)
-        db: Connection,
+        /// The single shared write connection
+        db: SharedDb,
         /// Guard that holds the leader lock; dropped when the workspace is dropped
         _guard: LeaderGuard,
     },
     /// Reader: queries the DB read-only
     Reader {
-        /// The database connection (read-only)
+        /// A read-only database connection
         db: Connection,
     },
 }
@@ -92,18 +102,15 @@ impl CodeContextWorkspace {
                     workspace_root.display()
                 );
 
-                let db = Connection::open(&db_path)?;
-                db::configure_connection(&db)?;
-                db::create_schema(&db)?;
+                let conn = Connection::open(&db_path)?;
+                db::configure_connection(&conn)?;
+                db::create_schema(&conn)?;
 
                 // Populate indexed_files table by scanning the workspace
                 // This must happen before spawning the indexing worker so it has files to process
-                crate::startup_cleanup(&db, workspace_root)?;
+                crate::startup_cleanup(&conn, workspace_root)?;
 
-                // NOTE: The basic indexing worker (spawn_indexing_worker) is intentionally
-                // NOT started here. It produces whole-file dumps without semantic chunking.
-                // Real tree-sitter indexing with chunks, symbols, and call edges is handled
-                // by index_discovered_files_async in the MCP server startup path.
+                let db = Arc::new(Mutex::new(conn));
 
                 Ok(Self {
                     mode: WorkspaceMode::Leader { db, _guard: guard },
@@ -112,7 +119,7 @@ impl CodeContextWorkspace {
                 })
             }
             Err(ElectionError::LockHeld) => {
-                tracing::info!(
+                tracing::debug!(
                     "Joining as code-context reader for {}",
                     workspace_root.display()
                 );
@@ -139,11 +146,29 @@ impl CodeContextWorkspace {
         matches!(self.mode, WorkspaceMode::Leader { .. })
     }
 
-    /// Get a reference to the database connection
-    pub fn db(&self) -> &Connection {
+    /// Get a reference to the database connection.
+    ///
+    /// For leaders, locks the shared mutex. For readers, returns the
+    /// read-only connection directly. Callers should not hold the
+    /// returned reference across await points.
+    pub fn db(&self) -> DbRef<'_> {
         match &self.mode {
-            WorkspaceMode::Leader { db, .. } => db,
-            WorkspaceMode::Reader { db } => db,
+            WorkspaceMode::Leader { db, .. } => {
+                DbRef::Shared(db.lock().unwrap_or_else(|p| p.into_inner()))
+            }
+            WorkspaceMode::Reader { db } => DbRef::Owned(db),
+        }
+    }
+
+    /// Get the shared write connection handle (leader only).
+    ///
+    /// Returns `None` for reader workspaces. Workers use this to get
+    /// their own clone of the `Arc<Mutex<Connection>>` so they can
+    /// write to the database through the single shared connection.
+    pub fn shared_db(&self) -> Option<SharedDb> {
+        match &self.mode {
+            WorkspaceMode::Leader { db, .. } => Some(Arc::clone(db)),
+            WorkspaceMode::Reader { .. } => None,
         }
     }
 
@@ -155,6 +180,24 @@ impl CodeContextWorkspace {
     /// Path to the `.code-context/` directory
     pub fn context_dir(&self) -> &Path {
         &self.context_dir
+    }
+}
+
+/// A reference to a database connection — either a mutex guard (leader)
+/// or a direct reference (reader).
+pub enum DbRef<'a> {
+    Shared(std::sync::MutexGuard<'a, Connection>),
+    Owned(&'a Connection),
+}
+
+impl std::ops::Deref for DbRef<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        match self {
+            DbRef::Shared(guard) => guard,
+            DbRef::Owned(conn) => conn,
+        }
     }
 }
 
@@ -236,5 +279,24 @@ mod tests {
         let debug_str = format!("{:?}", ws);
         assert!(debug_str.contains("CodeContextWorkspace"));
         assert!(debug_str.contains("Leader"));
+    }
+
+    #[test]
+    fn test_shared_db_leader_returns_some() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(ws.is_leader());
+        assert!(ws.shared_db().is_some());
+    }
+
+    #[test]
+    fn test_shared_db_reader_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws1 = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(ws1.is_leader());
+
+        let ws2 = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!ws2.is_leader());
+        assert!(ws2.shared_db().is_none());
     }
 }

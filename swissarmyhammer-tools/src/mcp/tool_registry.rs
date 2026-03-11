@@ -578,7 +578,9 @@ impl ToolContext {
 /// The trait includes optional CLI integration methods that enable dynamic CLI command
 /// generation without requiring modifications to existing tool implementations.
 #[async_trait::async_trait]
-pub trait McpTool: Doctorable + Send + Sync {
+pub trait McpTool:
+    Doctorable + swissarmyhammer_common::lifecycle::Initializable + Send + Sync
+{
     /// Get the tool's unique identifier name
     ///
     /// The name must be unique within the registry and should follow the
@@ -815,6 +817,31 @@ macro_rules! impl_empty_doctorable {
 
             fn is_applicable(&self) -> bool {
                 true
+            }
+        }
+    };
+}
+
+/// Macro to implement Initializable for tools that don't have lifecycle operations
+///
+/// Provides a default implementation with empty init/deinit/start/stop.
+/// Tools that need custom lifecycle should implement Initializable manually.
+///
+/// # Example
+///
+/// ```ignore
+/// impl_empty_initializable!(MyTool);
+/// ```
+#[macro_export]
+macro_rules! impl_empty_initializable {
+    ($tool_type:ty) => {
+        impl swissarmyhammer_common::lifecycle::Initializable for $tool_type {
+            fn name(&self) -> &str {
+                <Self as $crate::mcp::tool_registry::McpTool>::name(self)
+            }
+
+            fn category(&self) -> &str {
+                "tools"
             }
         }
     };
@@ -1797,6 +1824,8 @@ mod tests {
         }
     }
 
+    crate::impl_empty_initializable!(MockTool);
+
     #[async_trait::async_trait]
     impl McpTool for MockTool {
         fn name(&self) -> &'static str {
@@ -2042,6 +2071,8 @@ mod tests {
                 }
             }
 
+            crate::impl_empty_initializable!($name);
+
             #[async_trait::async_trait]
             impl McpTool for $name {
                 fn name(&self) -> &'static str {
@@ -2180,6 +2211,9 @@ mod tests {
     impl_empty_doctorable!(ValidTool);
     impl_empty_doctorable!(InvalidSchemaTool);
     impl_empty_doctorable!(MissingCategoryTool);
+    impl_empty_initializable!(ValidTool);
+    impl_empty_initializable!(InvalidSchemaTool);
+    impl_empty_initializable!(MissingCategoryTool);
 
     #[async_trait::async_trait]
     impl McpTool for ValidTool {

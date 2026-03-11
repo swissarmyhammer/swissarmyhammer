@@ -1,0 +1,36 @@
+# Code-context configuration — builtin defaults
+#
+# This file defines the default LSP stderr filter patterns.
+# It is embedded at compile time and serves as the lowest-precedence layer.
+#
+# Override at:
+#   ~/.code-context/config.yaml       (user-level, medium precedence)
+#   ./.code-context/config.yaml       (project-level, highest precedence)
+#
+# Filter patterns suppress matching LSP stderr lines from debug logs.
+# Lines that don't match any filter are logged normally.
+
+stderr_filters:
+  # rust-analyzer internal diagnostics (noisy but harmless)
+  - pattern: 'inference diagnostic'
+    reason: "rust-analyzer type inference noise in macro-expanded code"
+  - pattern: 'unknown feature'
+    reason: "rust-analyzer encountering unknown Cargo features"
+  - pattern: 'failed to read'
+    reason: "rust-analyzer transient file read failures during indexing"
+  - pattern: 'could not resolve'
+    reason: "rust-analyzer unresolved imports during initial indexing"
+
+  # typescript-language-server noise
+  - pattern: 'Loading global plugin'
+    reason: "typescript-language-server plugin loading messages"
+  - pattern: 'Skipping loading'
+    reason: "typescript-language-server skipping optional plugins"
+
+  # General LSP noise
+  - pattern: '^\s*$'
+    reason: "Empty or whitespace-only lines"
+
+settings:
+  # Log level for unfiltered stderr lines: "debug", "trace", or "off"
+  stderr_log_level: "debug"
