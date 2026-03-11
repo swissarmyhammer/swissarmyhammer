@@ -7,7 +7,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use swissarmyhammer_common::utils::find_git_repository_root_from;
@@ -33,6 +33,43 @@ use swissarmyhammer_skills::SkillLibrary;
 /// Server instructions displayed to MCP clients
 const SERVER_INSTRUCTIONS: &str =
     "The only coding assistant you'll ever need. Write specs, not code.";
+
+/// Build server instructions, optionally appending LSP health status.
+///
+/// When a work directory is provided, runs the doctor check to detect project
+/// types and their LSP servers. If any LSP servers are missing, a
+/// `setupStatus:` block is appended listing the missing servers with install
+/// hints. If all servers are installed (or no projects are detected), returns
+/// just the base instructions to avoid noise.
+pub(crate) fn build_instructions_with_health(work_dir: Option<&Path>) -> String {
+    let Some(path) = work_dir else {
+        return SERVER_INSTRUCTIONS.to_string();
+    };
+
+    let report = crate::mcp::tools::code_context::doctor::run_doctor(path);
+
+    let missing: Vec<_> = report
+        .lsp_servers
+        .iter()
+        .filter(|s| !s.installed)
+        .collect();
+
+    if missing.is_empty() {
+        return SERVER_INSTRUCTIONS.to_string();
+    }
+
+    let mut instructions = SERVER_INSTRUCTIONS.to_string();
+    instructions.push_str("\n\nsetupStatus: This workspace could benefit from additional tooling.");
+    for server in &missing {
+        let hint = server
+            .install_hint
+            .as_deref()
+            .unwrap_or("see project docs");
+        instructions.push_str(&format!("\n  {}: NOT INSTALLED — {}", server.name, hint));
+    }
+
+    instructions
+}
 
 /// Maximum retry attempts for operations with transient errors
 const MAX_RETRIES: u32 = 3;
@@ -317,17 +354,36 @@ impl McpServer {
                 }
             }
 
-            // Grab the shared client handle from rust-analyzer daemon.
-            // This is the same Arc the daemon uses — the worker shares it.
-            let shared_client = supervisor
-                .get_daemon("rust-analyzer")
-                .map(|d| d.shared_client());
+            // Grab shared client handles from ALL running daemons,
+            // not just rust-analyzer. Each (command_name, client) pair
+            // will get its own LSP indexing worker.
+            let clients: Vec<(String, swissarmyhammer_code_context::SharedLspClient)> = supervisor
+                .daemon_names()
+                .into_iter()
+                .filter_map(|name| {
+                    let daemon = supervisor.get_daemon(&name)?;
+                    if matches!(
+                        daemon.state(),
+                        swissarmyhammer_lsp::LspDaemonState::Running { .. }
+                    ) {
+                        Some((name, daemon.shared_client()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            tracing::info!(
+                "code-context: {} LSP clients available for indexing: {:?}",
+                clients.len(),
+                clients.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
+            );
 
             // Store supervisor for status queries and periodic health checks
             use super::tools::code_context::LSP_SUPERVISOR;
             let _ = LSP_SUPERVISOR.set(Arc::new(tokio::sync::Mutex::new(supervisor)));
 
-            shared_client
+            clients
         });
 
         // Open the workspace as leader. This creates the single write connection
@@ -398,27 +454,32 @@ impl McpServer {
             std::future::pending::<()>().await;
         });
 
-        // Once the LSP supervisor is ready, start the LSP indexing worker.
+        // Once the LSP supervisor is ready, start one LSP indexing worker per client.
         let lsp_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
             match lsp_handle.await {
-                Ok(Some(shared_client)) => {
+                Ok(clients) if !clients.is_empty() => {
                     use swissarmyhammer_code_context::{
                         spawn_lsp_indexing_worker, LspWorkerConfig,
                     };
-                    spawn_lsp_indexing_worker(
-                        workspace_root.clone(),
-                        lsp_db,
-                        shared_client,
-                        LspWorkerConfig::default(),
-                    );
-                    tracing::info!(
-                        "code-context: LSP indexing worker started for {}",
-                        workspace_root.display()
-                    );
+                    for (server_name, shared_client) in &clients {
+                        let worker_db = std::sync::Arc::clone(&lsp_db);
+                        spawn_lsp_indexing_worker(
+                            workspace_root.clone(),
+                            worker_db,
+                            std::sync::Arc::clone(shared_client),
+                            LspWorkerConfig::default(),
+                            server_name.clone(),
+                        );
+                        tracing::info!(
+                            "code-context: LSP indexing worker started for {} (server: {})",
+                            workspace_root.display(),
+                            server_name,
+                        );
+                    }
                 }
                 _ => {
-                    tracing::info!("code-context: no LSP client available, skipping LSP indexing");
+                    tracing::info!("code-context: no LSP clients available, skipping LSP indexing");
                 }
             }
 
@@ -1210,7 +1271,7 @@ impl ServerHandler for McpServer {
         Ok(InitializeResult {
             protocol_version: ProtocolVersion::default(),
             capabilities: create_server_capabilities(),
-            instructions: Some(SERVER_INSTRUCTIONS.into()),
+            instructions: Some(build_instructions_with_health(self.work_dir.as_deref()).into()),
             server_info: create_server_implementation(),
         })
     }
@@ -1344,7 +1405,7 @@ impl ServerHandler for McpServer {
             protocol_version: ProtocolVersion::default(),
             capabilities: create_server_capabilities(),
             server_info: create_server_implementation(),
-            instructions: Some(SERVER_INSTRUCTIONS.into()),
+            instructions: Some(build_instructions_with_health(self.work_dir.as_deref()).into()),
         }
     }
 }
@@ -1368,5 +1429,36 @@ mod tests {
         let c2 = agent_deterministic_color("claude-code");
         assert_eq!(c1, c2);
         assert_eq!(c1.len(), 6);
+    }
+
+    #[test]
+    fn test_build_instructions_no_work_dir() {
+        let result = build_instructions_with_health(None);
+        assert_eq!(result, SERVER_INSTRUCTIONS);
+    }
+
+    #[test]
+    fn test_build_instructions_no_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = build_instructions_with_health(Some(tmp.path()));
+        assert_eq!(result, SERVER_INSTRUCTIONS);
+    }
+
+    #[test]
+    fn test_build_instructions_with_missing_lsp() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .unwrap();
+        let result = build_instructions_with_health(Some(tmp.path()));
+        // Result always starts with the base instructions
+        assert!(result.starts_with(SERVER_INSTRUCTIONS));
+        // If rust-analyzer is not installed, we should see the setupStatus block
+        if result.len() > SERVER_INSTRUCTIONS.len() {
+            assert!(result.contains("setupStatus:"));
+            assert!(result.contains("NOT INSTALLED"));
+        }
     }
 }

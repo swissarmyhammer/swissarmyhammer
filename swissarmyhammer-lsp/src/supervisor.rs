@@ -149,6 +149,11 @@ impl LspSupervisorManager {
     pub fn get_daemon_mut(&mut self, command: &str) -> Option<&mut LspDaemon> {
         self.daemons.get_mut(command)
     }
+
+    /// Return the command names of all managed daemons.
+    pub fn daemon_names(&self) -> Vec<String> {
+        self.daemons.keys().cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -165,6 +170,12 @@ mod tests {
     fn test_supervisor_no_daemon_for_unknown_command() {
         let mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
         assert!(mgr.get_daemon("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_daemon_names_empty() {
+        let mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        assert!(mgr.daemon_names().is_empty());
     }
 
     #[tokio::test]

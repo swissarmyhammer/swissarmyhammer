@@ -459,7 +459,14 @@ impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
         let cwd = std::env::current_dir().unwrap_or_default();
         let report = doctor::run_doctor(&cwd);
 
-        if let Some(ref ptype) = report.project_type {
+        if report.project_types.is_empty() {
+            checks.push(HealthCheck::ok(
+                "LSP servers",
+                "No project type detected — no LSP required",
+                cat,
+            ));
+        } else {
+            let types_label = report.project_types.join(", ");
             for lsp in &report.lsp_servers {
                 if lsp.installed {
                     checks.push(HealthCheck::ok(
@@ -488,18 +495,15 @@ impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
                         .unwrap_or("Install the LSP server");
                     checks.push(HealthCheck::warning(
                         format!("{} (LSP)", lsp.name),
-                        format!("Not found (needed for {} code intelligence)", ptype),
+                        format!(
+                            "Not found (needed for {} code intelligence)",
+                            types_label
+                        ),
                         Some(hint.to_string()),
                         cat,
                     ));
                 }
             }
-        } else {
-            checks.push(HealthCheck::ok(
-                "LSP servers",
-                "No project type detected — no LSP required",
-                cat,
-            ));
         }
 
         checks
@@ -649,7 +653,7 @@ impl McpTool for CodeContextTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
-        match op_str {
+        let result = match op_str {
             "get symbol" => execute_get_symbol(&arguments, context),
             "search symbol" => execute_search_symbol(&arguments, context),
             "list symbols" => execute_list_symbols(&arguments, context),
@@ -673,6 +677,12 @@ impl McpTool for CodeContextTool {
                 ),
                 None,
             )),
+        };
+
+        // Append LSP degradation notice to query operations (not status operations)
+        match op_str {
+            "get status" | "build status" | "clear status" | "" => result,
+            _ => result.map(|r| maybe_append_lsp_notice(r, context)),
         }
     }
 }
@@ -755,6 +765,93 @@ fn check_ts_readiness(ws: &CodeContextWorkspace) -> Result<Option<CallToolResult
             }))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// LSP degradation notice
+// ---------------------------------------------------------------------------
+
+/// Check if any LSP servers are missing and return a notice string if so.
+///
+/// Checks the global LSP_SUPERVISOR for daemons in NotFound state.
+/// Falls back to the doctor check if the supervisor isn't initialized.
+/// Returns None if all LSP servers are available (no noise).
+fn lsp_degradation_notice(workspace_root: &std::path::Path) -> Option<String> {
+    // Try the supervisor first (it has live state)
+    if let Some(sup) = LSP_SUPERVISOR.get() {
+        if let Ok(guard) = sup.try_lock() {
+            let statuses = guard.status();
+            let missing: Vec<_> = statuses
+                .iter()
+                .filter(|s| matches!(s.state, swissarmyhammer_lsp::LspDaemonState::NotFound))
+                .collect();
+            if missing.is_empty() {
+                return None;
+            }
+            // Get install hints from the doctor module since DaemonStatus doesn't have them
+            let report = doctor::run_doctor(workspace_root);
+            let mut lines = vec![
+                "\n---".to_string(),
+                "Note: Code intelligence is limited to tree-sitter only.".to_string(),
+            ];
+            for daemon in &missing {
+                let hint = report
+                    .lsp_servers
+                    .iter()
+                    .find(|s| s.name == daemon.command)
+                    .and_then(|s| s.install_hint.as_deref())
+                    .unwrap_or("see project documentation");
+                lines.push(format!(
+                    "  {}: NOT INSTALLED — {}",
+                    daemon.command, hint
+                ));
+            }
+            return Some(lines.join("\n"));
+        }
+    }
+
+    // Supervisor not yet initialized — fall back to doctor check
+    let report = doctor::run_doctor(workspace_root);
+    let missing: Vec<_> = report.lsp_servers.iter().filter(|s| !s.installed).collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "\n---".to_string(),
+        "Note: Code intelligence is limited to tree-sitter only.".to_string(),
+    ];
+    for server in &missing {
+        let hint = server
+            .install_hint
+            .as_deref()
+            .unwrap_or("see project documentation");
+        lines.push(format!("  {}: NOT INSTALLED — {}", server.name, hint));
+    }
+    Some(lines.join("\n"))
+}
+
+/// Append an LSP degradation notice to a successful tool result if applicable.
+///
+/// Resolves the workspace root from the tool context and checks for missing LSP
+/// servers. If any are missing, a second text content item is appended to the result
+/// so the caller knows results are tree-sitter only.
+fn maybe_append_lsp_notice(mut result: CallToolResult, context: &ToolContext) -> CallToolResult {
+    let working_dir = context
+        .working_dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+    let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
+
+    if let Some(notice) = lsp_degradation_notice(&workspace_root) {
+        result.content.push(Annotated::new(
+            RawContent::Text(RawTextContent {
+                text: notice,
+                meta: None,
+            }),
+            None,
+        ));
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -1427,6 +1524,14 @@ fn execute_get_status(context: &ToolContext) -> Result<CallToolResult, McpError>
         }
     }
 
+    // Surface doctor report: detected project types and LSP availability
+    if let Ok(v) = serde_json::to_value(&doctor_report.project_types) {
+        result["project_types"] = v;
+    }
+    if let Ok(v) = serde_json::to_value(&doctor_report.lsp_servers) {
+        result["lsp_availability"] = v;
+    }
+
     json_result(&result)
 }
 
@@ -1585,5 +1690,28 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Missing 'op' field"));
+    }
+
+    #[test]
+    fn test_lsp_degradation_notice_no_supervisor() {
+        // When LSP_SUPERVISOR is not set and no projects, should return None
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(lsp_degradation_notice(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn test_lsp_degradation_notice_with_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .unwrap();
+        let notice = lsp_degradation_notice(tmp.path());
+        // If rust-analyzer is installed, notice is None; if not, it should contain the hint
+        if let Some(text) = notice {
+            assert!(text.contains("tree-sitter only"));
+            assert!(text.contains("rust-analyzer"));
+        }
     }
 }

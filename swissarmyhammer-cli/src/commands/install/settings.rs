@@ -162,7 +162,8 @@ pub fn merge_deny_bash(settings: &mut Value) -> bool {
 /// Returns true if a change was made.
 pub fn merge_statusline(settings: &mut Value) -> bool {
     let desired = json!({
-        "command": ["sah", "statusline"]
+        "type": "command",
+        "command": "sah statusline"
     });
 
     if settings.get("statusLine") == Some(&desired) {
@@ -404,10 +405,8 @@ mod tests {
         let mut settings = json!({});
         let changed = merge_statusline(&mut settings);
         assert!(changed);
-        assert_eq!(
-            settings["statusLine"]["command"],
-            json!(["sah", "statusline"])
-        );
+        assert_eq!(settings["statusLine"]["type"], "command");
+        assert_eq!(settings["statusLine"]["command"], "sah statusline");
     }
 
     #[test]
@@ -420,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_remove_statusline() {
-        let mut settings = json!({"statusLine": {"command": ["sah", "statusline"]}});
+        let mut settings = json!({"statusLine": {"type": "command", "command": "sah statusline"}});
         let changed = remove_statusline(&mut settings);
         assert!(changed);
         assert!(settings.get("statusLine").is_none());

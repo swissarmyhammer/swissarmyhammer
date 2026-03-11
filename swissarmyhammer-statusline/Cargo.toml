@@ -23,7 +23,7 @@ swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
 swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }
-swissarmyhammer-project-detection = { path = "../swissarmyhammer-project-detection" }
+rusqlite = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

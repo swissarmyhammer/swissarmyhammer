@@ -18,7 +18,11 @@ pub mod check_names {
     pub const IN_PATH: &str = "swissarmyhammer in PATH";
     pub const CLAUDE_CONFIG: &str = "Claude Code MCP configuration";
     pub const FILE_PERMISSIONS: &str = "File permissions";
-    pub const RUST_ANALYZER: &str = "Rust Analyzer (LSP)";
+
+    /// Build a dynamic check name for an LSP server
+    pub fn lsp_server(command: &str) -> String {
+        format!("{command} (LSP)")
+    }
 }
 
 /// Check installation method and binary integrity
@@ -292,62 +296,100 @@ pub fn check_file_permissions(checks: &mut Vec<Check>) -> Result<()> {
     Ok(())
 }
 
-/// Check LSP server availability
+/// Check LSP server availability for all detected project types
 ///
-/// Verifies that language servers are available on the system.
-/// Currently checks for rust-analyzer for Rust projects.
+/// Uses project detection to find all project types in the current workspace,
+/// then queries the LSP registry for relevant servers. Each server is checked
+/// for availability via `which` and `--version`.
 pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
-    use swissarmyhammer_code_context::detect_rust_analyzer;
+    use std::collections::HashSet;
+    use swissarmyhammer_lsp::registry::servers_for_project;
+    use swissarmyhammer_project_detection::detect_projects;
 
-    // Check for rust-analyzer
-    match detect_rust_analyzer() {
-        Some(path) => {
-            // Binary exists on PATH — verify it actually works.
-            // Rustup shims exist but fail if the component isn't installed.
-            match std::process::Command::new(&path).arg("--version").output() {
-                Ok(output) if output.status.success() => {
-                    checks.push(Check {
-                        name: check_names::RUST_ANALYZER.to_string(),
-                        status: CheckStatus::Ok,
-                        message: format!("Available at {}", path.display()),
-                        fix: None,
-                    });
-                }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    let reason = if stderr.is_empty() {
-                        format!("exited with status {}", output.status)
-                    } else {
-                        stderr
-                    };
-                    checks.push(Check {
-                        name: check_names::RUST_ANALYZER.to_string(),
-                        status: CheckStatus::Error,
-                        message: format!("Found at {} but broken: {}", path.display(), reason),
-                        fix: Some("rustup component add rust-analyzer".to_string()),
-                    });
-                }
-                Err(e) => {
-                    checks.push(Check {
-                        name: check_names::RUST_ANALYZER.to_string(),
-                        status: CheckStatus::Error,
-                        message: format!(
-                            "Found at {} but failed to execute: {}",
-                            path.display(),
-                            e
-                        ),
-                        fix: Some("rustup component add rust-analyzer".to_string()),
-                    });
-                }
+    let cwd = std::env::current_dir().unwrap_or_default();
+
+    // Detect project types in the workspace (shallow scan, depth 3)
+    let projects = detect_projects(&cwd, Some(3)).unwrap_or_default();
+
+    // Collect unique LSP specs across all detected project types, deduplicating by command name
+    let mut seen_commands = HashSet::new();
+    let mut specs = Vec::new();
+    for project in &projects {
+        for spec in servers_for_project(project.project_type) {
+            if seen_commands.insert(spec.command.clone()) {
+                specs.push(spec);
             }
         }
-        None => {
-            checks.push(Check {
-                name: check_names::RUST_ANALYZER.to_string(),
-                status: CheckStatus::Warning,
-                message: "rust-analyzer not found in PATH".to_string(),
-                fix: Some("Install rust-analyzer: rustup component add rust-analyzer".to_string()),
-            });
+    }
+
+    if specs.is_empty() {
+        checks.push(Check {
+            name: "LSP Servers".to_string(),
+            status: CheckStatus::Ok,
+            message: "No project types detected; no LSP servers to check".to_string(),
+            fix: None,
+        });
+        return Ok(());
+    }
+
+    // Check each LSP server
+    for spec in &specs {
+        let check_name = check_names::lsp_server(&spec.command);
+
+        // Try to find the binary on PATH
+        match which::which(&spec.command) {
+            Ok(path) => {
+                // Binary exists — verify it works with --version
+                match std::process::Command::new(&path).arg("--version").output() {
+                    Ok(output) if output.status.success() => {
+                        checks.push(Check {
+                            name: check_name,
+                            status: CheckStatus::Ok,
+                            message: format!("Available at {}", path.display()),
+                            fix: None,
+                        });
+                    }
+                    Ok(output) => {
+                        let stderr =
+                            String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        let reason = if stderr.is_empty() {
+                            format!("exited with status {}", output.status)
+                        } else {
+                            stderr
+                        };
+                        checks.push(Check {
+                            name: check_name,
+                            status: CheckStatus::Error,
+                            message: format!(
+                                "Found at {} but broken: {}",
+                                path.display(),
+                                reason
+                            ),
+                            fix: Some(spec.install_hint.clone()),
+                        });
+                    }
+                    Err(e) => {
+                        checks.push(Check {
+                            name: check_name,
+                            status: CheckStatus::Error,
+                            message: format!(
+                                "Found at {} but failed to execute: {}",
+                                path.display(),
+                                e
+                            ),
+                            fix: Some(spec.install_hint.clone()),
+                        });
+                    }
+                }
+            }
+            Err(_) => {
+                checks.push(Check {
+                    name: check_name,
+                    status: CheckStatus::Warning,
+                    message: format!("{} not found in PATH", spec.command),
+                    fix: Some(spec.install_hint.clone()),
+                });
+            }
         }
     }
 
@@ -422,27 +464,60 @@ mod tests {
         assert!(result.is_ok());
         assert!(!checks.is_empty());
 
-        // Should have a check for rust-analyzer
-        let rust_analyzer_check = checks
-            .iter()
-            .find(|c| c.name == check_names::RUST_ANALYZER)
-            .unwrap();
+        // Every check should have the "(LSP)" suffix or be the no-projects fallback
+        for check in &checks {
+            assert!(
+                check.name.contains("(LSP)") || check.name == "LSP Servers",
+                "Unexpected check name: {}",
+                check.name
+            );
+        }
 
-        // Check should have a status (Ok, Warning, or Error)
-        match rust_analyzer_check.status {
+        // Since we're running in a Rust project, we should find rust-analyzer
+        let ra_check = checks
+            .iter()
+            .find(|c| c.name == check_names::lsp_server("rust-analyzer"));
+        assert!(
+            ra_check.is_some(),
+            "Should find a rust-analyzer check when running in a Rust project"
+        );
+
+        let ra = ra_check.unwrap();
+        match ra.status {
             CheckStatus::Ok => {
-                // rust-analyzer was found and works
-                assert!(rust_analyzer_check.message.contains("Available at"));
+                assert!(ra.message.contains("Available at"));
             }
             CheckStatus::Error => {
-                // rust-analyzer binary found but broken (e.g. rustup shim without component)
-                assert!(rust_analyzer_check.message.contains("broken"));
-                assert!(rust_analyzer_check.fix.is_some());
+                // Binary found but broken (e.g. rustup shim without component)
+                assert!(ra.message.contains("broken") || ra.message.contains("failed to execute"));
+                assert!(ra.fix.is_some());
             }
             CheckStatus::Warning => {
-                // rust-analyzer was not found at all
-                assert!(rust_analyzer_check.message.contains("not found in PATH"));
+                // Not found at all
+                assert!(ra.message.contains("not found in PATH"));
+                assert!(ra.fix.is_some());
             }
         }
+    }
+
+    #[test]
+    fn test_lsp_servers_check_empty_dir() {
+        use tempfile::TempDir;
+
+        // Run in a temp dir with no project markers
+        let temp_dir = TempDir::new().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let mut checks = Vec::new();
+        let result = check_lsp_servers(&mut checks);
+
+        // Restore original dir
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "LSP Servers");
+        assert!(checks[0].message.contains("No project types detected"));
     }
 }

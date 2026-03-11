@@ -19,25 +19,29 @@ pub struct LspAvailability {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DoctorReport {
-    pub project_type: Option<String>,
+    pub project_types: Vec<String>,
     pub lsp_servers: Vec<LspAvailability>,
 }
 
-/// Detect project type from filesystem markers.
-pub fn detect_project_type(root: &Path) -> Option<String> {
+/// Detect all project types from filesystem markers.
+///
+/// Checks every known marker file so mixed-language workspaces (e.g. Rust + TS)
+/// report all applicable types instead of short-circuiting on the first match.
+pub fn detect_project_types(root: &Path) -> Vec<String> {
+    let mut types = Vec::new();
     if root.join("Cargo.toml").exists() {
-        return Some("rust".to_string());
+        types.push("rust".to_string());
     }
     if root.join("package.json").exists() {
-        return Some("javascript".to_string());
+        types.push("javascript".to_string());
     }
     if root.join("pyproject.toml").exists() || root.join("setup.py").exists() {
-        return Some("python".to_string());
+        types.push("python".to_string());
     }
     if root.join("go.mod").exists() {
-        return Some("go".to_string());
+        types.push("go".to_string());
     }
-    None
+    types
 }
 
 /// Check if a command/executable is available and actually works.
@@ -92,13 +96,22 @@ fn get_lsp_servers_for_type(project_type: &str) -> Vec<(&'static str, &'static s
 }
 
 /// Run a doctor check on the workspace.
+///
+/// Detects all project types present in `root` and checks LSP availability
+/// for each one. LSP entries are deduplicated by command name so that
+/// overlapping server lists (e.g. two project types needing the same LSP)
+/// don't produce duplicate entries.
 pub fn run_doctor(root: &Path) -> DoctorReport {
-    let project_type = detect_project_type(root);
+    let project_types = detect_project_types(root);
 
     let mut lsp_servers = Vec::new();
+    let mut seen_cmds = std::collections::HashSet::new();
 
-    if let Some(ref ptype) = project_type {
+    for ptype in &project_types {
         for (lsp_cmd, hint) in get_lsp_servers_for_type(ptype) {
+            if !seen_cmds.insert(lsp_cmd) {
+                continue; // already checked this command
+            }
             let (installed, path, error) = is_command_available(lsp_cmd);
             lsp_servers.push(LspAvailability {
                 name: lsp_cmd.to_string(),
@@ -115,7 +128,7 @@ pub fn run_doctor(root: &Path) -> DoctorReport {
     }
 
     DoctorReport {
-        project_type,
+        project_types,
         lsp_servers,
     }
 }
@@ -132,12 +145,43 @@ mod tests {
             "[package]\nname = \"test\"\n",
         )
         .unwrap();
-        assert_eq!(detect_project_type(tmp.path()), Some("rust".to_string()));
+        assert_eq!(detect_project_types(tmp.path()), vec!["rust".to_string()]);
     }
 
     #[test]
     fn test_detect_no_project() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(detect_project_type(tmp.path()).is_none());
+        assert!(detect_project_types(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn test_detect_mixed_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            "{\"name\": \"test\"}\n",
+        )
+        .unwrap();
+
+        let types = detect_project_types(tmp.path());
+        assert_eq!(types, vec!["rust".to_string(), "javascript".to_string()]);
+
+        // run_doctor should report both types and LSPs for each
+        let report = run_doctor(tmp.path());
+        assert_eq!(
+            report.project_types,
+            vec!["rust".to_string(), "javascript".to_string()]
+        );
+        let lsp_names: Vec<&str> = report.lsp_servers.iter().map(|l| l.name.as_str()).collect();
+        assert!(lsp_names.contains(&"rust-analyzer"), "missing rust-analyzer");
+        assert!(
+            lsp_names.contains(&"typescript-language-server"),
+            "missing typescript-language-server"
+        );
     }
 }

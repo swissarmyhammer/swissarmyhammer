@@ -65,20 +65,23 @@ pub type SharedLspClient = Arc<Mutex<Option<LspJsonRpcClient>>>;
 /// * `db` - Shared write connection from the leader workspace.
 /// * `client` - Shared handle to the LSP JSON-RPC client.
 /// * `config` - Worker configuration.
+/// * `server_name` - Command name of the LSP server (used in log messages).
 pub fn spawn_lsp_indexing_worker(
     workspace_root: PathBuf,
     db: SharedDb,
     client: SharedLspClient,
     config: LspWorkerConfig,
+    server_name: String,
 ) -> JoinHandle<()> {
+    let thread_name = format!("code-context-lsp-indexer-{}", server_name);
     thread::Builder::new()
-        .name("code-context-lsp-indexer".to_string())
-        .spawn(
-            move || match run_lsp_indexing_loop(&workspace_root, &db, &client, &config) {
-                Ok(()) => info!("LSP indexing worker completed"),
-                Err(e) => warn!("LSP indexing worker error: {}", e),
-            },
-        )
+        .name(thread_name)
+        .spawn(move || {
+            match run_lsp_indexing_loop(&workspace_root, &db, &client, &config, &server_name) {
+                Ok(()) => info!(server = %server_name, "LSP indexing worker completed"),
+                Err(e) => warn!(server = %server_name, "LSP indexing worker error: {}", e),
+            }
+        })
         .expect("Failed to spawn LSP indexing worker thread")
 }
 
@@ -92,8 +95,10 @@ fn run_lsp_indexing_loop(
     db: &SharedDb,
     client: &SharedLspClient,
     config: &LspWorkerConfig,
+    server_name: &str,
 ) -> Result<(), CodeContextError> {
     info!(
+        server = %server_name,
         "LSP indexing worker started for {}",
         workspace_root.display()
     );
@@ -116,7 +121,7 @@ fn run_lsp_indexing_loop(
         let mut guard = match client.lock() {
             Ok(g) => g,
             Err(poisoned) => {
-                warn!("LSP client mutex poisoned, recovering");
+                warn!(server = %server_name, "LSP client mutex poisoned, recovering");
                 poisoned.into_inner()
             }
         };
@@ -126,13 +131,13 @@ fn run_lsp_indexing_loop(
             None => {
                 // Client not available (daemon not started or restarting)
                 drop(guard);
-                debug!("LSP client not available, sleeping");
+                debug!(server = %server_name, "LSP client not available, sleeping");
                 thread::sleep(config.client_unavailable_sleep);
                 continue;
             }
         };
 
-        info!("LSP indexing: processing {} dirty files", dirty_files.len());
+        info!(server = %server_name, "LSP indexing: processing {} dirty files", dirty_files.len());
 
         // 3. Process each file sequentially (LSP is single-threaded I/O)
         for relative_path in &dirty_files {
@@ -162,6 +167,7 @@ fn run_lsp_indexing_loop(
         }
 
         info!(
+            server = %server_name,
             "LSP indexing: batch complete, {} files indexed so far",
             total_indexed
         );
