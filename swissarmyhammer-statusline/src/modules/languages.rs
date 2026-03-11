@@ -62,6 +62,11 @@ const LANGUAGE_ICONS: &[LanguageIcon] = &[
         icon: "\u{1f426}",
         lsp_servers: &["dart"],
     },
+    LanguageIcon {
+        project_type: ProjectType::Php,
+        icon: "\u{1f418}",
+        lsp_servers: &["intelephense"],
+    },
 ];
 
 /// Evaluate the languages module.

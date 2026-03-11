@@ -50,6 +50,9 @@ pub enum ProjectType {
     /// Dart/Flutter project (pubspec.yaml)
     #[serde(rename = "flutter")]
     Flutter,
+    /// PHP project (composer.json)
+    #[serde(rename = "php")]
+    Php,
 }
 
 impl ProjectType {
@@ -66,6 +69,7 @@ impl ProjectType {
             ProjectType::CMake => &["CMakeLists.txt"],
             ProjectType::Makefile => &["Makefile"],
             ProjectType::Flutter => &["pubspec.yaml"],
+            ProjectType::Php => &["composer.json"],
         }
     }
 }

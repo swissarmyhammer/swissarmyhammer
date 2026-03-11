@@ -107,6 +107,7 @@ fn detect_project_at_path(path: &Path) -> Result<Option<DetectedProject>, String
         ProjectType::CMake,
         ProjectType::Makefile,
         ProjectType::Flutter,
+        ProjectType::Php,
     ];
 
     for project_type in &project_types {

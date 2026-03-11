@@ -1,0 +1,22 @@
+# PHP LSP Server Configuration
+name: intelephense
+project_types:
+  - php
+command: intelephense
+args:
+  - --stdio
+language_ids:
+  - php
+file_extensions:
+  - php
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install intelephense: npm install -g intelephense"
+
+# Doctor checks for this LSP
+doctor:
+  description: "Validates intelephense installation and availability"
+  check_command: "which intelephense"
+  check_version_command: "intelephense --version"
+  version_pattern: null

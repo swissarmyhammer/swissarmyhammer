@@ -86,6 +86,7 @@ fn get_lsp_servers_for_type(project_type: &str) -> Vec<(&'static str, &'static s
             ("pyright", "npm install -g pyright"),
         ],
         "go" => vec![("gopls", "go install golang.org/x/tools/gopls@latest")],
+        "php" => vec![("intelephense", "npm install -g intelephense")],
         _ => vec![],
     }
 }
