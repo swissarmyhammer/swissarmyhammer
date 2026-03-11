@@ -60,10 +60,15 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
         let has_lsp =
             swissarmyhammer_code_context::find_executable(&spec.command).is_some();
 
-        if has_lsp || !cfg.dim_without_lsp {
+        if has_lsp {
             icons.push(icon.to_string());
         } else {
-            icons.push(format!("\x1b[2m{}\x1b[22m", icon));
+            let indicator = &cfg.missing_lsp_indicator;
+            if cfg.dim_without_lsp {
+                icons.push(format!("\x1b[2m{}{}\x1b[22m", icon, indicator));
+            } else {
+                icons.push(format!("{}{}", icon, indicator));
+            }
         }
     }
 

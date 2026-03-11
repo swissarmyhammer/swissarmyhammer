@@ -403,6 +403,9 @@ impl Default for IndexModuleConfig {
 pub struct LanguagesModuleConfig {
     pub style: String,
     pub dim_without_lsp: bool,
+    /// Indicator appended to language icons when the LSP server is not found.
+    /// Set to empty string to disable.
+    pub missing_lsp_indicator: String,
     pub format: String,
 }
 
@@ -411,6 +414,7 @@ impl Default for LanguagesModuleConfig {
         Self {
             style: "bold".into(),
             dim_without_lsp: true,
+            missing_lsp_indicator: "\u{26a0}".into(),
             format: "$icons".into(),
         }
     }
