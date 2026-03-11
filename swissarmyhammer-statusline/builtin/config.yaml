@@ -146,7 +146,7 @@ kanban:
 # Source: swissarmyhammer-code-context StatusReport
 index:
   style: "blue"
-  format: "idx $percent%"
+  format: "\U0001f5c2 $percent%"
   show_when_complete: false
 
 # ── Languages Module ─────────────────────────────────────────────────

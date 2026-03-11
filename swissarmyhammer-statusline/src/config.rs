@@ -391,7 +391,7 @@ impl Default for IndexModuleConfig {
     fn default() -> Self {
         Self {
             style: "blue".into(),
-            format: "idx $percent%".into(),
+            format: "\u{1f5c2} $percent%".into(),
             show_when_complete: false,
         }
     }
