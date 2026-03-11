@@ -1,0 +1,22 @@
+# Ruby LSP Server Configuration
+name: solargraph
+project_types: []
+command: solargraph
+args:
+  - stdio
+language_ids:
+  - ruby
+file_extensions:
+  - rb
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "gem install solargraph"
+icon: "💎"
+
+# Doctor checks for this LSP
+doctor:
+  description: "Validates solargraph installation and availability"
+  check_command: "which solargraph"
+  check_version_command: "solargraph --version"
+  version_pattern: null

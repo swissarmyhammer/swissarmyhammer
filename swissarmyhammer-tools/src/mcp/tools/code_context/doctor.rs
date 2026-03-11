@@ -1,10 +1,13 @@
 //! Diagnostic checking for code_context tool and LSP availability.
 //!
-//! The Doctor checks project type, detects appropriate LSP servers,
-//! and verifies their availability before attempting to index.
+//! The Doctor checks project type, looks up LSP servers from the YAML-driven
+//! registry in `swissarmyhammer-lsp`, and verifies their availability before
+//! attempting to index.
 
 use std::path::Path;
 use std::process::Command;
+
+use swissarmyhammer_project_detection::ProjectType;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LspAvailability {
@@ -23,30 +26,87 @@ pub struct DoctorReport {
     pub lsp_servers: Vec<LspAvailability>,
 }
 
+/// All project types the doctor knows how to check for.
+const KNOWN_PROJECT_TYPES: &[(ProjectType, &[&str])] = &[
+    (ProjectType::Rust, &["Cargo.toml"]),
+    (ProjectType::NodeJs, &["package.json"]),
+    (ProjectType::Python, &["pyproject.toml", "setup.py"]),
+    (ProjectType::Go, &["go.mod"]),
+    (ProjectType::Php, &["composer.json"]),
+    (ProjectType::JavaMaven, &["pom.xml"]),
+    (ProjectType::JavaGradle, &["build.gradle", "build.gradle.kts"]),
+    (ProjectType::CSharp, &["*.csproj", "*.sln"]),
+    (ProjectType::Flutter, &["pubspec.yaml"]),
+];
+
 /// Detect all project types from filesystem markers.
 ///
 /// Checks every known marker file so mixed-language workspaces (e.g. Rust + TS)
 /// report all applicable types instead of short-circuiting on the first match.
 pub fn detect_project_types(root: &Path) -> Vec<String> {
     let mut types = Vec::new();
-    if root.join("Cargo.toml").exists() {
-        types.push("rust".to_string());
+    for (ptype, markers) in KNOWN_PROJECT_TYPES {
+        for marker in *markers {
+            if marker.contains('*') {
+                // Glob pattern -- check if any matching file exists
+                if let Ok(entries) = std::fs::read_dir(root) {
+                    let suffix = marker.trim_start_matches('*');
+                    if entries
+                        .filter_map(|e| e.ok())
+                        .any(|e| {
+                            e.file_name()
+                                .to_str()
+                                .is_some_and(|n| n.ends_with(suffix))
+                        })
+                    {
+                        types.push(format!("{:?}", ptype).to_lowercase());
+                        break;
+                    }
+                }
+            } else if root.join(marker).exists() {
+                types.push(format!("{:?}", ptype).to_lowercase());
+                break;
+            }
+        }
     }
-    if root.join("package.json").exists() {
-        types.push("javascript".to_string());
-    }
-    if root.join("pyproject.toml").exists() || root.join("setup.py").exists() {
-        types.push("python".to_string());
-    }
-    if root.join("go.mod").exists() {
-        types.push("go".to_string());
+    types
+}
+
+/// Detect project types as `ProjectType` enum values.
+///
+/// Same logic as `detect_project_types` but returns enum values for
+/// use with the LSP registry.
+fn detect_project_type_enums(root: &Path) -> Vec<ProjectType> {
+    let mut types = Vec::new();
+    for (ptype, markers) in KNOWN_PROJECT_TYPES {
+        for marker in *markers {
+            if marker.contains('*') {
+                if let Ok(entries) = std::fs::read_dir(root) {
+                    let suffix = marker.trim_start_matches('*');
+                    if entries
+                        .filter_map(|e| e.ok())
+                        .any(|e| {
+                            e.file_name()
+                                .to_str()
+                                .is_some_and(|n| n.ends_with(suffix))
+                        })
+                    {
+                        types.push(*ptype);
+                        break;
+                    }
+                }
+            } else if root.join(marker).exists() {
+                types.push(*ptype);
+                break;
+            }
+        }
     }
     types
 }
 
 /// Check if a command/executable is available and actually works.
 ///
-/// Finding the binary via `which` isn't enough — rustup shims exist on PATH
+/// Finding the binary via `which` isn't enough -- rustup shims exist on PATH
 /// but fail if the actual component isn't installed. We verify by running
 /// `cmd --version` and checking for a successful exit.
 fn is_command_available(cmd: &str) -> (bool, Option<String>, Option<String>) {
@@ -58,7 +118,7 @@ fn is_command_available(cmd: &str) -> (bool, Option<String>, Option<String>) {
         _ => return (false, None, None),
     };
 
-    // Binary exists on PATH — now verify it actually runs
+    // Binary exists on PATH -- now verify it actually runs
     match Command::new(cmd).arg("--version").output() {
         Ok(output) if output.status.success() => (true, path, None),
         Ok(output) => {
@@ -74,54 +134,38 @@ fn is_command_available(cmd: &str) -> (bool, Option<String>, Option<String>) {
     }
 }
 
-/// LSP server info for a project type: (command, install_hint).
-fn get_lsp_servers_for_type(project_type: &str) -> Vec<(&'static str, &'static str)> {
-    match project_type {
-        "rust" => vec![("rust-analyzer", "rustup component add rust-analyzer")],
-        "javascript" => vec![
-            (
-                "typescript-language-server",
-                "npm install -g typescript-language-server typescript",
-            ),
-            ("tsserver", "npm install -g typescript"),
-        ],
-        "python" => vec![
-            ("pylsp", "pip install python-lsp-server"),
-            ("pyright", "npm install -g pyright"),
-        ],
-        "go" => vec![("gopls", "go install golang.org/x/tools/gopls@latest")],
-        "php" => vec![("intelephense", "npm install -g intelephense")],
-        _ => vec![],
-    }
-}
-
 /// Run a doctor check on the workspace.
 ///
 /// Detects all project types present in `root` and checks LSP availability
-/// for each one. LSP entries are deduplicated by command name so that
-/// overlapping server lists (e.g. two project types needing the same LSP)
-/// don't produce duplicate entries.
+/// for each one using the YAML-driven LSP registry. LSP entries are
+/// deduplicated by command name so that overlapping server lists
+/// (e.g. two project types needing the same LSP) don't produce duplicate entries.
 pub fn run_doctor(root: &Path) -> DoctorReport {
-    let project_types = detect_project_types(root);
+    let project_type_enums = detect_project_type_enums(root);
+    let project_types: Vec<String> = project_type_enums
+        .iter()
+        .map(|pt| format!("{:?}", pt).to_lowercase())
+        .collect();
 
     let mut lsp_servers = Vec::new();
     let mut seen_cmds = std::collections::HashSet::new();
 
-    for ptype in &project_types {
-        for (lsp_cmd, hint) in get_lsp_servers_for_type(ptype) {
-            if !seen_cmds.insert(lsp_cmd) {
+    for ptype in &project_type_enums {
+        let specs = swissarmyhammer_lsp::servers_for_project(*ptype);
+        for spec in &specs {
+            if !seen_cmds.insert(spec.command.clone()) {
                 continue; // already checked this command
             }
-            let (installed, path, error) = is_command_available(lsp_cmd);
+            let (installed, path, error) = is_command_available(&spec.command);
             lsp_servers.push(LspAvailability {
-                name: lsp_cmd.to_string(),
+                name: spec.command.clone(),
                 installed,
                 path,
                 error,
                 install_hint: if installed {
                     None
                 } else {
-                    Some(hint.to_string())
+                    Some(spec.install_hint.clone())
                 },
             });
         }
@@ -169,13 +213,13 @@ mod tests {
         .unwrap();
 
         let types = detect_project_types(tmp.path());
-        assert_eq!(types, vec!["rust".to_string(), "javascript".to_string()]);
+        assert_eq!(types, vec!["rust".to_string(), "nodejs".to_string()]);
 
         // run_doctor should report both types and LSPs for each
         let report = run_doctor(tmp.path());
         assert_eq!(
             report.project_types,
-            vec!["rust".to_string(), "javascript".to_string()]
+            vec!["rust".to_string(), "nodejs".to_string()]
         );
         let lsp_names: Vec<&str> = report.lsp_servers.iter().map(|l| l.name.as_str()).collect();
         assert!(lsp_names.contains(&"rust-analyzer"), "missing rust-analyzer");

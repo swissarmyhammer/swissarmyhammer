@@ -63,6 +63,10 @@ fn generate_code_context_examples() -> Vec<Value> {
             "description": "Clear all index data",
             "value": {"op": "clear status"}
         }),
+        json!({
+            "description": "Check LSP server status for detected languages",
+            "value": {"op": "lsp status"}
+        }),
     ]
 }
 
@@ -71,7 +75,7 @@ mod tests {
     use super::*;
     use crate::mcp::tools::code_context::{
         BuildStatus, ClearStatus, FindDuplicates, GetBlastradius, GetCallgraph, GetCodeStatus,
-        GetSymbol, GrepCode, ListSymbols, QueryAst, SearchCode, SearchSymbol,
+        GetSymbol, GrepCode, ListSymbols, LspStatus, QueryAst, SearchCode, SearchSymbol,
     };
 
     fn test_operations() -> Vec<&'static dyn Operation> {
@@ -88,6 +92,7 @@ mod tests {
             &GetCodeStatus as &dyn Operation,
             &BuildStatus as &dyn Operation,
             &ClearStatus as &dyn Operation,
+            &LspStatus as &dyn Operation,
         ]
     }
 
@@ -112,7 +117,7 @@ mod tests {
         let op_enum = schema["properties"]["op"]["enum"]
             .as_array()
             .expect("op should have enum");
-        assert_eq!(op_enum.len(), 12);
+        assert_eq!(op_enum.len(), 13);
         assert!(op_enum.contains(&json!("get symbol")));
         assert!(op_enum.contains(&json!("search symbol")));
         assert!(op_enum.contains(&json!("list symbols")));
@@ -135,7 +140,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 12);
+        assert_eq!(op_schemas.len(), 13);
     }
 
     #[test]
@@ -169,7 +174,7 @@ mod tests {
         let schema = generate_code_context_schema(&ops);
 
         assert!(schema["examples"].is_array());
-        assert_eq!(schema["examples"].as_array().unwrap().len(), 12);
+        assert_eq!(schema["examples"].as_array().unwrap().len(), 13);
     }
 
     #[test]

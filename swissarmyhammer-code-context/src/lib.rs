@@ -76,8 +76,8 @@ pub use ops::search_code::{
 };
 pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
 pub use ops::status::{
-    build_status, clear_status, get_status, BuildLayer, BuildStatusResult, ClearStatusResult,
-    StatusReport,
+    build_status, clear_status, distinct_extensions, get_status, BuildLayer, BuildStatusResult,
+    ClearStatusResult, StatusReport,
 };
 pub use ts_callgraph::{
     ensure_ts_symbols, extract_call_names, generate_ts_call_edges, resolve_callees, write_ts_edges,

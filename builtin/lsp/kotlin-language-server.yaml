@@ -1,0 +1,22 @@
+# Kotlin LSP Server Configuration
+name: kotlin-language-server
+project_types: []
+command: kotlin-language-server
+args: []
+language_ids:
+  - kotlin
+file_extensions:
+  - kt
+  - kts
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install Kotlin Language Server"
+icon: "💠"
+
+# Doctor checks for this LSP
+doctor:
+  description: "Validates kotlin-language-server installation and availability"
+  check_command: "which kotlin-language-server"
+  check_version_command: "kotlin-language-server --version"
+  version_pattern: null

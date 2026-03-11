@@ -10,6 +10,7 @@
 //! - `get status`: Health report for the code context index
 //! - `build status`: Mark files for re-indexing
 //! - `clear status`: Wipe all index data
+//! - `lsp status`: Show detected languages, LSP servers, and install status
 //!
 //! Uses the `swissarmyhammer-code-context` crate for all operations,
 //! opening a `CodeContextWorkspace` from the `ToolContext` working directory.
@@ -289,6 +290,25 @@ impl Operation for ClearStatus {
     }
 }
 
+/// Operation metadata for LSP status checking based on indexed file extensions.
+#[derive(Debug, Default)]
+pub struct LspStatus;
+
+impl Operation for LspStatus {
+    fn verb(&self) -> &'static str {
+        "lsp"
+    }
+    fn noun(&self) -> &'static str {
+        "status"
+    }
+    fn description(&self) -> &'static str {
+        "Show which languages are detected in the index, their LSP servers, and install status"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        &[]
+    }
+}
+
 /// Operation metadata for semantic code search using embeddings.
 #[derive(Debug, Default)]
 pub struct SearchCode;
@@ -408,6 +428,7 @@ static GET_BLASTRADIUS_OP: Lazy<GetBlastradius> = Lazy::new(GetBlastradius::defa
 static GET_CODE_STATUS_OP: Lazy<GetCodeStatus> = Lazy::new(GetCodeStatus::default);
 static BUILD_STATUS_OP: Lazy<BuildStatus> = Lazy::new(BuildStatus::default);
 static CLEAR_STATUS_OP: Lazy<ClearStatus> = Lazy::new(ClearStatus::default);
+static LSP_STATUS_OP: Lazy<LspStatus> = Lazy::new(LspStatus::default);
 static SEARCH_CODE_OP: Lazy<SearchCode> = Lazy::new(SearchCode::default);
 static FIND_DUPLICATES_OP: Lazy<FindDuplicates> = Lazy::new(FindDuplicates::default);
 static QUERY_AST_OP: Lazy<QueryAst> = Lazy::new(QueryAst::default);
@@ -426,6 +447,7 @@ static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(||
         &*GET_CODE_STATUS_OP as &dyn Operation,
         &*BUILD_STATUS_OP as &dyn Operation,
         &*CLEAR_STATUS_OP as &dyn Operation,
+        &*LSP_STATUS_OP as &dyn Operation,
     ]
 });
 
@@ -666,13 +688,14 @@ impl McpTool for CodeContextTool {
             "get status" => execute_get_status(context),
             "build status" => execute_build_status(&arguments, context),
             "clear status" => execute_clear_status(context),
+            "lsp status" => execute_lsp_status(context),
             "" => Err(McpError::invalid_params(
-                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'.",
+                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status'.",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status'",
+                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status'",
                     other
                 ),
                 None,
@@ -681,7 +704,7 @@ impl McpTool for CodeContextTool {
 
         // Append LSP degradation notice to query operations (not status operations)
         match op_str {
-            "get status" | "build status" | "clear status" | "" => result,
+            "get status" | "build status" | "clear status" | "lsp status" | "" => result,
             _ => result.map(|r| maybe_append_lsp_notice(r, context)),
         }
     }
@@ -1572,6 +1595,58 @@ fn execute_clear_status(context: &ToolContext) -> Result<CallToolResult, McpErro
     json_result(&result)
 }
 
+/// Execute the "lsp status" operation.
+///
+/// Queries indexed file extensions, cross-references with the LSP registry,
+/// and returns which languages are present, which LSPs are installed or missing,
+/// and install hints.
+fn execute_lsp_status(context: &ToolContext) -> Result<CallToolResult, McpError> {
+    let ws = open_workspace(context)?;
+    let conn = ws.db();
+
+    // Get distinct file extensions from the index
+    let exts =
+        swissarmyhammer_code_context::distinct_extensions(&conn).map_err(context_err)?;
+
+    // Convert to &str slice for the registry lookup
+    let ext_refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+    let matching_servers = swissarmyhammer_lsp::servers_for_extensions(&ext_refs);
+
+    // Build the response
+    let mut languages = Vec::new();
+    for spec in &matching_servers {
+        // Check which of this server's extensions are present in the index
+        let present_exts: Vec<&str> = spec
+            .file_extensions
+            .iter()
+            .filter(|e| exts.contains(e.as_str()))
+            .map(|e| e.as_str())
+            .collect();
+
+        let installed =
+            swissarmyhammer_code_context::find_executable(&spec.command).is_some();
+
+        languages.push(serde_json::json!({
+            "icon": spec.icon,
+            "extensions": present_exts,
+            "lsp_server": spec.command,
+            "installed": installed,
+            "install_hint": if installed { None } else { Some(&spec.install_hint) },
+        }));
+    }
+
+    let all_healthy = languages
+        .iter()
+        .all(|l| l["installed"].as_bool().unwrap_or(false));
+
+    let result = serde_json::json!({
+        "languages": languages,
+        "all_healthy": all_healthy,
+    });
+
+    json_result(&result)
+}
+
 /// Register the code_context tool with the registry.
 pub fn register_code_context_tools(registry: &mut ToolRegistry) {
     registry.register(CodeContextTool::new());
@@ -1609,7 +1684,7 @@ mod tests {
     fn test_code_context_tool_has_operations() {
         let tool = CodeContextTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 12);
+        assert_eq!(ops.len(), 13);
         assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
@@ -1622,6 +1697,7 @@ mod tests {
         assert!(ops.iter().any(|o| o.op_string() == "get status"));
         assert!(ops.iter().any(|o| o.op_string() == "build status"));
         assert!(ops.iter().any(|o| o.op_string() == "clear status"));
+        assert!(ops.iter().any(|o| o.op_string() == "lsp status"));
     }
 
     #[test]
@@ -1645,6 +1721,7 @@ mod tests {
         assert!(op_enum.contains(&serde_json::json!("get status")));
         assert!(op_enum.contains(&serde_json::json!("build status")));
         assert!(op_enum.contains(&serde_json::json!("clear status")));
+        assert!(op_enum.contains(&serde_json::json!("lsp status")));
     }
 
     #[test]
@@ -1655,7 +1732,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 12);
+        assert_eq!(op_schemas.len(), 13);
     }
 
     #[tokio::test]

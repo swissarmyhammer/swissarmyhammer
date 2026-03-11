@@ -1,0 +1,23 @@
+# Java LSP Server Configuration
+name: jdtls
+project_types:
+  - java-maven
+  - java-gradle
+command: jdtls
+args: []
+language_ids:
+  - java
+file_extensions:
+  - java
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install Eclipse JDT Language Server"
+icon: "☕"
+
+# Doctor checks for this LSP
+doctor:
+  description: "Validates jdtls installation and availability"
+  check_command: "which jdtls"
+  check_version_command: "jdtls --version"
+  version_pattern: null

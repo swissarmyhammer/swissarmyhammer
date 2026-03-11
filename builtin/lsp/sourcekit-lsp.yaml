@@ -1,0 +1,21 @@
+# Swift LSP Server Configuration
+name: sourcekit-lsp
+project_types: []
+command: sourcekit-lsp
+args: []
+language_ids:
+  - swift
+file_extensions:
+  - swift
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install Xcode or Swift toolchain"
+icon: "🐦"
+
+# Doctor checks for this LSP
+doctor:
+  description: "Validates sourcekit-lsp installation and availability"
+  check_command: "which sourcekit-lsp"
+  check_version_command: "sourcekit-lsp --version"
+  version_pattern: null

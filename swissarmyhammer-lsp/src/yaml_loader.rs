@@ -71,6 +71,7 @@ pub fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
             startup_timeout_secs: 30,
             health_check_interval_secs: 60,
             install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+            icon: Some("\u{1f980}".to_string()),
         });
     }
 

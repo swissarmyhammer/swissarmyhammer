@@ -28,6 +28,19 @@ pub static SERVERS: &[LspServerSpec] = &[LspServerSpec {
     install_hint: "Install rust-analyzer: rustup component add rust-analyzer",
 }];
 
+/// Return all loaded LSP server specs.
+pub fn all_servers() -> &'static [OwnedLspServerSpec] {
+    &OWNED_SERVERS
+}
+
+/// Return specs whose file_extensions overlap with the given set.
+pub fn servers_for_extensions(exts: &[&str]) -> Vec<&'static OwnedLspServerSpec> {
+    OWNED_SERVERS
+        .iter()
+        .filter(|s| s.file_extensions.iter().any(|e| exts.contains(&e.as_str())))
+        .collect()
+}
+
 /// Find all LSP servers that can handle the given project type
 /// Returns owned server specs loaded from YAML configuration files
 pub fn servers_for_project(project_type: ProjectType) -> Vec<OwnedLspServerSpec> {
@@ -102,5 +115,32 @@ mod tests {
             servers.iter().any(|s| s.command == "rust-analyzer"),
             "Should include rust-analyzer"
         );
+    }
+
+    #[test]
+    fn test_all_servers_returns_non_empty() {
+        let servers = all_servers();
+        assert!(!servers.is_empty(), "all_servers() should return a non-empty list");
+    }
+
+    #[test]
+    fn test_servers_for_extensions_rs() {
+        let servers = servers_for_extensions(&["rs"]);
+        assert!(
+            servers.iter().any(|s| s.command == "rust-analyzer"),
+            "servers_for_extensions([\"rs\"]) should return rust-analyzer"
+        );
+    }
+
+    #[test]
+    fn test_all_yaml_specs_have_icon() {
+        // Every loaded spec from YAML that has an icon field should have it set
+        for spec in all_servers() {
+            assert!(
+                spec.icon.is_some(),
+                "Server {} should have an icon set in its YAML file",
+                spec.command
+            );
+        }
     }
 }

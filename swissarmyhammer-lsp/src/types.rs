@@ -49,6 +49,9 @@ pub struct OwnedLspServerSpec {
     pub health_check_interval_secs: u64,
     /// Human-readable install instructions shown on failure
     pub install_hint: String,
+    /// Optional display icon (e.g. emoji) for this language server
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 fn default_startup_timeout() -> u64 {

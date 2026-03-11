@@ -22,8 +22,8 @@ dirs = { workspace = true }
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
+swissarmyhammer-lsp = { path = "../swissarmyhammer-lsp" }
 swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }
-rusqlite = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

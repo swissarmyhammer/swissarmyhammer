@@ -1,0 +1,23 @@
+# Dart LSP Server Configuration
+name: dart
+project_types:
+  - flutter
+command: dart
+args:
+  - language-server
+language_ids:
+  - dart
+file_extensions:
+  - dart
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install Dart SDK"
+icon: "🐦"
+
+# Doctor checks for this LSP
+doctor:
+  description: "Validates Dart language server installation and availability"
+  check_command: "which dart"
+  check_version_command: "dart --version"
+  version_pattern: null

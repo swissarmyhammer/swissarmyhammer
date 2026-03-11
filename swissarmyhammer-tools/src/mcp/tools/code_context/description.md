@@ -11,6 +11,7 @@ Code context operations for symbol lookup, search, grep, call graph, and blast r
 - **get status**: Health report with file counts, indexing progress, chunk/edge counts
 - **build status**: Mark files for re-indexing by resetting indexed flags
 - **clear status**: Wipe all index data and return stats about what was cleared
+- **lsp status**: Show which languages are detected in the index, their LSP servers, and install status
 
 ## Examples
 
@@ -48,4 +49,8 @@ Code context operations for symbol lookup, search, grep, call graph, and blast r
 
 ```json
 {"op": "clear status"}
+```
+
+```json
+{"op": "lsp status"}
 ```

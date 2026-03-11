@@ -1,101 +1,24 @@
 //! Languages module - shows language icons based on code-context indexed files.
 //!
 //! Derives language presence from the actual file extensions tracked in the
-//! code-context database, rather than project marker files. This correctly
-//! handles monorepos where languages appear at any nesting depth.
+//! code-context database via `distinct_extensions()`, and maps extensions to
+//! icons using the LSP registry rather than hardcoded tables.
+
+use std::collections::BTreeSet;
 
 use crate::module::{ModuleContext, ModuleOutput};
 use crate::style::Style;
 
-/// A language with its file extensions, display icon, and known LSP servers.
-struct LanguageEntry {
-    /// File extensions that indicate this language (without the dot).
-    extensions: &'static [&'static str],
-    /// Display icon for the statusline.
-    icon: &'static str,
-    /// LSP server executables for this language.
-    lsp_servers: &'static [&'static str],
-}
-
-const LANGUAGES: &[LanguageEntry] = &[
-    LanguageEntry {
-        extensions: &["rs"],
-        icon: "\u{1f980}",
-        lsp_servers: &["rust-analyzer"],
-    },
-    LanguageEntry {
-        extensions: &["py"],
-        icon: "\u{1f40d}",
-        lsp_servers: &["pyright", "pylsp"],
-    },
-    LanguageEntry {
-        extensions: &["ts", "tsx", "js", "jsx"],
-        icon: "\u{1f4dc}",
-        lsp_servers: &["typescript-language-server"],
-    },
-    LanguageEntry {
-        extensions: &["go"],
-        icon: "\u{1f439}",
-        lsp_servers: &["gopls"],
-    },
-    LanguageEntry {
-        extensions: &["java"],
-        icon: "\u{2615}",
-        lsp_servers: &["jdtls"],
-    },
-    LanguageEntry {
-        extensions: &["cs"],
-        icon: "\u{1f4bb}",
-        lsp_servers: &["omnisharp"],
-    },
-    LanguageEntry {
-        extensions: &["c", "cpp", "cc", "cxx", "h", "hpp", "hxx"],
-        icon: "\u{2699}\u{fe0f}",
-        lsp_servers: &["clangd"],
-    },
-    LanguageEntry {
-        extensions: &["dart"],
-        icon: "\u{1f426}",
-        lsp_servers: &["dart"],
-    },
-    LanguageEntry {
-        extensions: &["php"],
-        icon: "\u{1f418}",
-        lsp_servers: &["intelephense"],
-    },
-    LanguageEntry {
-        extensions: &["rb"],
-        icon: "\u{1f48e}",
-        lsp_servers: &["solargraph"],
-    },
-    LanguageEntry {
-        extensions: &["swift"],
-        icon: "\u{1f426}",
-        lsp_servers: &["sourcekit-lsp"],
-    },
-    LanguageEntry {
-        extensions: &["kt", "kts"],
-        icon: "\u{1f4a0}",
-        lsp_servers: &["kotlin-language-server"],
-    },
-];
-
-/// Query whether the code-context database has any indexed files with the given extension.
-fn has_extension(conn: &rusqlite::Connection, ext: &str) -> bool {
-    let pattern = format!("%.{}", ext);
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM indexed_files WHERE file_path LIKE ?1 LIMIT 1)",
-        [&pattern],
-        |row| row.get::<_, bool>(0),
-    )
-    .unwrap_or(false)
-}
+/// Default icon used when an LSP spec has no icon configured.
+const DEFAULT_ICON: &str = "\u{1f4e6}";
 
 /// Evaluate the languages module.
 ///
-/// Queries the code-context database for actual file extensions, then shows
-/// icons for each detected language. Icons are dimmed when the corresponding
-/// LSP server is not found in PATH.
+/// Queries the code-context database for actual file extensions, then looks up
+/// matching LSP server specs from the registry. Shows the spec's icon for each
+/// detected language. Icons are dimmed when the corresponding LSP server is not
+/// found in PATH. Deduplicates icons so that multiple servers for the same
+/// language (e.g. pyright and pylsp) only show one icon.
 pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let cwd = match std::env::current_dir() {
         Ok(p) => p,
@@ -109,23 +32,38 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
 
     let conn = ws.db();
     let cfg = &ctx.config.languages;
+
+    let present_exts = match swissarmyhammer_code_context::distinct_extensions(&conn) {
+        Ok(exts) => exts,
+        Err(_) => return ModuleOutput::hidden(),
+    };
+
+    if present_exts.is_empty() {
+        return ModuleOutput::hidden();
+    }
+
+    let ext_refs: Vec<&str> = present_exts.iter().map(|s| s.as_str()).collect();
+    let matching_servers = swissarmyhammer_lsp::servers_for_extensions(&ext_refs);
+
+    // Collect (icon, has_lsp) pairs, deduplicating by icon text.
+    // Use BTreeSet for deterministic ordering.
+    let mut seen_icons = BTreeSet::new();
     let mut icons = Vec::new();
 
-    for lang in LANGUAGES {
-        let has_files = lang.extensions.iter().any(|ext| has_extension(&conn, ext));
-        if !has_files {
+    for spec in &matching_servers {
+        let icon = spec.icon.as_deref().unwrap_or(DEFAULT_ICON);
+
+        if !seen_icons.insert(icon.to_string()) {
             continue;
         }
 
-        let has_lsp = lang
-            .lsp_servers
-            .iter()
-            .any(|server| swissarmyhammer_code_context::find_executable(server).is_some());
+        let has_lsp =
+            swissarmyhammer_code_context::find_executable(&spec.command).is_some();
 
         if has_lsp || !cfg.dim_without_lsp {
-            icons.push(lang.icon.to_string());
+            icons.push(icon.to_string());
         } else {
-            icons.push(format!("\x1b[2m{}\x1b[22m", lang.icon));
+            icons.push(format!("\x1b[2m{}\x1b[22m", icon));
         }
     }
 

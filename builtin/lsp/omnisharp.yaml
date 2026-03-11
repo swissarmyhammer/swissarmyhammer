@@ -1,0 +1,22 @@
+# C# LSP Server Configuration
+name: omnisharp
+project_types:
+  - csharp
+command: omnisharp
+args: []
+language_ids:
+  - csharp
+file_extensions:
+  - cs
+initialization_options: null
+startup_timeout_secs: 30
+health_check_interval_secs: 60
+install_hint: "Install OmniSharp"
+icon: "💻"
+
+# Doctor checks for this LSP
+doctor:
+  description: "Validates OmniSharp installation and availability"
+  check_command: "which omnisharp"
+  check_version_command: "omnisharp --version"
+  version_pattern: null

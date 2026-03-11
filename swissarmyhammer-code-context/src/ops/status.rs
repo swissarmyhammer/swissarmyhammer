@@ -5,6 +5,8 @@
 //! - `build_status` -- marks files for re-indexing by resetting indexed flags.
 //! - `clear_status` -- wipes all index data and returns stats about what was cleared.
 
+use std::collections::HashSet;
+
 use rusqlite::Connection;
 
 use crate::error::CodeContextError;
@@ -234,6 +236,37 @@ pub fn clear_status(conn: &Connection) -> Result<ClearStatusResult, CodeContextE
 }
 
 // ---------------------------------------------------------------------------
+// distinct_extensions
+// ---------------------------------------------------------------------------
+
+/// Returns the set of distinct file extensions present in the index.
+///
+/// Extracts extensions from indexed file paths (everything after the last dot).
+/// Files without an extension are excluded.
+///
+/// # Arguments
+///
+/// * `conn` - A reference to the SQLite connection.
+///
+/// # Errors
+///
+/// Returns [`CodeContextError::Database`] on SQLite failures.
+pub fn distinct_extensions(conn: &Connection) -> Result<HashSet<String>, CodeContextError> {
+    let mut stmt = conn.prepare("SELECT DISTINCT file_path FROM indexed_files")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut exts = HashSet::new();
+    for row in rows {
+        let path = row?;
+        if let Some(ext) = std::path::Path::new(&path).extension() {
+            if let Some(s) = ext.to_str() {
+                exts.insert(s.to_string());
+            }
+        }
+    }
+    Ok(exts)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -436,5 +469,29 @@ mod tests {
         assert_eq!(result.chunks_deleted, 0);
         assert_eq!(result.symbols_deleted, 0);
         assert_eq!(result.edges_deleted, 0);
+    }
+
+    // -- distinct_extensions tests --
+
+    #[test]
+    fn test_distinct_extensions() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 0);
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_file(&conn, "test.py", 0, 0);
+        insert_file(&conn, "Makefile", 0, 0); // no extension
+
+        let exts = distinct_extensions(&conn).unwrap();
+        assert!(exts.contains("rs"));
+        assert!(exts.contains("py"));
+        assert!(!exts.contains("")); // no empty extension
+        assert_eq!(exts.len(), 2);
+    }
+
+    #[test]
+    fn test_distinct_extensions_empty_db() {
+        let conn = test_db();
+        let exts = distinct_extensions(&conn).unwrap();
+        assert!(exts.is_empty());
     }
 }

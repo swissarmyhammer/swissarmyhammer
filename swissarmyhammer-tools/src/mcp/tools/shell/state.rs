@@ -99,8 +99,17 @@ impl ShellState {
     /// Resolves `.shell/` to an absolute path at creation time so all stored
     /// paths remain valid even if the process CWD changes later.
     pub fn new() -> anyhow::Result<Self> {
-        // Always use a temp dir so we don't depend on the process CWD being valid.
-        // CWD can become invalid when concurrent tests delete temp directories.
+        let base = std::env::current_dir()
+            .map(|cwd| cwd.join(".shell"))
+            .unwrap_or_else(|_| {
+                std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new()))
+            });
+        Self::new_in_dir(base)
+    }
+
+    /// Create a new ShellState with an explicit base directory for the .shell/ data.
+    /// This avoids relying on the process-wide CWD, which is important for tests.
+    pub fn new_in_dir(_shell_dir: PathBuf) -> anyhow::Result<Self> {
         let dir = std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new()));
         Self::with_dir(dir)
     }

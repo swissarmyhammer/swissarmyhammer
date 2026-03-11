@@ -1680,6 +1680,20 @@ impl ShellExecuteTool {
             state: Arc::new(Mutex::new(state)),
         }
     }
+
+    /// Creates an instance rooted in an isolated temp directory.
+    ///
+    /// Use this in tests to avoid depending on the process CWD, which can
+    /// become invalid when concurrent tests delete their temp directories.
+    #[cfg(test)]
+    fn new_isolated() -> Self {
+        let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
+        let state =
+            ShellState::with_dir(dir).expect("Failed to initialize isolated shell state");
+        Self {
+            state: Arc::new(Mutex::new(state)),
+        }
+    }
 }
 
 // No health checks needed
@@ -2124,7 +2138,7 @@ mod tests {
     ///
     /// This eliminates duplication in creating test fixtures for security tests.
     async fn create_security_test_fixtures() -> (ShellExecuteTool, ToolContext) {
-        (ShellExecuteTool::new(), create_test_context().await)
+        (ShellExecuteTool::new_isolated(), create_test_context().await)
     }
 
     /// Helper function to assert that a list of paths are blocked by security validation

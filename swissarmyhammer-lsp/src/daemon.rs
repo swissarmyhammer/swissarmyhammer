@@ -749,6 +749,7 @@ mod tests {
             startup_timeout_secs: 30,
             health_check_interval_secs: 60,
             install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+            icon: None,
         };
         let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
         assert_eq!(daemon.state(), LspDaemonState::NotStarted);
@@ -773,6 +774,7 @@ mod tests {
             startup_timeout_secs: 30,
             health_check_interval_secs: 60,
             install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+            icon: None,
         };
         let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp/test-workspace"));
         let result = daemon.start().await;
@@ -801,6 +803,7 @@ mod tests {
             startup_timeout_secs: 30,
             health_check_interval_secs: 60,
             install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+            icon: None,
         };
         let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp/test-workspace"));
         if daemon.start().await.is_ok() {
