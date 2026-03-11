@@ -1,0 +1,27 @@
+[package]
+name = "mirdan-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Mirdan tray app - Universal package manager for AI coding agents"
+
+[[bin]]
+name = "mirdan-app"
+path = "src/main.rs"
+
+[dependencies]
+mirdan = { path = "../mirdan-cli", package = "mirdan-cli" }
+tauri = { version = "2", features = ["devtools", "tray-icon"] }
+tauri-plugin-deep-link = "2"
+clap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+open = "5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

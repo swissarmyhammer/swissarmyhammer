@@ -180,6 +180,14 @@ async fn main() {
         Commands::Sync { global } => handle_registry_result(sync::run_sync(agent_filter, global)),
 
         Commands::Doctor { verbose } => doctor::run_doctor(verbose).await,
+
+        Commands::Start => {
+            eprintln!("The tray app is not available in the CLI-only build.");
+            eprintln!("Install Mirdan.app:");
+            eprintln!("  brew tap swissarmyhammer/tap");
+            eprintln!("  brew install --cask mirdan");
+            1
+        }
     };
 
     std::process::exit(exit_code);

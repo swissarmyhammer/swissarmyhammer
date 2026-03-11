@@ -336,6 +336,17 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(start)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_mirdan__help_commands" \
@@ -440,6 +451,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(start)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -472,6 +487,7 @@ _mirdan_commands() {
 'update:Update installed packages to latest versions' \
 'sync:Reconcile .skills/ with agent directories and verify lockfile' \
 'doctor:Diagnose Mirdan setup and configuration' \
+'start:Start the Mirdan tray/accessory app' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'mirdan commands' commands "$@"
@@ -505,6 +521,7 @@ _mirdan__help_commands() {
 'update:Update installed packages to latest versions' \
 'sync:Reconcile .skills/ with agent directories and verify lockfile' \
 'doctor:Diagnose Mirdan setup and configuration' \
+'start:Start the Mirdan tray/accessory app' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'mirdan help commands' commands "$@"
@@ -593,6 +610,11 @@ _mirdan__help__publish_commands() {
 _mirdan__help__search_commands() {
     local commands; commands=()
     _describe -t commands 'mirdan help search commands' commands "$@"
+}
+(( $+functions[_mirdan__help__start_commands] )) ||
+_mirdan__help__start_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help start commands' commands "$@"
 }
 (( $+functions[_mirdan__help__sync_commands] )) ||
 _mirdan__help__sync_commands() {
@@ -725,6 +747,11 @@ _mirdan__publish_commands() {
 _mirdan__search_commands() {
     local commands; commands=()
     _describe -t commands 'mirdan search commands' commands "$@"
+}
+(( $+functions[_mirdan__start_commands] )) ||
+_mirdan__start_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan start commands' commands "$@"
 }
 (( $+functions[_mirdan__sync_commands] )) ||
 _mirdan__sync_commands() {

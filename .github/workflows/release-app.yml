@@ -1,0 +1,170 @@
+# Build, sign, notarize, and publish the Mirdan tray app (Tauri v2).
+#
+# This workflow runs alongside the cargo-dist release.yml workflow.
+# cargo-dist creates the GitHub Release and publishes the lean CLI binary.
+# This workflow builds the Tauri .app / .dmg and uploads it to the same release.
+
+name: Release App
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - "**[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: self-hosted
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        run: |
+          rustup target add aarch64-apple-darwin
+
+      - name: Install Tauri CLI
+        run: |
+          cargo install tauri-cli --version "^2" --locked || true
+
+      - name: Import Apple certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
+          security create-keychain -p "" build.keychain || true
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import /tmp/certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
+          rm /tmp/certificate.p12
+
+      - name: Build Tauri app
+        env:
+          # Tauri reads these for notarization
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Will Ballard (S675BK92KH)"
+        working-directory: mirdan-app
+        run: |
+          cargo tauri build --target aarch64-apple-darwin
+
+      - name: Find DMG
+        id: find-dmg
+        working-directory: mirdan-app
+        run: |
+          DMG=$(find target/aarch64-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+          echo "dmg_path=$DMG" >> "$GITHUB_OUTPUT"
+          echo "dmg_name=$(basename $DMG)" >> "$GITHUB_OUTPUT"
+          echo "Found DMG: $DMG"
+
+      - name: Upload DMG to GitHub Release
+        if: ${{ github.ref_type == 'tag' }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Wait for cargo-dist to create the release (it may take a few minutes)
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" > /dev/null 2>&1; then
+              echo "Release $TAG found"
+              break
+            fi
+            echo "Waiting for release $TAG to be created... ($i/30)"
+            sleep 10
+          done
+          gh release upload "$TAG" "${{ steps.find-dmg.outputs.dmg_path }}" --clobber
+
+      - name: Upload DMG as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mirdan-app-dmg
+          path: ${{ steps.find-dmg.outputs.dmg_path }}
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain build.keychain || true
+
+  publish-homebrew-cask:
+    needs: build-macos
+    if: ${{ github.ref_type == 'tag' }}
+    runs-on: self-hosted
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mirdan-app-dmg
+          path: dmg/
+
+      - name: Compute SHA256
+        id: sha
+        run: |
+          DMG=$(find dmg -name "*.dmg" | head -1)
+          SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
+          NAME=$(basename "$DMG")
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "dmg_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA for $NAME"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          repository: swissarmyhammer/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update cask
+        env:
+          VERSION: ${{ github.ref_name }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+          DMG_NAME: ${{ steps.sha.outputs.dmg_name }}
+        run: |
+          # Strip leading 'v' from tag for version
+          CASK_VERSION="${VERSION#v}"
+
+          mkdir -p homebrew-tap/Casks
+
+          cat > homebrew-tap/Casks/mirdan.rb << EOF
+          cask "mirdan" do
+            version "${CASK_VERSION}"
+            sha256 "${SHA256}"
+
+            url "https://github.com/swissarmyhammer/swissarmyhammer/releases/download/${VERSION}/${DMG_NAME}"
+            name "Mirdan"
+            desc "Universal package manager for AI coding agents"
+            homepage "https://mirdan.ai"
+
+            app "Mirdan.app"
+          end
+          EOF
+
+          # Remove leading whitespace from heredoc
+          sed -i '' 's/^          //' homebrew-tap/Casks/mirdan.rb
+
+      - name: Push cask
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "mirdan bot"
+          git config user.email "bot@mirdan.ai"
+          git add Casks/mirdan.rb
+          git commit -m "mirdan cask ${GITHUB_REF_NAME}"
+          git push
+
+  # Placeholder for future Windows build
+  # build-windows:
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Build Tauri app
+  #       run: cargo tauri build --target x86_64-pc-windows-msvc
