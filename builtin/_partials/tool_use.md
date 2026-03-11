@@ -8,4 +8,6 @@ partial: true
 
 {% render '_partials/tool-use/file-globbing' %}
 
+{% render '_partials/tool-use/code-context' %}
+
 {% render '_partials/tool-use/kanban' %}
