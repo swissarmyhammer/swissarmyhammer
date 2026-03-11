@@ -1061,6 +1061,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // requires network access — flaky on CI runners
     fn test_clone_obra_superpowers_discovers_mixed_types() {
         // obra/superpowers has both .claude-plugin/plugin.json AND skills/ with SKILL.md files
         let source = parse_git_source("obra/superpowers", None).unwrap();
