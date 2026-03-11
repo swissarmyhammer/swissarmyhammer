@@ -1686,7 +1686,7 @@ impl ShellExecuteTool {
     /// Use this in tests to avoid depending on the process CWD, which can
     /// become invalid when concurrent tests delete their temp directories.
     #[cfg(test)]
-    fn new_isolated() -> Self {
+    pub(crate) fn new_isolated() -> Self {
         let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
         let state =
             ShellState::with_dir(dir).expect("Failed to initialize isolated shell state");
@@ -2268,7 +2268,7 @@ mod tests {
 
         /// Execute the command with the configured parameters
         async fn execute(self) -> Result<CallToolResult, McpError> {
-            let tool = ShellExecuteTool::new();
+            let tool = ShellExecuteTool::new_isolated();
             let context = if let Some(ctx) = self.custom_context {
                 ctx
             } else {
@@ -2320,7 +2320,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_tool_has_operations() {
-        let tool = ShellExecuteTool::new();
+        let tool = ShellExecuteTool::new_isolated();
         let ops = tool.operations();
         assert_eq!(ops.len(), 6);
         assert!(ops.iter().any(|o| o.op_string() == "execute command"));
@@ -2333,7 +2333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_properties() {
-        let tool = ShellExecuteTool::new();
+        let tool = ShellExecuteTool::new_isolated();
         assert_eq!(tool.name(), "shell");
         assert!(!tool.description().is_empty());
 
@@ -4136,7 +4136,7 @@ mod tests {
         // is properly managed and killed when the AsyncProcessGuard is dropped
 
         let context = create_test_context().await;
-        let tool = ShellExecuteTool::new();
+        let tool = ShellExecuteTool::new_isolated();
 
         // Platform-specific long-running command
         #[cfg(unix)]
@@ -4215,7 +4215,7 @@ mod tests {
 
     /// Create a shared test tool for tests that need state continuity
     fn shared_tool() -> ShellExecuteTool {
-        ShellExecuteTool::new()
+        ShellExecuteTool::new_isolated()
     }
 
     /// Execute a shell tool operation with the given op and args
@@ -4361,7 +4361,7 @@ mod tests {
     async fn test_kill_process_stops_running_command() {
         // Start a long-running command with max_lines=0 so it returns immediately
         // with command_id, while the process continues running
-        let tool = ShellExecuteTool::new();
+        let tool = ShellExecuteTool::new_isolated();
         let context = create_test_context().await;
         let mut args = serde_json::Map::new();
         args.insert("command".to_string(), json!("sleep 60"));

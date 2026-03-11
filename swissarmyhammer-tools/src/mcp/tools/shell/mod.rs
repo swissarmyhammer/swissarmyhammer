@@ -177,6 +177,12 @@ pub fn register_shell_tools(registry: &mut ToolRegistry) {
     registry.register(execute::ShellExecuteTool::new());
 }
 
+/// Test-only variant that uses isolated temp dirs instead of CWD.
+#[cfg(test)]
+fn register_shell_tools_isolated(registry: &mut ToolRegistry) {
+    registry.register(execute::ShellExecuteTool::new_isolated());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,7 +191,7 @@ mod tests {
     #[tokio::test]
     async fn test_register_shell_tools() {
         let mut registry = ToolRegistry::new();
-        register_shell_tools(&mut registry);
+        register_shell_tools_isolated(&mut registry);
 
         // Verify shell_execute tool is registered
         assert!(registry.get_tool("shell").is_some());
@@ -195,7 +201,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_tools_properties() {
         let mut registry = ToolRegistry::new();
-        register_shell_tools(&mut registry);
+        register_shell_tools_isolated(&mut registry);
 
         let tools = registry.list_tools();
         assert_eq!(tools.len(), 1);
@@ -215,8 +221,8 @@ mod tests {
         let mut registry = ToolRegistry::new();
 
         // Register twice to ensure no conflicts
-        register_shell_tools(&mut registry);
-        register_shell_tools(&mut registry);
+        register_shell_tools_isolated(&mut registry);
+        register_shell_tools_isolated(&mut registry);
 
         // Should have only one tool (second registration overwrites)
         assert_eq!(registry.len(), 1);
@@ -226,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_tool_name_uniqueness() {
         let mut registry = ToolRegistry::new();
-        register_shell_tools(&mut registry);
+        register_shell_tools_isolated(&mut registry);
 
         let tool_names = registry.list_tool_names();
         let unique_names: std::collections::HashSet<_> = tool_names.iter().collect();

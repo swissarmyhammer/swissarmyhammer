@@ -26,11 +26,17 @@ When you enter Plan Mode (via EnterPlanMode), follow these steps:
 
 Use `kanban` with `op: "init board"`, `name: "<workspace name>"` — name it for the overall workspace or repository, not for the specific feature being planned. If the board already exists, this is a no-op; don't worry about it, just move on to research.
 
-### 2. Research the codebase
+### 2. Read the spec (if provided)
+
+If the user provided a file path (e.g., `/plan my-spec.md`), read that file first. It contains the requirements, goals, or context for the plan. Parse it thoroughly before exploring the codebase — the spec tells you what to look for.
+
+If no file was provided, the user's message or conversation context IS the spec. Proceed with what you know, and use the `question` tool to ask clarifying questions if the goal is unclear.
+
+### 3. Research the codebase
 
 Explore thoroughly — read relevant files, understand the architecture, identify affected areas. Use Glob, Grep, and Read tools to understand what exists.
 
-### 3. Create kanban cards as you discover work
+### 4. Create kanban cards as you discover work
 
 As you identify each work item, create a kanban card immediately. Don't wait until you have a complete picture — each discovery becomes a card.
 
@@ -57,7 +63,7 @@ Then add subtasks: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`
 
 Set dependencies between cards: use `kanban` with `op: "update task"`, `id: "<task-id>"`, `depends_on: ["<blocker-task-id>"]`
 
-### 4. Present the plan and discuss
+### 5. Present the plan and discuss
 
 When you believe the initial plan is complete, present a summary to the user. List each card with its title, a one-line description of what it covers, and any dependencies. This gives the user a clear picture of the planned work.
 
