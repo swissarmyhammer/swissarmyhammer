@@ -39,6 +39,8 @@ git_branch:
 git_status:
   style: "red bold"
   format: "[$all_status$ahead_behind]"
+  # When true, append file counts after each symbol (e.g. "!2" instead of "!").
+  show_counts: false
   modified: "!"
   staged: "+"
   untracked: "?"

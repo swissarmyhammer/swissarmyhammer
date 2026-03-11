@@ -108,6 +108,8 @@ impl Default for GitBranchModuleConfig {
 pub struct GitStatusModuleConfig {
     pub style: String,
     pub format: String,
+    /// When true, append file counts after each symbol (e.g. "!2" instead of "!").
+    pub show_counts: bool,
     pub modified: String,
     pub staged: String,
     pub untracked: String,
@@ -124,6 +126,7 @@ impl Default for GitStatusModuleConfig {
         Self {
             style: "red bold".into(),
             format: "[$all_status$ahead_behind]".into(),
+            show_counts: false,
             modified: "!".into(),
             staged: "+".into(),
             untracked: "?".into(),
