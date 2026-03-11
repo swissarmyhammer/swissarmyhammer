@@ -12,6 +12,7 @@ Code context operations for symbol lookup, search, grep, call graph, and blast r
 - **build status**: Mark files for re-indexing by resetting indexed flags
 - **clear status**: Wipe all index data and return stats about what was cleared
 - **lsp status**: Show which languages are detected in the index, their LSP servers, and install status
+- **detect projects**: Detect project types in the workspace and return language-specific guidelines
 
 ## Examples
 
@@ -53,4 +54,12 @@ Code context operations for symbol lookup, search, grep, call graph, and blast r
 
 ```json
 {"op": "lsp status"}
+```
+
+```json
+{"op": "detect projects"}
+```
+
+```json
+{"op": "detect projects", "path": "/path/to/project", "max_depth": 5, "include_guidelines": false}
 ```

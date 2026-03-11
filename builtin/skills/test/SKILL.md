@@ -8,6 +8,10 @@ metadata:
   version: "3.0"
 ---
 
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+{% include "_partials/test-driven-development" %}
+
 # Test
 
 **Zero failures. Zero warnings. Zero skipped tests. The build is either clean or it's broken.**

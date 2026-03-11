@@ -8,6 +8,9 @@ metadata:
   version: "3.0"
 ---
 
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+
 # Code Review
 
 Perform a structured code review on the current changes.

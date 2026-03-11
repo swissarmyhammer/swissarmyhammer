@@ -6,6 +6,10 @@ metadata:
   version: "1.0"
 ---
 
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+{% include "_partials/git-practices" %}
+
 # Commit
 
 Create a git commit with a well-crafted conventional commit message.

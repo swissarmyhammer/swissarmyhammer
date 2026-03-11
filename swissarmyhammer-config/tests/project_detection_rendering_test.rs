@@ -95,8 +95,8 @@ fn test_rust_project_detection_renders_guidelines() {
         "Should contain treesitter detect projects instruction"
     );
     assert!(
-        rendered.contains("treesitter"),
-        "Should reference the treesitter tool"
+        rendered.contains("code_context"),
+        "Should reference the code_context tool"
     );
 
     // CurrentDirGuard automatically restores the original directory

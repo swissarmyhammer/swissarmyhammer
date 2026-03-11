@@ -8,6 +8,9 @@ metadata:
   version: "3.0"
 ---
 
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+
 # Coverage
 
 Identify test coverage gaps in changed code and produce a concrete work list of what needs tests.

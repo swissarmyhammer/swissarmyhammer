@@ -11,10 +11,12 @@
 //! - `build status`: Mark files for re-indexing
 //! - `clear status`: Wipe all index data
 //! - `lsp status`: Show detected languages, LSP servers, and install status
+//! - `detect projects`: Detect project types in the workspace and return guidelines
 //!
 //! Uses the `swissarmyhammer-code-context` crate for all operations,
 //! opening a `CodeContextWorkspace` from the `ToolContext` working directory.
 
+pub mod detect;
 pub mod doctor;
 pub mod schema;
 pub mod watcher;
@@ -418,6 +420,37 @@ impl Operation for QueryAst {
     }
 }
 
+/// Operation metadata for project detection.
+#[derive(Debug, Default)]
+pub struct DetectProjects;
+
+static DETECT_PROJECTS_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("path")
+        .description("Root path to search for projects (default: current directory)")
+        .param_type(ParamType::String),
+    ParamMeta::new("max_depth")
+        .description("Maximum directory depth to search (default: 3)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("include_guidelines")
+        .description("Include language-specific guidelines in output (default: true)")
+        .param_type(ParamType::Boolean),
+];
+
+impl Operation for DetectProjects {
+    fn verb(&self) -> &'static str {
+        "detect"
+    }
+    fn noun(&self) -> &'static str {
+        "projects"
+    }
+    fn description(&self) -> &'static str {
+        "Detect project types in the workspace and return language-specific guidelines"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        DETECT_PROJECTS_PARAMS
+    }
+}
+
 // Static operation instances for schema generation
 static GET_SYMBOL_OP: Lazy<GetSymbol> = Lazy::new(GetSymbol::default);
 static SEARCH_SYMBOL_OP: Lazy<SearchSymbol> = Lazy::new(SearchSymbol::default);
@@ -432,6 +465,7 @@ static LSP_STATUS_OP: Lazy<LspStatus> = Lazy::new(LspStatus::default);
 static SEARCH_CODE_OP: Lazy<SearchCode> = Lazy::new(SearchCode::default);
 static FIND_DUPLICATES_OP: Lazy<FindDuplicates> = Lazy::new(FindDuplicates::default);
 static QUERY_AST_OP: Lazy<QueryAst> = Lazy::new(QueryAst::default);
+static DETECT_PROJECTS_OP: Lazy<DetectProjects> = Lazy::new(DetectProjects::default);
 
 static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
@@ -448,6 +482,7 @@ static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(||
         &*BUILD_STATUS_OP as &dyn Operation,
         &*CLEAR_STATUS_OP as &dyn Operation,
         &*LSP_STATUS_OP as &dyn Operation,
+        &*DETECT_PROJECTS_OP as &dyn Operation,
     ]
 });
 
@@ -686,13 +721,14 @@ impl McpTool for CodeContextTool {
             "build status" => execute_build_status(&arguments, context),
             "clear status" => execute_clear_status(context),
             "lsp status" => execute_lsp_status(context),
+            "detect projects" => detect::execute_detect(&arguments, context).await,
             "" => Err(McpError::invalid_params(
-                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status'.",
+                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects'.",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status'",
+                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects'",
                     other
                 ),
                 None,
@@ -701,7 +737,7 @@ impl McpTool for CodeContextTool {
 
         // Append LSP degradation notice to query operations (not status operations)
         match op_str {
-            "get status" | "build status" | "clear status" | "lsp status" | "" => result,
+            "get status" | "build status" | "clear status" | "lsp status" | "detect projects" | "" => result,
             _ => result.map(|r| maybe_append_lsp_notice(r, context)),
         }
     }
@@ -1676,7 +1712,7 @@ mod tests {
     fn test_code_context_tool_has_operations() {
         let tool = CodeContextTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 13);
+        assert_eq!(ops.len(), 14);
         assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
@@ -1690,6 +1726,7 @@ mod tests {
         assert!(ops.iter().any(|o| o.op_string() == "build status"));
         assert!(ops.iter().any(|o| o.op_string() == "clear status"));
         assert!(ops.iter().any(|o| o.op_string() == "lsp status"));
+        assert!(ops.iter().any(|o| o.op_string() == "detect projects"));
     }
 
     #[test]
@@ -1714,6 +1751,7 @@ mod tests {
         assert!(op_enum.contains(&serde_json::json!("build status")));
         assert!(op_enum.contains(&serde_json::json!("clear status")));
         assert!(op_enum.contains(&serde_json::json!("lsp status")));
+        assert!(op_enum.contains(&serde_json::json!("detect projects")));
     }
 
     #[test]
@@ -1724,7 +1762,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 13);
+        assert_eq!(op_schemas.len(), 14);
     }
 
     #[tokio::test]

@@ -8,6 +8,10 @@ metadata:
   version: "3.0"
 ---
 
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+{% include "_partials/test-driven-development" %}
+
 # Deduplicate
 
 Find near-duplicate code using tree-sitter semantic similarity analysis, then refactor to eliminate redundancy.

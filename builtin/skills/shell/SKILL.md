@@ -27,7 +27,7 @@ Run a shell command. Output is stored in history regardless of truncation.
 | environment | string | no | JSON env vars |
 
 ```json
-{"op": "execute command", "command": "cargo test", "timeout": 300, "max_lines": 50}
+{"op": "execute command", "command": "cargo nextest run", "timeout": 300, "max_lines": 50}
 ```
 
 ### list processes
