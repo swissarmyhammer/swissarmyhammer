@@ -1271,7 +1271,7 @@ impl ServerHandler for McpServer {
         Ok(InitializeResult {
             protocol_version: ProtocolVersion::default(),
             capabilities: create_server_capabilities(),
-            instructions: Some(build_instructions_with_health(self.work_dir.as_deref()).into()),
+            instructions: Some(build_instructions_with_health(self.work_dir.as_deref())),
             server_info: create_server_implementation(),
         })
     }
@@ -1405,7 +1405,7 @@ impl ServerHandler for McpServer {
             protocol_version: ProtocolVersion::default(),
             capabilities: create_server_capabilities(),
             server_info: create_server_implementation(),
-            instructions: Some(build_instructions_with_health(self.work_dir.as_deref()).into()),
+            instructions: Some(build_instructions_with_health(self.work_dir.as_deref())),
         }
     }
 }
