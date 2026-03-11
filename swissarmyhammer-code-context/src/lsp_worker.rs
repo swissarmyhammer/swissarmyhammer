@@ -97,19 +97,30 @@ fn run_lsp_indexing_loop(
     config: &LspWorkerConfig,
     server_name: &str,
 ) -> Result<(), CodeContextError> {
+    let extensions = lsp_supported_extensions(server_name);
     info!(
         server = %server_name,
-        "LSP indexing worker started for {}",
-        workspace_root.display()
+        extensions = ?extensions,
+        "LSP indexing worker started for {} ({} supported extensions)",
+        workspace_root.display(),
+        extensions.len()
     );
+
+    if extensions.is_empty() {
+        warn!(
+            server = %server_name,
+            "No known extensions for LSP server '{}', worker will idle",
+            server_name
+        );
+    }
 
     let mut total_indexed = 0u64;
 
     loop {
-        // 1. Query dirty files (lock DB briefly)
+        // 1. Query dirty files filtered to extensions this server handles
         let dirty_files = {
             let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-            query_lsp_dirty_files(&conn, config.batch_size)?
+            query_lsp_dirty_files(&conn, config.batch_size, extensions)?
         };
 
         if dirty_files.is_empty() {
@@ -214,10 +225,70 @@ fn index_single_file(
     Ok(result.symbol_count)
 }
 
-/// Query files that need LSP indexing (`lsp_indexed = 0`).
-fn query_lsp_dirty_files(db: &Connection, limit: usize) -> Result<Vec<String>, CodeContextError> {
-    let mut stmt =
-        db.prepare("SELECT file_path FROM indexed_files WHERE lsp_indexed = 0 LIMIT ?")?;
+/// File extensions supported by each known LSP server.
+///
+/// Maps a server command name to the file extensions it can handle.
+/// Unknown servers return an empty slice, which prevents indexing files
+/// that no server understands.
+pub fn lsp_supported_extensions(server_name: &str) -> &'static [&'static str] {
+    match server_name {
+        "rust-analyzer" => &["rs"],
+        "pyright" | "pylsp" | "pyright-langserver" => &["py", "pyi", "pyw"],
+        "typescript-language-server" | "tsserver" | "ts_ls" => {
+            &["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"]
+        }
+        "gopls" => &["go"],
+        "jdtls" | "java-language-server" => &["java"],
+        "clangd" => &["c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh"],
+        "solargraph" | "ruby-lsp" => &["rb", "rake", "gemspec"],
+        "sourcekit-lsp" => &["swift"],
+        "kotlin-language-server" => &["kt", "kts"],
+        "lua-language-server" => &["lua"],
+        "omnisharp" => &["cs"],
+        "dart" | "dart-language-server" => &["dart"],
+        "phpactor" | "intelephense" => &["php", "phtml"],
+        "metals" => &["scala", "sc"],
+        _ => &[],
+    }
+}
+
+/// Union of all file extensions that at least one known LSP server supports.
+///
+/// Files with extensions not in this list can be marked `lsp_indexed = 1`
+/// immediately since no LSP server will ever process them.
+pub const LSP_CAPABLE_EXTENSIONS: &[&str] = &[
+    "rs", "py", "pyi", "pyw", "ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "go",
+    "java", "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "rb", "rake", "gemspec", "swift",
+    "kt", "kts", "lua", "cs", "dart", "php", "phtml", "scala", "sc",
+];
+
+/// Query files that need LSP indexing (`lsp_indexed = 0`), filtered to only
+/// include files whose extension matches what the given LSP server supports.
+///
+/// If `extensions` is empty the query returns no files, which is the correct
+/// behaviour for unknown servers.
+fn query_lsp_dirty_files(
+    db: &Connection,
+    limit: usize,
+    extensions: &[&str],
+) -> Result<Vec<String>, CodeContextError> {
+    if extensions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Build WHERE clause: lsp_indexed = 0 AND (file_path LIKE '%.rs' OR ...)
+    let like_clauses: Vec<String> = extensions
+        .iter()
+        .map(|ext| format!("file_path LIKE '%.{}'", ext))
+        .collect();
+    let filter = like_clauses.join(" OR ");
+
+    let sql = format!(
+        "SELECT file_path FROM indexed_files WHERE lsp_indexed = 0 AND ({}) LIMIT ?",
+        filter
+    );
+
+    let mut stmt = db.prepare(&sql)?;
     let files = stmt
         .query_map([limit as i64], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -295,7 +366,7 @@ mod tests {
         )
         .unwrap();
 
-        let dirty = query_lsp_dirty_files(&db, 100).unwrap();
+        let dirty = query_lsp_dirty_files(&db, 100, &["rs"]).unwrap();
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0], "src/main.rs");
     }
@@ -307,7 +378,7 @@ mod tests {
         insert_test_file(&db, "b.rs");
         insert_test_file(&db, "c.rs");
 
-        let dirty = query_lsp_dirty_files(&db, 2).unwrap();
+        let dirty = query_lsp_dirty_files(&db, 2, &["rs"]).unwrap();
         assert_eq!(dirty.len(), 2);
     }
 
@@ -321,8 +392,54 @@ mod tests {
         )
         .unwrap();
 
-        let dirty = query_lsp_dirty_files(&db, 100).unwrap();
+        let dirty = query_lsp_dirty_files(&db, 100, &["rs"]).unwrap();
         assert!(dirty.is_empty());
+    }
+
+    #[test]
+    fn test_query_lsp_dirty_files_filters_by_extension() {
+        let db = create_test_db();
+        insert_test_file(&db, "src/main.rs");
+        insert_test_file(&db, "config.toml");
+        insert_test_file(&db, "script.sh");
+        insert_test_file(&db, "app.py");
+
+        // rust-analyzer should only see .rs files
+        let dirty = query_lsp_dirty_files(&db, 100, &["rs"]).unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0], "src/main.rs");
+
+        // pyright should only see .py files
+        let dirty = query_lsp_dirty_files(&db, 100, &["py", "pyi", "pyw"]).unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0], "app.py");
+    }
+
+    #[test]
+    fn test_query_lsp_dirty_files_empty_extensions_returns_nothing() {
+        let db = create_test_db();
+        insert_test_file(&db, "src/main.rs");
+        insert_test_file(&db, "config.toml");
+
+        // Unknown server -> empty extensions -> no files
+        let dirty = query_lsp_dirty_files(&db, 100, &[]).unwrap();
+        assert!(dirty.is_empty());
+    }
+
+    // -- lsp_supported_extensions tests --
+
+    #[test]
+    fn test_lsp_supported_extensions_known_servers() {
+        assert_eq!(lsp_supported_extensions("rust-analyzer"), &["rs"]);
+        assert!(lsp_supported_extensions("pyright").contains(&"py"));
+        assert!(lsp_supported_extensions("typescript-language-server").contains(&"ts"));
+        assert!(lsp_supported_extensions("gopls").contains(&"go"));
+    }
+
+    #[test]
+    fn test_lsp_supported_extensions_unknown_server() {
+        assert!(lsp_supported_extensions("unknown-server").is_empty());
+        assert!(lsp_supported_extensions("").is_empty());
     }
 
     // -- extension_to_language_id tests --

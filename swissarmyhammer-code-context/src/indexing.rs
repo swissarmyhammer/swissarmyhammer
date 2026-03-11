@@ -91,26 +91,26 @@ fn run_indexing_worker(
                     let full_path = workspace_root.join(file_path);
                     if !full_path.exists() {
                         warn!("File not found: {}", file_path);
-                        return (file_path.clone(), 0);
+                        return (file_path.clone(), vec![]);
                     }
 
-                    // Try to parse file with tree-sitter
+                    // Parse file and extract chunks
                     match parse_and_extract_chunks(&full_path) {
                         Ok(chunks) => {
                             debug!("Extracted {} chunks from {}", chunks.len(), file_path);
-                            (file_path.clone(), chunks.len())
+                            (file_path.clone(), chunks)
                         }
                         Err(e) => {
                             warn!("Failed to parse {}: {}", file_path, e);
-                            (file_path.clone(), 0)
+                            (file_path.clone(), vec![])
                         }
                     }
                 })
                 .collect();
 
             // Write results back to database
-            for (file_path, chunk_count) in results {
-                if chunk_count == 0 {
+            for (file_path, chunks) in results {
+                if chunks.is_empty() {
                     debug!(
                         "Skipping {} - no chunks extracted, marking indexed to avoid retry loop",
                         file_path
@@ -121,29 +121,22 @@ fn run_indexing_worker(
                     continue;
                 }
 
-                // Parse the file again to get chunks for writing
-                // (We parse twice, which is suboptimal, but keeps code simple and thread-safe)
-                let full_path = workspace_root.join(&file_path);
-                match parse_and_extract_chunks(&full_path) {
-                    Ok(chunks) => {
-                        if let Err(e) = write_ts_chunks(&db, &file_path, &chunks) {
-                            warn!("Failed to write chunks for {}: {}", file_path, e);
-                            continue;
-                        }
+                if let Err(e) = write_ts_chunks(&db, &file_path, &chunks) {
+                    warn!("Failed to write chunks for {}: {}", file_path, e);
+                    // Mark as indexed anyway to avoid infinite retry loop
+                    let _ = mark_ts_indexed(&db, &file_path);
+                    continue;
+                }
 
-                        if let Err(e) = mark_ts_indexed(&db, &file_path) {
-                            warn!("Failed to mark {} as indexed: {}", file_path, e);
-                        } else {
-                            indexed_count += 1;
-                            debug!(
-                                "Successfully indexed {} with {} chunks",
-                                file_path, chunk_count
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to parse {} again: {}", file_path, e);
-                    }
+                if let Err(e) = mark_ts_indexed(&db, &file_path) {
+                    warn!("Failed to mark {} as indexed: {}", file_path, e);
+                } else {
+                    indexed_count += 1;
+                    debug!(
+                        "Successfully indexed {} with {} chunks",
+                        file_path,
+                        chunks.len()
+                    );
                 }
             }
             info!(

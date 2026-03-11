@@ -341,12 +341,15 @@ fn test_get_status_reflects_file_counts() {
 
     let status = swissarmyhammer_code_context::get_status(&ws.db()).expect("get_status failed");
 
-    // After startup_cleanup, status should accurately report counts
+    // After startup_cleanup, status should accurately report counts.
+    // Cargo.toml has no LSP server so it is pre-marked lsp_indexed=1.
     assert_eq!(status.total_files, 4);
     assert_eq!(status.ts_indexed_files, 0, "No files indexed yet");
-    assert_eq!(status.lsp_indexed_files, 0, "No files indexed yet");
+    assert_eq!(
+        status.lsp_indexed_files, 1,
+        "Cargo.toml should be pre-marked lsp_indexed=1 (no LSP server for .toml)"
+    );
     assert_eq!(status.ts_indexed_percent, 0.0);
-    assert_eq!(status.lsp_indexed_percent, 0.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -468,11 +471,21 @@ fn test_ts_indexing_produces_chunks_and_leaves_lsp_unindexed() {
     assert!(!rows.is_empty(), "indexed_files should not be empty");
     for (path, ts, lsp) in &rows {
         assert_eq!(*ts, 1, "ts_indexed should be 1 for {}, got {}", path, ts);
-        assert_eq!(
-            *lsp, 0,
-            "lsp_indexed should still be 0 for {}, got {}",
-            path, lsp
-        );
+        // Files with no LSP server (e.g. .toml) are pre-marked lsp_indexed=1
+        // during startup_cleanup. Only LSP-capable files remain at 0.
+        if path.ends_with(".toml") {
+            assert_eq!(
+                *lsp, 1,
+                "lsp_indexed should be 1 for {} (no LSP server), got {}",
+                path, lsp
+            );
+        } else {
+            assert_eq!(
+                *lsp, 0,
+                "lsp_indexed should still be 0 for {}, got {}",
+                path, lsp
+            );
+        }
     }
 
     // ---------------------------------------------------------------
@@ -1014,8 +1027,20 @@ fn test_lsp_reindexing_after_file_change() {
         .send_did_open(&lib_rs_abs, "rust", &lib_content)
         .expect("didOpen failed");
 
-    // Give rust-analyzer time to analyze the project
-    thread::sleep(Duration::from_secs(5));
+    // Poll rust-analyzer until it returns symbols (needs time for cold-cache analysis).
+    {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(30);
+        let poll_interval = Duration::from_millis(500);
+        loop {
+            if let Ok(result) = client.collect_file_symbols(&lib_rs_abs) {
+                if result.symbol_count > 0 || start.elapsed() >= timeout {
+                    break;
+                }
+            }
+            thread::sleep(poll_interval);
+        }
+    }
 
     let result = {
         let db = ws.db();
@@ -1137,8 +1162,20 @@ mod tests {
         .send_did_open(&lib_rs_abs, "rust", &modified_content)
         .expect("didOpen (modified) failed");
 
-    // Give rust-analyzer time to re-analyze
-    thread::sleep(Duration::from_secs(5));
+    // Poll rust-analyzer until it returns symbols for the modified file.
+    {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(30);
+        let poll_interval = Duration::from_millis(500);
+        loop {
+            if let Ok(result) = client.collect_file_symbols(&lib_rs_abs) {
+                if result.symbol_count > 0 || start.elapsed() >= timeout {
+                    break;
+                }
+            }
+            thread::sleep(poll_interval);
+        }
+    }
 
     let result2 = {
         let db = ws.db();
