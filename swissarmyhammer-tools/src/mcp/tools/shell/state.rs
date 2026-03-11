@@ -101,9 +101,7 @@ impl ShellState {
     pub fn new() -> anyhow::Result<Self> {
         let base = std::env::current_dir()
             .map(|cwd| cwd.join(".shell"))
-            .unwrap_or_else(|_| {
-                std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new()))
-            });
+            .unwrap_or_else(|_| std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new())));
         Self::new_in_dir(base)
     }
 

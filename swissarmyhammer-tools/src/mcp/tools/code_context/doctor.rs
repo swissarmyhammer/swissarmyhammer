@@ -34,7 +34,10 @@ const KNOWN_PROJECT_TYPES: &[(ProjectType, &[&str])] = &[
     (ProjectType::Go, &["go.mod"]),
     (ProjectType::Php, &["composer.json"]),
     (ProjectType::JavaMaven, &["pom.xml"]),
-    (ProjectType::JavaGradle, &["build.gradle", "build.gradle.kts"]),
+    (
+        ProjectType::JavaGradle,
+        &["build.gradle", "build.gradle.kts"],
+    ),
     (ProjectType::CSharp, &["*.csproj", "*.sln"]),
     (ProjectType::Flutter, &["pubspec.yaml"]),
 ];
@@ -53,11 +56,7 @@ pub fn detect_project_types(root: &Path) -> Vec<String> {
                     let suffix = marker.trim_start_matches('*');
                     if entries
                         .filter_map(|e| e.ok())
-                        .any(|e| {
-                            e.file_name()
-                                .to_str()
-                                .is_some_and(|n| n.ends_with(suffix))
-                        })
+                        .any(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(suffix)))
                     {
                         types.push(format!("{:?}", ptype).to_lowercase());
                         break;
@@ -85,11 +84,7 @@ fn detect_project_type_enums(root: &Path) -> Vec<ProjectType> {
                     let suffix = marker.trim_start_matches('*');
                     if entries
                         .filter_map(|e| e.ok())
-                        .any(|e| {
-                            e.file_name()
-                                .to_str()
-                                .is_some_and(|n| n.ends_with(suffix))
-                        })
+                        .any(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(suffix)))
                     {
                         types.push(*ptype);
                         break;
@@ -206,11 +201,7 @@ mod tests {
             "[package]\nname = \"test\"\n",
         )
         .unwrap();
-        std::fs::write(
-            tmp.path().join("package.json"),
-            "{\"name\": \"test\"}\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("package.json"), "{\"name\": \"test\"}\n").unwrap();
 
         let types = detect_project_types(tmp.path());
         assert_eq!(types, vec!["rust".to_string(), "nodejs".to_string()]);
@@ -222,7 +213,10 @@ mod tests {
             vec!["rust".to_string(), "nodejs".to_string()]
         );
         let lsp_names: Vec<&str> = report.lsp_servers.iter().map(|l| l.name.as_str()).collect();
-        assert!(lsp_names.contains(&"rust-analyzer"), "missing rust-analyzer");
+        assert!(
+            lsp_names.contains(&"rust-analyzer"),
+            "missing rust-analyzer"
+        );
         assert!(
             lsp_names.contains(&"typescript-language-server"),
             "missing typescript-language-server"

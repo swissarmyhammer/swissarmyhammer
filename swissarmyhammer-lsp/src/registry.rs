@@ -120,7 +120,10 @@ mod tests {
     #[test]
     fn test_all_servers_returns_non_empty() {
         let servers = all_servers();
-        assert!(!servers.is_empty(), "all_servers() should return a non-empty list");
+        assert!(
+            !servers.is_empty(),
+            "all_servers() should return a non-empty list"
+        );
     }
 
     #[test]

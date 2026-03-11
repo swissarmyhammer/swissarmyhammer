@@ -48,11 +48,7 @@ pub(crate) fn build_instructions_with_health(work_dir: Option<&Path>) -> String 
 
     let report = crate::mcp::tools::code_context::doctor::run_doctor(path);
 
-    let missing: Vec<_> = report
-        .lsp_servers
-        .iter()
-        .filter(|s| !s.installed)
-        .collect();
+    let missing: Vec<_> = report.lsp_servers.iter().filter(|s| !s.installed).collect();
 
     if missing.is_empty() {
         return SERVER_INSTRUCTIONS.to_string();
@@ -61,10 +57,7 @@ pub(crate) fn build_instructions_with_health(work_dir: Option<&Path>) -> String 
     let mut instructions = SERVER_INSTRUCTIONS.to_string();
     instructions.push_str("\n\nsetupStatus: This workspace could benefit from additional tooling.");
     for server in &missing {
-        let hint = server
-            .install_hint
-            .as_deref()
-            .unwrap_or("see project docs");
+        let hint = server.install_hint.as_deref().unwrap_or("see project docs");
         instructions.push_str(&format!("\n  {}: NOT INSTALLED — {}", server.name, hint));
     }
 

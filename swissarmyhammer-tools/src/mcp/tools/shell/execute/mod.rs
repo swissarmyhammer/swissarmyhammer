@@ -1688,8 +1688,7 @@ impl ShellExecuteTool {
     #[cfg(test)]
     pub(crate) fn new_isolated() -> Self {
         let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
-        let state =
-            ShellState::with_dir(dir).expect("Failed to initialize isolated shell state");
+        let state = ShellState::with_dir(dir).expect("Failed to initialize isolated shell state");
         Self {
             state: Arc::new(Mutex::new(state)),
         }
@@ -2138,7 +2137,10 @@ mod tests {
     ///
     /// This eliminates duplication in creating test fixtures for security tests.
     async fn create_security_test_fixtures() -> (ShellExecuteTool, ToolContext) {
-        (ShellExecuteTool::new_isolated(), create_test_context().await)
+        (
+            ShellExecuteTool::new_isolated(),
+            create_test_context().await,
+        )
     }
 
     /// Helper function to assert that a list of paths are blocked by security validation

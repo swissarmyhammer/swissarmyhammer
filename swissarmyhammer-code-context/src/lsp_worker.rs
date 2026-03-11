@@ -257,9 +257,9 @@ pub fn lsp_supported_extensions(server_name: &str) -> &'static [&'static str] {
 /// Files with extensions not in this list can be marked `lsp_indexed = 1`
 /// immediately since no LSP server will ever process them.
 pub const LSP_CAPABLE_EXTENSIONS: &[&str] = &[
-    "rs", "py", "pyi", "pyw", "ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "go",
-    "java", "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "rb", "rake", "gemspec", "swift",
-    "kt", "kts", "lua", "cs", "dart", "php", "phtml", "scala", "sc",
+    "rs", "py", "pyi", "pyw", "ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "go", "java",
+    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "rb", "rake", "gemspec", "swift", "kt",
+    "kts", "lua", "cs", "dart", "php", "phtml", "scala", "sc",
 ];
 
 /// Query files that need LSP indexing (`lsp_indexed = 0`), filtered to only

@@ -517,10 +517,7 @@ impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
                         .unwrap_or("Install the LSP server");
                     checks.push(HealthCheck::warning(
                         format!("{} (LSP)", lsp.name),
-                        format!(
-                            "Not found (needed for {} code intelligence)",
-                            types_label
-                        ),
+                        format!("Not found (needed for {} code intelligence)", types_label),
                         Some(hint.to_string()),
                         cat,
                     ));
@@ -824,10 +821,7 @@ fn lsp_degradation_notice(workspace_root: &std::path::Path) -> Option<String> {
                     .find(|s| s.name == daemon.command)
                     .and_then(|s| s.install_hint.as_deref())
                     .unwrap_or("see project documentation");
-                lines.push(format!(
-                    "  {}: NOT INSTALLED — {}",
-                    daemon.command, hint
-                ));
+                lines.push(format!("  {}: NOT INSTALLED — {}", daemon.command, hint));
             }
             return Some(lines.join("\n"));
         }
@@ -1605,8 +1599,7 @@ fn execute_lsp_status(context: &ToolContext) -> Result<CallToolResult, McpError>
     let conn = ws.db();
 
     // Get distinct file extensions from the index
-    let exts =
-        swissarmyhammer_code_context::distinct_extensions(&conn).map_err(context_err)?;
+    let exts = swissarmyhammer_code_context::distinct_extensions(&conn).map_err(context_err)?;
 
     // Convert to &str slice for the registry lookup
     let ext_refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
@@ -1623,8 +1616,7 @@ fn execute_lsp_status(context: &ToolContext) -> Result<CallToolResult, McpError>
             .map(|e| e.as_str())
             .collect();
 
-        let installed =
-            swissarmyhammer_code_context::find_executable(&spec.command).is_some();
+        let installed = swissarmyhammer_code_context::find_executable(&spec.command).is_some();
 
         languages.push(serde_json::json!({
             "icon": spec.icon,
