@@ -1,89 +1,85 @@
-//! Languages module - shows language icons for detected languages.
+//! Languages module - shows language icons for detected project types.
 
 use crate::module::{ModuleContext, ModuleOutput};
 use crate::style::Style;
+use swissarmyhammer_project_detection::ProjectType;
 
-/// A language with its file extensions, display icon, and known LSP servers.
+/// A project type with its display icon and known LSP servers.
 struct LanguageIcon {
-    extensions: &'static [&'static str],
+    project_type: ProjectType,
     icon: &'static str,
     lsp_servers: &'static [&'static str],
 }
 
 const LANGUAGE_ICONS: &[LanguageIcon] = &[
     LanguageIcon {
-        extensions: &["rs"],
+        project_type: ProjectType::Rust,
         icon: "\u{1f980}",
         lsp_servers: &["rust-analyzer"],
     },
     LanguageIcon {
-        extensions: &["py"],
+        project_type: ProjectType::Python,
         icon: "\u{1f40d}",
         lsp_servers: &["pyright", "pylsp"],
     },
     LanguageIcon {
-        extensions: &["ts", "tsx"],
+        project_type: ProjectType::NodeJs,
         icon: "\u{1f4dc}",
         lsp_servers: &["typescript-language-server"],
     },
     LanguageIcon {
-        extensions: &["js", "jsx"],
-        icon: "\u{1f4dc}",
-        lsp_servers: &["typescript-language-server"],
-    },
-    LanguageIcon {
-        extensions: &["go"],
+        project_type: ProjectType::Go,
         icon: "\u{1f439}",
         lsp_servers: &["gopls"],
     },
     LanguageIcon {
-        extensions: &["java"],
+        project_type: ProjectType::JavaMaven,
         icon: "\u{2615}",
         lsp_servers: &["jdtls"],
     },
     LanguageIcon {
-        extensions: &["rb"],
-        icon: "\u{1f48e}",
-        lsp_servers: &["solargraph"],
+        project_type: ProjectType::JavaGradle,
+        icon: "\u{2615}",
+        lsp_servers: &["jdtls"],
     },
     LanguageIcon {
-        extensions: &["swift"],
+        project_type: ProjectType::CSharp,
+        icon: "\u{1f4bb}",
+        lsp_servers: &["omnisharp"],
+    },
+    LanguageIcon {
+        project_type: ProjectType::CMake,
+        icon: "\u{2699}\u{fe0f}",
+        lsp_servers: &["clangd"],
+    },
+    LanguageIcon {
+        project_type: ProjectType::Makefile,
+        icon: "\u{2699}\u{fe0f}",
+        lsp_servers: &["clangd"],
+    },
+    LanguageIcon {
+        project_type: ProjectType::Flutter,
         icon: "\u{1f426}",
-        lsp_servers: &["sourcekit-lsp"],
+        lsp_servers: &["dart"],
     },
 ];
 
 /// Evaluate the languages module.
 ///
-/// Queries the code-context database for indexed file extensions, then shows
-/// icons for detected languages. Icons are dimmed when the corresponding
-/// LSP server is not found in PATH.
+/// Detects project types in the current directory and shows icons for each.
+/// Icons are dimmed when the corresponding LSP server is not found in PATH.
 pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
-    // Try to open code-context workspace to see what languages are indexed
     let cwd = match std::env::current_dir() {
         Ok(p) => p,
         Err(_) => return ModuleOutput::hidden(),
     };
 
-    let ws = match swissarmyhammer_code_context::CodeContextWorkspace::open(&cwd) {
-        Ok(ws) => ws,
+    let projects = match swissarmyhammer_project_detection::detect_projects(&cwd, Some(1)) {
+        Ok(p) => p,
         Err(_) => return ModuleOutput::hidden(),
     };
 
-    let conn = ws.db();
-
-    // Query extensions from indexed_files
-    let extensions: Vec<String> = match conn.prepare(
-        "SELECT DISTINCT substr(path, instr(path, '.') + 1) FROM indexed_files WHERE path LIKE '%.%'",
-    ) {
-        Ok(mut stmt) => stmt
-            .query_map([], |row| row.get(0))
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default(),
-        Err(_) => return ModuleOutput::hidden(),
-    };
-
-    if extensions.is_empty() {
+    if projects.is_empty() {
         return ModuleOutput::hidden();
     }
 
@@ -92,11 +88,10 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let mut seen = std::collections::HashSet::new();
 
     for lang_icon in LANGUAGE_ICONS {
-        let has_ext = lang_icon
-            .extensions
+        let has_project = projects
             .iter()
-            .any(|ext| extensions.iter().any(|e| e == ext));
-        if !has_ext {
+            .any(|p| p.project_type == lang_icon.project_type);
+        if !has_project {
             continue;
         }
         if !seen.insert(lang_icon.icon) {
