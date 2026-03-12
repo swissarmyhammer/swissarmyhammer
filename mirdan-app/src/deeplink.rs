@@ -24,9 +24,13 @@ pub fn parse_url(url: &str) -> Option<DeepLinkAction> {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     match segments.as_slice() {
-        ["install", package] if !package.is_empty() => Some(DeepLinkAction::Install {
-            package: (*package).to_string(),
-        }),
+        ["install", package] if !package.is_empty() => {
+            // URL-decode the package name (browsers may encode @ as %40, etc.)
+            let decoded = urlencoding::decode(package).ok()?;
+            Some(DeepLinkAction::Install {
+                package: decoded.into_owned(),
+            })
+        }
         _ => None,
     }
 }
@@ -57,7 +61,7 @@ pub fn handle_url(_app: &AppHandle, url: String) {
                 let result = rt.block_on(mirdan::install::run_install(
                     &package, // package_spec
                     None,     // agent_filter — install for all agents
-                    false,    // global
+                    true,     // global — tray app has no project CWD
                     false,    // git
                     None,     // skill_select
                 ));
@@ -129,5 +133,26 @@ mod tests {
     #[test]
     fn test_parse_bare_scheme() {
         assert_eq!(parse_url("mirdan://"), None);
+    }
+
+    #[test]
+    fn test_parse_url_encoded_at() {
+        // Browsers may encode @ as %40
+        assert_eq!(
+            parse_url("mirdan://install/no-secrets%401.2.0"),
+            Some(DeepLinkAction::Install {
+                package: "no-secrets@1.2.0".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_url_encoded_spaces() {
+        assert_eq!(
+            parse_url("mirdan://install/my%20package"),
+            Some(DeepLinkAction::Install {
+                package: "my package".to_string(),
+            })
+        );
     }
 }
