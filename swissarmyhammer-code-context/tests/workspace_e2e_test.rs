@@ -1029,7 +1029,7 @@ fn test_lsp_reindexing_after_file_change() {
     // Poll rust-analyzer until it returns symbols (needs time for cold-cache analysis).
     {
         let start = std::time::Instant::now();
-        let timeout = Duration::from_secs(30);
+        let timeout = Duration::from_secs(60);
         let poll_interval = Duration::from_millis(500);
         loop {
             if let Ok(result) = client.collect_file_symbols(&lib_rs_abs) {
@@ -1164,7 +1164,7 @@ mod tests {
     // Poll rust-analyzer until it returns symbols for the modified file.
     {
         let start = std::time::Instant::now();
-        let timeout = Duration::from_secs(30);
+        let timeout = Duration::from_secs(60);
         let poll_interval = Duration::from_millis(500);
         loop {
             if let Ok(result) = client.collect_file_symbols(&lib_rs_abs) {

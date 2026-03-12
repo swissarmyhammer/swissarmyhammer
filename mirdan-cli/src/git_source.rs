@@ -1061,46 +1061,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // requires network access — flaky on CI runners
-    fn test_clone_obra_superpowers_discovers_mixed_types() {
-        // obra/superpowers has both .claude-plugin/plugin.json AND skills/ with SKILL.md files
-        let source = parse_git_source("obra/superpowers", None).unwrap();
-        let temp_dir = git_clone(&source).unwrap();
-        let packages = discover_packages(temp_dir.path(), None, None).unwrap();
-
-        let types: std::collections::HashSet<_> = packages
-            .iter()
-            .map(|p| format!("{}", p.package_type))
-            .collect();
-
-        assert!(
-            types.contains("plugin"),
-            "Should discover Plugin type, found: {:?}",
-            types
-        );
-        assert!(
-            types.contains("skill"),
-            "Should discover Skill type, found: {:?}",
-            types
-        );
-        assert!(
-            packages.len() >= 2,
-            "Should have at least 2 packages (1 plugin + skills), found {}",
-            packages.len()
-        );
-
-        // Names should all be unique (deduplication works)
-        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
-        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
-        assert_eq!(
-            names.len(),
-            unique.len(),
-            "Package names should be unique: {:?}",
-            names
-        );
-    }
-
-    #[test]
     fn test_clone_anthropics_plugins_discovers_multiple_plugins() {
         // anthropics/claude-plugins-official is a marketplace repo.
         // The plugins/ directory is a PRIORITY_DIR, so the scanner finds
