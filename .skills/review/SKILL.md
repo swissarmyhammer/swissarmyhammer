@@ -6,6 +6,49 @@ metadata:
   version: "3.0"
 ---
 
+## Project Detection
+
+To discover project types, build commands, and language-specific guidelines for this workspace, call the code_context tool:
+
+```json
+{"op": "detect projects"}
+```
+
+This will scan the directory tree and return:
+- All detected project types (Rust, Node.js, Python, Go, Java, C#, CMake, Makefile, Flutter, PHP)
+- Project locations as relative paths
+- Workspace/monorepo membership
+- Language-specific guidelines for testing, building, formatting, and linting
+
+**Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
+
+## Code Quality
+
+- Write clean, readable code that follows existing patterns in the codebase
+- Prefer simple, obvious solutions over clever ones
+- Make minimal changes to achieve the goal - avoid unnecessary refactoring
+- Don't add features, abstractions, or "improvements" beyond what was asked
+
+## Style
+
+- Follow the project's existing conventions for naming, formatting, and structure
+- Match the indentation, quotes, and spacing style already in use
+- If the project has a formatter config (prettier, rustfmt, black), respect it
+
+## Documentation
+
+- Every function needs a docstring explaining what it does
+- Document parameters, return values, and errors
+- Update existing documentation if your changes make it stale
+- Inline comments explain "why", not "what"
+
+## Error Handling
+
+- Handle errors at appropriate boundaries
+- Don't add defensive code for scenarios that can't happen
+- Trust internal code and framework guarantees
+
+
 # Code Review
 
 Perform a structured code review on the current changes.
@@ -14,15 +57,27 @@ Perform a structured code review on the current changes.
 
 ### 1. Get the Changes
 
-Use `git` with `op: "get changes"` to get the list of files changed on the current branch. This returns committed changes since diverging from the parent branch plus any uncommitted work.
+Use `git` with `op: "get changes"` to get the list of changed files.
 
-If a specific branch was requested, pass it as the `branch` parameter:
+**Determine the scope from the user's request:**
 
-```json
-{"op": "get changes", "branch": "feature-branch"}
-```
+| User says | `get changes` call |
+|-----------|-------------------|
+| `/review` (nothing else) | `{"op": "get changes"}` — auto-detects branch or defaults to last commit on main |
+| `/review the last 4 commits` | `{"op": "get changes", "range": "HEAD~4..HEAD"}` |
+| `/review since abc123` | `{"op": "get changes", "range": "abc123..HEAD"}` |
+| `/review abc123..def456` | `{"op": "get changes", "range": "abc123..def456"}` |
+| `/review feature-branch` | `{"op": "get changes", "branch": "feature-branch"}` |
+
+Parse the user's natural language for commit count ("last N commits"), commit refs, or ranges, and map to the `range` parameter. If the user mentions a branch name instead, use `branch`. When in doubt, omit both and let the tool auto-detect.
 
 Read the full content of every changed file — diffs alone lack context. Understand the **purpose** of the change before reviewing (PR description, commit messages, kanban cards).
+
+When a `range` was used (explicit or auto-defaulted), use `get diff` with `file@<start-ref>` and `file@<end-ref>` syntax to get semantic diffs for each changed file. For example, to diff a file across a range:
+
+```json
+{"op": "get diff", "left": "src/main.rs@HEAD~4", "right": "src/main.rs"}
+```
 
 ### 2. Layered Examination
 
@@ -96,6 +151,7 @@ Add subtasks for each fix step. Every card MUST include a verification subtask.
 ### 7. Summarize
 
 - One-sentence overall assessment
+- **Scope reviewed**: branch name and parent, or the revision range used (e.g. "Reviewed `HEAD~4..HEAD` on main")
 - Count of findings by severity (e.g., "1 blocker, 3 warnings, 5 nits")
 - List of kanban cards created with their IDs and titles
 - Verdict: **approve**, **request changes**, or **comment only**
