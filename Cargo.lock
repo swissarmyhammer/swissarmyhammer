@@ -4959,6 +4959,7 @@ dependencies = [
 name = "mirdan-app"
 version = "0.8.0"
 dependencies = [
+ "anyhow",
  "clap",
  "image",
  "mirdan-cli",

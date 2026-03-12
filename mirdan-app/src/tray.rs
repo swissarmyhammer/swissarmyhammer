@@ -29,7 +29,7 @@ mod ids {
 /// # Errors
 ///
 /// Returns an error if Tauri menu or tray construction fails.
-pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+pub fn setup_tray(app: &AppHandle) -> anyhow::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
 
     // --- Installed-packages submenu ------------------------------------------
@@ -83,7 +83,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Use the monochrome template icon for the menu bar (adapts to light/dark).
     // Decode the embedded PNG to raw RGBA for Tauri's Image API.
     let tray_png = image::load_from_memory(include_bytes!("../icons/tray-icon@2x.png"))
-        .expect("embedded tray icon must be valid PNG")
+        .map_err(|e| anyhow::anyhow!("tray icon decode: {e}"))?
         .to_rgba8();
     let (w, h) = tray_png.dimensions();
     let icon = tauri::image::Image::new_owned(tray_png.into_raw(), w, h);

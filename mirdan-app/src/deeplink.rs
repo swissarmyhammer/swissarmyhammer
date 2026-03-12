@@ -13,6 +13,20 @@ pub enum DeepLinkAction {
     Install { package: String },
 }
 
+/// Check that a decoded package name contains only safe characters.
+///
+/// Accepts: alphanumeric, `-`, `_`, `.`, `@`, ` `.
+/// Rejects path separators, `..`, and shell metacharacters.
+fn is_valid_package_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains("..")
+        && !name.contains('/')
+        && !name.contains('\\')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | ' '))
+}
+
 /// Parse a `mirdan://` URL into an action.
 ///
 /// Returns `None` for unrecognized or malformed URLs.
@@ -27,6 +41,11 @@ pub fn parse_url(url: &str) -> Option<DeepLinkAction> {
         ["install", package] if !package.is_empty() => {
             // URL-decode the package name (browsers may encode @ as %40, etc.)
             let decoded = urlencoding::decode(package).ok()?;
+            // Reject package names that don't match the expected format to
+            // prevent path traversal or injection from malicious deep links.
+            if !is_valid_package_name(&decoded) {
+                return None;
+            }
             Some(DeepLinkAction::Install {
                 package: decoded.into_owned(),
             })
@@ -55,8 +74,13 @@ pub fn handle_url(_app: &AppHandle, url: String) {
             // Run the async install on a dedicated tokio runtime so we don't
             // block the Tauri event loop.
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new()
-                    .expect("failed to create tokio runtime for deep-link install");
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        eprintln!("[mirdan] failed to create tokio runtime for deep-link install: {e}");
+                        return;
+                    }
+                };
 
                 let result = rt.block_on(mirdan::install::run_install(
                     &package, // package_spec
@@ -154,5 +178,15 @@ mod tests {
                 package: "my package".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn test_parse_rejects_path_traversal() {
+        assert_eq!(parse_url("mirdan://install/..%2F..%2Fetc%2Fpasswd"), None);
+    }
+
+    #[test]
+    fn test_parse_rejects_shell_metacharacters() {
+        assert_eq!(parse_url("mirdan://install/foo;rm%20-rf"), None);
     }
 }

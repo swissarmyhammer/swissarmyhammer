@@ -7,22 +7,8 @@ mod tray;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use mirdan::registry::RegistryError;
-use mirdan::{
-    agents, auth, banner, doctor, info, install, list, new, outdated, publish, search, sync,
-};
-use mirdan::{Cli, Commands, NewKind};
-
-/// Map a registry result to a process exit code (0 = success, 1 = error).
-fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
-    match result {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            1
-        }
-    }
-}
+use mirdan::{agents, banner};
+use mirdan::{Cli, Commands};
 
 /// Launch the Tauri tray application.
 fn run_tray() {
@@ -51,31 +37,30 @@ fn run_tray() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running mirdan app");
+        .unwrap_or_else(|e| {
+            eprintln!("[mirdan] fatal: tauri runtime failed: {e}");
+            std::process::exit(1);
+        });
 }
 
 fn main() {
-    // When launched with no args from a non-TTY context (Finder, URL scheme),
-    // go straight to tray mode without bothering clap.
+    // Detect launch context: tray mode (no args + non-TTY) or banner display.
     {
         use std::io::IsTerminal;
         let args: Vec<String> = std::env::args().collect();
-        if args.len() == 1 && !std::io::stdin().is_terminal() {
+        let is_tty = std::io::stdin().is_terminal();
+
+        if args.len() == 1 && !is_tty {
             run_tray();
             return;
         }
-    }
 
-    // Show branded banner for interactive help.
-    {
-        use std::io::IsTerminal;
-        let args: Vec<String> = std::env::args().collect();
-        let show = match args.len() {
-            1 => std::io::stdin().is_terminal(),
+        let show_banner = match args.len() {
+            1 => is_tty,
             2 => args[1] == "--help" || args[1] == "-h",
             _ => false,
         };
-        if show {
+        if show_banner {
             banner::print_banner();
         }
     }
@@ -112,101 +97,9 @@ fn main() {
         }
     }
 
-    let agent_filter = cli.agent.as_deref();
-
     let exit_code = rt.block_on(async {
-        match cli.command {
-            Commands::Agents { all, json } => {
-                handle_registry_result(agents::run_agents(all, json))
-            }
-
-            Commands::New { kind } => match kind {
-                NewKind::Skill { name, global } => {
-                    handle_registry_result(new::run_new_skill(&name, global, agent_filter))
-                }
-                NewKind::Validator { name, global } => {
-                    handle_registry_result(new::run_new_validator(&name, global))
-                }
-                NewKind::Tool { name, global } => {
-                    handle_registry_result(new::run_new_tool(&name, global))
-                }
-                NewKind::Plugin { name, global } => {
-                    handle_registry_result(new::run_new_plugin(&name, global))
-                }
-            },
-
-            Commands::Install {
-                package,
-                global,
-                git,
-                skill,
-                mcp,
-                command,
-                args,
-            } => {
-                if mcp {
-                    let cmd = command.expect("--command is required when --mcp is set");
-                    handle_registry_result(
-                        install::run_install_mcp(&package, &cmd, args, agent_filter, global).await,
-                    )
-                } else {
-                    handle_registry_result(
-                        install::run_install(&package, agent_filter, global, git, skill.as_deref())
-                            .await,
-                    )
-                }
-            }
-
-            Commands::Uninstall { name, global } => {
-                handle_registry_result(install::run_uninstall(&name, agent_filter, global).await)
-            }
-
-            Commands::List {
-                skills,
-                validators,
-                tools,
-                plugins,
-                json,
-            } => handle_registry_result(list::run_list(
-                skills, validators, tools, plugins, agent_filter, json,
-            )),
-
-            Commands::Search { query, json } => match query {
-                Some(q) => handle_registry_result(search::run_search(&q, json).await),
-                None => handle_registry_result(search::run_interactive_search().await),
-            },
-
-            Commands::Info { name } => {
-                handle_registry_result(info::run_info(&name, agent_filter).await)
-            }
-
-            Commands::Login => handle_registry_result(auth::login().await),
-            Commands::Logout => handle_registry_result(auth::logout().await),
-            Commands::Whoami => handle_registry_result(auth::whoami().await),
-
-            Commands::Publish { source, dry_run } => {
-                handle_registry_result(publish::run_publish(&source, dry_run).await)
-            }
-
-            Commands::Unpublish { name_version } => {
-                handle_registry_result(publish::run_unpublish(&name_version, cli.yes).await)
-            }
-
-            Commands::Outdated => handle_registry_result(outdated::run_outdated().await),
-
-            Commands::Update { name, global } => handle_registry_result(
-                outdated::run_update(name.as_deref(), agent_filter, global).await,
-            ),
-
-            Commands::Sync { global } => {
-                handle_registry_result(sync::run_sync(agent_filter, global))
-            }
-
-            Commands::Doctor { verbose } => doctor::run_doctor(verbose).await,
-
-            // Already handled above, but needed for exhaustive match.
-            Commands::Start => unreachable!(),
-        }
+        // dispatch returns None for Commands::Start, which we already handled above.
+        mirdan::dispatch(&cli).await.unwrap_or_else(|| unreachable!())
     });
 
     std::process::exit(exit_code);

@@ -31,22 +31,8 @@
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use mirdan::registry::RegistryError;
-use mirdan::{
-    agents, auth, banner, doctor, info, install, list, new, outdated, publish, search, sync,
-};
-use mirdan::{Cli, Commands, NewKind};
-
-/// Helper to run an async registry command and map errors to exit codes.
-fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
-    match result {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            1
-        }
-    }
-}
+use mirdan::{agents, banner};
+use mirdan::Cli;
 
 #[tokio::main]
 async fn main() {
@@ -89,99 +75,10 @@ async fn main() {
         }
     }
 
-    let agent_filter = cli.agent.as_deref();
-
-    let exit_code = match cli.command {
-        Commands::Agents { all, json } => handle_registry_result(agents::run_agents(all, json)),
-
-        Commands::New { kind } => match kind {
-            NewKind::Skill { name, global } => {
-                handle_registry_result(new::run_new_skill(&name, global, agent_filter))
-            }
-            NewKind::Validator { name, global } => {
-                handle_registry_result(new::run_new_validator(&name, global))
-            }
-            NewKind::Tool { name, global } => {
-                handle_registry_result(new::run_new_tool(&name, global))
-            }
-            NewKind::Plugin { name, global } => {
-                handle_registry_result(new::run_new_plugin(&name, global))
-            }
-        },
-
-        Commands::Install {
-            package,
-            global,
-            git,
-            skill,
-            mcp,
-            command,
-            args,
-        } => {
-            if mcp {
-                let cmd = command.expect("--command is required when --mcp is set");
-                handle_registry_result(
-                    install::run_install_mcp(&package, &cmd, args, agent_filter, global).await,
-                )
-            } else {
-                handle_registry_result(
-                    install::run_install(&package, agent_filter, global, git, skill.as_deref())
-                        .await,
-                )
-            }
-        }
-
-        Commands::Uninstall { name, global } => {
-            handle_registry_result(install::run_uninstall(&name, agent_filter, global).await)
-        }
-
-        Commands::List {
-            skills,
-            validators,
-            tools,
-            plugins,
-            json,
-        } => handle_registry_result(list::run_list(
-            skills,
-            validators,
-            tools,
-            plugins,
-            agent_filter,
-            json,
-        )),
-
-        Commands::Search { query, json } => match query {
-            Some(q) => handle_registry_result(search::run_search(&q, json).await),
-            None => handle_registry_result(search::run_interactive_search().await),
-        },
-
-        Commands::Info { name } => {
-            handle_registry_result(info::run_info(&name, agent_filter).await)
-        }
-
-        Commands::Login => handle_registry_result(auth::login().await),
-        Commands::Logout => handle_registry_result(auth::logout().await),
-        Commands::Whoami => handle_registry_result(auth::whoami().await),
-
-        Commands::Publish { source, dry_run } => {
-            handle_registry_result(publish::run_publish(&source, dry_run).await)
-        }
-
-        Commands::Unpublish { name_version } => {
-            handle_registry_result(publish::run_unpublish(&name_version, cli.yes).await)
-        }
-
-        Commands::Outdated => handle_registry_result(outdated::run_outdated().await),
-
-        Commands::Update { name, global } => handle_registry_result(
-            outdated::run_update(name.as_deref(), agent_filter, global).await,
-        ),
-
-        Commands::Sync { global } => handle_registry_result(sync::run_sync(agent_filter, global)),
-
-        Commands::Doctor { verbose } => doctor::run_doctor(verbose).await,
-
-        Commands::Start => {
+    let exit_code = match mirdan::dispatch(&cli).await {
+        Some(code) => code,
+        None => {
+            // Commands::Start — tray app not available in CLI-only build.
             eprintln!("The tray app is not available in the CLI-only build.");
             eprintln!("Install Mirdan.app:");
             eprintln!("  brew tap swissarmyhammer/tap");
@@ -195,7 +92,8 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use mirdan::{Cli, Commands, NewKind};
+    use clap::Parser;
 
     #[test]
     fn test_cli_parsing_agents() {

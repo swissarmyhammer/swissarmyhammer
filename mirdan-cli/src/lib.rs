@@ -14,6 +14,8 @@ pub mod auth;
 pub mod banner;
 mod cli;
 pub use cli::{Cli, Commands, NewKind};
+mod dispatch;
+pub use dispatch::dispatch;
 pub mod doctor;
 pub mod git_source;
 pub mod info;
