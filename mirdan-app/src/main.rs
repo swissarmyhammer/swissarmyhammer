@@ -5,13 +5,21 @@ mod deeplink;
 mod tray;
 
 use clap::Parser;
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 use mirdan::{agents, banner};
 use mirdan::{Cli, Commands};
 
+/// Initialize tracing for tray mode — routes to macOS Console.app via os_log.
+fn init_tray_tracing() {
+    let oslog = tracing_oslog::OsLogger::new("ai.mirdan.app", "default");
+    tracing_subscriber::registry().with(oslog).init();
+}
+
 /// Launch the Tauri tray application.
 fn run_tray() {
+    init_tray_tracing();
     use tauri_plugin_deep_link::DeepLinkExt;
 
     tauri::Builder::default()
@@ -38,7 +46,7 @@ fn run_tray() {
         })
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
-            eprintln!("[mirdan] fatal: tauri runtime failed: {e}");
+            tracing::error!("tauri runtime failed: {e}");
             std::process::exit(1);
         });
 }
@@ -91,7 +99,7 @@ fn main() {
     if let Some(ref agent_id) = cli.agent {
         if let Ok(config) = agents::load_agents_config() {
             if let Err(e) = agents::validate_agent_id(&config, agent_id) {
-                eprintln!("Error: {}", e);
+                tracing::error!("{e}");
                 std::process::exit(1);
             }
         }

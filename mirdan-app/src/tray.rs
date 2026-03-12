@@ -97,11 +97,11 @@ pub fn setup_tray(app: &AppHandle) -> anyhow::Result<()> {
         .on_menu_event(|app, event| {
             match event.id().as_ref() {
                 ids::CHECK_UPDATES => {
-                    eprintln!("[mirdan] check for updates triggered (not yet implemented)");
+                    tracing::info!("check for updates triggered (not yet implemented)");
                 }
                 ids::OPEN_REGISTRY => {
                     if let Err(e) = open::that("https://registry.mirdan.ai") {
-                        eprintln!("[mirdan] failed to open registry URL: {e}");
+                        tracing::error!("failed to open registry URL: {e}");
                     }
                 }
                 ids::QUIT => {

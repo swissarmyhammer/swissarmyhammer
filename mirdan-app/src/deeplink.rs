@@ -6,6 +6,7 @@
 //! - `mirdan://install/{package}` — install a package by name (optionally `name@version`)
 
 use tauri::AppHandle;
+use tracing::{error, info, warn};
 
 /// A parsed deep-link action.
 #[derive(Debug, PartialEq, Eq)]
@@ -62,14 +63,14 @@ pub fn handle_url(_app: &AppHandle, url: String) {
     let action = match parse_url(&url) {
         Some(a) => a,
         None => {
-            eprintln!("[mirdan] unrecognized deep-link URL: {url}");
+            warn!(url, "unrecognized deep-link URL");
             return;
         }
     };
 
     match action {
         DeepLinkAction::Install { package } => {
-            eprintln!("[mirdan] deep-link install: {package}");
+            info!(package, "deep-link install requested");
 
             // Run the async install on a dedicated tokio runtime so we don't
             // block the Tauri event loop.
@@ -77,7 +78,7 @@ pub fn handle_url(_app: &AppHandle, url: String) {
                 let rt = match tokio::runtime::Runtime::new() {
                     Ok(rt) => rt,
                     Err(e) => {
-                        eprintln!("[mirdan] failed to create tokio runtime for deep-link install: {e}");
+                        error!("failed to create tokio runtime for deep-link install: {e}");
                         return;
                     }
                 };
@@ -92,11 +93,11 @@ pub fn handle_url(_app: &AppHandle, url: String) {
 
                 match result {
                     Ok(()) => {
-                        eprintln!("[mirdan] installed {package} successfully");
+                        info!(package, "installed successfully");
                         // TODO: native notification
                     }
                     Err(e) => {
-                        eprintln!("[mirdan] install failed for {package}: {e}");
+                        error!(package, "install failed: {e}");
                         // TODO: native notification
                     }
                 }
