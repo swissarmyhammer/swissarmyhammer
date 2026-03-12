@@ -906,7 +906,7 @@ fn merge_parsed_stdin(
     // Try JSON first, then YAML
     let parsed: Option<serde_json::Value> = serde_json::from_str(input)
         .ok()
-        .or_else(|| serde_yaml::from_str(input).ok());
+        .or_else(|| serde_yaml_ng::from_str(input).ok());
 
     match parsed {
         Some(serde_json::Value::Object(stdin_map)) => {
