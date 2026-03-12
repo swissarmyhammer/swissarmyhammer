@@ -3,6 +3,7 @@ install:
     cargo install --path swissarmyhammer-cli
     cargo install --path avp-cli
     cargo install --path mirdan-cli
+    just mirdan-dev
 
 # Build the Mirdan tray app (debug) and install to /Applications for deep link testing
 mirdan-dev:

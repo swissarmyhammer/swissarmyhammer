@@ -100,7 +100,7 @@ pub fn setup_tray(app: &AppHandle) -> anyhow::Result<()> {
                     tracing::info!("check for updates triggered (not yet implemented)");
                 }
                 ids::OPEN_REGISTRY => {
-                    if let Err(e) = open::that("https://registry.mirdan.ai") {
+                    if let Err(e) = open::that("https://mirdan.ai") {
                         tracing::error!("failed to open registry URL: {e}");
                     }
                 }

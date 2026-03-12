@@ -37,8 +37,29 @@ pub fn discover_packages(
     // If none are set, scan all types.
     let scan_all = !skills_only && !validators_only && !tools_only && !plugins_only;
 
-    // Scan skills from agent directories
+    // Scan skills from the central store and agent project directories.
+    //
+    // The store (`~/.skills/` global, `.skills/` project) is the source of truth
+    // for installed packages. Agent directories (`.claude/skills/`, etc.) contain
+    // symlinks into the store, which can break (e.g. when `~/.claude` is itself
+    // a symlink to iCloud). Scanning the store directly is robust.
+    //
+    // We also scan agent project-level directories for skills installed without
+    // the store (e.g. manually placed skills).
     if skills_only || scan_all {
+        // Global store
+        let global_store = store::skill_store_dir(true);
+        if global_store.exists() {
+            scan_skills_recursive(&global_store, &global_store, "global", &mut packages);
+        }
+
+        // Project store
+        let project_store = store::skill_store_dir(false);
+        if project_store.exists() {
+            scan_skills_recursive(&project_store, &project_store, "project", &mut packages);
+        }
+
+        // Also scan agent project-level skill dirs for non-store skills
         if let Ok(config) = agents::load_agents_config() {
             let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
 
@@ -163,6 +184,47 @@ pub fn run_list(
     Ok(())
 }
 
+/// Recursively scan a store directory for skill packages (any nested dir containing SKILL.md).
+///
+/// The store uses nested paths like `~/.skills/owner/repo/skill/SKILL.md`.
+/// The skill name is derived from the path relative to the store root.
+fn scan_skills_recursive(
+    dir: &Path,
+    store_root: &Path,
+    location: &str,
+    packages: &mut Vec<InstalledPackage>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.join("SKILL.md").exists() {
+                let skill_md = path.join("SKILL.md");
+                let name = read_frontmatter_name(&skill_md).unwrap_or_else(|| {
+                    path.strip_prefix(store_root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string()
+                });
+                let version = read_frontmatter_version(&skill_md);
+                packages.push(InstalledPackage {
+                    name,
+                    package_type: PackageType::Skill,
+                    version,
+                    targets: vec![location.to_string()],
+                });
+            } else {
+                // Recurse into subdirectories
+                scan_skills_recursive(&path, store_root, location, packages);
+            }
+        }
+    }
+}
+
 /// Scan a directory for skill packages (subdirs containing SKILL.md).
 fn scan_skills(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
     let entries = match std::fs::read_dir(dir) {
@@ -249,6 +311,17 @@ fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackag
             });
         }
     }
+}
+
+/// Read name from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
+fn read_frontmatter_name(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let content = content.trim();
+    let rest = content.strip_prefix("---")?;
+    let end = rest.find("---")?;
+    let frontmatter = &rest[..end];
+    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    yaml.get("name")?.as_str().map(|s| s.to_string())
 }
 
 /// Read version from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
