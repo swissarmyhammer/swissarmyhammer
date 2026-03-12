@@ -14,45 +14,55 @@ pub enum DeepLinkAction {
     Install { package: String },
 }
 
-/// Check that a decoded package name contains only safe characters.
+/// Check that a decoded package spec contains only safe characters.
 ///
-/// Accepts: alphanumeric, `-`, `_`, `.`, `@`, ` `.
-/// Rejects path separators, `..`, and shell metacharacters.
-fn is_valid_package_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.contains("..")
-        && !name.contains('/')
-        && !name.contains('\\')
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | ' '))
+/// Package specs can be:
+/// - Simple names: `no-secrets`, `no-secrets@1.2.0`
+/// - Git URLs: `https://github.com/owner/repo/skill@latest`
+///
+/// Rejects `..` sequences and shell metacharacters.
+fn is_valid_package_spec(spec: &str) -> bool {
+    !spec.is_empty()
+        && !spec.contains("..")
+        && spec.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '-' | '_' | '.' | '@' | '/' | ':' | ' ' | '+' | '~')
+        })
 }
 
 /// Parse a `mirdan://` URL into an action.
+///
+/// Supports:
+/// - `mirdan://install/no-secrets`
+/// - `mirdan://install/no-secrets@1.2.0`
+/// - `mirdan://install/https://github.com/owner/repo/skill@latest`
 ///
 /// Returns `None` for unrecognized or malformed URLs.
 pub fn parse_url(url: &str) -> Option<DeepLinkAction> {
     // Strip the scheme prefix.
     let path = url.strip_prefix("mirdan://")?;
 
-    // Split on '/' and ignore empty segments (handles trailing slashes).
-    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    // Extract the action (first segment) and the rest as the package spec.
+    let path = path.trim_matches('/');
+    let (action, spec) = path.split_once('/')?;
 
-    match segments.as_slice() {
-        ["install", package] if !package.is_empty() => {
-            // URL-decode the package name (browsers may encode @ as %40, etc.)
-            let decoded = urlencoding::decode(package).ok()?;
-            // Reject package names that don't match the expected format to
-            // prevent path traversal or injection from malicious deep links.
-            if !is_valid_package_name(&decoded) {
-                return None;
-            }
-            Some(DeepLinkAction::Install {
-                package: decoded.into_owned(),
-            })
-        }
-        _ => None,
+    if action != "install" || spec.is_empty() {
+        return None;
     }
+
+    // Strip trailing slashes from the spec.
+    let spec = spec.trim_end_matches('/');
+
+    // URL-decode the package spec (browsers may encode @ as %40, etc.)
+    let decoded = urlencoding::decode(spec).ok()?;
+
+    if !is_valid_package_spec(&decoded) {
+        return None;
+    }
+
+    Some(DeepLinkAction::Install {
+        package: decoded.into_owned(),
+    })
 }
 
 /// Handle an incoming deep-link URL.
@@ -83,11 +93,12 @@ pub fn handle_url(_app: &AppHandle, url: String) {
                     }
                 };
 
+                let is_git = package.starts_with("https://") || package.starts_with("http://");
                 let result = rt.block_on(mirdan::install::run_install(
                     &package, // package_spec
                     None,     // agent_filter — install for all agents
                     true,     // global — tray app has no project CWD
-                    false,    // git
+                    is_git,   // git — auto-detect from URL
                     None,     // skill_select
                 ));
 
@@ -189,5 +200,25 @@ mod tests {
     #[test]
     fn test_parse_rejects_shell_metacharacters() {
         assert_eq!(parse_url("mirdan://install/foo;rm%20-rf"), None);
+    }
+
+    #[test]
+    fn test_parse_git_url_package() {
+        assert_eq!(
+            parse_url("mirdan://install/https://github.com/0xdarkmatter/claude-mods/explain@latest"),
+            Some(DeepLinkAction::Install {
+                package: "https://github.com/0xdarkmatter/claude-mods/explain@latest".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_git_url_no_version() {
+        assert_eq!(
+            parse_url("mirdan://install/https://github.com/owner/repo"),
+            Some(DeepLinkAction::Install {
+                package: "https://github.com/owner/repo".to_string(),
+            })
+        );
     }
 }
