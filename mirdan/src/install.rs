@@ -868,34 +868,15 @@ fn uninstall_skill(
         }
     }
 
-    if removed == 0 {
-        let scope = if global { "global" } else { "project" };
-        return Err(RegistryError::NotFound(format!(
-            "Skill '{}' not found in any agent ({} scope)",
-            name, scope
-        )));
-    }
-
-    // 2. Remove store entry if no remaining symlinks reference it
+    // 2. Remove store entry regardless of symlink state
     let store_path = store::skill_store_dir(global).join(&sanitized);
     if store_path.exists() {
-        // Collect all agent skill dirs to check for remaining references
-        let all_agents = agents::get_detected_agents(&config);
-        let all_skill_dirs: Vec<PathBuf> = all_agents
-            .iter()
-            .map(|a| {
-                if global {
-                    agent_global_skill_dir(&a.def)
-                } else {
-                    agent_project_skill_dir(&a.def)
-                }
-            })
-            .collect();
+        std::fs::remove_dir_all(&store_path)?;
+        tracing::info!(path = %store_path.display(), "removed store entry");
+    }
 
-        if !store::store_entry_still_referenced(&store_path, &all_skill_dirs) {
-            std::fs::remove_dir_all(&store_path)?;
-            println!("  Removed store entry {}", store_path.display());
-        }
+    if removed == 0 {
+        tracing::warn!(name, "no symlinks found in agent dirs (already cleaned up?)");
     }
 
     Ok(())

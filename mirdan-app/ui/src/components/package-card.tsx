@@ -59,11 +59,10 @@ export function PackageCard({
   }
 
   async function handleUninstall() {
-    if (!window.confirm(`Uninstall "${pkg.name}"?`)) return;
     setBusy("uninstall");
     try {
       const msg = await invoke<string>("uninstall_package", {
-        spec: pkg.name,
+        spec: pkg.source,
       });
       toast(msg, "success");
       onRefresh();
@@ -77,7 +76,7 @@ export function PackageCard({
   async function handleUpdate() {
     setBusy("update");
     try {
-      const msg = await invoke<string>("update_package", { spec: pkg.name });
+      const msg = await invoke<string>("update_package", { spec: pkg.source });
       toast(msg, "success");
       onRefresh();
     } catch (e) {

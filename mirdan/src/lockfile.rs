@@ -228,4 +228,79 @@ mod tests {
     fn test_verify_integrity_bad_prefix() {
         assert!(verify_integrity(b"hello", "md5-abc").is_err());
     }
+
+    #[test]
+    fn test_find_by_display_name_exact_key() {
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "explain".to_string(),
+            LockedPackage {
+                package_type: PackageType::Skill,
+                version: "1.0.0".to_string(),
+                resolved: String::new(),
+                integrity: String::new(),
+                installed_at: String::new(),
+                targets: vec![],
+            },
+        );
+        let found = lf.find_by_display_name("explain");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().0, "explain");
+    }
+
+    #[test]
+    fn test_find_by_display_name_url_key() {
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "https://github.com/owner/repo/explain".to_string(),
+            LockedPackage {
+                package_type: PackageType::Skill,
+                version: "1.0.0".to_string(),
+                resolved: String::new(),
+                integrity: String::new(),
+                installed_at: String::new(),
+                targets: vec![],
+            },
+        );
+        let found = lf.find_by_display_name("explain");
+        assert!(found.is_some());
+        assert_eq!(
+            found.unwrap().0,
+            "https://github.com/owner/repo/explain"
+        );
+    }
+
+    #[test]
+    fn test_find_by_display_name_ambiguous() {
+        let mut lf = Lockfile::default();
+        let pkg = LockedPackage {
+            package_type: PackageType::Skill,
+            version: "1.0.0".to_string(),
+            resolved: String::new(),
+            integrity: String::new(),
+            installed_at: String::new(),
+            targets: vec![],
+        };
+        lf.add_package("https://github.com/a/explain".to_string(), pkg.clone());
+        lf.add_package("https://github.com/b/explain".to_string(), pkg);
+        // Ambiguous — two packages end with "explain"
+        assert!(lf.find_by_display_name("explain").is_none());
+    }
+
+    #[test]
+    fn test_find_by_display_name_no_match() {
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "https://github.com/owner/repo/foo".to_string(),
+            LockedPackage {
+                package_type: PackageType::Skill,
+                version: "1.0.0".to_string(),
+                resolved: String::new(),
+                integrity: String::new(),
+                installed_at: String::new(),
+                targets: vec![],
+            },
+        );
+        assert!(lf.find_by_display_name("bar").is_none());
+    }
 }

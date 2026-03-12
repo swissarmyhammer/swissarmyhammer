@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::agents::{self, agent_project_skill_dir};
+use crate::lockfile::Lockfile;
 use crate::mcp_config;
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
@@ -12,6 +13,8 @@ use crate::table;
 /// An installed package found during scanning.
 pub struct InstalledPackage {
     pub name: String,
+    /// The lockfile key (source URL or name) used for install/uninstall operations.
+    pub source: String,
     pub package_type: PackageType,
     pub version: String,
     pub targets: Vec<String>,
@@ -120,7 +123,29 @@ pub fn discover_packages(
         }
     }
 
-    merge_packages(packages)
+    let mut merged = merge_packages(packages);
+
+    // Enrich source field from lockfiles so callers (e.g. GUI) can pass
+    // the correct identifier for uninstall/update operations.
+    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
+    for dir in lockfile_dirs.iter().flatten() {
+        if let Ok(lf) = Lockfile::load(dir) {
+            for pkg in &mut merged {
+                // If source is just the display name, try to find the full lockfile key
+                if pkg.source == pkg.name {
+                    for key in lf.packages.keys() {
+                        let last_segment = key.rsplit('/').next().unwrap_or(key);
+                        if last_segment == pkg.name {
+                            pkg.source = key.clone();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    merged
 }
 
 /// Get the mirdan.ai registry URL for a package.
@@ -242,6 +267,7 @@ fn scan_skills_recursive(
                 });
                 let version = read_frontmatter_version(&skill_md);
                 packages.push(InstalledPackage {
+                    source: name.clone(),
                     name,
                     package_type: PackageType::Skill,
                     version,
@@ -268,6 +294,7 @@ fn scan_skills(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage
             let name = entry.file_name().to_string_lossy().to_string();
             let version = read_frontmatter_version(&path.join("SKILL.md"));
             packages.push(InstalledPackage {
+                source: name.clone(),
                 name,
                 package_type: PackageType::Skill,
                 version,
@@ -290,6 +317,7 @@ fn scan_validators(dir: &Path, location: &str, packages: &mut Vec<InstalledPacka
             let name = entry.file_name().to_string_lossy().to_string();
             let version = read_frontmatter_version(&path.join("VALIDATOR.md"));
             packages.push(InstalledPackage {
+                source: name.clone(),
                 name,
                 package_type: PackageType::Validator,
                 version,
@@ -312,6 +340,7 @@ fn scan_tools(dir: &Path, location: &str, packages: &mut Vec<InstalledPackage>) 
             let name = entry.file_name().to_string_lossy().to_string();
             let version = read_frontmatter_version(&path.join("TOOL.md"));
             packages.push(InstalledPackage {
+                source: name.clone(),
                 name,
                 package_type: PackageType::Tool,
                 version,
@@ -334,6 +363,7 @@ fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackag
             let name = mcp_config::read_plugin_json(&path.join(".claude-plugin/plugin.json"))
                 .unwrap_or_else(|_| entry.file_name().to_string_lossy().to_string());
             packages.push(InstalledPackage {
+                source: name.clone(),
                 name,
                 package_type: PackageType::Plugin,
                 version: "latest".to_string(),
@@ -444,12 +474,14 @@ metadata:
     fn test_merge_packages() {
         let packages = vec![
             InstalledPackage {
+                source: "skill-a".to_string(),
                 name: "skill-a".to_string(),
                 package_type: PackageType::Skill,
                 version: "1.0.0".to_string(),
                 targets: vec!["Claude Code".to_string()],
             },
             InstalledPackage {
+                source: "skill-a".to_string(),
                 name: "skill-a".to_string(),
                 package_type: PackageType::Skill,
                 version: "1.0.0".to_string(),

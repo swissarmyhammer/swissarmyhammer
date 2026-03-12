@@ -7,6 +7,8 @@ use tracing::{error, info};
 #[derive(Debug, Serialize)]
 pub struct PackageInfo {
     pub name: String,
+    /// Lockfile key / source URL — use this for uninstall and update, not `name`.
+    pub source: String,
     pub package_type: String,
     pub version: String,
     pub targets: Vec<String>,
@@ -25,6 +27,7 @@ pub fn list_packages() -> Vec<PackageInfo> {
             let store_path = find_store_path(&p.name);
             PackageInfo {
                 name: p.name,
+                source: p.source,
                 package_type: p.package_type.to_string(),
                 version: p.version,
                 targets: p.targets,
@@ -155,6 +158,7 @@ mod tests {
     fn test_package_info_serializes() {
         let info = PackageInfo {
             name: "test-skill".to_string(),
+            source: "https://github.com/owner/repo/test-skill".to_string(),
             package_type: "skill".to_string(),
             version: "1.0.0".to_string(),
             targets: vec!["Claude Code".to_string()],
