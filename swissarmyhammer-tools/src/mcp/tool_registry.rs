@@ -341,6 +341,12 @@ pub struct ToolContext {
     /// and makes test isolation more reliable and explicit.
     pub working_dir: Option<PathBuf>,
 
+    /// MCP session identifier
+    ///
+    /// Auto-generated when the context is created. Tools can use this to
+    /// identify the current session without requiring the caller to pass it.
+    pub session_id: String,
+
     /// Optional MCP server instance (for creating filtering proxies)
     ///
     /// Uses interior mutability to allow setting after context creation.
@@ -374,6 +380,7 @@ impl ToolContext {
             peer: None,
             tool_registry: None,
             working_dir: None,
+            session_id: ulid::Ulid::new().to_string(),
             mcp_server: Arc::new(RwLock::new(None)),
         }
     }
@@ -1769,6 +1776,11 @@ register_tool_category!(
     code_context,
     "Register all code context tools with the registry"
 );
+register_tool_category!(
+    register_ralph_tools,
+    ralph,
+    "Register all ralph persistent instruction tools with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -1791,6 +1803,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_kanban_tools(&mut registry);
     register_code_context_tools(&mut registry);
     register_web_tools(&mut registry);
+    register_ralph_tools(&mut registry);
 
     registry
 }
