@@ -36,3 +36,15 @@ partial: true
 - Examples: `examples/`
 - Binaries: `src/bin/`
 - Build output: `target/` (git-ignored)
+
+**Testing**
+
+You can focus testing on what you changed and pick up dependencies. Very efficient!
+
+```
+# Run tests in my-crate AND everything that transitively depends on it
+cargo nextest run -E 'rdeps(my-crate)'
+
+# Multiple changed packages (union them)
+cargo nextest run -E 'rdeps(crate-a) | rdeps(crate-b)'
+```
