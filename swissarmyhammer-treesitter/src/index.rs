@@ -476,10 +476,14 @@ impl IndexContext {
         self.parse_discovered_files(&files_to_parse, &mut errors)
             .await;
 
-        // Phase 3: embed chunks
+        // Phase 3: embed chunks (or just write file records if embedding disabled)
         self.last_status.phase = IndexPhase::Embedding;
-        let model_name = self.config.embedding_model.clone();
-        self.run_embedding_phase(&model_name, &mut errors).await?;
+        if self.config.embedding_enabled {
+            let model_name = self.config.embedding_model.clone();
+            self.run_embedding_phase(&model_name, &mut errors).await?;
+        } else {
+            self.write_parsed_files_without_embeddings(&mut errors);
+        }
 
         // Send final status
         self.last_status.phase = IndexPhase::Complete;
@@ -503,11 +507,6 @@ impl IndexContext {
         model_name: &str,
         errors: &mut Vec<(PathBuf, String)>,
     ) -> Result<()> {
-        if !self.config.embedding_enabled {
-            tracing::info!("Embedding disabled, skipping embedding phase");
-            return Ok(());
-        }
-
         let files_count = self.files.len();
         if files_count == 0 {
             return Ok(());
@@ -635,6 +634,39 @@ impl IndexContext {
         }) {
             let _ = db.commit_transaction(); // Try to commit what we have
             errors.push((path.to_path_buf(), format!("Database write failed: {}", e)));
+        }
+    }
+
+    /// Write all parsed files to the database without embeddings.
+    ///
+    /// Used when `embedding_enabled` is false. Records file hashes and chunk
+    /// byte ranges so that `list_files()`, `file_is_current()`, and incremental
+    /// indexing still work.
+    fn write_parsed_files_without_embeddings(&self, errors: &mut Vec<(PathBuf, String)>) {
+        let Some(db) = &self.database else {
+            return;
+        };
+
+        for (path, parsed) in &self.files {
+            if let Err(e) = db.begin_transaction().and_then(|()| {
+                let file_id = db.upsert_file(path, &parsed.content_hash)?;
+                let chunks = chunk_file(parsed.clone());
+                for chunk in &chunks {
+                    if let crate::chunk::ChunkSource::Parsed {
+                        start_byte,
+                        end_byte,
+                        ..
+                    } = &chunk.source
+                    {
+                        let symbol = chunk.symbol_path();
+                        db.insert_chunk(&file_id, *start_byte, *end_byte, None, &symbol)?;
+                    }
+                }
+                db.commit_transaction()
+            }) {
+                let _ = db.rollback_transaction();
+                errors.push((path.clone(), format!("Database write failed: {}", e)));
+            }
         }
     }
 

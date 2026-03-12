@@ -1160,9 +1160,6 @@ mod tests {
     const TEST_MEDIUM_SIMILARITY_THRESHOLD: f32 = 0.5;
     /// Minimum chunk size for duplicate detection tests
     const TEST_MIN_CHUNK_BYTES: usize = 10;
-    /// Small minimum chunk size for tests with small code samples
-    const TEST_SMALL_MIN_CHUNK_BYTES: usize = 5;
-
     // Test timeouts and delays for background indexing tests
     /// Timeout for successful database verification (1 second)
     const TEST_DB_READY_TIMEOUT_SUCCESS: std::time::Duration = std::time::Duration::from_secs(1);
@@ -1252,6 +1249,19 @@ mod tests {
             .open()
             .await
             .unwrap()
+    }
+
+    /// Open a workspace with a custom IndexConfig and wait for background indexing.
+    async fn open_and_wait_with_config(dir: &Path, config: IndexConfig) -> Workspace {
+        let (callback, handle) = index_complete_notifier();
+        let workspace = Workspace::new(dir)
+            .with_index_config(config)
+            .with_progress(callback)
+            .open()
+            .await
+            .unwrap();
+        handle.wait().await;
+        workspace
     }
 
     // =========================================================================
@@ -1907,7 +1917,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let workspace = open_no_embedding(dir.path()).await;
         let result = workspace
             .find_duplicates_in_file(
                 PathBuf::from("/nonexistent.rs"),
@@ -1918,17 +1928,66 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_find_duplicates_in_file_with_file() {
+    async fn test_find_duplicates_in_file_finds_similar_code() {
         let dir = TempDir::new().unwrap();
-        let file_path = dir.path().join("test.rs");
-        std::fs::write(&file_path, "fn main() { let x = 1; }").unwrap();
 
-        let workspace = open_and_wait(dir.path()).await;
+        // Target file — numeric filtering
+        let target = dir.path().join("target.rs");
+        std::fs::write(
+            &target,
+            r#"
+fn process_items(items: &[i32]) -> Vec<i32> {
+    let mut out = Vec::new();
+    for item in items {
+        if *item > 0 {
+            out.push(item * 2);
+        }
+    }
+    out
+}
+"#,
+        )
+        .unwrap();
+
+        // Near-duplicate in another file
+        std::fs::write(
+            dir.path().join("similar.rs"),
+            r#"
+fn transform_items(values: &[i32]) -> Vec<i32> {
+    let mut out = Vec::new();
+    for value in values {
+        if *value > 0 {
+            out.push(value * 2);
+        }
+    }
+    out
+}
+"#,
+        )
+        .unwrap();
+
+        let config = IndexConfig {
+            embedding_enabled: true,
+            ..Default::default()
+        };
+        let workspace = open_and_wait_with_config(dir.path(), config).await;
 
         let result = workspace
-            .find_duplicates_in_file(file_path, TEST_MEDIUM_SIMILARITY_THRESHOLD)
+            .find_duplicates_in_file(target, TEST_MEDIUM_SIMILARITY_THRESHOLD)
             .await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "find_duplicates_in_file should succeed");
+
+        let similar = result.unwrap();
+        assert!(
+            !similar.is_empty(),
+            "Should find similar code in similar.rs"
+        );
+        assert!(
+            similar
+                .iter()
+                .any(|s| s.chunk.file.to_string_lossy().contains("similar.rs")),
+            "Results should include similar.rs"
+        );
     }
 
     #[tokio::test]
@@ -1942,6 +2001,7 @@ mod tests {
 
         let (complete_cb, handle) = index_complete_notifier();
         let _workspace = Workspace::new(dir.path())
+            .with_index_config(no_embedding_config())
             .with_progress(move |status| {
                 progress_called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
                 complete_cb(status);
@@ -1961,7 +2021,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
-        let workspace = Workspace::new(dir.path()).open().await.unwrap();
+        let workspace = open_no_embedding(dir.path()).await;
 
         // With background indexing, open() returns Reader mode immediately
         assert!(!workspace.is_leader());
@@ -1993,6 +2053,7 @@ mod tests {
         let (complete_cb, handle) = index_complete_notifier();
 
         let _workspace2 = Workspace::new(dir.path())
+            .with_index_config(no_embedding_config())
             .with_progress(move |status| {
                 if status.files_parsed > 0 {
                     parse_count_clone
@@ -2032,6 +2093,7 @@ mod tests {
         let (complete_cb, handle) = index_complete_notifier();
 
         let _workspace2 = Workspace::new(dir.path())
+            .with_index_config(no_embedding_config())
             .with_progress(move |status| {
                 parse_count_clone.store(status.files_parsed, std::sync::atomic::Ordering::SeqCst);
                 complete_cb(status);
@@ -2072,6 +2134,7 @@ mod tests {
         let (complete_cb, handle) = index_complete_notifier();
 
         let _workspace2 = Workspace::new(dir.path())
+            .with_index_config(no_embedding_config())
             .with_progress(move |status| {
                 let current = max_parsed_clone.load(std::sync::atomic::Ordering::SeqCst);
                 if status.files_parsed > current {
@@ -2339,10 +2402,10 @@ mod tests {
         std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
 
         // First open starts background indexing
-        let _first = Workspace::open(dir.path()).await.unwrap();
+        let _first = open_no_embedding(dir.path()).await;
 
         // Second open should wait for database to be ready, then open as follower
-        let second = Workspace::open(dir.path()).await.unwrap();
+        let second = open_no_embedding(dir.path()).await;
         assert!(!second.is_leader());
         assert!(second.database_path().exists());
     }
