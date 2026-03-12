@@ -25,6 +25,10 @@ fn run_tray() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            // Accessory app: no Dock icon, tray only.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             tray::setup_tray(app.handle())?;
 
             // Handle any URLs that were passed at launch (cold start from URL).
