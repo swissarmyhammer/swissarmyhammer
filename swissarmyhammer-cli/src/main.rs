@@ -1453,7 +1453,9 @@ mod tests_stdin_merge {
         serde_json::Map::new()
     }
 
-    fn args_with(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serde_json::Value> {
+    fn args_with(
+        pairs: &[(&str, serde_json::Value)],
+    ) -> serde_json::Map<String, serde_json::Value> {
         let mut map = serde_json::Map::new();
         for (k, v) in pairs {
             map.insert(k.to_string(), v.clone());

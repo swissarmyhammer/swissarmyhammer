@@ -49,7 +49,10 @@ pub fn validate_session_id(session_id: &str) -> anyhow::Result<()> {
 /// double quotes and backslashes.
 fn escape_yaml_value(s: &str) -> String {
     if s.contains('\n') || s.contains(':') || s.contains('"') || s.contains('\\') {
-        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        let escaped = s
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n");
         format!("\"{escaped}\"")
     } else {
         s.to_string()
@@ -280,7 +283,11 @@ mod tests {
 
         write_ralph(tmp.path(), "test-session", &state).unwrap();
 
-        let expected_path = tmp.path().join(".sah").join("ralph").join("test-session.md");
+        let expected_path = tmp
+            .path()
+            .join(".sah")
+            .join("ralph")
+            .join("test-session.md");
         assert!(expected_path.exists());
     }
 

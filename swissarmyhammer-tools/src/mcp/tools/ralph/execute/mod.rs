@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use swissarmyhammer_operations::{generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig};
+use swissarmyhammer_operations::{
+    generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
+};
 
 use super::state::{delete_ralph, read_ralph, write_ralph, RalphState};
 
@@ -549,10 +551,7 @@ mod tests {
 
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("set ralph"));
-        args.insert(
-            "session_id".to_string(),
-            serde_json::json!("test-session"),
-        );
+        args.insert("session_id".to_string(), serde_json::json!("test-session"));
         args.insert(
             "instruction".to_string(),
             serde_json::json!("Keep going until all cards are done"),
@@ -595,10 +594,7 @@ mod tests {
         let mut set_args = serde_json::Map::new();
         set_args.insert("op".to_string(), serde_json::json!("set ralph"));
         set_args.insert("session_id".to_string(), serde_json::json!("session-x"));
-        set_args.insert(
-            "instruction".to_string(),
-            serde_json::json!("Keep working"),
-        );
+        set_args.insert("instruction".to_string(), serde_json::json!("Keep working"));
         tool.execute(set_args, &ctx).await.unwrap();
 
         // Check
@@ -720,10 +716,7 @@ mod tests {
         let mut set_args = serde_json::Map::new();
         set_args.insert("op".to_string(), serde_json::json!("set ralph"));
         set_args.insert("session_id".to_string(), serde_json::json!("session-get"));
-        set_args.insert(
-            "instruction".to_string(),
-            serde_json::json!("Keep working"),
-        );
+        set_args.insert("instruction".to_string(), serde_json::json!("Keep working"));
         set_args.insert("max_iterations".to_string(), serde_json::json!(30));
         tool.execute(set_args, &ctx).await.unwrap();
 
@@ -754,22 +747,37 @@ mod tests {
         // Set first instruction
         let mut args1 = serde_json::Map::new();
         args1.insert("op".to_string(), serde_json::json!("set ralph"));
-        args1.insert("session_id".to_string(), serde_json::json!("session-replace"));
-        args1.insert("instruction".to_string(), serde_json::json!("First instruction"));
+        args1.insert(
+            "session_id".to_string(),
+            serde_json::json!("session-replace"),
+        );
+        args1.insert(
+            "instruction".to_string(),
+            serde_json::json!("First instruction"),
+        );
         tool.execute(args1, &ctx).await.unwrap();
 
         // Replace with second
         let mut args2 = serde_json::Map::new();
         args2.insert("op".to_string(), serde_json::json!("set ralph"));
-        args2.insert("session_id".to_string(), serde_json::json!("session-replace"));
-        args2.insert("instruction".to_string(), serde_json::json!("Second instruction"));
+        args2.insert(
+            "session_id".to_string(),
+            serde_json::json!("session-replace"),
+        );
+        args2.insert(
+            "instruction".to_string(),
+            serde_json::json!("Second instruction"),
+        );
         args2.insert("max_iterations".to_string(), serde_json::json!(99));
         tool.execute(args2, &ctx).await.unwrap();
 
         // Verify replacement
         let mut get_args = serde_json::Map::new();
         get_args.insert("op".to_string(), serde_json::json!("get ralph"));
-        get_args.insert("session_id".to_string(), serde_json::json!("session-replace"));
+        get_args.insert(
+            "session_id".to_string(),
+            serde_json::json!("session-replace"),
+        );
         let result = tool.execute(get_args, &ctx).await.unwrap();
         let content = result
             .content
@@ -811,7 +819,12 @@ mod tests {
         reset_args.insert("session_id".to_string(), serde_json::json!("preserve-iter"));
         reset_args.insert("instruction".to_string(), serde_json::json!("Second"));
         let result = tool.execute(reset_args, &ctx).await.unwrap();
-        let content = result.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap();
+        let content = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap();
         let json: serde_json::Value = serde_json::from_str(content).unwrap();
         // Response should indicate the preserved iteration
         assert_eq!(json["iteration"], 3);
@@ -821,7 +834,12 @@ mod tests {
         get_args.insert("op".to_string(), serde_json::json!("get ralph"));
         get_args.insert("session_id".to_string(), serde_json::json!("preserve-iter"));
         let get_result = tool.execute(get_args, &ctx).await.unwrap();
-        let get_content = get_result.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap();
+        let get_content = get_result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap();
         let get_json: serde_json::Value = serde_json::from_str(get_content).unwrap();
         assert_eq!(get_json["instruction"], "Second");
         assert_eq!(get_json["iteration"], 3);
@@ -925,24 +943,42 @@ mod tests {
         // Check 1: iteration 1 of 2 — should block
         let r1 = tool.execute(check_args.clone(), &ctx).await.unwrap();
         let j1: serde_json::Value = serde_json::from_str(
-            r1.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap(),
-        ).unwrap();
+            r1.content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| t.text.as_str())
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(j1["decision"], "block");
 
         // Check 2: iteration 2 of 2 — should block (still within limit)
         let r2 = tool.execute(check_args.clone(), &ctx).await.unwrap();
         let j2: serde_json::Value = serde_json::from_str(
-            r2.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap(),
-        ).unwrap();
+            r2.content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| t.text.as_str())
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(j2["decision"], "block");
 
         // Check 3: iteration 3 > max 2 — should allow and delete file
         let r3 = tool.execute(check_args.clone(), &ctx).await.unwrap();
         let j3: serde_json::Value = serde_json::from_str(
-            r3.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap(),
-        ).unwrap();
+            r3.content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| t.text.as_str())
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(j3["decision"], "allow");
-        assert!(j3["reason"].as_str().unwrap().contains("Max iterations reached"));
+        assert!(j3["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Max iterations reached"));
 
         // File should be gone
         assert!(read_ralph(tmp.path(), "max-test").unwrap().is_none());
@@ -958,7 +994,10 @@ mod tests {
         let mut set_args = serde_json::Map::new();
         set_args.insert("op".to_string(), serde_json::json!("set ralph"));
         set_args.insert("session_id".to_string(), serde_json::json!("hook-test"));
-        set_args.insert("instruction".to_string(), serde_json::json!("Implement cards"));
+        set_args.insert(
+            "instruction".to_string(),
+            serde_json::json!("Implement cards"),
+        );
         tool.execute(set_args, &ctx).await.unwrap();
 
         // Check — block response
@@ -966,14 +1005,22 @@ mod tests {
         check_args.insert("op".to_string(), serde_json::json!("check ralph"));
         check_args.insert("session_id".to_string(), serde_json::json!("hook-test"));
         let result = tool.execute(check_args, &ctx).await.unwrap();
-        let content = result.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap();
+        let content = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap();
         let json: serde_json::Value = serde_json::from_str(content).unwrap();
 
         // Must have "decision" and "reason" per Claude Code Stop hook spec
         assert!(json.get("decision").is_some(), "Must have 'decision' field");
         assert!(json.get("reason").is_some(), "Must have 'reason' field");
         assert_eq!(json["decision"], "block");
-        assert!(json["reason"].as_str().unwrap().len() > 0, "Reason must be non-empty");
+        assert!(
+            json["reason"].as_str().unwrap().len() > 0,
+            "Reason must be non-empty"
+        );
 
         // Allow response also needs valid schema
         let tmp2 = tempfile::tempdir().unwrap();
@@ -982,7 +1029,12 @@ mod tests {
         check_args2.insert("op".to_string(), serde_json::json!("check ralph"));
         check_args2.insert("session_id".to_string(), serde_json::json!("no-session"));
         let result2 = tool.execute(check_args2, &ctx2).await.unwrap();
-        let content2 = result2.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap();
+        let content2 = result2
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap();
         let json2: serde_json::Value = serde_json::from_str(content2).unwrap();
         assert_eq!(json2["decision"], "allow");
     }
@@ -1003,7 +1055,10 @@ mod tests {
 
         // Verify file was created using context's session_id
         let state = read_ralph(tmp.path(), &ctx.session_id).unwrap();
-        assert!(state.is_some(), "State should exist under context session_id");
+        assert!(
+            state.is_some(),
+            "State should exist under context session_id"
+        );
         assert_eq!(state.unwrap().instruction, "Auto session");
     }
 
@@ -1023,7 +1078,12 @@ mod tests {
         let mut get_args = serde_json::Map::new();
         get_args.insert("op".to_string(), serde_json::json!("get ralph"));
         let result = tool.execute(get_args, &ctx).await.unwrap();
-        let content = result.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap();
+        let content = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap();
         let json: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(json["active"], true);
         assert_eq!(json["instruction"], "Test get");
@@ -1045,7 +1105,12 @@ mod tests {
         let mut clear_args = serde_json::Map::new();
         clear_args.insert("op".to_string(), serde_json::json!("clear ralph"));
         let result = tool.execute(clear_args, &ctx).await.unwrap();
-        let content = result.content.first().and_then(|c| c.as_text()).map(|t| t.text.as_str()).unwrap();
+        let content = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap();
         let json: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(json["cleared"], true);
 
@@ -1063,6 +1128,9 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("check ralph"));
         let result = tool.execute(args, &ctx).await;
-        assert!(result.is_err(), "check ralph should require explicit session_id");
+        assert!(
+            result.is_err(),
+            "check ralph should require explicit session_id"
+        );
     }
 }
