@@ -737,7 +737,8 @@ impl McpTool for CodeContextTool {
 
         // Append LSP degradation notice to query operations (not status operations)
         match op_str {
-            "get status" | "build status" | "clear status" | "lsp status" | "detect projects" | "" => result,
+            "get status" | "build status" | "clear status" | "lsp status" | "detect projects"
+            | "" => result,
             _ => result.map(|r| maybe_append_lsp_notice(r, context)),
         }
     }

@@ -107,9 +107,8 @@ impl ShellState {
 
     /// Create a new ShellState with an explicit base directory for the .shell/ data.
     /// This avoids relying on the process-wide CWD, which is important for tests.
-    pub fn new_in_dir(_shell_dir: PathBuf) -> anyhow::Result<Self> {
-        let dir = std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new()));
-        Self::with_dir(dir)
+    pub fn new_in_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
+        Self::with_dir(shell_dir)
     }
 
     /// Create a new ShellState rooted at the given directory.

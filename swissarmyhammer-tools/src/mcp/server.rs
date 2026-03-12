@@ -453,7 +453,7 @@ impl McpServer {
             match lsp_handle.await {
                 Ok(clients) if !clients.is_empty() => {
                     use swissarmyhammer_code_context::{
-                        spawn_lsp_indexing_worker, LspWorkerConfig,
+                        new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
                     };
                     for (server_name, shared_client) in &clients {
                         let worker_db = std::sync::Arc::clone(&lsp_db);
@@ -463,6 +463,7 @@ impl McpServer {
                             std::sync::Arc::clone(shared_client),
                             LspWorkerConfig::default(),
                             server_name.clone(),
+                            new_shutdown_flag(),
                         );
                         tracing::info!(
                             "code-context: LSP indexing worker started for {} (server: {})",

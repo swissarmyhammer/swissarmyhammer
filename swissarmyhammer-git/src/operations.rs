@@ -171,6 +171,77 @@ impl GitOperations {
         Ok(changed_files)
     }
 
+    /// Get list of files changed within a git revision range
+    ///
+    /// Parses the range string and performs a tree-to-tree diff between the two endpoints.
+    /// If the range contains `..`, it is split into `from..to`. If it is a single ref,
+    /// it is treated as `ref..HEAD`.
+    ///
+    /// # Arguments
+    ///
+    /// * `range` - A git revision range, e.g. `HEAD~1..HEAD`, `HEAD~3..HEAD`, or `HEAD~2`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Either ref in the range cannot be resolved
+    /// - The resolved objects cannot be peeled to commits
+    /// - The tree diff fails
+    pub fn get_changed_files_from_range(&self, range: &str) -> GitResult<Vec<String>> {
+        let repo = self.repo.inner();
+
+        // Parse range: "from..to" or single ref treated as "ref..HEAD"
+        let (from_ref, to_ref) = if let Some((from, to)) = range.split_once("..") {
+            (from.to_string(), to.to_string())
+        } else {
+            (range.to_string(), "HEAD".to_string())
+        };
+
+        // Resolve each ref to a commit
+        let from_obj = repo
+            .revparse_single(&from_ref)
+            .map_err(|e| convert_git2_error("revparse_from_ref", e))?;
+        let from_commit = from_obj
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_from_to_commit", e))?;
+
+        let to_obj = repo
+            .revparse_single(&to_ref)
+            .map_err(|e| convert_git2_error("revparse_to_ref", e))?;
+        let to_commit = to_obj
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_to_to_commit", e))?;
+
+        // Get trees for diff
+        let from_tree = from_commit
+            .tree()
+            .map_err(|e| convert_git2_error("get_from_tree", e))?;
+        let to_tree = to_commit
+            .tree()
+            .map_err(|e| convert_git2_error("get_to_tree", e))?;
+
+        // Compute diff from..to
+        let diff = repo
+            .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)
+            .map_err(|e| convert_git2_error("diff_tree_to_tree_range", e))?;
+
+        // Extract file paths from diff deltas
+        let mut changed_files = Vec::new();
+        for delta in diff.deltas() {
+            if let Some(path) = delta.new_file().path() {
+                if let Some(path_str) = path.to_str() {
+                    changed_files.push(path_str.to_string());
+                }
+            }
+        }
+
+        // Deduplicate and sort for consistent output
+        changed_files.sort();
+        changed_files.dedup();
+
+        Ok(changed_files)
+    }
+
     /// Get all tracked files in the repository
     ///
     /// Returns a sorted list of all files currently tracked in the repository's HEAD commit.
@@ -1174,5 +1245,249 @@ mod tests {
         let mut sorted_files = all_files.clone();
         sorted_files.sort();
         assert_eq!(all_files, sorted_files, "Files should be sorted");
+    }
+
+    #[test]
+    fn test_get_changed_files_from_range_last_commit() {
+        use std::fs;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let repo_path = temp_dir.path();
+
+        let repo = Repository::init(repo_path).expect("Failed to init repository");
+        repo.set_head("refs/heads/main")
+            .expect("Failed to set HEAD to main");
+        let mut config = repo.config().expect("Failed to get config");
+        config
+            .set_str("user.name", "Test User")
+            .expect("Failed to set user.name");
+        config
+            .set_str("user.email", "test@example.com")
+            .expect("Failed to set user.email");
+
+        let signature = git2::Signature::now("Test User", "test@example.com")
+            .expect("Failed to create signature");
+
+        let create_commit = |message: &str, files: Vec<(&str, &str)>| {
+            for (filename, content) in files {
+                let file_path = repo_path.join(filename);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).expect("Failed to create parent directory");
+                }
+                fs::write(&file_path, content).expect("Failed to write file");
+            }
+
+            let mut index = repo.index().expect("Failed to get index");
+            index
+                .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+                .expect("Failed to add files to index");
+            index.write().expect("Failed to write index");
+            let tree_id = index.write_tree().expect("Failed to write tree");
+            let tree = repo.find_tree(tree_id).expect("Failed to find tree");
+
+            let parent_commit = match repo.head() {
+                Ok(head) => {
+                    let parent_oid = head.target().expect("Failed to get head target");
+                    Some(
+                        repo.find_commit(parent_oid)
+                            .expect("Failed to find parent commit"),
+                    )
+                }
+                Err(_) => None,
+            };
+
+            let parents: Vec<&git2::Commit> =
+                parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
+            .expect("Failed to create commit")
+        };
+
+        // Create two commits
+        create_commit("Initial commit", vec![("README.md", "Initial content")]);
+        create_commit("Second commit", vec![("file1.txt", "hello")]);
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
+            .expect("Failed to create GitOperations");
+
+        // HEAD~1..HEAD should return only file1.txt (from the last commit)
+        let changed_files = git_ops
+            .get_changed_files_from_range("HEAD~1..HEAD")
+            .expect("Failed to get changed files from range");
+
+        assert_eq!(changed_files.len(), 1, "Expected 1 changed file");
+        assert!(changed_files.contains(&"file1.txt".to_string()));
+        assert!(!changed_files.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn test_get_changed_files_from_range_multiple_commits() {
+        use std::fs;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let repo_path = temp_dir.path();
+
+        let repo = Repository::init(repo_path).expect("Failed to init repository");
+        repo.set_head("refs/heads/main")
+            .expect("Failed to set HEAD to main");
+        let mut config = repo.config().expect("Failed to get config");
+        config
+            .set_str("user.name", "Test User")
+            .expect("Failed to set user.name");
+        config
+            .set_str("user.email", "test@example.com")
+            .expect("Failed to set user.email");
+
+        let signature = git2::Signature::now("Test User", "test@example.com")
+            .expect("Failed to create signature");
+
+        let create_commit = |message: &str, files: Vec<(&str, &str)>| {
+            for (filename, content) in files {
+                let file_path = repo_path.join(filename);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).expect("Failed to create parent directory");
+                }
+                fs::write(&file_path, content).expect("Failed to write file");
+            }
+
+            let mut index = repo.index().expect("Failed to get index");
+            index
+                .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+                .expect("Failed to add files to index");
+            index.write().expect("Failed to write index");
+            let tree_id = index.write_tree().expect("Failed to write tree");
+            let tree = repo.find_tree(tree_id).expect("Failed to find tree");
+
+            let parent_commit = match repo.head() {
+                Ok(head) => {
+                    let parent_oid = head.target().expect("Failed to get head target");
+                    Some(
+                        repo.find_commit(parent_oid)
+                            .expect("Failed to find parent commit"),
+                    )
+                }
+                Err(_) => None,
+            };
+
+            let parents: Vec<&git2::Commit> =
+                parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
+            .expect("Failed to create commit")
+        };
+
+        // Create 4 commits
+        create_commit("Initial commit", vec![("README.md", "Initial content")]);
+        create_commit("Commit 2", vec![("file1.txt", "hello")]);
+        create_commit("Commit 3", vec![("file2.txt", "world")]);
+        create_commit("Commit 4", vec![("file3.txt", "foo")]);
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
+            .expect("Failed to create GitOperations");
+
+        // HEAD~3..HEAD should return files from last 3 commits
+        let changed_files = git_ops
+            .get_changed_files_from_range("HEAD~3..HEAD")
+            .expect("Failed to get changed files from range");
+
+        assert_eq!(changed_files.len(), 3, "Expected 3 changed files");
+        assert!(changed_files.contains(&"file1.txt".to_string()));
+        assert!(changed_files.contains(&"file2.txt".to_string()));
+        assert!(changed_files.contains(&"file3.txt".to_string()));
+        // README.md was in the initial commit, before the range
+        assert!(!changed_files.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn test_get_changed_files_from_range_single_ref() {
+        use std::fs;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let repo_path = temp_dir.path();
+
+        let repo = Repository::init(repo_path).expect("Failed to init repository");
+        repo.set_head("refs/heads/main")
+            .expect("Failed to set HEAD to main");
+        let mut config = repo.config().expect("Failed to get config");
+        config
+            .set_str("user.name", "Test User")
+            .expect("Failed to set user.name");
+        config
+            .set_str("user.email", "test@example.com")
+            .expect("Failed to set user.email");
+
+        let signature = git2::Signature::now("Test User", "test@example.com")
+            .expect("Failed to create signature");
+
+        let create_commit = |message: &str, files: Vec<(&str, &str)>| {
+            for (filename, content) in files {
+                let file_path = repo_path.join(filename);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).expect("Failed to create parent directory");
+                }
+                fs::write(&file_path, content).expect("Failed to write file");
+            }
+
+            let mut index = repo.index().expect("Failed to get index");
+            index
+                .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+                .expect("Failed to add files to index");
+            index.write().expect("Failed to write index");
+            let tree_id = index.write_tree().expect("Failed to write tree");
+            let tree = repo.find_tree(tree_id).expect("Failed to find tree");
+
+            let parent_commit = match repo.head() {
+                Ok(head) => {
+                    let parent_oid = head.target().expect("Failed to get head target");
+                    Some(
+                        repo.find_commit(parent_oid)
+                            .expect("Failed to find parent commit"),
+                    )
+                }
+                Err(_) => None,
+            };
+
+            let parents: Vec<&git2::Commit> =
+                parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
+            .expect("Failed to create commit")
+        };
+
+        // Create 3 commits
+        create_commit("Initial commit", vec![("README.md", "Initial content")]);
+        create_commit("Commit 2", vec![("file1.txt", "hello")]);
+        create_commit("Commit 3", vec![("file2.txt", "world")]);
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
+            .expect("Failed to create GitOperations");
+
+        // Single ref "HEAD~2" should be treated as "HEAD~2..HEAD"
+        let changed_files = git_ops
+            .get_changed_files_from_range("HEAD~2")
+            .expect("Failed to get changed files from range");
+
+        assert_eq!(changed_files.len(), 2, "Expected 2 changed files");
+        assert!(changed_files.contains(&"file1.txt".to_string()));
+        assert!(changed_files.contains(&"file2.txt".to_string()));
+        assert!(!changed_files.contains(&"README.md".to_string()));
     }
 }

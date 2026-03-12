@@ -1907,9 +1907,8 @@ fn wait_for_lsp_symbols(
 /// parsed and persisted to the database.
 ///
 /// Requires rust-analyzer to be installed.
-/// Run with: `cargo test -p swissarmyhammer-code-context -- test_real_lsp_document_symbols --ignored --nocapture`
+/// Run with: `cargo test -p swissarmyhammer-code-context -- test_real_lsp_document_symbols --nocapture`
 #[test]
-#[ignore]
 fn test_real_lsp_document_symbols() {
     use std::process::{Command, Stdio};
     use swissarmyhammer_code_context::db;
@@ -2240,11 +2239,10 @@ fn test_ts_call_edges_known_graph() {
 /// Verify that LSP-sourced call edges work for a known call graph using
 /// a real rust-analyzer process.
 ///
-/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Requires rust-analyzer to be installed.
 /// Run with:
-///   cargo test -p swissarmyhammer-code-context -- test_lsp_call_edges_known_graph --ignored --nocapture
+///   cargo test -p swissarmyhammer-code-context -- test_lsp_call_edges_known_graph --nocapture
 #[test]
-#[ignore]
 fn test_lsp_call_edges_known_graph() {
     use std::process::{Command, Stdio};
     use swissarmyhammer_code_context::{detect_rust_analyzer, LspJsonRpcClient};
@@ -2437,11 +2435,10 @@ edition = "2021"
 /// `get_symbol`, `search_symbol`, and `list_symbols` operations return
 /// correct results with non-empty source text.
 ///
-/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Requires rust-analyzer to be installed.
 /// Run with:
-///   cargo test --test integration_test -- test_lsp_symbol_lookup_end_to_end --ignored --nocapture
+///   cargo test --test integration_test -- test_lsp_symbol_lookup_end_to_end --nocapture
 #[test]
-#[ignore]
 fn test_lsp_symbol_lookup_end_to_end() {
     use std::process::{Command, Stdio};
     use swissarmyhammer_code_context::{detect_rust_analyzer, ensure_ts_symbols, LspJsonRpcClient};

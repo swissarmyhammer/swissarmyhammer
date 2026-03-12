@@ -958,11 +958,10 @@ pub fn subtract(a: i32, b: i32) -> i32 {
 /// 6. Re-run TS indexing, then LSP-index lib.rs again with the same server.
 /// 7. Verify both flags back to 1 and `lsp_symbols` contains `added_later`.
 ///
-/// Marked `#[ignore]` because it requires `rust-analyzer` to be installed.
+/// Requires `rust-analyzer` to be installed.
 /// Run with:
-///   cargo test --test workspace_e2e_test -- test_lsp_reindexing_after_file_change --ignored --nocapture
+///   cargo test --test workspace_e2e_test -- test_lsp_reindexing_after_file_change --nocapture
 #[test]
-#[ignore]
 fn test_lsp_reindexing_after_file_change() {
     use std::process::{Command, Stdio};
     use std::thread;

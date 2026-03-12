@@ -12,7 +12,6 @@ use tokio::sync::Mutex as TokioMutex;
 /// Test calling code_context tool with the workspace root project.
 /// Uses CARGO_MANIFEST_DIR to find the project, so it works on CI too.
 #[tokio::test]
-#[ignore]
 async fn test_code_context_on_real_project() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 

@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use swissarmyhammer_project_detection::ProjectType;
+use swissarmyhammer_project_detection::{detect_projects, ProjectType};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LspAvailability {
@@ -26,76 +26,22 @@ pub struct DoctorReport {
     pub lsp_servers: Vec<LspAvailability>,
 }
 
-/// All project types the doctor knows how to check for.
-const KNOWN_PROJECT_TYPES: &[(ProjectType, &[&str])] = &[
-    (ProjectType::Rust, &["Cargo.toml"]),
-    (ProjectType::NodeJs, &["package.json"]),
-    (ProjectType::Python, &["pyproject.toml", "setup.py"]),
-    (ProjectType::Go, &["go.mod"]),
-    (ProjectType::Php, &["composer.json"]),
-    (ProjectType::JavaMaven, &["pom.xml"]),
-    (
-        ProjectType::JavaGradle,
-        &["build.gradle", "build.gradle.kts"],
-    ),
-    (ProjectType::CSharp, &["*.csproj", "*.sln"]),
-    (ProjectType::Flutter, &["pubspec.yaml"]),
-];
-
-/// Detect all project types from filesystem markers.
+/// Detect all project types from filesystem markers using the canonical detection logic.
 ///
-/// Checks every known marker file so mixed-language workspaces (e.g. Rust + TS)
-/// report all applicable types instead of short-circuiting on the first match.
+/// Delegates to `swissarmyhammer_project_detection::detect_projects()` with depth 1
+/// (root only) and deduplicates the resulting project types.
 pub fn detect_project_types(root: &Path) -> Vec<String> {
-    let mut types = Vec::new();
-    for (ptype, markers) in KNOWN_PROJECT_TYPES {
-        for marker in *markers {
-            if marker.contains('*') {
-                // Glob pattern -- check if any matching file exists
-                if let Ok(entries) = std::fs::read_dir(root) {
-                    let suffix = marker.trim_start_matches('*');
-                    if entries
-                        .filter_map(|e| e.ok())
-                        .any(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(suffix)))
-                    {
-                        types.push(format!("{:?}", ptype).to_lowercase());
-                        break;
-                    }
-                }
-            } else if root.join(marker).exists() {
-                types.push(format!("{:?}", ptype).to_lowercase());
-                break;
-            }
-        }
-    }
-    types
+    detect_project_type_enums(root)
+        .into_iter()
+        .map(|pt| format!("{:?}", pt).to_lowercase())
+        .collect()
 }
 
-/// Detect project types as `ProjectType` enum values.
-///
-/// Same logic as `detect_project_types` but returns enum values for
-/// use with the LSP registry.
+/// Detect project types as `ProjectType` enum values using the canonical detection logic.
 fn detect_project_type_enums(root: &Path) -> Vec<ProjectType> {
-    let mut types = Vec::new();
-    for (ptype, markers) in KNOWN_PROJECT_TYPES {
-        for marker in *markers {
-            if marker.contains('*') {
-                if let Ok(entries) = std::fs::read_dir(root) {
-                    let suffix = marker.trim_start_matches('*');
-                    if entries
-                        .filter_map(|e| e.ok())
-                        .any(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(suffix)))
-                    {
-                        types.push(*ptype);
-                        break;
-                    }
-                }
-            } else if root.join(marker).exists() {
-                types.push(*ptype);
-                break;
-            }
-        }
-    }
+    let projects = detect_projects(root, Some(1)).unwrap_or_default();
+    let mut types: Vec<ProjectType> = projects.into_iter().map(|p| p.project_type).collect();
+    types.dedup();
     types
 }
 
