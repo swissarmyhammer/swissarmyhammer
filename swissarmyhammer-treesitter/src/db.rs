@@ -172,13 +172,17 @@ impl IndexDatabase {
     /// Get file count
     pub fn file_count(&self) -> SqliteResult<usize> {
         self.conn()
-            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM files", [], |row| {
+                row.get::<_, i64>(0).map(|v| v as usize)
+            })
     }
 
     /// Get chunk count
     pub fn chunk_count(&self) -> SqliteResult<usize> {
         self.conn()
-            .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| {
+                row.get::<_, i64>(0).map(|v| v as usize)
+            })
     }
 
     /// Get count of chunks with embeddings
@@ -186,7 +190,7 @@ impl IndexDatabase {
         self.conn().query_row(
             "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL",
             [],
-            |row| row.get(0),
+            |row| row.get::<_, i64>(0).map(|v| v as usize),
         )
     }
 

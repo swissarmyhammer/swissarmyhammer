@@ -48,7 +48,7 @@ pub struct EntityCache {
 /// Compute a deterministic content hash for an entity's fields.
 ///
 /// Copies fields into a `BTreeMap` for sorted-key order, then serializes
-/// to YAML via `serde_yaml::to_string` and feeds those bytes into a
+/// to YAML via `serde_yaml_ng::to_string` and feeds those bytes into a
 /// `DefaultHasher`. The sort step eliminates HashMap iteration-order
 /// nondeterminism so the hash is stable across calls.
 fn hash_entity(entity: &Entity) -> u64 {
@@ -56,7 +56,7 @@ fn hash_entity(entity: &Entity) -> u64 {
     use std::collections::BTreeMap;
 
     let sorted: BTreeMap<_, _> = entity.fields.iter().collect();
-    let yaml = serde_yaml::to_string(&sorted).unwrap_or_default();
+    let yaml = serde_yaml_ng::to_string(&sorted).unwrap_or_default();
     let mut hasher = DefaultHasher::new();
     yaml.hash(&mut hasher);
     hasher.finish()

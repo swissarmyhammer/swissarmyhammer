@@ -478,7 +478,7 @@ fn extract_name_from_frontmatter(content: &str) -> Option<String> {
     let rest = &content[3..];
     let end = rest.find("---")?;
     let frontmatter = &rest[..end];
-    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).ok()?;
     yaml.get("name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())

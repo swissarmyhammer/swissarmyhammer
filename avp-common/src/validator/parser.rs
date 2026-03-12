@@ -161,8 +161,8 @@ fn parse_validator_internal<C: DirectoryConfig>(
     let rendered = render_frontmatter(frontmatter_str);
 
     // Parse YAML frontmatter
-    let mut yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
+    let mut yaml_value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&rendered).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to parse YAML frontmatter: {}", e),
         })?;
@@ -177,7 +177,7 @@ fn parse_validator_internal<C: DirectoryConfig>(
 
     // Deserialize to typed frontmatter
     let mut frontmatter: ValidatorFrontmatter =
-        serde_yaml::from_value(yaml_value).map_err(|e| AvpError::Validator {
+        serde_yaml_ng::from_value(yaml_value).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to deserialize frontmatter: {}", e),
         })?;
@@ -277,8 +277,8 @@ pub fn parse_ruleset_manifest<C: DirectoryConfig>(
     let rendered = render_frontmatter(frontmatter_str);
 
     // Parse YAML frontmatter
-    let mut yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
+    let mut yaml_value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&rendered).map_err(|e| AvpError::Validator {
             validator: format!("{}/VALIDATOR.md", dir_path.display()),
             message: format!("failed to parse YAML frontmatter: {}", e),
         })?;
@@ -293,7 +293,7 @@ pub fn parse_ruleset_manifest<C: DirectoryConfig>(
 
     // Deserialize to typed manifest
     let mut manifest: RuleSetManifest =
-        serde_yaml::from_value(yaml_value).map_err(|e| AvpError::Validator {
+        serde_yaml_ng::from_value(yaml_value).map_err(|e| AvpError::Validator {
             validator: format!("{}/VALIDATOR.md", dir_path.display()),
             message: format!("failed to deserialize manifest: {}", e),
         })?;
@@ -337,15 +337,15 @@ pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
     let rendered = render_frontmatter(frontmatter_str);
 
     // Parse YAML frontmatter
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&rendered).map_err(|e| AvpError::Validator {
+    let yaml_value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&rendered).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to parse YAML frontmatter: {}", e),
         })?;
 
     // Deserialize to typed frontmatter
     let mut frontmatter: RuleFrontmatter =
-        serde_yaml::from_value(yaml_value).map_err(|e| AvpError::Validator {
+        serde_yaml_ng::from_value(yaml_value).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to deserialize frontmatter: {}", e),
         })?;

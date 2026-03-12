@@ -78,7 +78,7 @@ impl ViewsContext {
         };
 
         for (name, yaml) in sources {
-            match serde_yaml::from_str::<ViewDef>(yaml) {
+            match serde_yaml_ng::from_str::<ViewDef>(yaml) {
                 Ok(def) => {
                     // Later entries override earlier ones (same id)
                     if let Some(&old_idx) = ctx.id_index.get(&def.id) {
@@ -131,7 +131,7 @@ impl ViewsContext {
 
     /// Write (create or update) a view definition. Persists to YAML immediately.
     pub async fn write_view(&mut self, def: &ViewDef) -> Result<()> {
-        let yaml = serde_yaml::to_string(def)?;
+        let yaml = serde_yaml_ng::to_string(def)?;
         let path = self.view_path(&def.id);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
@@ -205,7 +205,7 @@ impl ViewsContext {
                 continue;
             }
             let content = fs::read_to_string(&path).await?;
-            match serde_yaml::from_str::<ViewDef>(&content) {
+            match serde_yaml_ng::from_str::<ViewDef>(&content) {
                 Ok(def) => {
                     let idx = self.views.len();
                     self.id_index.insert(def.id.clone(), idx);

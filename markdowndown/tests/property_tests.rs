@@ -99,8 +99,8 @@ mod frontmatter_properties {
                 date_downloaded: timestamp,
             };
 
-            let yaml = serde_yaml::to_string(&frontmatter).unwrap();
-            let deserialized: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+            let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap();
+            let deserialized: Frontmatter = serde_yaml_ng::from_str(&yaml).unwrap();
 
             prop_assert_eq!(deserialized.source_url, url);
             prop_assert_eq!(deserialized.exporter, exporter);
@@ -122,7 +122,7 @@ mod frontmatter_properties {
 
             let yaml = yaml_result.unwrap();
             let yaml_only = yaml.trim_start_matches("---\n").trim_end_matches("---\n");
-            let parsed: Frontmatter = serde_yaml::from_str(yaml_only).unwrap();
+            let parsed: Frontmatter = serde_yaml_ng::from_str(yaml_only).unwrap();
 
             prop_assert_eq!(parsed.source_url.as_str(), url_str);
             prop_assert_eq!(parsed.exporter, exporter);
@@ -197,7 +197,7 @@ date_downloaded: "{timestamp_str}"
 
             let yaml = yaml_result.unwrap();
             let yaml_only = yaml.trim_start_matches("---\n").trim_end_matches("---\n");
-            let frontmatter: Frontmatter = serde_yaml::from_str(yaml_only).unwrap();
+            let frontmatter: Frontmatter = serde_yaml_ng::from_str(yaml_only).unwrap();
 
             prop_assert_eq!(frontmatter.source_url.as_str(), url_str);
             prop_assert_eq!(frontmatter.exporter, converter_name);

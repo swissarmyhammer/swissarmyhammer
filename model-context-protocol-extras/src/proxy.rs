@@ -36,19 +36,11 @@ impl CapturingClientHandler {
 
 impl ClientHandler for CapturingClientHandler {
     fn get_info(&self) -> ClientInfo {
-        ClientInfo {
-            meta: None,
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "mcp-proxy-client".to_string(),
-                title: Some("MCP Proxy Client".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: None,
-                website_url: None,
-                icons: None,
-            },
-        }
+        ClientInfo::new(
+            ClientCapabilities::default(),
+            Implementation::new("mcp-proxy-client", env!("CARGO_PKG_VERSION"))
+                .with_title("MCP Proxy Client"),
+        )
     }
 
     async fn on_progress(
@@ -136,27 +128,20 @@ impl ServerHandler for McpProxyHandler {
     ) -> Result<InitializeResult, McpError> {
         tracing::debug!("McpProxy: initialize (upstream: {})", self.upstream_url);
 
-        Ok(InitializeResult {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                tools: Some(ToolsCapability {
-                    list_changed: Some(false),
-                }),
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(false),
-                }),
-                ..Default::default()
-            },
-            instructions: Some("MCP proxy with notification capture".into()),
-            server_info: Implementation {
-                name: "mcp-notification-proxy".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                title: Some("MCP Notification Capturing Proxy".into()),
-                description: None,
-                website_url: None,
-                icons: None,
-            },
-        })
+        let mut caps = ServerCapabilities::default();
+        caps.tools = Some(ToolsCapability {
+            list_changed: Some(false),
+        });
+        caps.prompts = Some(PromptsCapability {
+            list_changed: Some(false),
+        });
+
+        Ok(ServerInfo::new(caps)
+            .with_server_info(
+                Implementation::new("mcp-notification-proxy", env!("CARGO_PKG_VERSION"))
+                    .with_title("MCP Notification Capturing Proxy"),
+            )
+            .with_instructions("MCP proxy with notification capture"))
     }
 
     async fn list_tools(
@@ -205,27 +190,20 @@ impl ServerHandler for McpProxyHandler {
     }
 
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                tools: Some(ToolsCapability {
-                    list_changed: Some(false),
-                }),
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(false),
-                }),
-                ..Default::default()
-            },
-            server_info: Implementation {
-                name: "mcp-notification-proxy".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                title: Some("MCP Notification Capturing Proxy".into()),
-                description: None,
-                website_url: None,
-                icons: None,
-            },
-            instructions: Some("MCP proxy with notification capture".into()),
-        }
+        let mut caps = ServerCapabilities::default();
+        caps.tools = Some(ToolsCapability {
+            list_changed: Some(false),
+        });
+        caps.prompts = Some(PromptsCapability {
+            list_changed: Some(false),
+        });
+
+        ServerInfo::new(caps)
+            .with_server_info(
+                Implementation::new("mcp-notification-proxy", env!("CARGO_PKG_VERSION"))
+                    .with_title("MCP Notification Capturing Proxy"),
+            )
+            .with_instructions("MCP proxy with notification capture")
     }
 }
 

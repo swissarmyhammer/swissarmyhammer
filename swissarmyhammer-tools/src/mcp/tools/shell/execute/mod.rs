@@ -1429,17 +1429,11 @@ fn format_success_result(result: ShellExecutionResult) -> Result<CallToolResult,
         result.execution_time_ms
     );
 
-    Ok(CallToolResult {
-        content: vec![rmcp::model::Annotated::new(
-            rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                text: json_response,
-                meta: None,
-            }),
-            None,
-        )],
-        structured_content: None,
-        meta: None,
-        is_error: Some(is_error),
+    let content = vec![rmcp::model::Content::text(json_response)];
+    Ok(if is_error {
+        CallToolResult::error(content)
+    } else {
+        CallToolResult::success(content)
     })
 }
 
@@ -1448,18 +1442,9 @@ fn format_error_result(shell_error: ShellError) -> Result<CallToolResult, McpErr
     let error_message = format!("Shell execution failed: {shell_error}");
     tracing::error!("{}", error_message);
 
-    Ok(CallToolResult {
-        content: vec![rmcp::model::Annotated::new(
-            rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                text: error_message,
-                meta: None,
-            }),
-            None,
-        )],
-        structured_content: None,
-        meta: None,
-        is_error: Some(true),
-    })
+    Ok(CallToolResult::error(vec![rmcp::model::Content::text(
+        error_message,
+    )]))
 }
 
 /// Operation metadata for executing shell commands

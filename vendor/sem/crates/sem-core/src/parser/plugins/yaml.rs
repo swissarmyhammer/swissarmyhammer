@@ -24,8 +24,8 @@ impl SemanticParserPlugin for YamlParserPlugin {
             return Vec::new();
         }
 
-        // Parse with serde_yaml for content hashing
-        let parsed: serde_yaml::Value = match serde_yaml::from_str(content) {
+        // Parse with serde_yaml_ng for content hashing
+        let parsed: serde_yaml_ng::Value = match serde_yaml_ng::from_str(content) {
             Ok(v) => v,
             Err(_) => return Vec::new(),
         };
@@ -44,7 +44,7 @@ impl SemanticParserPlugin for YamlParserPlugin {
             };
             let is_section = value.is_mapping() || value.is_sequence();
             let value_str = if is_section {
-                serde_yaml::to_string(value)
+                serde_yaml_ng::to_string(value)
                     .unwrap_or_default()
                     .trim()
                     .to_string()
@@ -133,12 +133,12 @@ fn trim_trailing_blanks_yaml(lines: &[&str], start: usize, next_start: usize) ->
     end
 }
 
-fn yaml_value_to_string(value: &serde_yaml::Value) -> String {
+fn yaml_value_to_string(value: &serde_yaml_ng::Value) -> String {
     match value {
-        serde_yaml::Value::String(s) => s.clone(),
-        serde_yaml::Value::Number(n) => n.to_string(),
-        serde_yaml::Value::Bool(b) => b.to_string(),
-        serde_yaml::Value::Null => "null".to_string(),
+        serde_yaml_ng::Value::String(s) => s.clone(),
+        serde_yaml_ng::Value::Number(n) => n.to_string(),
+        serde_yaml_ng::Value::Bool(b) => b.to_string(),
+        serde_yaml_ng::Value::Null => "null".to_string(),
         _ => format!("{:?}", value),
     }
 }

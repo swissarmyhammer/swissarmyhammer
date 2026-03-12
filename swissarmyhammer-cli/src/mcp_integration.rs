@@ -238,7 +238,7 @@ pub mod response_formatting {
     pub fn format_success_response(result: &CallToolResult) -> String {
         // First check if there's structured content - serialize it to YAML
         if let Some(ref data) = result.structured_content {
-            return serde_yaml::to_string(data).unwrap_or_else(|_| {
+            return serde_yaml_ng::to_string(data).unwrap_or_else(|_| {
                 serde_json::to_string_pretty(data)
                     .unwrap_or_else(|_| "Operation successful".to_string())
             });
@@ -248,7 +248,7 @@ pub mod response_formatting {
         if let Ok(json_value) = extract_json_data(result) {
             // Successfully parsed as JSON - convert to YAML with leading newline
             let text = extract_text_content(result).unwrap_or_default();
-            return serde_yaml::to_string(&json_value)
+            return serde_yaml_ng::to_string(&json_value)
                 .map(|yaml| format!("\n{}", yaml))
                 .unwrap_or(text);
         }
@@ -312,20 +312,10 @@ mod tests {
 
     #[test]
     fn test_response_formatting() {
-        use rmcp::model::{Annotated, RawContent, RawTextContent};
+        use rmcp::model::Content;
 
-        let success_result = CallToolResult {
-            content: vec![Annotated::new(
-                RawContent::Text(RawTextContent {
-                    text: "Operation successful".to_string(),
-                    meta: None,
-                }),
-                None,
-            )],
-            structured_content: None,
-            meta: None,
-            is_error: Some(false),
-        };
+        let success_result =
+            CallToolResult::success(vec![Content::text("Operation successful".to_string())]);
 
         let formatted = response_formatting::format_success_response(&success_result);
         assert!(formatted.contains("Operation successful"));

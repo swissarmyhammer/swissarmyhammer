@@ -33,7 +33,7 @@ pub struct McpFrontmatter {
 }
 
 /// Parse the `mcp` section from TOOL.md YAML frontmatter.
-pub fn parse_tool_frontmatter(yaml: &serde_yaml::Value) -> Result<McpFrontmatter, RegistryError> {
+pub fn parse_tool_frontmatter(yaml: &serde_yaml_ng::Value) -> Result<McpFrontmatter, RegistryError> {
     let mcp = yaml.get("mcp").ok_or_else(|| {
         RegistryError::Validation("TOOL.md frontmatter missing 'mcp' section".to_string())
     })?;
@@ -182,7 +182,7 @@ fn write_json_config(path: &Path, value: &serde_json::Value) -> Result<(), Regis
 }
 
 /// Parse raw YAML frontmatter from a markdown file, returning the YAML Value.
-pub fn parse_yaml_frontmatter(path: &Path) -> Result<serde_yaml::Value, RegistryError> {
+pub fn parse_yaml_frontmatter(path: &Path) -> Result<serde_yaml_ng::Value, RegistryError> {
     let content = std::fs::read_to_string(path)?;
     let content = content.trim();
 
@@ -199,7 +199,7 @@ pub fn parse_yaml_frontmatter(path: &Path) -> Result<serde_yaml::Value, Registry
     })?;
 
     let frontmatter = &rest[..end];
-    serde_yaml::from_str(frontmatter)
+    serde_yaml_ng::from_str(frontmatter)
         .map_err(|e| RegistryError::Validation(format!("Invalid YAML frontmatter: {}", e)))
 }
 
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_parse_tool_frontmatter() {
-        let yaml: serde_yaml::Value = serde_yaml::from_str(
+        let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(
             r#"
 name: my-tool
 mcp:
@@ -252,7 +252,7 @@ mcp:
 
     #[test]
     fn test_parse_tool_frontmatter_missing_mcp() {
-        let yaml: serde_yaml::Value = serde_yaml::from_str("name: no-mcp\n").unwrap();
+        let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str("name: no-mcp\n").unwrap();
         assert!(parse_tool_frontmatter(&yaml).is_err());
     }
 

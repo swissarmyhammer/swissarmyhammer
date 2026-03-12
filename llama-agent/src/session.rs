@@ -209,7 +209,7 @@ impl SessionManager {
         transcript: &TranscriptEntry,
         path: &PathBuf,
     ) -> Result<(), SessionError> {
-        let yaml_content = serde_yaml::to_string(transcript).map_err(|e| {
+        let yaml_content = serde_yaml_ng::to_string(transcript).map_err(|e| {
             SessionError::InvalidState(format!("Failed to serialize transcript: {}", e))
         })?;
 
@@ -247,7 +247,7 @@ impl SessionManager {
             // Read existing transcript
             let mut transcript =
                 match fs::read_to_string(transcript_path).await {
-                    Ok(content) => serde_yaml::from_str::<TranscriptEntry>(&content)
+                    Ok(content) => serde_yaml_ng::from_str::<TranscriptEntry>(&content)
                         .unwrap_or_else(|_| TranscriptEntry {
                             session_id: session.id,
                             created_at: session

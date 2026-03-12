@@ -50,7 +50,7 @@
 //! };
 //!
 //! // Serialize to YAML for document headers
-//! let yaml = serde_yaml::to_string(&frontmatter)?;
+//! let yaml = serde_yaml_ng::to_string(&frontmatter)?;
 //! println!("YAML frontmatter:\n{}", yaml);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -72,7 +72,7 @@
 //! };
 //!
 //! // Generate complete markdown document with frontmatter
-//! let yaml_header = serde_yaml::to_string(&metadata)?;
+//! let yaml_header = serde_yaml_ng::to_string(&metadata)?;
 //! let complete_document = format!("---\n{}---\n\n{}", yaml_header, content);
 //!
 //! println!("Complete document:\n{}", complete_document);
@@ -274,7 +274,7 @@ impl Markdown {
         }
 
         // Validate that it's parseable as YAML
-        serde_yaml::from_str::<serde_yaml::Value>(yaml_content).is_ok()
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml_content).is_ok()
     }
 
     /// Extracts YAML section from content.
@@ -1309,8 +1309,8 @@ mod tests {
     #[test]
     fn test_urltype_serialization() {
         let url_type = UrlType::GoogleDocs;
-        let serialized = serde_yaml::to_string(&url_type).unwrap();
-        let deserialized: UrlType = serde_yaml::from_str(&serialized).unwrap();
+        let serialized = serde_yaml_ng::to_string(&url_type).unwrap();
+        let deserialized: UrlType = serde_yaml_ng::from_str(&serialized).unwrap();
         assert_eq!(url_type, deserialized);
     }
 
@@ -1370,8 +1370,8 @@ mod tests {
                 .with_timezone(&Utc),
         };
 
-        let yaml = serde_yaml::to_string(&frontmatter).unwrap();
-        let deserialized: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap();
+        let deserialized: Frontmatter = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(frontmatter, deserialized);
     }
 
@@ -1392,7 +1392,7 @@ mod tests {
             };
 
             // Test that all components work together
-            let yaml_frontmatter = serde_yaml::to_string(&frontmatter).unwrap();
+            let yaml_frontmatter = serde_yaml_ng::to_string(&frontmatter).unwrap();
             let full_document = format!("---\n{yaml_frontmatter}---\n\n{markdown}");
 
             assert!(full_document.contains("# Hello World"));
@@ -1445,10 +1445,10 @@ mod tests {
             };
 
             // Serialize to YAML
-            let yaml = serde_yaml::to_string(&original_frontmatter).unwrap();
+            let yaml = serde_yaml_ng::to_string(&original_frontmatter).unwrap();
 
             // Deserialize back
-            let deserialized: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+            let deserialized: Frontmatter = serde_yaml_ng::from_str(&yaml).unwrap();
 
             // Verify all fields match exactly
             assert_eq!(original_frontmatter.source_url, deserialized.source_url);
@@ -1606,8 +1606,8 @@ mod tests {
                 };
 
                 // Test YAML roundtrip
-                let yaml = serde_yaml::to_string(&original).unwrap();
-                let from_yaml: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+                let yaml = serde_yaml_ng::to_string(&original).unwrap();
+                let from_yaml: Frontmatter = serde_yaml_ng::from_str(&yaml).unwrap();
                 assert_eq!(
                     original, from_yaml,
                     "YAML roundtrip should preserve all data"
@@ -1973,8 +1973,8 @@ mod tests {
                 .with_info("Additional context");
 
                 // Test that ErrorContext can be serialized/deserialized
-                let yaml = serde_yaml::to_string(&context).unwrap();
-                let deserialized: ErrorContext = serde_yaml::from_str(&yaml).unwrap();
+                let yaml = serde_yaml_ng::to_string(&context).unwrap();
+                let deserialized: ErrorContext = serde_yaml_ng::from_str(&yaml).unwrap();
 
                 assert_eq!(context.url, deserialized.url);
                 assert_eq!(context.operation, deserialized.operation);
@@ -1986,33 +1986,33 @@ mod tests {
             fn test_error_kind_serialization() {
                 // Test that all error kinds can be serialized/deserialized
                 let validation_kind = ValidationErrorKind::InvalidUrl;
-                let yaml = serde_yaml::to_string(&validation_kind).unwrap();
-                let deserialized: ValidationErrorKind = serde_yaml::from_str(&yaml).unwrap();
+                let yaml = serde_yaml_ng::to_string(&validation_kind).unwrap();
+                let deserialized: ValidationErrorKind = serde_yaml_ng::from_str(&yaml).unwrap();
                 assert_eq!(validation_kind, deserialized);
 
                 let network_kind = NetworkErrorKind::ServerError(TEST_HTTP_INTERNAL_SERVER_ERROR);
-                let yaml = serde_yaml::to_string(&network_kind).unwrap();
-                let deserialized: NetworkErrorKind = serde_yaml::from_str(&yaml).unwrap();
+                let yaml = serde_yaml_ng::to_string(&network_kind).unwrap();
+                let deserialized: NetworkErrorKind = serde_yaml_ng::from_str(&yaml).unwrap();
                 assert_eq!(network_kind, deserialized);
 
                 let auth_kind = AuthErrorKind::TokenExpired;
-                let yaml = serde_yaml::to_string(&auth_kind).unwrap();
-                let deserialized: AuthErrorKind = serde_yaml::from_str(&yaml).unwrap();
+                let yaml = serde_yaml_ng::to_string(&auth_kind).unwrap();
+                let deserialized: AuthErrorKind = serde_yaml_ng::from_str(&yaml).unwrap();
                 assert_eq!(auth_kind, deserialized);
 
                 let content_kind = ContentErrorKind::ParsingFailed;
-                let yaml = serde_yaml::to_string(&content_kind).unwrap();
-                let deserialized: ContentErrorKind = serde_yaml::from_str(&yaml).unwrap();
+                let yaml = serde_yaml_ng::to_string(&content_kind).unwrap();
+                let deserialized: ContentErrorKind = serde_yaml_ng::from_str(&yaml).unwrap();
                 assert_eq!(content_kind, deserialized);
 
                 let converter_kind = ConverterErrorKind::ExternalToolFailed;
-                let yaml = serde_yaml::to_string(&converter_kind).unwrap();
-                let deserialized: ConverterErrorKind = serde_yaml::from_str(&yaml).unwrap();
+                let yaml = serde_yaml_ng::to_string(&converter_kind).unwrap();
+                let deserialized: ConverterErrorKind = serde_yaml_ng::from_str(&yaml).unwrap();
                 assert_eq!(converter_kind, deserialized);
 
                 let config_kind = ConfigErrorKind::MissingDependency;
-                let yaml = serde_yaml::to_string(&config_kind).unwrap();
-                let deserialized: ConfigErrorKind = serde_yaml::from_str(&yaml).unwrap();
+                let yaml = serde_yaml_ng::to_string(&config_kind).unwrap();
+                let deserialized: ConfigErrorKind = serde_yaml_ng::from_str(&yaml).unwrap();
                 assert_eq!(config_kind, deserialized);
             }
         }
@@ -2212,12 +2212,12 @@ mod tests {
                     Url::new("https://docs.google.com/document/d/test123".to_string()).unwrap();
 
                 // Test YAML serialization
-                let yaml = serde_yaml::to_string(&original_url).unwrap();
+                let yaml = serde_yaml_ng::to_string(&original_url).unwrap();
                 assert!(yaml.contains("https://docs.google.com"));
 
                 // Test deserialization
                 let yaml_input = "\"https://github.com/user/repo/issues/42\"";
-                let deserialized: Result<Url, _> = serde_yaml::from_str(yaml_input);
+                let deserialized: Result<Url, _> = serde_yaml_ng::from_str(yaml_input);
                 assert!(deserialized.is_ok());
 
                 let url = deserialized.unwrap();
@@ -2235,7 +2235,7 @@ mod tests {
                 ];
 
                 for yaml_input in invalid_yaml_inputs {
-                    let result: Result<Url, _> = serde_yaml::from_str(yaml_input);
+                    let result: Result<Url, _> = serde_yaml_ng::from_str(yaml_input);
                     assert!(
                         result.is_err(),
                         "Should reject invalid URL during deserialization: {yaml_input}"
@@ -2574,8 +2574,8 @@ mod tests {
                     // Test YAML serialization roundtrip
                     test_serialization_roundtrip(
                         &variant,
-                        |v| serde_yaml::to_string(v).map_err(Into::into),
-                        |s| serde_yaml::from_str(s).map_err(Into::into),
+                        |v| serde_yaml_ng::to_string(v).map_err(Into::into),
+                        |s| serde_yaml_ng::from_str(s).map_err(Into::into),
                     );
 
                     // Test JSON serialization roundtrip

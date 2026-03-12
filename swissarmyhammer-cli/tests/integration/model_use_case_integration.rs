@@ -442,7 +442,7 @@ async fn test_model_configuration_persistence() -> Result<()> {
         .join("sah.yaml");
     let config_content = fs::read_to_string(config_path)?;
 
-    let config_value: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
+    let config_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content)?;
 
     assert!(
         config_value.get("model").is_some(),

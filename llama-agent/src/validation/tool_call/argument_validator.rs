@@ -2,7 +2,7 @@
 
 use crate::types::{Session, ToolCall};
 use crate::validation::{ValidationError, ValidationResult, Validator};
-use jsonschema::JSONSchema;
+use jsonschema::Validator as JsonSchemaValidator;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -68,7 +68,7 @@ impl ToolArgumentValidator {
         &self,
         tool_name: &str,
         schema: &Value,
-    ) -> Result<JSONSchema, ValidationError> {
+    ) -> Result<JsonSchemaValidator, ValidationError> {
         // Create a simple cache key from tool name and schema string
         let schema_str = serde_json::to_string(schema).unwrap_or_default();
         let cache_key = format!("{}:{}", tool_name, schema_str);
@@ -79,8 +79,8 @@ impl ToolArgumentValidator {
             if let Some(cached_result) = cache.get(&cache_key) {
                 match cached_result {
                     Ok(cached_schema) => {
-                        // Re-compile from cached schema (JSONSchema compilation is relatively fast)
-                        return JSONSchema::compile(cached_schema).map_err(|e| {
+                        // Re-compile from cached schema (compilation is relatively fast)
+                        return jsonschema::validator_for(cached_schema).map_err(|e| {
                             ValidationError::schema_validation(format!(
                                 "Failed to re-compile cached JSON schema for tool '{}': {}",
                                 tool_name, e
@@ -95,7 +95,7 @@ impl ToolArgumentValidator {
         }
 
         // Compile the schema if not cached
-        let compiled_schema = JSONSchema::compile(schema).map_err(|e| {
+        let compiled_schema = jsonschema::validator_for(schema).map_err(|e| {
             let error_msg = format!(
                 "Failed to compile JSON schema for tool '{}': {}",
                 tool_name, e
@@ -121,12 +121,13 @@ impl ToolArgumentValidator {
     fn validate_arguments_against_schema(
         &self,
         tool_call: &ToolCall,
-        schema: &JSONSchema,
+        schema: &JsonSchemaValidator,
     ) -> ValidationResult {
-        let validation_result = schema.validate(&tool_call.arguments);
+        let errors: Vec<_> = schema.iter_errors(&tool_call.arguments).collect();
 
-        if let Err(errors) = validation_result {
+        if !errors.is_empty() {
             let error_messages: Vec<String> = errors
+                .iter()
                 .map(|error| {
                     format!(
                         "{}. Value at '{}' failed validation",

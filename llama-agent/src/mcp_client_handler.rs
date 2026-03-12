@@ -54,19 +54,14 @@ impl NotifyingClientHandler {
 
 impl ClientHandler for NotifyingClientHandler {
     fn get_info(&self) -> rmcp::model::ClientInfo {
-        rmcp::model::ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: rmcp::model::ClientCapabilities::default(),
-            client_info: rmcp::model::Implementation {
-                name: "llama_agent_notifying_client".to_string(),
-                title: Some("Llama Agent Notifying MCP Client".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: None,
-                website_url: None,
-                icons: None,
-            },
-            meta: None,
-        }
+        rmcp::model::ClientInfo::new(
+            rmcp::model::ClientCapabilities::default(),
+            rmcp::model::Implementation::new(
+                "llama_agent_notifying_client",
+                env!("CARGO_PKG_VERSION"),
+            )
+            .with_title("Llama Agent Notifying MCP Client"),
+        )
     }
 
     async fn on_progress(

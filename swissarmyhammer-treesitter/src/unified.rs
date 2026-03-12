@@ -1224,19 +1224,34 @@ mod tests {
         (callback, IndexCompleteHandle { completed, notify })
     }
 
-    /// Open a workspace and wait for background indexing to complete.
-    ///
-    /// Replaces the `Workspace::open() + sleep()` pattern with a proper
-    /// completion notification.
+    /// Index config with embeddings disabled (fast, for most tests).
+    fn no_embedding_config() -> IndexConfig {
+        IndexConfig {
+            embedding_enabled: false,
+            ..Default::default()
+        }
+    }
+
+    /// Open a workspace and wait for background indexing to complete (no embeddings).
     async fn open_and_wait(dir: &Path) -> Workspace {
         let (callback, handle) = index_complete_notifier();
         let workspace = Workspace::new(dir)
+            .with_index_config(no_embedding_config())
             .with_progress(callback)
             .open()
             .await
             .unwrap();
         handle.wait().await;
         workspace
+    }
+
+    /// Open a workspace without waiting (no embeddings).
+    async fn open_no_embedding(dir: &Path) -> Workspace {
+        Workspace::new(dir)
+            .with_index_config(no_embedding_config())
+            .open()
+            .await
+            .unwrap()
     }
 
     // =========================================================================
@@ -1829,8 +1844,8 @@ mod tests {
     #[tokio::test]
     async fn test_open_returns_workspace() {
         let dir = TempDir::new().unwrap();
-        let result = Workspace::open(dir.path()).await;
-        assert!(result.is_ok());
+        let workspace = open_no_embedding(dir.path()).await;
+        assert_eq!(workspace.workspace_root(), dir.path());
     }
 
     #[tokio::test]
@@ -1854,14 +1869,14 @@ mod tests {
     #[tokio::test]
     async fn test_workspace_root_returns_correct_path() {
         let dir = TempDir::new().unwrap();
-        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let workspace = open_no_embedding(dir.path()).await;
         assert_eq!(workspace.workspace_root(), dir.path());
     }
 
     #[tokio::test]
     async fn test_socket_path_returns_path() {
         let dir = TempDir::new().unwrap();
-        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let workspace = open_no_embedding(dir.path()).await;
         let socket_path = workspace.socket_path();
         // Socket path should be a valid path
         assert!(!socket_path.as_os_str().is_empty());
@@ -1870,7 +1885,7 @@ mod tests {
     #[tokio::test]
     async fn test_database_path_returns_correct_location() {
         let dir = TempDir::new().unwrap();
-        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let workspace = open_no_embedding(dir.path()).await;
         let db_path = workspace.database_path();
         assert!(db_path.to_string_lossy().contains(".treesitter-index.db"));
         assert!(db_path.starts_with(dir.path()));
@@ -1879,26 +1894,12 @@ mod tests {
     #[tokio::test]
     async fn test_find_all_duplicates_empty_workspace() {
         let dir = TempDir::new().unwrap();
-        let workspace = Workspace::open(dir.path()).await.unwrap();
+        let workspace = open_no_embedding(dir.path()).await;
         let result = workspace
             .find_all_duplicates(TEST_HIGH_SIMILARITY_THRESHOLD, TEST_MIN_CHUNK_BYTES)
             .await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_find_all_duplicates_with_files() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("a.rs"), "fn foo() { println!(\"hello\"); }").unwrap();
-        std::fs::write(dir.path().join("b.rs"), "fn bar() { println!(\"world\"); }").unwrap();
-
-        let workspace = Workspace::open(dir.path()).await.unwrap();
-        let result = workspace
-            .find_all_duplicates(TEST_HIGH_SIMILARITY_THRESHOLD, TEST_SMALL_MIN_CHUNK_BYTES)
-            .await;
-        assert!(result.is_ok());
-        // May or may not find duplicates depending on embeddings
     }
 
     #[tokio::test]

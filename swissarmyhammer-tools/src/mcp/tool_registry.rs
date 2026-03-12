@@ -222,8 +222,8 @@ use super::plan_notifications::PlanSender;
 use super::tool_handlers::ToolHandlers;
 use owo_colors::OwoColorize;
 use rmcp::model::{
-    Annotated, CallToolResult, LoggingLevel, LoggingMessageNotification,
-    LoggingMessageNotificationParam, RawContent, RawTextContent, Tool,
+    CallToolResult, Content, LoggingLevel, LoggingMessageNotification,
+    LoggingMessageNotificationParam, Tool,
 };
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::HashMap;
@@ -983,17 +983,12 @@ impl ToolRegistry {
                     serde_json::Map::new()
                 };
 
-                Tool {
-                    name: McpTool::name(tool.as_ref()).into(),
-                    description: Some(tool.description().into()),
-                    input_schema: std::sync::Arc::new(schema_map),
-                    annotations: None,
-                    output_schema: None,
-                    icons: None,
-                    title: Some(McpTool::name(tool.as_ref()).into()),
-                    meta: None,
-                    execution: None,
-                }
+                Tool::new(
+                    McpTool::name(tool.as_ref()),
+                    tool.description(),
+                    schema_map,
+                )
+                .with_title(McpTool::name(tool.as_ref()))
             })
             .collect()
     }
@@ -1341,18 +1336,7 @@ impl BaseToolImpl {
     ///
     /// * `CallToolResult` - A success response
     pub fn create_success_response<T: Into<String>>(content: T) -> CallToolResult {
-        CallToolResult {
-            content: vec![Annotated::new(
-                RawContent::Text(RawTextContent {
-                    text: content.into(),
-                    meta: None,
-                }),
-                None,
-            )],
-            structured_content: None,
-            is_error: Some(false),
-            meta: None,
-        }
+        CallToolResult::success(vec![Content::text(content.into())])
     }
 
     /// Create an error response with the given error message
@@ -1374,18 +1358,7 @@ impl BaseToolImpl {
             None => error.into(),
         };
 
-        CallToolResult {
-            content: vec![Annotated::new(
-                RawContent::Text(RawTextContent {
-                    text: error_text,
-                    meta: None,
-                }),
-                None,
-            )],
-            structured_content: None,
-            is_error: Some(true),
-            meta: None,
-        }
+        CallToolResult::error(vec![Content::text(error_text)])
     }
 }
 
@@ -1798,7 +1771,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::{Annotated, RawContent, RawTextContent};
+    use rmcp::model::RawContent;
 
     /// Mock tool for testing
     struct MockTool {
@@ -1849,18 +1822,10 @@ mod tests {
             _arguments: serde_json::Map<String, serde_json::Value>,
             _context: &ToolContext,
         ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(CallToolResult {
-                content: vec![Annotated::new(
-                    RawContent::Text(RawTextContent {
-                        text: format!("Mock tool {} executed", self.name),
-                        meta: None,
-                    }),
-                    None,
-                )],
-                structured_content: None,
-                is_error: Some(false),
-                meta: None,
-            })
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "Mock tool {} executed",
+                self.name
+            ))]))
         }
     }
 

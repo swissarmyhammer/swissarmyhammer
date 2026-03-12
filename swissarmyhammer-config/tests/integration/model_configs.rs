@@ -281,13 +281,13 @@ fn test_agent_config_serialization() {
     let config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
 
     // Should serialize to YAML correctly
-    let yaml = serde_yaml::to_string(&config).expect("Failed to serialize to YAML");
+    let yaml = serde_yaml_ng::to_string(&config).expect("Failed to serialize to YAML");
     assert!(yaml.contains("type: llama-agent"));
     assert!(yaml.contains("quiet: false"));
 
     // Should deserialize from YAML correctly
     let deserialized: ModelConfig =
-        serde_yaml::from_str(&yaml).expect("Failed to deserialize from YAML");
+        serde_yaml_ng::from_str(&yaml).expect("Failed to deserialize from YAML");
     assert_eq!(config.executor_type(), deserialized.executor_type());
     assert_eq!(config.quiet, deserialized.quiet);
 }

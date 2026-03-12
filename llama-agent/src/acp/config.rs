@@ -205,7 +205,7 @@ impl AcpConfig {
             ))
         })?;
 
-        serde_yaml::from_str(&content)
+        serde_yaml_ng::from_str(&content)
             .map_err(|e| ConfigError::ParseError(format!("Failed to parse YAML config: {}", e)))
     }
 
@@ -230,7 +230,7 @@ impl AcpConfig {
     /// ```
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), ConfigError> {
         let path = path.as_ref();
-        let content = serde_yaml::to_string(self).map_err(|e| {
+        let content = serde_yaml_ng::to_string(self).map_err(|e| {
             ConfigError::SerializationError(format!("Failed to serialize config to YAML: {}", e))
         })?;
 

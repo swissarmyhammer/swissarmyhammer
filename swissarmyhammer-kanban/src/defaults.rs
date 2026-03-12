@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn builtin_views_parse_as_view_def() {
         for (name, yaml) in builtin_view_definitions() {
-            let result: Result<swissarmyhammer_views::ViewDef, _> = serde_yaml::from_str(yaml);
+            let result: Result<swissarmyhammer_views::ViewDef, _> = serde_yaml_ng::from_str(yaml);
             assert!(
                 result.is_ok(),
                 "Failed to parse view '{}': {}",
@@ -197,7 +197,7 @@ mod tests {
     fn builtin_board_view_exists() {
         let defs = builtin_view_definitions();
         let (_, yaml) = defs.iter().find(|(n, _)| *n == "board").unwrap();
-        let view: swissarmyhammer_views::ViewDef = serde_yaml::from_str(yaml).unwrap();
+        let view: swissarmyhammer_views::ViewDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(view.name, "Board");
         assert_eq!(view.kind, swissarmyhammer_views::ViewKind::Board);
         assert!(view.entity_type.as_deref() == Some("task"));
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn builtin_fields_parse_as_field_def() {
         for (name, yaml) in builtin_field_definitions() {
-            let result: Result<FieldDef, _> = serde_yaml::from_str(yaml);
+            let result: Result<FieldDef, _> = serde_yaml_ng::from_str(yaml);
             assert!(
                 result.is_ok(),
                 "Failed to parse field '{}': {}",
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn builtin_entities_parse_as_entity_def() {
         for (name, yaml) in builtin_entity_definitions() {
-            let result: Result<EntityDef, _> = serde_yaml::from_str(yaml);
+            let result: Result<EntityDef, _> = serde_yaml_ng::from_str(yaml);
             assert!(
                 result.is_ok(),
                 "Failed to parse entity '{}': {}",
@@ -249,7 +249,7 @@ mod tests {
         let mut names: Vec<_> = defs
             .iter()
             .map(|(_, yaml)| {
-                let def: FieldDef = serde_yaml::from_str(yaml).unwrap();
+                let def: FieldDef = serde_yaml_ng::from_str(yaml).unwrap();
                 def.name
             })
             .collect();
@@ -265,7 +265,7 @@ mod tests {
         let mut ids: Vec<_> = defs
             .iter()
             .map(|(_, yaml)| {
-                let def: FieldDef = serde_yaml::from_str(yaml).unwrap();
+                let def: FieldDef = serde_yaml_ng::from_str(yaml).unwrap();
                 def.id
             })
             .collect();
@@ -279,7 +279,7 @@ mod tests {
     fn builtin_task_entity_has_expected_fields() {
         let defs = builtin_entity_definitions();
         let (_, yaml) = defs.iter().find(|(n, _)| *n == "task").unwrap();
-        let entity: EntityDef = serde_yaml::from_str(yaml).unwrap();
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert_eq!(entity.name, "task");
         assert_eq!(entity.body_field, Some("body".into()));
@@ -295,7 +295,7 @@ mod tests {
     fn builtin_board_entity_exists() {
         let defs = builtin_entity_definitions();
         let (_, yaml) = defs.iter().find(|(n, _)| *n == "board").unwrap();
-        let entity: EntityDef = serde_yaml::from_str(yaml).unwrap();
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert_eq!(entity.name, "board");
         assert!(entity.fields.iter().any(|f| f == "name"));
@@ -306,7 +306,7 @@ mod tests {
     fn builtin_attachment_entity_exists() {
         let defs = builtin_entity_definitions();
         let (_, yaml) = defs.iter().find(|(n, _)| *n == "attachment").unwrap();
-        let entity: EntityDef = serde_yaml::from_str(yaml).unwrap();
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert_eq!(entity.name, "attachment");
         assert!(entity.fields.iter().any(|f| f == "attachment_name"));
@@ -322,14 +322,14 @@ mod tests {
         let field_names: Vec<FieldName> = field_defs
             .iter()
             .map(|(_, yaml)| {
-                let def: FieldDef = serde_yaml::from_str(yaml).unwrap();
+                let def: FieldDef = serde_yaml_ng::from_str(yaml).unwrap();
                 def.name
             })
             .collect();
 
         let entity_defs = builtin_entity_definitions();
         for (ename, eyaml) in &entity_defs {
-            let entity: EntityDef = serde_yaml::from_str(eyaml).unwrap();
+            let entity: EntityDef = serde_yaml_ng::from_str(eyaml).unwrap();
             for field_ref in &entity.fields {
                 assert!(
                     field_names.contains(field_ref),
@@ -438,7 +438,7 @@ mod tests {
         let defs = builtin_field_definitions();
 
         for (filename, yaml) in &defs {
-            let field: swissarmyhammer_fields::FieldDef = serde_yaml::from_str(yaml).unwrap();
+            let field: swissarmyhammer_fields::FieldDef = serde_yaml_ng::from_str(yaml).unwrap();
             if let swissarmyhammer_fields::FieldType::Computed { derive } = &field.type_ {
                 assert!(
                     engine.has(derive),

@@ -42,17 +42,18 @@ async fn teardown(
     server.shutdown().await.expect("Failed to shutdown server");
 }
 
+/// Helper to build CallToolRequestParams for the skill tool
+fn skill_params(args: serde_json::Value) -> CallToolRequestParams {
+    CallToolRequestParams::new("skill")
+        .with_arguments(args.as_object().cloned().unwrap_or_default())
+}
+
 #[tokio::test]
 async fn test_builtin_skills_discovered_via_list() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            name: "skill".into(),
-            arguments: serde_json::json!({"op": "list skill"}).as_object().cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(skill_params(serde_json::json!({"op": "list skill"})))
         .await
         .expect("list skill should succeed");
 
@@ -79,14 +80,9 @@ async fn test_use_skill_returns_instructions() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            name: "skill".into(),
-            arguments: serde_json::json!({"op": "use skill", "name": "plan"})
-                .as_object()
-                .cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(skill_params(
+            serde_json::json!({"op": "use skill", "name": "plan"}),
+        ))
         .await
         .expect("use skill should succeed");
 
@@ -115,14 +111,9 @@ async fn test_search_skill_finds_matches() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            name: "skill".into(),
-            arguments: serde_json::json!({"op": "search skill", "query": "commit"})
-                .as_object()
-                .cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(skill_params(
+            serde_json::json!({"op": "search skill", "query": "commit"}),
+        ))
         .await
         .expect("search skill should succeed");
 
@@ -147,14 +138,9 @@ async fn test_search_skill_no_matches() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            name: "skill".into(),
-            arguments: serde_json::json!({"op": "search skill", "query": "zzz_nonexistent_zzz"})
-                .as_object()
-                .cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(skill_params(
+            serde_json::json!({"op": "search skill", "query": "zzz_nonexistent_zzz"}),
+        ))
         .await
         .expect("search skill with no matches should succeed");
 
@@ -210,14 +196,9 @@ async fn test_get_verb_backward_compat() {
 
     // "get skill" should still work (backward compat, routes to Use)
     let result = client
-        .call_tool(CallToolRequestParams {
-            name: "skill".into(),
-            arguments: serde_json::json!({"op": "get skill", "name": "plan"})
-                .as_object()
-                .cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(skill_params(
+            serde_json::json!({"op": "get skill", "name": "plan"}),
+        ))
         .await
         .expect("get skill (backward compat) should succeed");
 
@@ -250,14 +231,9 @@ async fn test_skill_invoke_by_name_returns_body_content() {
 
     // Invoke the plan skill by name
     let result = client
-        .call_tool(CallToolRequestParams {
-            name: "skill".into(),
-            arguments: serde_json::json!({"op": "use skill", "name": "plan"})
-                .as_object()
-                .cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(skill_params(
+            serde_json::json!({"op": "use skill", "name": "plan"}),
+        ))
         .await
         .expect("use skill plan should succeed");
 
@@ -293,14 +269,9 @@ async fn test_skill_test_returns_body_content() {
     let (server, client) = setup(true).await;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            name: "skill".into(),
-            arguments: serde_json::json!({"op": "use skill", "name": "test"})
-                .as_object()
-                .cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(skill_params(
+            serde_json::json!({"op": "use skill", "name": "test"}),
+        ))
         .await
         .expect("use skill test should succeed");
 
@@ -339,12 +310,7 @@ async fn test_skill_invoke_via_shorthand() {
 
     // Use the shorthand form (just name, no explicit verb)
     let result = client
-        .call_tool(CallToolRequestParams {
-            name: "skill".into(),
-            arguments: serde_json::json!({"name": "plan"}).as_object().cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(skill_params(serde_json::json!({"name": "plan"})))
         .await
         .expect("shorthand use skill should succeed");
 

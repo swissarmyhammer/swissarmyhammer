@@ -279,27 +279,14 @@ mod tests {
     async fn test_includes_both_core_and_mcp_commands() {
         // Create mock prompts from MCP
         let prompts = vec![
-            Prompt {
-                name: "deploy".to_string(),
-                title: None,
-                description: Some("Deploy to production".to_string()),
-                arguments: None,
-                icons: None,
-                meta: None,
-            },
-            Prompt {
-                name: "migrate".to_string(),
-                title: None,
-                description: Some("Run migrations".to_string()),
-                arguments: Some(vec![PromptArgument {
-                    name: "spec".to_string(),
-                    title: None,
-                    description: Some("Specification file".to_string()),
-                    required: Some(true),
-                }]),
-                icons: None,
-                meta: None,
-            },
+            Prompt::new("deploy", Some("Deploy to production"), None),
+            Prompt::new(
+                "migrate",
+                Some("Run migrations"),
+                Some(vec![PromptArgument::new("spec")
+                    .with_description("Specification file")
+                    .with_required(true)]),
+            ),
         ];
 
         let mcp_client = Arc::new(MockMCPClient::new(prompts));
@@ -438,14 +425,7 @@ mod tests {
     #[tokio::test]
     async fn test_skills_override_duplicate_mcp_prompts() {
         // MCP prompt with same name as a skill should be skipped
-        let prompts = vec![Prompt {
-            name: "plan".to_string(),
-            title: None,
-            description: Some("MCP plan prompt".to_string()),
-            arguments: None,
-            icons: None,
-            meta: None,
-        }];
+        let prompts = vec![Prompt::new("plan", Some("MCP plan prompt"), None)];
 
         let mcp_client = Arc::new(MockMCPClient::new(prompts));
         let library = loaded_skill_library();
@@ -473,14 +453,7 @@ mod tests {
     #[tokio::test]
     async fn test_skills_and_mcp_commands_coexist() {
         // MCP prompt with a unique name should still appear
-        let prompts = vec![Prompt {
-            name: "deploy".to_string(),
-            title: None,
-            description: Some("Deploy to production".to_string()),
-            arguments: None,
-            icons: None,
-            meta: None,
-        }];
+        let prompts = vec![Prompt::new("deploy", Some("Deploy to production"), None)];
 
         let mcp_client = Arc::new(MockMCPClient::new(prompts));
         let library = loaded_skill_library();
@@ -502,14 +475,7 @@ mod tests {
     #[tokio::test]
     async fn test_without_skills_behaves_as_before() {
         // CommandRegistry::new (no skills) should behave identically to before
-        let prompts = vec![Prompt {
-            name: "deploy".to_string(),
-            title: None,
-            description: Some("Deploy".to_string()),
-            arguments: None,
-            icons: None,
-            meta: None,
-        }];
+        let prompts = vec![Prompt::new("deploy", Some("Deploy"), None)];
 
         let mcp_client = Arc::new(MockMCPClient::new(prompts));
         let registry = CommandRegistry::new(mcp_client);

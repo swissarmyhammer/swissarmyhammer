@@ -57,16 +57,16 @@ pub struct StatusReport {
 ///
 /// Returns [`CodeContextError::Database`] on SQLite failures.
 pub fn get_status(conn: &Connection) -> Result<StatusReport, CodeContextError> {
-    let total_files: u64 =
+    let total_files: i64 =
         conn.query_row("SELECT COUNT(*) FROM indexed_files", [], |r| r.get(0))?;
 
-    let ts_indexed_files: u64 = conn.query_row(
+    let ts_indexed_files: i64 = conn.query_row(
         "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 1",
         [],
         |r| r.get(0),
     )?;
 
-    let lsp_indexed_files: u64 = conn.query_row(
+    let lsp_indexed_files: i64 = conn.query_row(
         "SELECT COUNT(*) FROM indexed_files WHERE lsp_indexed = 1",
         [],
         |r| r.get(0),
@@ -84,26 +84,26 @@ pub fn get_status(conn: &Connection) -> Result<StatusReport, CodeContextError> {
         0.0
     };
 
-    let ts_chunk_count: u64 = conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))?;
+    let ts_chunk_count: i64 = conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))?;
 
-    let files_with_chunks: u64 =
+    let files_with_chunks: i64 =
         conn.query_row("SELECT COUNT(DISTINCT file_path) FROM ts_chunks", [], |r| {
             r.get(0)
         })?;
 
-    let files_with_symbols: u64 = conn.query_row(
+    let files_with_symbols: i64 = conn.query_row(
         "SELECT COUNT(DISTINCT file_path) FROM lsp_symbols",
         [],
         |r| r.get(0),
     )?;
 
-    let lsp_symbol_count: u64 =
+    let lsp_symbol_count: i64 =
         conn.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0))?;
 
-    let call_edge_count: u64 =
+    let call_edge_count: i64 =
         conn.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0))?;
 
-    let dirty_files: u64 = conn.query_row(
+    let dirty_files: i64 = conn.query_row(
         "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 0",
         [],
         |r| r.get(0),
@@ -112,17 +112,17 @@ pub fn get_status(conn: &Connection) -> Result<StatusReport, CodeContextError> {
     let hint = crate::hints::hint_for_operation("get_status");
 
     Ok(StatusReport {
-        total_files,
-        ts_indexed_files,
-        lsp_indexed_files,
+        total_files: total_files as u64,
+        ts_indexed_files: ts_indexed_files as u64,
+        lsp_indexed_files: lsp_indexed_files as u64,
         ts_indexed_percent,
         lsp_indexed_percent,
-        ts_chunk_count,
-        files_with_chunks,
-        files_with_symbols,
-        lsp_symbol_count,
-        call_edge_count,
-        dirty_files,
+        ts_chunk_count: ts_chunk_count as u64,
+        files_with_chunks: files_with_chunks as u64,
+        files_with_symbols: files_with_symbols as u64,
+        lsp_symbol_count: lsp_symbol_count as u64,
+        call_edge_count: call_edge_count as u64,
+        dirty_files: dirty_files as u64,
         hint,
     })
 }
@@ -392,7 +392,7 @@ mod tests {
         assert!(!result.hint.is_empty());
 
         // Verify flags were reset
-        let ts_count: u64 = conn
+        let ts_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 1",
                 [],
@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(ts_count, 0);
 
         // LSP should be untouched
-        let lsp_count: u64 = conn
+        let lsp_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM indexed_files WHERE lsp_indexed = 1",
                 [],
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(result.files_marked, 2);
         assert_eq!(result.layer, "both");
 
-        let indexed: u64 = conn
+        let indexed: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 1 OR lsp_indexed = 1",
                 [],

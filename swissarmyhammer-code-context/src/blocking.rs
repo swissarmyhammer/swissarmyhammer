@@ -53,7 +53,7 @@ pub fn check_blocking_status(
     conn: &Connection,
     layer: IndexLayer,
 ) -> Result<BlockingStatus, CodeContextError> {
-    let total_files: u64 =
+    let total_files: i64 =
         conn.query_row("SELECT COUNT(*) FROM indexed_files", [], |r| r.get(0))?;
 
     if total_files == 0 {
@@ -65,7 +65,7 @@ pub fn check_blocking_status(
         IndexLayer::Lsp => "lsp_indexed",
     };
 
-    let indexed_files: u64 = conn.query_row(
+    let indexed_files: i64 = conn.query_row(
         &format!("SELECT COUNT(*) FROM indexed_files WHERE {} = 1", column),
         [],
         |r| r.get(0),
@@ -76,8 +76,8 @@ pub fn check_blocking_status(
     } else {
         let progress_percent = (indexed_files as f64 / total_files as f64) * 100.0;
         Ok(BlockingStatus::NotReady {
-            total_files,
-            indexed_files,
+            total_files: total_files as u64,
+            indexed_files: indexed_files as u64,
             progress_percent,
         })
     }

@@ -118,7 +118,7 @@ fn handle_config_error(config_err: String) -> Result<(), Box<dyn std::error::Err
 
 /// Handle parse error
 fn handle_parse_error(
-    serde_err: serde_yaml::Error,
+    serde_err: serde_yaml_ng::Error,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     handle_error(
         format!("Failed to process agent configuration: {}", serde_err),

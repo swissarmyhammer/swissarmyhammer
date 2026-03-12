@@ -206,8 +206,8 @@ mod tests {
     #[test]
     fn field_type_text_yaml_round_trip() {
         let ft = FieldType::Text { single_line: true };
-        let yaml = serde_yaml::to_string(&ft).unwrap();
-        let parsed: FieldType = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&ft).unwrap();
+        let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(ft, parsed);
     }
 
@@ -231,8 +231,8 @@ mod tests {
                 },
             ],
         };
-        let yaml = serde_yaml::to_string(&ft).unwrap();
-        let parsed: FieldType = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&ft).unwrap();
+        let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(ft, parsed);
     }
 
@@ -242,8 +242,8 @@ mod tests {
             entity: "task".into(),
             multiple: true,
         };
-        let yaml = serde_yaml::to_string(&ft).unwrap();
-        let parsed: FieldType = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&ft).unwrap();
+        let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(ft, parsed);
     }
 
@@ -252,8 +252,8 @@ mod tests {
         let ft = FieldType::Computed {
             derive: "parse-body-tags".into(),
         };
-        let yaml = serde_yaml::to_string(&ft).unwrap();
-        let parsed: FieldType = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&ft).unwrap();
+        let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(ft, parsed);
     }
 
@@ -263,26 +263,26 @@ mod tests {
             min: Some(0.0),
             max: Some(100.0),
         };
-        let yaml = serde_yaml::to_string(&ft).unwrap();
-        let parsed: FieldType = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&ft).unwrap();
+        let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(ft, parsed);
     }
 
     #[test]
     fn editor_display_sort_yaml_round_trip() {
         let editor = Editor::ColorPalette;
-        let yaml = serde_yaml::to_string(&editor).unwrap();
-        let parsed: Editor = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&editor).unwrap();
+        let parsed: Editor = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(editor, parsed);
 
         let display = Display::BadgeList;
-        let yaml = serde_yaml::to_string(&display).unwrap();
-        let parsed: Display = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&display).unwrap();
+        let parsed: Display = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(display, parsed);
 
         let sort = SortKind::OptionOrder;
-        let yaml = serde_yaml::to_string(&sort).unwrap();
-        let parsed: SortKind = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&sort).unwrap();
+        let parsed: SortKind = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(sort, parsed);
     }
 
@@ -318,8 +318,8 @@ mod tests {
             section: None,
             validate: None,
         };
-        let yaml = serde_yaml::to_string(&field).unwrap();
-        let parsed: FieldDef = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&field).unwrap();
+        let parsed: FieldDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(field, parsed);
     }
 
@@ -338,7 +338,7 @@ mod tests {
             section: None,
             validate: None,
         };
-        let yaml = serde_yaml::to_string(&field).unwrap();
+        let yaml = serde_yaml_ng::to_string(&field).unwrap();
         assert!(yaml.contains("type:"));
         assert!(!yaml.contains("type_:"));
     }
@@ -362,8 +362,8 @@ mod tests {
             mention_prefix: None,
             mention_display_field: None,
         };
-        let yaml = serde_yaml::to_string(&entity).unwrap();
-        let parsed: EntityDef = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&entity).unwrap();
+        let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(entity, parsed);
     }
 
@@ -377,9 +377,9 @@ mod tests {
             mention_prefix: None,
             mention_display_field: None,
         };
-        let yaml = serde_yaml::to_string(&entity).unwrap();
+        let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         assert!(!yaml.contains("body_field"));
-        let parsed: EntityDef = serde_yaml::from_str(&yaml).unwrap();
+        let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(entity, parsed);
     }
 
@@ -512,7 +512,7 @@ editor: select
 display: badge
 sort: option-order
 "#;
-        let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "status");
         assert_eq!(field.default, Some(serde_json::json!("Backlog")));
         assert_eq!(field.editor, Some(Editor::Select));
@@ -528,8 +528,8 @@ sort: option-order
         }
 
         // Round-trip
-        let yaml_out = serde_yaml::to_string(&field).unwrap();
-        let reparsed: FieldDef = serde_yaml::from_str(&yaml_out).unwrap();
+        let yaml_out = serde_yaml_ng::to_string(&field).unwrap();
+        let reparsed: FieldDef = serde_yaml_ng::from_str(&yaml_out).unwrap();
         assert_eq!(field, reparsed);
     }
 
@@ -544,7 +544,7 @@ type:
 editor: none
 display: badge-list
 "#;
-        let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "tags");
         assert_eq!(field.editor, Some(Editor::None));
         assert_eq!(field.display, Some(Display::BadgeList));
@@ -567,7 +567,7 @@ type:
 editor: multi-select
 display: avatar
 "#;
-        let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "assignees");
         if let FieldType::Reference {
             ref entity,
@@ -598,7 +598,7 @@ validate: |
   if (v.length === 0) throw new Error("tag_name cannot be empty");
   return v;
 "#;
-        let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "tag_name");
         assert!(field.validate.is_some());
         assert!(field
@@ -620,7 +620,7 @@ type:
 editor: multi-select
 display: badge-list
 "#;
-        let field: FieldDef = serde_yaml::from_str(yaml_input).unwrap();
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "depends_on");
         if let FieldType::Reference {
             ref entity,
@@ -649,7 +649,7 @@ fields:
   - depends_on
   - body
 "#;
-        let entity: EntityDef = serde_yaml::from_str(yaml_input).unwrap();
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(entity.name, "task");
         assert_eq!(entity.body_field, Some("body".into()));
         assert_eq!(entity.fields.len(), 8);
@@ -660,9 +660,9 @@ fields:
     #[test]
     fn sort_kind_lexical_yaml_round_trip() {
         let sort = SortKind::Lexical;
-        let yaml = serde_yaml::to_string(&sort).unwrap();
+        let yaml = serde_yaml_ng::to_string(&sort).unwrap();
         assert!(yaml.contains("lexical"));
-        let parsed: SortKind = serde_yaml::from_str(&yaml).unwrap();
+        let parsed: SortKind = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(sort, parsed);
     }
 

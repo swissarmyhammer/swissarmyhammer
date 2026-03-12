@@ -9,7 +9,7 @@ description = "View registry and changelog for SwissArmyHammer"
 
 [dependencies]
 serde = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }

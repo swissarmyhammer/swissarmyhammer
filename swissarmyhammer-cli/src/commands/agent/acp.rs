@@ -96,7 +96,7 @@ async fn load_acp_config(
     if let Some(path) = config_path {
         // Load from file
         let content = tokio::fs::read_to_string(&path).await?;
-        let config: AcpConfig = serde_yaml::from_str(&content)?;
+        let config: AcpConfig = serde_yaml_ng::from_str(&content)?;
         Ok(config)
     } else {
         // Use default configuration

@@ -29,10 +29,10 @@ impl TestMcpServer {
 
     fn get_tools() -> Vec<Tool> {
         vec![
-            Tool {
-                name: "list-files".into(),
-                description: Some("List files in a directory".into()),
-                input_schema: Arc::new({
+            Tool::new(
+                "list-files",
+                "List files in a directory",
+                Arc::new({
                     let mut map = Map::new();
                     map.insert("type".to_string(), json!("object"));
                     map.insert(
@@ -42,17 +42,11 @@ impl TestMcpServer {
                     map.insert("required".to_string(), json!(["path"]));
                     map
                 }),
-                annotations: None,
-                output_schema: None,
-                icons: None,
-                title: Some("list-files".into()),
-                meta: None,
-                execution: None,
-            },
-            Tool {
-                name: "create-plan".into(),
-                description: Some("Create an execution plan".into()),
-                input_schema: Arc::new({
+            ),
+            Tool::new(
+                "create-plan",
+                "Create an execution plan",
+                Arc::new({
                     let mut map = Map::new();
                     map.insert("type".to_string(), json!("object"));
                     map.insert(
@@ -62,13 +56,7 @@ impl TestMcpServer {
                     map.insert("required".to_string(), json!(["goal"]));
                     map
                 }),
-                annotations: None,
-                output_schema: None,
-                icons: None,
-                title: Some("create-plan".into()),
-                meta: None,
-                execution: None,
-            },
+            ),
         ]
     }
 
@@ -141,30 +129,17 @@ impl ServerHandler for TestMcpServer {
             request.client_info.version
         );
 
-        Ok(InitializeResult {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                tools: Some(ToolsCapability {
-                    list_changed: Some(false),
-                }),
-                prompts: None,
-                resources: None,
-                logging: None,
-                completions: None,
-                experimental: None,
-                extensions: None,
-                tasks: None,
-            },
-            instructions: Some("Test MCP server for ACP conformance testing".into()),
-            server_info: Implementation {
-                name: self.name.clone(),
-                version: self.version.clone(),
-                icons: None,
-                title: None,
-                description: None,
-                website_url: None,
-            },
-        })
+        let mut caps = ServerCapabilities::default();
+        caps.tools = Some(ToolsCapability {
+            list_changed: Some(false),
+        });
+
+        Ok(InitializeResult::new(caps)
+            .with_server_info(Implementation::new(
+                self.name.clone(),
+                self.version.clone(),
+            ))
+            .with_instructions("Test MCP server for ACP conformance testing"))
     }
 
     async fn list_tools(
@@ -233,18 +208,9 @@ impl ServerHandler for TestMcpServer {
                     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
 
-                Ok(CallToolResult {
-                    content: vec![Annotated::new(
-                        RawContent::Text(RawTextContent {
-                            text: serde_json::to_string_pretty(&result).unwrap(),
-                            meta: None,
-                        }),
-                        None,
-                    )],
-                    is_error: Some(false),
-                    structured_content: None,
-                    meta: None,
-                })
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&result).unwrap(),
+                )]))
             }
             "create-plan" => {
                 let goal = arguments
@@ -287,18 +253,9 @@ impl ServerHandler for TestMcpServer {
                     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
 
-                Ok(CallToolResult {
-                    content: vec![Annotated::new(
-                        RawContent::Text(RawTextContent {
-                            text: serde_json::to_string_pretty(&result).unwrap(),
-                            meta: None,
-                        }),
-                        None,
-                    )],
-                    is_error: Some(false),
-                    structured_content: None,
-                    meta: None,
-                })
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&result).unwrap(),
+                )]))
             }
             _ => Err(McpError::invalid_request(
                 format!("Unknown tool: {}", request.name),
@@ -308,30 +265,17 @@ impl ServerHandler for TestMcpServer {
     }
 
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                tools: Some(ToolsCapability {
-                    list_changed: Some(false),
-                }),
-                prompts: None,
-                resources: None,
-                logging: None,
-                completions: None,
-                experimental: None,
-                extensions: None,
-                tasks: None,
-            },
-            server_info: Implementation {
-                name: self.name.clone(),
-                version: self.version.clone(),
-                icons: None,
-                title: None,
-                description: None,
-                website_url: None,
-            },
-            instructions: Some("Test MCP server for ACP conformance testing".into()),
-        }
+        let mut caps = ServerCapabilities::default();
+        caps.tools = Some(ToolsCapability {
+            list_changed: Some(false),
+        });
+
+        ServerInfo::new(caps)
+            .with_server_info(Implementation::new(
+                self.name.clone(),
+                self.version.clone(),
+            ))
+            .with_instructions("Test MCP server for ACP conformance testing")
     }
 }
 

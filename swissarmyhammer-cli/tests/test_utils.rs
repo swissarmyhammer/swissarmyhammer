@@ -72,7 +72,7 @@ pub fn create_test_prompt_files(dir: &Path) -> Result<()> {
     let prompts = create_test_prompts();
     for prompt in prompts {
         let file_path = dir.join(format!("{}.yaml", prompt.name));
-        let content = serde_yaml::to_string(&prompt)
+        let content = serde_yaml_ng::to_string(&prompt)
             .map_err(|e| anyhow::anyhow!("Failed to serialize prompt: {}", e))?;
         std::fs::write(&file_path, content)?;
     }

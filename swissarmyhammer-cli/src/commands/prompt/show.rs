@@ -34,7 +34,7 @@ pub async fn execute_show_command(
         }
         crate::cli::OutputFormat::Yaml => {
             let detail = PromptDetail::from_prompt(&prompt, file_source);
-            println!("{}", serde_yaml::to_string(&detail)?);
+            println!("{}", serde_yaml_ng::to_string(&detail)?);
         }
         _ => {
             print_prompt_detail(&prompt, file_source, context.verbose);

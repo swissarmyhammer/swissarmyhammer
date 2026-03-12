@@ -264,7 +264,7 @@ fn parse_frontmatter_body(
     let body = parts[2].strip_prefix('\n').unwrap_or(parts[2]);
 
     let yaml_map: HashMap<String, Value> =
-        serde_yaml::from_str(frontmatter).map_err(|e| EntityError::Yaml {
+        serde_yaml_ng::from_str(frontmatter).map_err(|e| EntityError::Yaml {
             path: path.to_path_buf(),
             source: e,
         })?;
@@ -304,7 +304,7 @@ fn parse_plain_yaml(
     let entity_type = entity_type.as_ref();
     let id = id.as_ref();
     let yaml_map: HashMap<String, Value> =
-        serde_yaml::from_str(content).map_err(|e| EntityError::Yaml {
+        serde_yaml_ng::from_str(content).map_err(|e| EntityError::Yaml {
             path: path.to_path_buf(),
             source: e,
         })?;
@@ -332,7 +332,7 @@ fn format_frontmatter_body(entity: &Entity, body_field: impl AsRef<str>) -> Resu
 
     let frontmatter_value = Value::Object(frontmatter_map);
     let frontmatter_yaml =
-        serde_yaml::to_string(&frontmatter_value).map_err(|e| EntityError::Yaml {
+        serde_yaml_ng::to_string(&frontmatter_value).map_err(|e| EntityError::Yaml {
             path: PathBuf::from("<serialization>"),
             source: e,
         })?;
@@ -349,7 +349,7 @@ fn format_plain_yaml(entity: &Entity) -> Result<String> {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
     );
-    serde_yaml::to_string(&map_value).map_err(|e| EntityError::Yaml {
+    serde_yaml_ng::to_string(&map_value).map_err(|e| EntityError::Yaml {
         path: PathBuf::from("<serialization>"),
         source: e,
     })

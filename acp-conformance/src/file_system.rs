@@ -22,7 +22,7 @@
 //!    - Response: `null` on success
 
 use agent_client_protocol::{
-    Agent, ClientCapabilities, ExtRequest, FileSystemCapability, InitializeRequest, ProtocolVersion,
+    Agent, ClientCapabilities, ExtRequest, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
 use serde_json::json;
@@ -44,7 +44,7 @@ pub async fn test_read_text_file_capability_check<A: Agent + ?Sized>(
     tracing::info!("Testing fs/read_text_file capability check");
 
     // Initialize with NO readTextFile capability
-    let client_caps = ClientCapabilities::new().fs(FileSystemCapability::new()
+    let client_caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
         .read_text_file(false)
         .write_text_file(false));
 
@@ -102,7 +102,7 @@ pub async fn test_write_text_file_capability_check<A: Agent + ?Sized>(
     tracing::info!("Testing fs/write_text_file capability check");
 
     // Initialize with NO writeTextFile capability
-    let client_caps = ClientCapabilities::new().fs(FileSystemCapability::new()
+    let client_caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
         .read_text_file(false)
         .write_text_file(false));
 
@@ -159,7 +159,7 @@ pub async fn test_read_text_file_basic<A: Agent + ?Sized>(agent: &A) -> crate::R
     tracing::info!("Testing basic fs/read_text_file");
 
     // Initialize with readTextFile capability
-    let client_caps = ClientCapabilities::new().fs(FileSystemCapability::new()
+    let client_caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
         .read_text_file(true)
         .write_text_file(false));
 
@@ -221,7 +221,7 @@ pub async fn test_read_text_file_with_range<A: Agent + ?Sized>(agent: &A) -> cra
     tracing::info!("Testing fs/read_text_file with line and limit");
 
     // Initialize with readTextFile capability
-    let client_caps = ClientCapabilities::new().fs(FileSystemCapability::new()
+    let client_caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
         .read_text_file(true)
         .write_text_file(false));
 
@@ -278,7 +278,7 @@ pub async fn test_write_text_file_basic<A: Agent + ?Sized>(agent: &A) -> crate::
     tracing::info!("Testing basic fs/write_text_file");
 
     // Initialize with writeTextFile capability
-    let client_caps = ClientCapabilities::new().fs(FileSystemCapability::new()
+    let client_caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
         .read_text_file(false)
         .write_text_file(true));
 
@@ -326,7 +326,7 @@ pub async fn test_write_text_file_creates_new<A: Agent + ?Sized>(agent: &A) -> c
     tracing::info!("Testing fs/write_text_file creates new file");
 
     // Initialize with writeTextFile capability
-    let client_caps = ClientCapabilities::new().fs(FileSystemCapability::new()
+    let client_caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
         .read_text_file(false)
         .write_text_file(true));
 
@@ -376,7 +376,7 @@ pub async fn test_read_write_integration<A: Agent + ?Sized>(agent: &A) -> crate:
     tracing::info!("Testing fs/read_text_file and fs/write_text_file integration");
 
     // Initialize with both capabilities
-    let client_caps = ClientCapabilities::new().fs(FileSystemCapability::new()
+    let client_caps = ClientCapabilities::new().fs(FileSystemCapabilities::new()
         .read_text_file(true)
         .write_text_file(true));
 

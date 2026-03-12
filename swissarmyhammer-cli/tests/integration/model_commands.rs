@@ -218,8 +218,8 @@ async fn test_model_list_yaml_format() -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Should be valid YAML
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&stdout).expect("Output should be valid YAML");
+    let yaml_value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&stdout).expect("Output should be valid YAML");
 
     // Should be an array
     assert!(yaml_value.is_sequence(), "YAML output should be a sequence");

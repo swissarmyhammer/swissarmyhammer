@@ -507,7 +507,7 @@ fn display_as_yaml<T>(items: &[T]) -> Result<(), Box<dyn std::error::Error + Sen
 where
     T: serde::Serialize,
 {
-    let yaml = serde_yaml::to_string(items)?;
+    let yaml = serde_yaml_ng::to_string(items)?;
     println!("{}", yaml);
     Ok(())
 }

@@ -9,7 +9,7 @@ description = "Command trait, registry, and dispatch context for SwissArmyHammer
 
 [dependencies]
 serde = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }

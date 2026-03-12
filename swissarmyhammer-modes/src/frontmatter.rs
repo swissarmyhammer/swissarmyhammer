@@ -73,7 +73,7 @@ pub fn parse_frontmatter(content: &str) -> Result<FrontmatterResult> {
         let metadata = if yaml_content.trim().is_empty() {
             None
         } else {
-            match serde_yaml::from_str::<Value>(yaml_content) {
+            match serde_yaml_ng::from_str::<Value>(yaml_content) {
                 Ok(value) => Some(value),
                 Err(e) => {
                     return Err(SwissArmyHammerError::Other {

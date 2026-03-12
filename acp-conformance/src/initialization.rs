@@ -28,7 +28,7 @@
 //!    - Must include name, version if present
 
 use agent_client_protocol::{
-    Agent, ClientCapabilities, FileSystemCapability, InitializeRequest, ProtocolVersion,
+    Agent, ClientCapabilities, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
 use swissarmyhammer_common::Pretty;
@@ -69,7 +69,7 @@ pub async fn test_full_capabilities_initialization<A: Agent + ?Sized>(
 
     // Create request with all client capabilities
     let client_caps = ClientCapabilities::new()
-        .fs(FileSystemCapability::new()
+        .fs(FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -194,7 +194,7 @@ fn validate_auth_methods(methods: &[agent_client_protocol::AuthMethod]) -> crate
     } else {
         tracing::info!("Agent declares {} auth method(s)", methods.len());
         for method in methods {
-            tracing::info!("  - Auth method: {}", Pretty(&method.id));
+            tracing::info!("  - Auth method: {}", Pretty(&method.id()));
         }
     }
     Ok(())

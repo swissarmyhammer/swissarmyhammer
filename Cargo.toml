@@ -82,10 +82,10 @@ tokio-util = "0.7"
 tokio-stream = "0.1"
 tokio-tungstenite = "0.28"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10"
 serde_json = "1"
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
 tracing = { version = "0.1", features = ["log"] }
 tracing-log = "0.2"
 test-log = {version = "0.2.18" , features = ["trace"]}
@@ -107,7 +107,7 @@ glob = "0.3"
 ignore = "0.4"
 ulid = { version = "1.2.1", features = ["serde"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
-toml = "0.9.5"
+toml = "1.0"
 schemars = "0.8"
 governor = "0.7"
 nonzero_ext = "0.3"
@@ -155,7 +155,7 @@ owo-colors = "4"
 is-terminal = "0.4"
 which = "8.0"
 
-rmcp = { version = "0.15.0", features = [
+rmcp = { version = "1.2", features = [
     "server",
     "client",
     "macros",
@@ -167,7 +167,7 @@ rmcp = { version = "0.15.0", features = [
     "elicitation",
     "schemars",
 ] }
-agent-client-protocol = "0.9.4"
+agent-client-protocol = "0.10"
 dirs = "6.0"
 comfy-table = "7"
 crossterm = "0.29"
@@ -175,8 +175,8 @@ dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 arboard = "3.4"
 atty = "0.2"
 zip = "0.6"
-reqwest = { version = "0.12", features = ["json", "stream", "gzip", "cookies", "rustls-tls", "multipart"] }
-git2 = { version = "0.18", default-features = false, features = ["vendored-libgit2"] }
+reqwest = { version = "0.13", features = ["json", "stream", "gzip", "cookies", "rustls", "multipart"] }
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
 url = "2.5"
 indicatif = "0.17"
 sha2 = "0.10"
@@ -184,10 +184,10 @@ futures-util = "0.3"
 tempfile = "3.0"
 pathdiff = "0.2"
 serial_test = "3.0"
-rand = "0.8"
+rand = "0.9"
 syntect = "5.2"
 once_cell = "1.20"
-rusqlite = { version = "0.33", features = ["bundled"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
 html2text = "0.16"
 bytes = "1.0"
 futures = "0.3"
@@ -224,7 +224,7 @@ swissarmyhammer-operations-macros = { path = "swissarmyhammer-operations-macros"
 num_cpus = "1.0"
 process-wrap = "8.0"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "rustls-tls"] }
-jsonschema = "0.18"
+jsonschema = "0.28"
 
 # Ripgrep library
 grep = "0.4.1"
@@ -235,9 +235,9 @@ encoding_rs = "0.8"
 filetime = "0.2"
 html2md = "0.2"
 html-escape = "0.2"
-scraper = "0.20"
+scraper = "0.25"
 urlencoding = "2.1.3"
-chromiumoxide = "0.7"
+chromiumoxide = "0.9"
 
 # Additional crate dependencies
 infer = "0.16"
@@ -257,7 +257,7 @@ piper = "0.2"
 tokio-test = "0.4"
 derive_builder = "0.20"
 scopeguard = "1.2"
-wiremock = "0.5"
+wiremock = "0.6"
 mockito = "1.2"
 byte-unit = "5.1"
 figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
@@ -266,7 +266,7 @@ figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
 assert_cmd = "2.0"
 predicates = "3.0"
 proptest = "1.0"
-sysinfo = "0.30"
+sysinfo = "0.38"
 rstest = "0.26.1"
 
 

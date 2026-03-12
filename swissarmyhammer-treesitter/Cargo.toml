@@ -70,7 +70,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # SQLite for persistent index storage
-rusqlite = { version = "0.33", features = ["bundled"] }
+rusqlite = { workspace = true }
 
 # Leader election
 swissarmyhammer-leader-election = { workspace = true }

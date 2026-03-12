@@ -99,7 +99,7 @@ impl Doctorable for PromptHealthChecker {
                         if content.starts_with("---") {
                             let parts: Vec<&str> = content.splitn(3, "---").collect();
                             if parts.len() >= 3 {
-                                if let Err(e) = serde_yaml::from_str::<serde_yaml::Value>(parts[1])
+                                if let Err(e) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(parts[1])
                                 {
                                     yaml_errors.push((entry.path().to_path_buf(), e.to_string()));
                                 }

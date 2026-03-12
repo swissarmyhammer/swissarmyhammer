@@ -206,18 +206,9 @@ impl GitChangesTool {
                 .map_err(|e| rmcp::ErrorData::internal_error(e, None))?
         };
 
-        Ok(CallToolResult {
-            content: vec![rmcp::model::Annotated::new(
-                rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                    text: response_json,
-                    meta: None,
-                }),
-                None,
-            )],
-            is_error: Some(false),
-            structured_content: None,
-            meta: None,
-        })
+        Ok(CallToolResult::success(vec![
+            rmcp::model::Content::text(response_json),
+        ]))
     }
 
     /// Resolves the working directory from the tool context.
@@ -430,18 +421,9 @@ impl McpTool for GitChangesTool {
             rmcp::ErrorData::internal_error(format!("Failed to serialize response: {}", e), None)
         })?;
 
-        Ok(CallToolResult {
-            content: vec![rmcp::model::Annotated::new(
-                rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                    text: response_json,
-                    meta: None,
-                }),
-                None,
-            )],
-            is_error: Some(false),
-            structured_content: None,
-            meta: None,
-        })
+        Ok(CallToolResult::success(vec![
+            rmcp::model::Content::text(response_json),
+        ]))
     }
 }
 

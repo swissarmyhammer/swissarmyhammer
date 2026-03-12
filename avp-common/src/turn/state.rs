@@ -98,7 +98,7 @@ impl TurnStateManager {
             ))
         })?;
 
-        let state: TurnState = serde_yaml::from_str(&content).map_err(|e| {
+        let state: TurnState = serde_yaml_ng::from_str(&content).map_err(|e| {
             AvpError::Context(format!(
                 "Failed to parse turn state '{}': {}",
                 state_path.display(),
@@ -133,7 +133,7 @@ impl TurnStateManager {
         // Acquire lock for writing
         let _lock = self.acquire_lock()?;
 
-        let content = serde_yaml::to_string(state)
+        let content = serde_yaml_ng::to_string(state)
             .map_err(|e| AvpError::Context(format!("Failed to serialize turn state: {}", e)))?;
 
         fs::write(&state_path, content).map_err(|e| {

@@ -1917,7 +1917,7 @@ mod tests {
 
         // Set up test client capabilities for ACP compliance
         let test_capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -1948,7 +1948,7 @@ mod tests {
 
         // Set test capabilities
         let test_capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -2806,7 +2806,7 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
         let caps_no_read = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(false)
                 .write_text_file(true))
             .terminal(false);
@@ -2844,7 +2844,7 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
         let caps_no_terminal = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -2881,7 +2881,7 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
         let caps_enabled = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -2952,7 +2952,7 @@ mod tests {
         );
 
         let caps_no_terminal = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -2982,7 +2982,7 @@ mod tests {
         );
 
         let caps_with_terminal = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -3353,7 +3353,7 @@ mod tests {
 
         // Test with terminal capability explicitly disabled
         let caps_disabled = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -3974,7 +3974,7 @@ mod tests {
 
         // Set client capabilities for file operations
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -4040,7 +4040,7 @@ mod tests {
 
         // Set client capabilities for file operations
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -4121,7 +4121,7 @@ mod tests {
 
         // Set client capabilities for file operations
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);

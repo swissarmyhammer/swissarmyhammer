@@ -1,7 +1,7 @@
 //! Agent validation logic for protocol and capability validation
 
 use agent_client_protocol::{
-    ClientCapabilities, Error, FileSystemCapability, InitializeRequest, ProtocolVersion,
+    ClientCapabilities, Error, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
 };
 
 impl crate::agent::ClaudeAgent {
@@ -142,7 +142,7 @@ impl crate::agent::ClaudeAgent {
     /// Uses lenient validation: unknown fs.meta capabilities are logged but don't fail validation.
     pub(crate) fn validate_filesystem_capabilities(
         &self,
-        fs_capabilities: &FileSystemCapability,
+        fs_capabilities: &FileSystemCapabilities,
     ) -> Result<(), Error> {
         // Validate meta field if present
         if let Some(fs_meta) = &fs_capabilities.meta {

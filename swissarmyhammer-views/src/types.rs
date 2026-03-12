@@ -70,8 +70,8 @@ mod tests {
     #[test]
     fn view_kind_yaml_round_trip() {
         let kind = ViewKind::Board;
-        let yaml = serde_yaml::to_string(&kind).unwrap();
-        let parsed: ViewKind = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&kind).unwrap();
+        let parsed: ViewKind = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(kind, parsed);
     }
 
@@ -95,8 +95,8 @@ mod tests {
                 }),
             }],
         };
-        let yaml = serde_yaml::to_string(&def).unwrap();
-        let parsed: ViewDef = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let parsed: ViewDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(def, parsed);
     }
 
@@ -124,7 +124,7 @@ commands:
   - id: board.expandAll
     name: Expand Lanes
 "#;
-        let def: ViewDef = serde_yaml::from_str(yaml).unwrap();
+        let def: ViewDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.name, "Board");
         assert_eq!(def.kind, ViewKind::Board);
         assert_eq!(def.card_fields.len(), 4);
@@ -141,7 +141,7 @@ id: "01ABC"
 name: Test
 kind: list
 "#;
-        let def: ViewDef = serde_yaml::from_str(yaml).unwrap();
+        let def: ViewDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.kind, ViewKind::List);
         assert!(def.icon.is_none());
         assert!(def.card_fields.is_empty());
@@ -151,8 +151,8 @@ kind: list
     #[test]
     fn grid_kind_round_trip() {
         let kind = ViewKind::Grid;
-        let yaml = serde_yaml::to_string(&kind).unwrap();
-        let parsed: ViewKind = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&kind).unwrap();
+        let parsed: ViewKind = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(kind, parsed);
     }
 
@@ -163,7 +163,7 @@ id: "01ABC"
 name: Test
 kind: gantt
 "#;
-        let def: ViewDef = serde_yaml::from_str(yaml).unwrap();
+        let def: ViewDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.kind, ViewKind::Unknown);
     }
 }

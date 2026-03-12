@@ -191,7 +191,7 @@ impl FrontmatterBuilder {
 
         // Serialize to YAML
         let mut yaml_content =
-            serde_yaml::to_string(&frontmatter).map_err(|e| MarkdownError::ParseError {
+            serde_yaml_ng::to_string(&frontmatter).map_err(|e| MarkdownError::ParseError {
                 message: format!(
                     "Failed to serialize frontmatter to YAML (source URL: {source_url_str}, {additional_fields_count} additional fields): {e}"
                 ),
@@ -200,8 +200,8 @@ impl FrontmatterBuilder {
         // Add additional fields if any
         if !self.additional_fields.is_empty() {
             // Parse the existing YAML to add additional fields
-            let mut yaml_value: serde_yaml::Value =
-                serde_yaml::from_str(&yaml_content).map_err(|e| MarkdownError::ParseError {
+            let mut yaml_value: serde_yaml_ng::Value =
+                serde_yaml_ng::from_str(&yaml_content).map_err(|e| MarkdownError::ParseError {
                     message: format!(
                         "Failed to parse generated YAML (content length: {} chars): {}",
                         yaml_content.len(),
@@ -209,17 +209,17 @@ impl FrontmatterBuilder {
                     ),
                 })?;
 
-            if let serde_yaml::Value::Mapping(ref mut map) = yaml_value {
+            if let serde_yaml_ng::Value::Mapping(ref mut map) = yaml_value {
                 for (key, value) in self.additional_fields {
                     map.insert(
-                        serde_yaml::Value::String(key),
-                        serde_yaml::Value::String(value),
+                        serde_yaml_ng::Value::String(key),
+                        serde_yaml_ng::Value::String(value),
                     );
                 }
             }
 
             yaml_content =
-                serde_yaml::to_string(&yaml_value).map_err(|e| MarkdownError::ParseError {
+                serde_yaml_ng::to_string(&yaml_value).map_err(|e| MarkdownError::ParseError {
                     message: format!(
                         "Failed to serialize extended frontmatter to YAML ({additional_fields_count} additional fields added): {e}"
                     ),
@@ -293,7 +293,7 @@ pub fn extract_frontmatter(markdown: &str) -> Option<Frontmatter> {
         let yaml_content = &content_after_start[..end_pos];
 
         // Try to parse the YAML content
-        serde_yaml::from_str(yaml_content).ok()
+        serde_yaml_ng::from_str(yaml_content).ok()
     } else {
         None
     }

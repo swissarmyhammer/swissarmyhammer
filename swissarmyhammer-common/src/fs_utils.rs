@@ -272,7 +272,7 @@ impl FileSystemUtils {
         T: serde::de::DeserializeOwned,
     {
         let content = self.fs.read_to_string(path)?;
-        serde_yaml::from_str(&content).map_err(SwissArmyHammerError::Serialization)
+        serde_yaml_ng::from_str(&content).map_err(SwissArmyHammerError::Serialization)
     }
 
     /// Write data as YAML to a file
@@ -280,7 +280,7 @@ impl FileSystemUtils {
     where
         T: serde::Serialize,
     {
-        let content = serde_yaml::to_string(data)?;
+        let content = serde_yaml_ng::to_string(data)?;
         self.fs.write(path, &content)
     }
 
@@ -294,7 +294,7 @@ impl FileSystemUtils {
     where
         T: serde::Serialize,
     {
-        let content = serde_yaml::to_string(data)?;
+        let content = serde_yaml_ng::to_string(data)?;
         self.fs.write_with_permissions(path, &content, permissions)
     }
 

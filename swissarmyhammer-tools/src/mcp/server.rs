@@ -179,32 +179,21 @@ where
 
 /// Create ServerCapabilities for MCP protocol
 fn create_server_capabilities() -> ServerCapabilities {
-    ServerCapabilities {
-        prompts: Some(PromptsCapability {
-            list_changed: Some(true),
-        }),
-        tools: Some(ToolsCapability {
-            list_changed: Some(true),
-        }),
-        resources: None,
-        logging: None,
-        completions: None,
-        experimental: None,
-        extensions: None,
-        tasks: None,
-    }
+    let mut caps = ServerCapabilities::default();
+    caps.prompts = Some(PromptsCapability {
+        list_changed: Some(true),
+    });
+    caps.tools = Some(ToolsCapability {
+        list_changed: Some(true),
+    });
+    caps
 }
 
 /// Create Implementation information for the MCP server
 fn create_server_implementation() -> Implementation {
-    Implementation {
-        name: "SwissArmyHammer".into(),
-        version: crate::VERSION.into(),
-        icons: None,
-        title: Some("SwissArmyHammer MCP Server".into()),
-        description: None,
-        website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
-    }
+    Implementation::new("SwissArmyHammer", crate::VERSION)
+        .with_title("SwissArmyHammer MCP Server")
+        .with_website_url("https://github.com/swissarmyhammer/swissarmyhammer")
 }
 
 impl McpServer {
@@ -1262,12 +1251,9 @@ impl ServerHandler for McpServer {
             }
         }
 
-        Ok(InitializeResult {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: create_server_capabilities(),
-            instructions: Some(build_instructions_with_health(self.work_dir.as_deref())),
-            server_info: create_server_implementation(),
-        })
+        Ok(InitializeResult::new(create_server_capabilities())
+            .with_server_info(create_server_implementation())
+            .with_instructions(build_instructions_with_health(self.work_dir.as_deref())))
     }
 
     async fn list_prompts(
@@ -1293,24 +1279,21 @@ impl ServerHandler for McpServer {
                             Some(
                                 p.parameters
                                     .iter()
-                                    .map(|param| PromptArgument {
-                                        name: param.name.clone(),
-                                        title: None, // Could use param.name here if we want to display it
-                                        description: Some(param.description.clone()),
-                                        required: Some(param.required),
+                                    .map(|param| {
+                                        PromptArgument::new(param.name.clone())
+                                            .with_description(param.description.clone())
+                                            .with_required(param.required)
                                     })
                                     .collect(),
                             )
                         };
 
-                        Prompt {
-                            name: p.name.clone(),
-                            description: p.description.clone(),
+                        Prompt::new(
+                            p.name.clone(),
+                            p.description.clone(),
                             arguments,
-                            icons: None,
-                            title: Some(p.name.clone()),
-                            meta: None,
-                        }
+                        )
+                        .with_title(p.name.clone())
                     })
                     .collect();
 
@@ -1349,13 +1332,14 @@ impl ServerHandler for McpServer {
         let content =
             Self::render_prompt_with_args(&library, &request.name, &prompt, &request.arguments)?;
 
-        Ok(GetPromptResult {
-            description: prompt.description.clone(),
-            messages: vec![PromptMessage {
-                role: PromptMessageRole::User,
-                content: PromptMessageContent::Text { text: content },
-            }],
-        })
+        let mut result = GetPromptResult::new(vec![PromptMessage::new(
+            PromptMessageRole::User,
+            PromptMessageContent::text(content),
+        )]);
+        if let Some(desc) = prompt.description.clone() {
+            result = result.with_description(desc);
+        }
+        Ok(result)
     }
 
     async fn list_tools(
@@ -1395,12 +1379,9 @@ impl ServerHandler for McpServer {
     }
 
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: create_server_capabilities(),
-            server_info: create_server_implementation(),
-            instructions: Some(build_instructions_with_health(self.work_dir.as_deref())),
-        }
+        ServerInfo::new(create_server_capabilities())
+            .with_server_info(create_server_implementation())
+            .with_instructions(build_instructions_with_health(self.work_dir.as_deref()))
     }
 }
 

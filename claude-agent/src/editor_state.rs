@@ -301,7 +301,7 @@ impl Default for EditorStateManager {
 /// Check if client capabilities include editor state support
 ///
 /// Returns true if the client has advertised editor state support via the
-/// `meta` extension point in `FileSystemCapability`.
+/// `meta` extension point in `FileSystemCapabilities`.
 ///
 /// # Example Client Capabilities
 ///
@@ -432,7 +432,7 @@ mod tests {
         use serde_json::json;
 
         let capabilities = ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)
                 .meta(
@@ -453,7 +453,7 @@ mod tests {
         use serde_json::json;
 
         let capabilities = ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)
                 .meta(
@@ -473,7 +473,7 @@ mod tests {
         use agent_client_protocol::ClientCapabilities;
 
         let capabilities = ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);

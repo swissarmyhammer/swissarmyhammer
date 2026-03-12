@@ -52,7 +52,7 @@ fn create_test_environment() -> (
 
     // Set client capabilities
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -110,7 +110,7 @@ fn create_test_environment_with_capabilities(
 
     // Set client capabilities with specific settings
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(read_capability)
             .write_text_file(write_capability))
         .terminal(terminal_capability);

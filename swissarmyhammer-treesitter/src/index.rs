@@ -78,6 +78,11 @@ pub struct IndexConfig {
     /// Embedding model name (resolved via swissarmyhammer-embedding).
     /// Defaults to `swissarmyhammer_embedding::DEFAULT_MODEL_NAME` ("qwen-embedding").
     pub embedding_model: String,
+
+    /// Whether to compute embeddings during indexing.
+    /// When `false`, files are parsed and chunked but no embedding model is loaded.
+    /// Defaults to `true`.
+    pub embedding_enabled: bool,
 }
 
 impl Default for IndexConfig {
@@ -87,6 +92,7 @@ impl Default for IndexConfig {
             parse_timeout_ms: DEFAULT_PARSE_TIMEOUT_MS,
             respect_gitignore: true,
             embedding_model: swissarmyhammer_embedding::DEFAULT_MODEL_NAME.to_string(),
+            embedding_enabled: true,
         }
     }
 }
@@ -497,6 +503,11 @@ impl IndexContext {
         model_name: &str,
         errors: &mut Vec<(PathBuf, String)>,
     ) -> Result<()> {
+        if !self.config.embedding_enabled {
+            tracing::info!("Embedding disabled, skipping embedding phase");
+            return Ok(());
+        }
+
         let files_count = self.files.len();
         if files_count == 0 {
             return Ok(());
@@ -1053,6 +1064,29 @@ mod tests {
         let context = IndexContext::new("/some/path").with_config(config);
 
         assert_eq!(context.config().max_file_size, 1024);
+    }
+
+    #[tokio::test]
+    async fn test_config_embedding_disabled_skips_model() {
+        let dir = setup_test_dir();
+        let config = IndexConfig {
+            embedding_enabled: false,
+            ..Default::default()
+        };
+        let mut context = IndexContext::new(dir.path()).with_config(config);
+        let result = context.scan().await.unwrap();
+
+        // Files should still be parsed
+        assert!(result.files_parsed > 0, "Files should be parsed");
+        // But no embeddings computed
+        assert_eq!(
+            context.last_status.files_embedded, 0,
+            "No files should be embedded when embedding_enabled is false"
+        );
+        assert!(
+            context.embedding_model.is_none(),
+            "Embedding model should not be loaded"
+        );
     }
 
     #[tokio::test]
