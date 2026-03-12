@@ -52,30 +52,22 @@ fn run_tray() {
 }
 
 fn main() {
-    // Detect launch context: tray mode (no args + non-TTY) or banner display.
-    {
-        use std::io::IsTerminal;
-        let args: Vec<String> = std::env::args().collect();
-        let is_tty = std::io::stdin().is_terminal();
+    // No args → tray mode (Finder launch, cargo tauri dev, or bare invocation).
+    // The app binary's primary job is the tray — CLI commands are the exception.
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 1 {
+        run_tray();
+        return;
+    }
 
-        if args.len() == 1 && !is_tty {
-            run_tray();
-            return;
-        }
-
-        let show_banner = match args.len() {
-            1 => is_tty,
-            2 => args[1] == "--help" || args[1] == "-h",
-            _ => false,
-        };
-        if show_banner {
-            banner::print_banner();
-        }
+    // Show banner for --help.
+    if args.len() == 2 && (args[1] == "--help" || args[1] == "-h") {
+        banner::print_banner();
     }
 
     let cli = Cli::parse();
 
-    // `start` subcommand → tray mode, skip all CLI setup.
+    // `start` subcommand → tray mode, same as no-args.
     if matches!(cli.command, Commands::Start) {
         run_tray();
         return;
