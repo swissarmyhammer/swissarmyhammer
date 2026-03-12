@@ -108,7 +108,7 @@ pub fn load_agents_config() -> Result<AgentsConfig, RegistryError> {
                 path, e
             ))
         })?;
-        return serde_yaml::from_str(&content).map_err(|e| {
+        return serde_yaml_ng::from_str(&content).map_err(|e| {
             RegistryError::Validation(format!("Invalid agents config '{}': {}", path, e))
         });
     }
@@ -118,7 +118,7 @@ pub fn load_agents_config() -> Result<AgentsConfig, RegistryError> {
         let user_config = home.join(".mirdan").join("agents.yaml");
         if user_config.exists() {
             let content = std::fs::read_to_string(&user_config)?;
-            return serde_yaml::from_str(&content).map_err(|e| {
+            return serde_yaml_ng::from_str(&content).map_err(|e| {
                 RegistryError::Validation(format!(
                     "Invalid agents config '{}': {}",
                     user_config.display(),
@@ -129,7 +129,7 @@ pub fn load_agents_config() -> Result<AgentsConfig, RegistryError> {
     }
 
     // Use embedded default
-    serde_yaml::from_str(DEFAULT_AGENTS_YAML)
+    serde_yaml_ng::from_str(DEFAULT_AGENTS_YAML)
         .map_err(|e| RegistryError::Validation(format!("Invalid embedded agents config: {}", e)))
 }
 
@@ -591,7 +591,7 @@ agents:
       - dir: "~/.test"
       - command: test-cmd
 "#;
-        let config: AgentsConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AgentsConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(config.agents.len(), 1);
         assert_eq!(config.agents[0].id, "test-agent");
         assert_eq!(config.agents[0].detect.len(), 2);

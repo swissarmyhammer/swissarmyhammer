@@ -9,7 +9,7 @@ use markdowndown::types::{
     MarkdownError, NetworkErrorKind, Url, UrlType, ValidationErrorKind,
 };
 use proptest::prelude::*;
-use serde_yaml;
+use serde_yaml_ng;
 
 // Test constants for magic number elimination
 const MAX_TIMESTAMP_DIFF_SECONDS: i64 = 5;
@@ -49,8 +49,8 @@ mod helpers {
     {
         test_serialization_roundtrip(
             value,
-            |v| serde_yaml::to_string(v).map_err(|e| e.into()),
-            |s| serde_yaml::from_str(s).map_err(|e| e.into()),
+            |v| serde_yaml_ng::to_string(v).map_err(|e| e.into()),
+            |s| serde_yaml_ng::from_str(s).map_err(|e| e.into()),
         );
     }
 
@@ -682,7 +682,7 @@ mod integration_tests {
         };
 
         // Test that all components work together
-        let yaml_frontmatter = serde_yaml::to_string(&frontmatter).unwrap();
+        let yaml_frontmatter = serde_yaml_ng::to_string(&frontmatter).unwrap();
         let full_document = format!("---\n{yaml_frontmatter}---\n\n{markdown}");
 
         assert!(full_document.contains("# Hello World"));
@@ -712,7 +712,7 @@ mod integration_tests {
         };
 
         // This should serialize successfully
-        let yaml = serde_yaml::to_string(&frontmatter).unwrap();
+        let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap();
         assert!(yaml.contains("https://example.com"));
 
         let complete = valid_markdown.with_frontmatter(&format!("---\n{yaml}---\n"));
@@ -736,24 +736,24 @@ mod integration_tests {
 
         // Helper to test roundtrip serialization
         let test_roundtrip = |value: &impl Serialize,
-                              deserialize: fn(&str) -> Result<_, serde_yaml::Error>| {
-            let serialized = serde_yaml::to_string(value).unwrap();
+                              deserialize: fn(&str) -> Result<_, serde_yaml_ng::Error>| {
+            let serialized = serde_yaml_ng::to_string(value).unwrap();
             let deserialized = deserialize(&serialized).unwrap();
             (serialized, deserialized)
         };
 
         // Test URL roundtrip
-        let (url_yaml, url_deserialized) = test_roundtrip(&url, serde_yaml::from_str::<Url>);
+        let (url_yaml, url_deserialized) = test_roundtrip(&url, serde_yaml_ng::from_str::<Url>);
         assert_eq!(url, url_deserialized);
 
         // Test Frontmatter roundtrip
         let (frontmatter_yaml, frontmatter_deserialized) =
-            test_roundtrip(&frontmatter, serde_yaml::from_str::<Frontmatter>);
+            test_roundtrip(&frontmatter, serde_yaml_ng::from_str::<Frontmatter>);
         assert_eq!(frontmatter, frontmatter_deserialized);
 
         // Test UrlType roundtrip
         let (_url_type_yaml, url_type_deserialized) =
-            test_roundtrip(&url_type, serde_yaml::from_str::<UrlType>);
+            test_roundtrip(&url_type, serde_yaml_ng::from_str::<UrlType>);
         assert_eq!(url_type, url_type_deserialized);
 
         // Test Markdown content preservation

@@ -142,7 +142,7 @@ pub fn run_list_command(
             println!("{json}");
         }
         OutputFormat::Yaml => {
-            let yaml = serde_yaml::to_string(&prompt_infos)?;
+            let yaml = serde_yaml_ng::to_string(&prompt_infos)?;
             print!("{yaml}");
         }
         OutputFormat::Table => {

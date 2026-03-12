@@ -40,7 +40,7 @@ pub fn get_registry_url() -> String {
         let config_path = home.join(".mirdan").join("config.yaml");
         if config_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&config_path) {
-                if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
+                if let Ok(yaml) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&content) {
                     if let Some(url) = yaml.get("registry_url").and_then(|v| v.as_str()) {
                         return url.to_string();
                     }

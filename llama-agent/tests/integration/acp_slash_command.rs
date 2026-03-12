@@ -107,59 +107,30 @@ mod acp_slash_command_tests {
         // Create mock prompts with various configurations
         let prompts = vec![
             // Simple prompt without arguments
-            Prompt {
-                name: "test".to_string(),
-                title: None,
-                description: Some("Run tests".to_string()),
-                arguments: None,
-                icons: None,
-                meta: None,
-            },
+            Prompt::new("test", Some("Run tests"), None),
             // Prompt with required arguments
-            Prompt {
-                name: "plan".to_string(),
-                title: None,
-                description: Some("Create a plan".to_string()),
-                arguments: Some(vec![PromptArgument {
-                    name: "spec".to_string(),
-                    title: None,
-                    description: Some("Specification file".to_string()),
-                    required: Some(true),
-                }]),
-                icons: None,
-                meta: None,
-            },
+            Prompt::new(
+                "plan",
+                Some("Create a plan"),
+                Some(vec![PromptArgument::new("spec")
+                    .with_description("Specification file")
+                    .with_required(true)]),
+            ),
             // Prompt with optional arguments
-            Prompt {
-                name: "review".to_string(),
-                title: None,
-                description: Some("Review code".to_string()),
-                arguments: Some(vec![
-                    PromptArgument {
-                        name: "files".to_string(),
-                        title: None,
-                        description: Some("Files to review".to_string()),
-                        required: Some(true),
-                    },
-                    PromptArgument {
-                        name: "severity".to_string(),
-                        title: None,
-                        description: Some("Minimum severity level".to_string()),
-                        required: Some(false),
-                    },
+            Prompt::new(
+                "review",
+                Some("Review code"),
+                Some(vec![
+                    PromptArgument::new("files")
+                        .with_description("Files to review")
+                        .with_required(true),
+                    PromptArgument::new("severity")
+                        .with_description("Minimum severity level")
+                        .with_required(false),
                 ]),
-                icons: None,
-                meta: None,
-            },
+            ),
             // Prompt without description
-            Prompt {
-                name: "commit".to_string(),
-                title: None,
-                description: None,
-                arguments: None,
-                icons: None,
-                meta: None,
-            },
+            Prompt::new("commit", None::<String>, None),
         ];
 
         let mcp_client = Arc::new(MockMCPClientWithPrompts::new(prompts));
@@ -347,14 +318,7 @@ mod acp_slash_command_tests {
             .with_max_level(tracing::Level::DEBUG)
             .try_init();
 
-        let prompts = vec![Prompt {
-            name: "simple".to_string(),
-            title: None,
-            description: Some("Simple command".to_string()),
-            arguments: None,
-            icons: None,
-            meta: None,
-        }];
+        let prompts = vec![Prompt::new("simple", Some("Simple command"), None)];
 
         let mcp_client = Arc::new(MockMCPClientWithPrompts::new(prompts));
         let registry = CommandRegistry::new(mcp_client);
@@ -501,22 +465,8 @@ mod acp_slash_command_tests {
 
         // Create MCP prompts that overlap with skill names
         let prompts = vec![
-            Prompt {
-                name: "plan".to_string(),
-                title: None,
-                description: Some("MCP plan prompt (should be overridden)".to_string()),
-                arguments: None,
-                icons: None,
-                meta: None,
-            },
-            Prompt {
-                name: "deploy".to_string(),
-                title: None,
-                description: Some("Deploy to production (MCP-only)".to_string()),
-                arguments: None,
-                icons: None,
-                meta: None,
-            },
+            Prompt::new("plan", Some("MCP plan prompt (should be overridden)"), None),
+            Prompt::new("deploy", Some("Deploy to production (MCP-only)"), None),
         ];
 
         let mcp_client = Arc::new(MockMCPClientWithPrompts::new(prompts));

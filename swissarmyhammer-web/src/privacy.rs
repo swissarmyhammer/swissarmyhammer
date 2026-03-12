@@ -149,8 +149,8 @@ impl UserAgentRotator {
 
         if self.randomize {
             let index = {
-                let mut rng = rand::thread_rng();
-                rng.gen_range(0..user_agents.len())
+                let mut rng = rand::rng();
+                rng.random_range(0..user_agents.len())
             };
             user_agents[index].clone()
         } else {
@@ -201,8 +201,9 @@ impl RequestJitter {
         }
 
         let delay = {
-            let mut rng = rand::thread_rng();
-            let delay_ms = rng.gen_range(self.min_delay.as_millis()..=self.max_delay.as_millis());
+            let mut rng = rand::rng();
+            let delay_ms =
+                rng.random_range(self.min_delay.as_millis()..=self.max_delay.as_millis());
             Duration::from_millis(delay_ms as u64)
         };
 
@@ -245,14 +246,14 @@ impl InstanceDistributor {
 
         if suitable_instances.is_empty() {
             let index = {
-                let mut rng = rand::thread_rng();
-                rng.gen_range(0..available.len())
+                let mut rng = rand::rng();
+                rng.random_range(0..available.len())
             };
             Some(available[index].clone())
         } else {
             let index = {
-                let mut rng = rand::thread_rng();
-                rng.gen_range(0..suitable_instances.len())
+                let mut rng = rand::rng();
+                rng.random_range(0..suitable_instances.len())
             };
             Some(suitable_instances[index].clone())
         }

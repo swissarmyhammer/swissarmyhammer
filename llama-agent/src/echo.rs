@@ -85,10 +85,8 @@ impl EchoService {
             ),
         ];
 
-        Ok(GetPromptResult {
-            description: Some("Echo prompt for testing MCP functionality".to_string()),
-            messages,
-        })
+        Ok(GetPromptResult::new(messages)
+            .with_description("Echo prompt for testing MCP functionality"))
     }
 }
 
@@ -96,18 +94,17 @@ impl EchoService {
 #[prompt_handler]
 impl ServerHandler for EchoService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_tools()
                 .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "Echo server for testing MCP functionality. Tools: echo, status. Prompts: echo_prompt."
-                    .to_string(),
-            ),
-        }
+        )
+        .with_protocol_version(ProtocolVersion::V_2024_11_05)
+        .with_server_info(Implementation::from_build_env())
+        .with_instructions(
+            "Echo server for testing MCP functionality. Tools: echo, status. Prompts: echo_prompt.",
+        )
     }
 
     async fn initialize(

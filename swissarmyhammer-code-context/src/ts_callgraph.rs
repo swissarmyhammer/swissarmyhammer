@@ -275,7 +275,7 @@ pub fn generate_ts_call_edges(
         // Find the tightest enclosing chunk for this call site.
         let caller_symbol: Option<String> = caller_stmt
             .query_row(
-                rusqlite::params![file_path, site.start_byte, site.end_byte],
+                rusqlite::params![file_path, site.start_byte as i64, site.end_byte as i64],
                 |row| row.get(0),
             )
             .ok();

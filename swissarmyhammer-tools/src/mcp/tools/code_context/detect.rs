@@ -28,8 +28,7 @@ static GUIDELINES_NODEJS: &str =
     include_str!("../../../../../builtin/_partials/project-types/nodejs.md");
 static GUIDELINES_PYTHON: &str =
     include_str!("../../../../../builtin/_partials/project-types/python.md");
-static GUIDELINES_GO: &str =
-    include_str!("../../../../../builtin/_partials/project-types/go.md");
+static GUIDELINES_GO: &str = include_str!("../../../../../builtin/_partials/project-types/go.md");
 static GUIDELINES_JAVA_MAVEN: &str =
     include_str!("../../../../../builtin/_partials/project-types/java-maven.md");
 static GUIDELINES_JAVA_GRADLE: &str =

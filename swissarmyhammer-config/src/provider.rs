@@ -46,7 +46,7 @@ impl FileProvider {
             )
         })?;
 
-        let yaml_value: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
+        let yaml_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).map_err(|e| {
             ConfigurationError::load(
                 self.path.clone(),
                 figment::Error::from(format!("Failed to parse YAML: {}", e)),

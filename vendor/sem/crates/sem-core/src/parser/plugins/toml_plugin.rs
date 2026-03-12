@@ -25,14 +25,11 @@ impl SemanticParserPlugin for TomlParserPlugin {
             return Vec::new();
         }
 
-        // Parse for content hashing
-        let parsed: toml::Value = match content.parse() {
-            Ok(v) => v,
+        // Parse for content hashing.
+        // toml 1.0 requires parsing as Table (a full document), not Value (a single value).
+        let table: toml::Table = match content.parse() {
+            Ok(t) => t,
             Err(_) => return Vec::new(),
-        };
-        let table = match parsed.as_table() {
-            Some(t) => t,
-            None => return Vec::new(),
         };
 
         let mut entities = Vec::new();

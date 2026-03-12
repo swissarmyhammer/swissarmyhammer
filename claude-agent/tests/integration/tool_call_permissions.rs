@@ -47,7 +47,7 @@ fn create_test_environment() -> (
 
     // Set client capabilities
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -244,7 +244,7 @@ async fn test_stored_permission_allows_tool_without_prompt() {
     );
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -319,7 +319,7 @@ async fn test_stored_permission_denies_tool() {
     );
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -396,7 +396,7 @@ async fn test_custom_policy_denies_tool() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -467,7 +467,7 @@ async fn test_custom_policy_allows_tool() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -538,7 +538,7 @@ async fn test_pattern_matching_in_permissions() {
     );
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -625,7 +625,7 @@ async fn test_permission_expiration() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -683,7 +683,7 @@ async fn test_auto_approved_fs_read_bypasses_policy() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -745,7 +745,7 @@ async fn test_auto_approved_fs_write_bypasses_policy() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -809,7 +809,7 @@ async fn test_auto_approved_terminal_bypasses_policy() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -873,7 +873,7 @@ async fn test_auto_approved_multiple_tools() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -961,7 +961,7 @@ async fn test_non_auto_approved_tool_still_requires_permission() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -1036,7 +1036,7 @@ async fn test_auto_approved_with_deny_policy_still_denied() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -1098,7 +1098,7 @@ async fn test_fs_read_fails_without_read_capability() {
 
     // Set capabilities with read_text_file disabled
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(false) // Capability disabled
             .write_text_file(true))
         .terminal(true);
@@ -1156,7 +1156,7 @@ async fn test_fs_write_fails_without_write_capability() {
 
     // Set capabilities with write_text_file disabled
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(false)) // Capability disabled
         .terminal(true);
@@ -1230,7 +1230,7 @@ async fn test_terminal_fails_without_terminal_capability() {
 
     // Set capabilities with terminal disabled
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(false); // Capability disabled
@@ -1295,7 +1295,7 @@ async fn test_operations_fail_with_no_capabilities() {
 
     // Set capabilities with all filesystem and terminal capabilities disabled
     let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapability::new()
+        .fs(agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(false)
             .write_text_file(false))
         .terminal(false);

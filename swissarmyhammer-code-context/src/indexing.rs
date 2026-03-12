@@ -6,15 +6,19 @@
 //! 3. Writes chunks and symbols to the database
 //! 4. Updates indexed flags
 //! 5. Handles LSP requests (placeholder for future LSP integration)
+//!
+//! All database writes go through the leader's [`SharedDb`] — a single
+//! `Arc<Mutex<Connection>>` — so there is no write contention with the
+//! LSP worker or any other writer.
 
 use rayon::prelude::*;
-use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::error::CodeContextError;
+use crate::workspace::SharedDb;
 
 /// Configuration for the indexing worker
 #[derive(Debug, Clone)]
@@ -34,18 +38,22 @@ impl Default for IndexingConfig {
     }
 }
 
-/// Spawn a background indexing worker thread in the leader process
+/// Spawn a background indexing worker thread in the leader process.
 ///
 /// This starts a detached thread that:
 /// 1. Queries dirty files from the database
 /// 2. Parses them using tree-sitter
-/// 3. Writes results back to the database
+/// 3. Writes results back to the database via the shared connection
 /// 4. Repeats until no dirty files remain
-pub fn spawn_indexing_worker(workspace_root: PathBuf, db_path: PathBuf, config: IndexingConfig) {
+///
+/// The worker uses the leader's [`SharedDb`] so all writes are serialized
+/// through a single connection, eliminating SQLITE_BUSY contention with the
+/// LSP worker and other writers.
+pub fn spawn_indexing_worker(workspace_root: PathBuf, db: SharedDb, config: IndexingConfig) {
     thread::Builder::new()
         .name("code-context-indexer".to_string())
         .spawn(
-            move || match run_indexing_worker(&workspace_root, &db_path, config) {
+            move || match run_indexing_worker(&workspace_root, &db, config) {
                 Ok(()) => {
                     info!("Indexing worker completed successfully");
                 }
@@ -57,10 +65,14 @@ pub fn spawn_indexing_worker(workspace_root: PathBuf, db_path: PathBuf, config: 
         .expect("Failed to spawn indexing worker thread");
 }
 
-/// Main indexing worker loop
+/// Main indexing worker loop.
+///
+/// Uses the leader's shared DB connection for all reads and writes.
+/// The mutex is locked only for the duration of each individual DB call
+/// so the LSP worker and other writers can interleave without contention.
 fn run_indexing_worker(
     workspace_root: &Path,
-    db_path: &Path,
+    db: &SharedDb,
     config: IndexingConfig,
 ) -> Result<(), CodeContextError> {
     info!(
@@ -68,16 +80,12 @@ fn run_indexing_worker(
         workspace_root.display()
     );
 
-    // Open database connection for reading dirty files
-    let db = Connection::open(db_path)?;
-    db.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
-
     // Work queue loop: keep checking for dirty files indefinitely
     // This allows the worker to index files that are discovered after startup
     let mut indexed_count = 0;
     loop {
         // Query dirty files (ts_indexed = 0) in batches
-        let dirty_files = query_dirty_files(&db, config.batch_size)?;
+        let dirty_files = query_dirty_files(db, config.batch_size)?;
 
         if !dirty_files.is_empty() {
             info!("code-context: processing {} dirty files", dirty_files.len());
@@ -108,27 +116,29 @@ fn run_indexing_worker(
                 })
                 .collect();
 
-            // Write results back to database
+            // Write results back to database (each call locks the shared connection briefly)
             for (file_path, chunks) in results {
                 if chunks.is_empty() {
                     debug!(
                         "Skipping {} - no chunks extracted, marking indexed to avoid retry loop",
                         file_path
                     );
-                    if let Err(e) = mark_ts_indexed(&db, &file_path) {
+                    if let Err(e) = mark_ts_indexed(db, &file_path) {
                         warn!("Failed to mark {} as indexed: {}", file_path, e);
                     }
                     continue;
                 }
 
-                if let Err(e) = write_ts_chunks(&db, &file_path, &chunks) {
+                if let Err(e) = write_ts_chunks(db, &file_path, &chunks) {
                     warn!("Failed to write chunks for {}: {}", file_path, e);
                     // Mark as indexed anyway to avoid infinite retry loop
-                    let _ = mark_ts_indexed(&db, &file_path);
+                    if let Err(e2) = mark_ts_indexed(db, &file_path) {
+                        warn!("Failed to mark {} as indexed after chunk write error: {}", file_path, e2);
+                    }
                     continue;
                 }
 
-                if let Err(e) = mark_ts_indexed(&db, &file_path) {
+                if let Err(e) = mark_ts_indexed(db, &file_path) {
                     warn!("Failed to mark {} as indexed: {}", file_path, e);
                 } else {
                     indexed_count += 1;
@@ -151,9 +161,13 @@ fn run_indexing_worker(
     }
 }
 
-/// Query files that need tree-sitter indexing (ts_indexed=0)
-fn query_dirty_files(db: &Connection, limit: usize) -> Result<Vec<String>, CodeContextError> {
-    let mut stmt = db.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed=0 LIMIT ?")?;
+/// Query files that need tree-sitter indexing (ts_indexed=0).
+///
+/// Locks the shared connection for the duration of the query.
+fn query_dirty_files(db: &SharedDb, limit: usize) -> Result<Vec<String>, CodeContextError> {
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    let mut stmt =
+        conn.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed=0 LIMIT ?")?;
 
     let files = stmt
         .query_map([limit as i64], |row| row.get::<_, String>(0))?
@@ -162,9 +176,12 @@ fn query_dirty_files(db: &Connection, limit: usize) -> Result<Vec<String>, CodeC
     Ok(files)
 }
 
-/// Mark a file as indexed in the database
-fn mark_ts_indexed(db: &Connection, file_path: &str) -> Result<(), CodeContextError> {
-    db.execute(
+/// Mark a file as indexed in the database.
+///
+/// Locks the shared connection for the duration of the update.
+fn mark_ts_indexed(db: &SharedDb, file_path: &str) -> Result<(), CodeContextError> {
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    conn.execute(
         "UPDATE indexed_files SET ts_indexed=1 WHERE file_path=?",
         [file_path],
     )?;
@@ -213,19 +230,26 @@ fn parse_and_extract_chunks(file_path: &Path) -> Result<Vec<(usize, String)>, Co
     Ok(vec![(0, content)])
 }
 
-/// Write parsed chunks to the ts_chunks table
+/// Write parsed chunks to the ts_chunks table.
+///
+/// Locks the shared connection for the duration of all inserts in one batch.
 fn write_ts_chunks(
-    db: &Connection,
+    db: &SharedDb,
     file_path: &str,
     chunks: &[(usize, String)],
 ) -> Result<(), CodeContextError> {
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    // Delete any existing chunks for this file before inserting new ones.
+    // Without this, re-indexing a file (after a hash change marks it dirty)
+    // would accumulate duplicate chunk rows.
+    conn.execute("DELETE FROM ts_chunks WHERE file_path = ?", [file_path])?;
     for (start_byte, content) in chunks {
         let end_byte = start_byte + content.len();
         // Count lines in the content
         let start_line = 1i64; // Simple implementation: all chunks start at line 1
         let end_line = 1i64 + content.lines().count() as i64;
 
-        db.execute(
+        conn.execute(
             "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text) VALUES (?, ?, ?, ?, ?, ?)",
             rusqlite::params![file_path, *start_byte as i64, end_byte as i64, start_line, end_line, content],
         )?;
@@ -236,13 +260,17 @@ fn write_ts_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
     use std::fs;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
-    fn create_test_db() -> Connection {
+    /// Create a test SharedDb with the required schema.
+    fn create_test_db() -> SharedDb {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "
+            PRAGMA foreign_keys = ON;
             CREATE TABLE indexed_files (
                 file_path     TEXT PRIMARY KEY,
                 content_hash  BLOB NOT NULL,
@@ -265,10 +293,12 @@ mod tests {
             ",
         )
         .unwrap();
-        conn
+        Arc::new(Mutex::new(conn))
     }
 
-    fn insert_test_file(conn: &Connection, file_path: &str) {
+    /// Insert a test file row into indexed_files via the shared connection.
+    fn insert_test_file(db: &SharedDb, file_path: &str) {
+        let conn = db.lock().unwrap();
         conn.execute(
             "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed) VALUES (?, ?, ?, ?, 0, 0)",
             rusqlite::params![file_path, vec![0u8; 16], 1024i64, 1000i64],
@@ -318,7 +348,8 @@ fn hello() {
         assert!(result.is_ok());
 
         // Verify chunks were written
-        let mut stmt = db
+        let conn = db.lock().unwrap();
+        let mut stmt = conn
             .prepare("SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?")
             .unwrap();
 
@@ -334,18 +365,31 @@ fn hello() {
         insert_test_file(&db, file_path);
 
         // Verify file is not indexed initially
-        let mut stmt = db
-            .prepare("SELECT ts_indexed FROM indexed_files WHERE file_path = ?")
-            .unwrap();
-        let initial: i64 = stmt.query_row([file_path], |row| row.get(0)).unwrap();
-        assert_eq!(initial, 0, "File should not be indexed initially");
+        {
+            let conn = db.lock().unwrap();
+            let initial: i64 = conn
+                .query_row(
+                    "SELECT ts_indexed FROM indexed_files WHERE file_path = ?",
+                    [file_path],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(initial, 0, "File should not be indexed initially");
+        }
 
         // Mark as indexed
         let result = mark_ts_indexed(&db, file_path);
         assert!(result.is_ok());
 
         // Verify file is indexed
-        let indexed: i64 = stmt.query_row([file_path], |row| row.get(0)).unwrap();
+        let conn = db.lock().unwrap();
+        let indexed: i64 = conn
+            .query_row(
+                "SELECT ts_indexed FROM indexed_files WHERE file_path = ?",
+                [file_path],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(indexed, 1, "File should be indexed");
     }
 
@@ -357,11 +401,14 @@ fn hello() {
         insert_test_file(&db, "file2.rs");
 
         // Mark one as indexed
-        db.execute(
-            "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = 'file1.rs'",
-            [],
-        )
-        .unwrap();
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = 'file1.rs'",
+                [],
+            )
+            .unwrap();
+        }
 
         // Query dirty files
         let dirty = query_dirty_files(&db, 10).unwrap();
@@ -386,12 +433,122 @@ fn hello() {
         assert!(write_result.is_ok(), "Writing chunks should succeed");
 
         // Verify chunks count
-        let mut count_stmt = db.prepare("SELECT COUNT(*) FROM ts_chunks").unwrap();
-        let all_chunks: i64 = count_stmt.query_row([], |row| row.get(0)).unwrap();
-        assert_eq!(all_chunks, 2, "Should have 2 chunks total in database");
+        {
+            let conn = db.lock().unwrap();
+            let all_chunks: i64 = conn
+                .query_row("SELECT COUNT(*) FROM ts_chunks", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(all_chunks, 2, "Should have 2 chunks total in database");
+        }
 
         // Mark as indexed
         let mark_result = mark_ts_indexed(&db, file_path);
         assert!(mark_result.is_ok());
+    }
+
+    #[test]
+    fn test_write_ts_chunks_deletes_old_before_insert() {
+        let db = create_test_db();
+        let file_path = "reindexed.rs";
+
+        insert_test_file(&db, file_path);
+
+        // First write: 2 chunks
+        let chunks_v1 = vec![
+            (0usize, "fn old_v1() {}".to_string()),
+            (14usize, "fn old_v2() {}".to_string()),
+        ];
+        write_ts_chunks(&db, file_path, &chunks_v1).unwrap();
+
+        // Verify 2 chunks exist
+        {
+            let conn = db.lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?",
+                    [file_path],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 2, "Should have 2 chunks after first write");
+        }
+
+        // Second write: 1 chunk (simulates re-indexing after file edit)
+        let chunks_v2 = vec![(0usize, "fn new_only() {}".to_string())];
+        write_ts_chunks(&db, file_path, &chunks_v2).unwrap();
+
+        // Should have exactly 1 chunk, not 3 (old ones must be deleted)
+        {
+            let conn = db.lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?",
+                    [file_path],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                count, 1,
+                "Should have 1 chunk after re-index, not 3 (old chunks must be deleted)"
+            );
+
+            // Verify it's the new content
+            let text: String = conn
+                .query_row(
+                    "SELECT text FROM ts_chunks WHERE file_path = ?",
+                    [file_path],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(text, "fn new_only() {}", "Chunk text should be the new version");
+        }
+    }
+
+    #[test]
+    fn test_mark_ts_indexed_returns_error_on_broken_db() {
+        // Verify that mark_ts_indexed surfaces errors rather than silently
+        // swallowing them. This matters because the caller must log or
+        // propagate the error so files don't stay dirty forever.
+        let db = create_test_db();
+        insert_test_file(&db, "broken.rs");
+
+        // Drop the indexed_files table to simulate a broken database state
+        {
+            let conn = db.lock().unwrap();
+            conn.execute_batch("DROP TABLE ts_chunks; DROP TABLE indexed_files;")
+                .unwrap();
+        }
+
+        // mark_ts_indexed should return Err, not silently succeed
+        let result = mark_ts_indexed(&db, "broken.rs");
+        assert!(
+            result.is_err(),
+            "mark_ts_indexed should return an error when the table is missing"
+        );
+    }
+
+    #[test]
+    fn test_shared_db_no_contention_between_reads_and_writes() {
+        // Verify that the SharedDb approach works: one thread writes chunks
+        // while another reads dirty files, with no SQLITE_BUSY errors.
+        let db = create_test_db();
+        insert_test_file(&db, "concurrent.rs");
+
+        // Write from one reference
+        let db2 = Arc::clone(&db);
+        let handle = std::thread::spawn(move || {
+            let chunks = vec![(0usize, "fn concurrent() {}".to_string())];
+            write_ts_chunks(&db2, "concurrent.rs", &chunks).unwrap();
+            mark_ts_indexed(&db2, "concurrent.rs").unwrap();
+        });
+
+        handle.join().unwrap();
+
+        // Read from original reference -- should see the write
+        let dirty = query_dirty_files(&db, 10).unwrap();
+        assert!(
+            dirty.is_empty(),
+            "File should be indexed after write thread completes"
+        );
     }
 }

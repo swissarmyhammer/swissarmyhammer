@@ -139,5 +139,5 @@ fn test_acp_config_to_file_creates_valid_yaml() {
     assert!(content.contains("outputBufferBytes"));
 
     // Verify it can be parsed back
-    let _parsed: AcpConfig = serde_yaml::from_str(&content).unwrap();
+    let _parsed: AcpConfig = serde_yaml_ng::from_str(&content).unwrap();
 }

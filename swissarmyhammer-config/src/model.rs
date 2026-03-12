@@ -712,7 +712,7 @@ pub enum ModelError {
     IoError(#[from] std::io::Error),
     /// Configuration parsing error
     #[error("Parse error: {0}")]
-    ParseError(#[from] serde_yaml::Error),
+    ParseError(#[from] serde_yaml_ng::Error),
     /// Configuration validation error
     #[error("Configuration error: {0}")]
     ConfigError(String),
@@ -772,7 +772,7 @@ fn extract_yaml_frontmatter_field(content: &str, field: &str) -> Option<String> 
     let end_pos = stripped.find("---")?;
     let front_matter = &stripped[..end_pos];
 
-    let yaml_value = serde_yaml::from_str::<serde_yaml::Value>(front_matter).ok()?;
+    let yaml_value = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(front_matter).ok()?;
     let value = yaml_value.get(field)?;
     let value_str = value.as_str()?;
     Some(value_str.trim().to_string())
@@ -797,7 +797,7 @@ fn extract_comment_field(content: &str, prefix: &str) -> Option<String> {
 /// Handles two formats:
 /// 1. Frontmatter format: `---\ndescription: "..."\n---\nactual_config`
 /// 2. Pure config format: just the ModelConfig YAML
-pub fn parse_model_config(content: &str) -> Result<ModelConfig, serde_yaml::Error> {
+pub fn parse_model_config(content: &str) -> Result<ModelConfig, serde_yaml_ng::Error> {
     let content = content.trim();
 
     // Check for YAML front matter
@@ -805,12 +805,12 @@ pub fn parse_model_config(content: &str) -> Result<ModelConfig, serde_yaml::Erro
         if let Some(end_pos) = stripped.find("---") {
             // Extract the content after the second ---
             let config_content = &stripped[end_pos + 3..].trim();
-            return serde_yaml::from_str::<ModelConfig>(config_content);
+            return serde_yaml_ng::from_str::<ModelConfig>(config_content);
         }
     }
 
     // Fall back to parsing entire content as ModelConfig
-    serde_yaml::from_str::<ModelConfig>(content)
+    serde_yaml_ng::from_str::<ModelConfig>(content)
 }
 
 /// Statistics for model merging from multiple sources
@@ -1716,7 +1716,7 @@ impl ModelManager {
         }
 
         let config_content = std::fs::read_to_string(&config_path).map_err(ModelError::IoError)?;
-        let config_value: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
+        let config_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content)?;
 
         // Read model key
         if let Some(model_name) = config_value.get("model") {
@@ -1878,7 +1878,7 @@ impl ModelManager {
     /// - Validates file permissions before reading
     /// - Checks file size to prevent resource exhaustion
     /// - Audit logs file access
-    fn load_or_create_config(config_path: &Path) -> Result<serde_yaml::Value, ModelError> {
+    fn load_or_create_config(config_path: &Path) -> Result<serde_yaml_ng::Value, ModelError> {
         if config_path.exists() {
             // Security: Check file permissions
             Self::check_file_readable(config_path)?;
@@ -1912,11 +1912,11 @@ impl ModelManager {
                 ModelError::IoError(e)
             })?;
 
-            let value: serde_yaml::Value = serde_yaml::from_str(&content)
-                .unwrap_or(serde_yaml::Value::Mapping(Default::default()));
+            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content)
+                .unwrap_or(serde_yaml_ng::Value::Mapping(Default::default()));
             // Empty YAML files parse as Null, not Mapping — normalize to empty mapping
             if value.is_null() {
-                Ok(serde_yaml::Value::Mapping(Default::default()))
+                Ok(serde_yaml_ng::Value::Mapping(Default::default()))
             } else {
                 Ok(value)
             }
@@ -1925,7 +1925,7 @@ impl ModelManager {
                 "Config file does not exist, creating new: {}",
                 config_path.display()
             );
-            Ok(serde_yaml::Value::Mapping(Default::default()))
+            Ok(serde_yaml_ng::Value::Mapping(Default::default()))
         }
     }
 
@@ -1962,13 +1962,13 @@ impl ModelManager {
 
     /// Update config with agent for use case
     fn update_config_with_agent(
-        config: &mut serde_yaml::Value,
+        config: &mut serde_yaml_ng::Value,
         agent_name: &str,
     ) -> Result<(), ModelError> {
         if let Some(map) = config.as_mapping_mut() {
             map.insert(
-                serde_yaml::Value::String("model".to_string()),
-                serde_yaml::Value::String(agent_name.to_string()),
+                serde_yaml_ng::Value::String("model".to_string()),
+                serde_yaml_ng::Value::String(agent_name.to_string()),
             );
         }
 
@@ -1983,7 +1983,7 @@ impl ModelManager {
     /// - Checks parent directory permissions
     /// - Uses atomic write operation when possible
     /// - Audit logs file modifications
-    fn save_config(config_path: &Path, config: &serde_yaml::Value) -> Result<(), ModelError> {
+    fn save_config(config_path: &Path, config: &serde_yaml_ng::Value) -> Result<(), ModelError> {
         // Security: Validate the parent directory is writable
         if let Some(parent) = config_path.parent() {
             Self::check_directory_writable(parent)?;
@@ -1992,7 +1992,7 @@ impl ModelManager {
         // Security: Audit log config write
         tracing::info!("Writing config to file: {}", config_path.display());
 
-        let config_yaml = serde_yaml::to_string(config)?;
+        let config_yaml = serde_yaml_ng::to_string(config)?;
 
         // Security: Check serialized config size before writing
         const MAX_CONFIG_SIZE: usize = 10 * 1024 * 1024; // 10MB
@@ -2150,13 +2150,13 @@ mod tests {
         let config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
 
         // Should serialize to YAML correctly
-        let yaml = serde_yaml::to_string(&config).expect("Failed to serialize to YAML");
+        let yaml = serde_yaml_ng::to_string(&config).expect("Failed to serialize to YAML");
         assert!(yaml.contains("type: llama-agent"));
         assert!(yaml.contains("quiet: false"));
 
         // Should deserialize from YAML correctly
         let deserialized: ModelConfig =
-            serde_yaml::from_str(&yaml).expect("Failed to deserialize from YAML");
+            serde_yaml_ng::from_str(&yaml).expect("Failed to deserialize from YAML");
         assert_eq!(config.executor_type(), deserialized.executor_type());
         assert_eq!(config.quiet, deserialized.quiet);
     }
@@ -2382,9 +2382,9 @@ mod tests {
     }
 
     #[test]
-    fn test_model_error_from_serde_yaml_error() {
+    fn test_model_error_from_serde_yaml_ng_error() {
         let invalid_yaml = "invalid: yaml: content: [unclosed";
-        let yaml_error = serde_yaml::from_str::<serde_yaml::Value>(invalid_yaml)
+        let yaml_error = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(invalid_yaml)
             .expect_err("Should fail to parse invalid YAML");
         let model_error: ModelError = yaml_error.into();
 
@@ -3483,7 +3483,7 @@ model: qwen-coder
     #[test]
     fn test_model_error_parse_error_is_critical() {
         let yaml_err =
-            serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content").unwrap_err();
+            serde_yaml_ng::from_str::<serde_yaml_ng::Value>("invalid: yaml: content").unwrap_err();
         let error = ModelError::from(yaml_err);
         assert_eq!(error.severity(), ErrorSeverity::Critical);
     }
@@ -3608,7 +3608,7 @@ executor:
     max_sequence_length: 512
 quiet: false
 "#;
-        let config: ModelConfig = serde_yaml::from_str(yaml).expect("old format should parse");
+        let config: ModelConfig = serde_yaml_ng::from_str(yaml).expect("old format should parse");
         assert_eq!(config.executors.len(), 1);
         assert!(config.executors[0].platform.is_none());
         assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
@@ -3635,7 +3635,7 @@ executors:
         max_sequence_length: 512
 quiet: false
 "#;
-        let config: ModelConfig = serde_yaml::from_str(yaml).expect("new format should parse");
+        let config: ModelConfig = serde_yaml_ng::from_str(yaml).expect("new format should parse");
         assert_eq!(config.executors.len(), 2);
         assert_eq!(config.executors[0].platform, Some(Platform::MacosArm64));
         assert!(config.executors[1].platform.is_none());
@@ -3736,11 +3736,11 @@ quiet: false
             quiet: false,
         };
 
-        let yaml = serde_yaml::to_string(&config).expect("serialize");
+        let yaml = serde_yaml_ng::to_string(&config).expect("serialize");
         assert!(yaml.contains("ane-embedding"));
         assert!(yaml.contains("macos-arm64"));
 
-        let deserialized: ModelConfig = serde_yaml::from_str(&yaml).expect("deserialize");
+        let deserialized: ModelConfig = serde_yaml_ng::from_str(&yaml).expect("deserialize");
         assert_eq!(deserialized.executors.len(), 1);
         assert_eq!(
             deserialized.executors[0].platform,

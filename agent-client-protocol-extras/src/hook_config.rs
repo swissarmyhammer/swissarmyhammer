@@ -1152,7 +1152,7 @@ hooks:
         - type: command
           command: "./check.sh"
 "#;
-        let config: HookConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
         let groups = config.hooks.get(&HookEventKindConfig::PreToolUse).unwrap();
         assert_eq!(groups[0].matcher.as_deref(), Some("Bash"));
         assert!(matches!(
@@ -1170,7 +1170,7 @@ hooks:
         - type: prompt
           prompt: "Check completion: $ARGUMENTS"
 "#;
-        let config: HookConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
         let groups = config.hooks.get(&HookEventKindConfig::Stop).unwrap();
         assert!(matches!(
             &groups[0].hooks[0],
@@ -1197,14 +1197,14 @@ hooks:
         - type: command
           command: "./init.sh"
 "#;
-        let config: HookConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(config.hooks.len(), 3);
     }
 
     #[test]
     fn test_yaml_empty_config() {
         let yaml = "{}";
-        let config: HookConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(config.hooks.is_empty());
     }
 
@@ -1248,7 +1248,7 @@ hooks:
 "#;
 
         let from_json: HookConfig = serde_json::from_str(json).unwrap();
-        let from_yaml: HookConfig = serde_yaml::from_str(yaml).unwrap();
+        let from_yaml: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert_eq!(from_json.hooks.len(), from_yaml.hooks.len());
         // Both should have PreToolUse and Stop
@@ -1908,7 +1908,7 @@ hooks:
           command: "echo '{\"decision\": \"block\", \"reason\": \"Keep going\"}'"
 "#;
 
-        let config: HookConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(config.hooks.len(), 3);
 
         let (mock, _) = MockAgent::new();

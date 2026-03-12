@@ -47,19 +47,12 @@ async fn setup_agent_mode_test_context() -> (IsolatedTestEnvironment, CliToolCon
 /// Creates a CallToolResult for testing purposes.
 #[cfg(test)]
 fn create_test_call_result(text: &str, is_error: bool) -> rmcp::model::CallToolResult {
-    use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
+    use rmcp::model::{CallToolResult, Content};
 
-    CallToolResult {
-        content: vec![Annotated::new(
-            RawContent::Text(RawTextContent {
-                text: text.to_string(),
-                meta: None,
-            }),
-            None,
-        )],
-        structured_content: None,
-        is_error: Some(is_error),
-        meta: None,
+    if is_error {
+        CallToolResult::error(vec![Content::text(text.to_string())])
+    } else {
+        CallToolResult::success(vec![Content::text(text.to_string())])
     }
 }
 

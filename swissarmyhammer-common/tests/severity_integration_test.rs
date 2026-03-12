@@ -65,8 +65,8 @@ fn test_swissarmyhammer_error_error_severity() {
     // Test that all error-level errors are properly classified
 
     // Create a serialization error by trying to parse invalid YAML
-    let yaml_error: serde_yaml::Error =
-        serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content:").unwrap_err();
+    let yaml_error: serde_yaml_ng::Error =
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>("invalid: yaml: content:").unwrap_err();
 
     // Create a JSON error by trying to parse invalid JSON
     let json_error: serde_json::Error =
@@ -223,7 +223,8 @@ fn test_all_error_variants_have_severity() {
         ),
         (
             SwissArmyHammerError::Serialization(
-                serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content:").unwrap_err(),
+                serde_yaml_ng::from_str::<serde_yaml_ng::Value>("invalid: yaml: content:")
+                    .unwrap_err(),
             ),
             ErrorSeverity::Error,
         ),

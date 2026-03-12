@@ -212,7 +212,7 @@ mod tests {
         conn.execute(
             "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, symbol_path, text)
              VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![file_path, text.len(), start_line, end_line, symbol_path, text],
+            rusqlite::params![file_path, text.len() as i64, start_line, end_line, symbol_path, text],
         )
         .unwrap();
     }

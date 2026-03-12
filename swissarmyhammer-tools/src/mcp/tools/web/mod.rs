@@ -1,7 +1,7 @@
 //! Unified web tool for MCP operations
 //!
 //! This module provides a single `web` tool that dispatches between operations:
-//! - `search url`: Search the web using DuckDuckGo with optional content fetching
+//! - `search url`: Search the web using Brave Search with optional content fetching
 //! - `fetch url`: Fetch a specific URL and convert HTML to markdown
 //!
 //! Follows the Operation pattern from `swissarmyhammer-operations`.
@@ -58,6 +58,10 @@ impl McpTool for WebTool {
 
     fn cli_category(&self) -> Option<&'static str> {
         Some("web")
+    }
+
+    fn is_agent_tool(&self) -> bool {
+        true
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
@@ -128,34 +132,11 @@ impl Doctorable for WebTool {
     }
 
     fn run_health_checks(&self) -> Vec<HealthCheck> {
-        let mut checks = Vec::new();
-
-        let chrome_result = swissarmyhammer_web::detect_chrome();
-
-        if chrome_result.found {
-            let path = chrome_result.path.as_ref().unwrap();
-            let method = chrome_result.detection_method.as_ref().unwrap();
-
-            checks.push(HealthCheck::ok(
-                "Chrome/Chromium Browser",
-                format!("Found at {} (via {})", path.display(), method),
-                self.category(),
-            ));
-        } else {
-            let instructions = chrome_result.installation_instructions();
-
-            checks.push(HealthCheck::warning(
-                "Chrome/Chromium Browser",
-                format!(
-                    "Not found (required for web search)\nChecked {} locations",
-                    chrome_result.paths_checked.len()
-                ),
-                Some(format!("Install Chrome/Chromium:\n{}", instructions)),
-                self.category(),
-            ));
-        }
-
-        checks
+        vec![HealthCheck::ok(
+            "Brave Search",
+            "Uses direct HTTP requests (no browser required)".to_string(),
+            self.category(),
+        )]
     }
 
     fn is_applicable(&self) -> bool {

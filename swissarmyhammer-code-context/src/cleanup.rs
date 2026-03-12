@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ignore::WalkBuilder;
 use rayon::prelude::*;
+use rusqlite::types::Value;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
@@ -193,10 +194,9 @@ fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextErr
         return Ok(count);
     }
 
-    // Build: WHERE lsp_indexed = 0 AND NOT (file_path LIKE '%.rs' OR ...)
-    let like_clauses: Vec<String> = LSP_CAPABLE_EXTENSIONS
-        .iter()
-        .map(|ext| format!("file_path LIKE '%.{}'", ext))
+    // Build parameterized: WHERE lsp_indexed = 0 AND NOT (file_path LIKE ?1 OR ?2 ...)
+    let like_clauses: Vec<String> = (1..=LSP_CAPABLE_EXTENSIONS.len())
+        .map(|i| format!("file_path LIKE ?{}", i))
         .collect();
     let filter = like_clauses.join(" OR ");
 
@@ -205,7 +205,12 @@ fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextErr
         filter
     );
 
-    let count = conn.execute(&sql, [])?;
+    let params: Vec<Value> = LSP_CAPABLE_EXTENSIONS
+        .iter()
+        .map(|ext| Value::Text(format!("%.{}", ext)))
+        .collect();
+
+    let count = conn.execute(&sql, rusqlite::params_from_iter(params))?;
     Ok(count)
 }
 

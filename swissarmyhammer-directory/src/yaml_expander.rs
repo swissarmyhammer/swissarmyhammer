@@ -50,7 +50,7 @@ use crate::file_loader::VirtualFileSystem;
 #[derive(Debug)]
 pub struct YamlExpander<C: DirectoryConfig> {
     /// Loaded YAML files indexed by their relative path (without extension).
-    includes: HashMap<String, serde_yaml::Value>,
+    includes: HashMap<String, serde_yaml_ng::Value>,
     /// Phantom data for the configuration type.
     _phantom: PhantomData<C>,
 }
@@ -94,7 +94,7 @@ impl<C: DirectoryConfig> YamlExpander<C> {
                 continue;
             }
 
-            match serde_yaml::from_str::<serde_yaml::Value>(&file_entry.content) {
+            match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&file_entry.content) {
                 Ok(value) => {
                     tracing::debug!(
                         "Loaded YAML include '{}' from {} ({})",
@@ -124,7 +124,7 @@ impl<C: DirectoryConfig> YamlExpander<C> {
     /// * `name` - The include name (e.g., "file_groups/source_code")
     /// * `content` - The YAML content as a string
     pub fn add_builtin(&mut self, name: &str, content: &str) -> Result<()> {
-        let value = serde_yaml::from_str(content).map_err(|e| DirectoryError::Other {
+        let value = serde_yaml_ng::from_str(content).map_err(|e| DirectoryError::Other {
             message: format!("Failed to parse builtin YAML '{}': {}", name, e),
         })?;
         self.includes.insert(name.to_string(), value);
@@ -132,7 +132,7 @@ impl<C: DirectoryConfig> YamlExpander<C> {
     }
 
     /// Get a loaded include by name.
-    pub fn get(&self, name: &str) -> Option<&serde_yaml::Value> {
+    pub fn get(&self, name: &str) -> Option<&serde_yaml_ng::Value> {
         self.includes.get(name)
     }
 
@@ -157,18 +157,18 @@ impl<C: DirectoryConfig> YamlExpander<C> {
     /// Returns an error if:
     /// - A referenced include is not found
     /// - A sequence expansion references a non-sequence value
-    pub fn expand(&self, value: serde_yaml::Value) -> Result<serde_yaml::Value> {
+    pub fn expand(&self, value: serde_yaml_ng::Value) -> Result<serde_yaml_ng::Value> {
         self.expand_value(value, &mut Vec::new())
     }
 
     /// Internal recursive expansion with cycle detection.
     fn expand_value(
         &self,
-        value: serde_yaml::Value,
+        value: serde_yaml_ng::Value,
         visited: &mut Vec<String>,
-    ) -> Result<serde_yaml::Value> {
+    ) -> Result<serde_yaml_ng::Value> {
         match value {
-            serde_yaml::Value::String(s) if s.starts_with('@') => {
+            serde_yaml_ng::Value::String(s) if s.starts_with('@') => {
                 let include_name = &s[1..]; // Strip the @
 
                 // Check for cycles
@@ -197,12 +197,12 @@ impl<C: DirectoryConfig> YamlExpander<C> {
 
                 Ok(expanded)
             }
-            serde_yaml::Value::Sequence(seq) => {
+            serde_yaml_ng::Value::Sequence(seq) => {
                 let mut expanded_seq = Vec::new();
 
                 for item in seq {
                     // Check if this is an @include that should be spliced
-                    if let serde_yaml::Value::String(s) = &item {
+                    if let serde_yaml_ng::Value::String(s) = &item {
                         if let Some(include_name) = s.strip_prefix('@') {
                             // Check for cycles
                             if visited.contains(&include_name.to_string()) {
@@ -227,7 +227,7 @@ impl<C: DirectoryConfig> YamlExpander<C> {
                             visited.pop();
 
                             // Splice sequences, otherwise just add the value
-                            if let serde_yaml::Value::Sequence(included_seq) = expanded {
+                            if let serde_yaml_ng::Value::Sequence(included_seq) = expanded {
                                 expanded_seq.extend(included_seq);
                             } else {
                                 expanded_seq.push(expanded);
@@ -240,10 +240,10 @@ impl<C: DirectoryConfig> YamlExpander<C> {
                     expanded_seq.push(self.expand_value(item, visited)?);
                 }
 
-                Ok(serde_yaml::Value::Sequence(expanded_seq))
+                Ok(serde_yaml_ng::Value::Sequence(expanded_seq))
             }
-            serde_yaml::Value::Mapping(map) => {
-                let mut expanded_map = serde_yaml::Mapping::new();
+            serde_yaml_ng::Value::Mapping(map) => {
+                let mut expanded_map = serde_yaml_ng::Mapping::new();
 
                 for (key, val) in map {
                     let expanded_key = self.expand_value(key, visited)?;
@@ -251,7 +251,7 @@ impl<C: DirectoryConfig> YamlExpander<C> {
                     expanded_map.insert(expanded_key, expanded_val);
                 }
 
-                Ok(serde_yaml::Value::Mapping(expanded_map))
+                Ok(serde_yaml_ng::Value::Mapping(expanded_map))
             }
             // Other value types pass through unchanged
             other => Ok(other),
@@ -261,8 +261,8 @@ impl<C: DirectoryConfig> YamlExpander<C> {
     /// Parse a YAML string and expand includes.
     ///
     /// This is a convenience method that combines parsing and expansion.
-    pub fn parse_and_expand(&self, yaml: &str) -> Result<serde_yaml::Value> {
-        let value = serde_yaml::from_str(yaml).map_err(|e| DirectoryError::Other {
+    pub fn parse_and_expand(&self, yaml: &str) -> Result<serde_yaml_ng::Value> {
+        let value = serde_yaml_ng::from_str(yaml).map_err(|e| DirectoryError::Other {
             message: format!("Failed to parse YAML: {}", e),
         })?;
         self.expand(value)
@@ -274,7 +274,7 @@ impl<C: DirectoryConfig> YamlExpander<C> {
     /// config into a typed struct.
     pub fn parse_yaml<T: serde::de::DeserializeOwned>(&self, yaml: &str) -> Result<T> {
         let expanded = self.parse_and_expand(yaml)?;
-        serde_yaml::from_value(expanded).map_err(|e| DirectoryError::Other {
+        serde_yaml_ng::from_value(expanded).map_err(|e| DirectoryError::Other {
             message: format!("Failed to deserialize YAML: {}", e),
         })
     }
@@ -322,8 +322,8 @@ mod tests {
             .unwrap();
 
         // Note: @ must be quoted in YAML
-        let input: serde_yaml::Value =
-            serde_yaml::from_str("\"@file_groups/source_code\"").unwrap();
+        let input: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("\"@file_groups/source_code\"").unwrap();
         let expanded = expander.expand(input).unwrap();
 
         assert!(expanded.is_sequence());
@@ -346,7 +346,7 @@ mod tests {
             )
             .unwrap();
 
-        let input: serde_yaml::Value = serde_yaml::from_str(
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str(
             r#"
 - "@file_groups/source_code"
 - "*.custom"
@@ -377,7 +377,7 @@ mod tests {
             )
             .unwrap();
 
-        let input: serde_yaml::Value = serde_yaml::from_str(
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str(
             r#"
 match:
   files:
@@ -424,7 +424,8 @@ match:
             .unwrap();
 
         // Note: @ must be quoted in YAML
-        let input: serde_yaml::Value = serde_yaml::from_str("\"@file_groups/frontend\"").unwrap();
+        let input: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("\"@file_groups/frontend\"").unwrap();
         let expanded = expander.expand(input).unwrap();
 
         let seq = expanded.as_sequence().unwrap();
@@ -441,7 +442,7 @@ match:
         expander.add_builtin("a", "\"@b\"").unwrap();
         expander.add_builtin("b", "\"@a\"").unwrap();
 
-        let input: serde_yaml::Value = serde_yaml::from_str("\"@a\"").unwrap();
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str("\"@a\"").unwrap();
         let result = expander.expand(input);
 
         assert!(result.is_err());
@@ -454,7 +455,7 @@ match:
         let expander = YamlExpander::<SwissarmyhammerConfig>::new();
 
         // Note: @ must be quoted in YAML
-        let input: serde_yaml::Value = serde_yaml::from_str("\"@nonexistent/file\"").unwrap();
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str("\"@nonexistent/file\"").unwrap();
         let result = expander.expand(input);
 
         assert!(result.is_err());
@@ -491,7 +492,7 @@ files:
     fn test_non_reference_strings_unchanged() {
         let expander = YamlExpander::<SwissarmyhammerConfig>::new();
 
-        let input: serde_yaml::Value = serde_yaml::from_str(
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str(
             r#"
 - "regular string"
 - "email@example.com"

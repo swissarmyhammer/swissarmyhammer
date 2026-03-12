@@ -9,7 +9,7 @@ description = "Shared embedding trait and types for text embedding backends"
 
 [dependencies]
 async-trait.workspace = true
-md5 = "0.7"
+md5 = { workspace = true }
 serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util"] }
@@ -17,4 +17,4 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
-tempfile = "3"
+tempfile = { workspace = true }

@@ -26,19 +26,10 @@ async fn test_http_mcp_server_rmcp_client_final() {
         },
     );
 
-    let client_info = ClientInfo {
-        protocol_version: Default::default(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "test http client".to_string(),
-            title: None,
-            version: "0.0.1".to_string(),
-            description: None,
-            website_url: None,
-            icons: None,
-        },
-        meta: None,
-    };
+    let client_info = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("test http client", "0.0.1"),
+    );
 
     let client = client_info.serve(transport).await.unwrap();
 

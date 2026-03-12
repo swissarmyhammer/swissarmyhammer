@@ -1,7 +1,7 @@
 //! Integration tests for web search functionality
 //!
 //! These tests verify that the unified web tool's search operation works end-to-end
-//! with real Chrome/Chromium browser. Chrome/Chromium must be installed in CI.
+//! with Brave Search via direct HTTP requests (no browser needed).
 
 use serde_json::json;
 use std::sync::Arc;
@@ -10,7 +10,6 @@ use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::web::WebTool;
-use swissarmyhammer_web::chrome;
 
 /// Helper function to create a test context for integration tests
 async fn create_test_context() -> ToolContext {
@@ -22,50 +21,12 @@ async fn create_test_context() -> ToolContext {
     ToolContext::new(tool_handlers, git_ops, agent_config)
 }
 
-/// Test that Chrome is detected on this system
-#[test]
-fn test_chrome_detection_on_system() {
-    let result = chrome::detect_chrome();
-
-    if !result.found {
-        println!("WARNING: Chrome not found on this system");
-        println!("{}", result.message);
-        println!("\n{}", result.installation_instructions());
-        println!("\nSkipping Chrome-dependent tests");
-    } else {
-        println!("Chrome found: {}", result.path.as_ref().unwrap().display());
-        println!(
-            "Detection method: {}",
-            result.detection_method.as_ref().unwrap()
-        );
-    }
-
-    // Test passes regardless of Chrome availability - just reports status
-    assert!(
-        !result.paths_checked.is_empty(),
-        "Should have checked some paths"
-    );
-}
-
-/// Test web search with real Chrome
+/// Test web search with Brave Search
 #[tokio::test]
-async fn test_web_search_real_chrome() {
-    let chrome_result = chrome::detect_chrome();
-    assert!(
-        chrome_result.found,
-        "Chrome/Chromium must be installed: {}",
-        chrome_result.installation_instructions()
-    );
-
-    println!(
-        "Testing web search with Chrome at: {}",
-        chrome_result.path.as_ref().unwrap().display()
-    );
-
+async fn test_web_search_brave() {
     let tool = WebTool::new();
     let context = create_test_context().await;
 
-    // Perform a simple search without content fetching for speed
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), json!("search url"));
     args.insert("query".to_string(), json!("rust programming language"));
@@ -78,12 +39,10 @@ async fn test_web_search_real_chrome() {
 
     println!("Search completed in {:?}", duration);
 
-    // Verify result
     assert!(result.is_ok(), "Search should succeed: {:?}", result.err());
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
 
-    // Parse response
     let response_text = match &call_result.content[0].raw {
         rmcp::model::RawContent::Text(text_content) => &text_content.text,
         _ => panic!("Expected text content"),
@@ -91,17 +50,14 @@ async fn test_web_search_real_chrome() {
 
     let response: serde_json::Value = serde_json::from_str(response_text).unwrap();
 
-    // Verify we got results
     assert!(response["results"].is_array());
     let results = response["results"].as_array().unwrap();
     assert!(!results.is_empty(), "Should have search results");
     assert!(results.len() <= 3, "Should have at most 3 results");
 
-    // Verify result structure
     for result in results {
         assert!(result["title"].is_string());
         assert!(result["url"].is_string());
-        assert!(result["description"].is_string());
 
         println!("\nResult: {}", result["title"]);
         println!("URL: {}", result["url"]);
@@ -114,17 +70,9 @@ async fn test_web_search_real_chrome() {
 /// Test web search with content fetching
 #[tokio::test]
 async fn test_web_search_with_content() {
-    let chrome_result = chrome::detect_chrome();
-    assert!(
-        chrome_result.found,
-        "Chrome/Chromium must be installed: {}",
-        chrome_result.installation_instructions()
-    );
-
     let tool = WebTool::new();
     let context = create_test_context().await;
 
-    // Perform search with content fetching (slower)
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), json!("search url"));
     args.insert("query".to_string(), json!("rust programming"));
@@ -140,7 +88,6 @@ async fn test_web_search_with_content() {
     assert!(result.is_ok());
     let call_result = result.unwrap();
 
-    // Parse response
     let response_text = match &call_result.content[0].raw {
         rmcp::model::RawContent::Text(text_content) => &text_content.text,
         _ => panic!("Expected text content"),
@@ -148,15 +95,12 @@ async fn test_web_search_with_content() {
 
     let response: serde_json::Value = serde_json::from_str(response_text).unwrap();
 
-    // Verify we got results with content
     let results = response["results"].as_array().unwrap();
     assert!(!results.is_empty());
 
-    // Check if any results have content fetched
     let with_content_count = results.iter().filter(|r| !r["content"].is_null()).count();
     println!("Results with content: {}", with_content_count);
 
-    // Print metadata about content fetching
     if let Some(stats) = response["metadata"]["content_fetch_stats"].as_object() {
         println!("Content fetch stats:");
         println!("  Attempted: {}", stats["attempted"]);
@@ -165,27 +109,18 @@ async fn test_web_search_with_content() {
     }
 }
 
-/// Test web search error handling when Chrome launches but search fails
+/// Test web search error handling for empty query
 #[tokio::test]
 async fn test_web_search_error_handling() {
-    let chrome_result = chrome::detect_chrome();
-    assert!(
-        chrome_result.found,
-        "Chrome/Chromium must be installed: {}",
-        chrome_result.installation_instructions()
-    );
-
     let tool = WebTool::new();
     let context = create_test_context().await;
 
-    // Try an empty query (should fail validation)
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), json!("search url"));
     args.insert("query".to_string(), json!(""));
 
     let result = tool.execute(args, &context).await;
 
-    // Should fail with validation error
     assert!(result.is_err(), "Empty query should fail");
 
     let err = result.unwrap_err();

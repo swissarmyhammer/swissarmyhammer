@@ -99,7 +99,12 @@ impl fmt::Debug for LspServerSpec {
 
 impl fmt::Display for OwnedLspServerSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (command: {})", self.command, self.command)
+        write!(
+            f,
+            "{} (languages: {})",
+            self.command,
+            self.language_ids.join(", ")
+        )
     }
 }
 
@@ -127,4 +132,45 @@ pub struct DaemonStatus {
     pub command: String,
     /// Current state
     pub state: LspDaemonState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to build a minimal OwnedLspServerSpec for testing.
+    fn make_spec(command: &str, language_ids: &[&str]) -> OwnedLspServerSpec {
+        OwnedLspServerSpec {
+            project_types: vec![],
+            command: command.to_string(),
+            args: vec![],
+            language_ids: language_ids.iter().map(|s| s.to_string()).collect(),
+            file_extensions: vec![],
+            startup_timeout_secs: 30,
+            health_check_interval_secs: 60,
+            install_hint: String::new(),
+            icon: None,
+        }
+    }
+
+    #[test]
+    fn test_display_shows_command_and_languages() {
+        let spec = make_spec("rust-analyzer", &["rust"]);
+        assert_eq!(spec.to_string(), "rust-analyzer (languages: rust)");
+    }
+
+    #[test]
+    fn test_display_multiple_languages() {
+        let spec = make_spec("typescript-language-server", &["typescript", "javascript"]);
+        assert_eq!(
+            spec.to_string(),
+            "typescript-language-server (languages: typescript, javascript)"
+        );
+    }
+
+    #[test]
+    fn test_display_no_languages() {
+        let spec = make_spec("unknown-server", &[]);
+        assert_eq!(spec.to_string(), "unknown-server (languages: )");
+    }
 }

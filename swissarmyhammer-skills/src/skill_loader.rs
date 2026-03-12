@@ -34,7 +34,7 @@ pub fn parse_skill_md_with_path(
     let (frontmatter_str, body) = split_frontmatter(content)?;
 
     // Parse YAML frontmatter
-    let fm: SkillFrontmatter = serde_yaml::from_str(&frontmatter_str)
+    let fm: SkillFrontmatter = serde_yaml_ng::from_str(&frontmatter_str)
         .map_err(|e| format!("failed to parse SKILL.md frontmatter: {}", e))?;
 
     // Validate required fields

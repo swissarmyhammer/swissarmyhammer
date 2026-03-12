@@ -105,7 +105,7 @@ impl FieldsContext {
         };
 
         for (name, yaml) in definitions {
-            match serde_yaml::from_str::<FieldDef>(yaml) {
+            match serde_yaml_ng::from_str::<FieldDef>(yaml) {
                 Ok(def) => {
                     let idx = ctx.fields.len();
                     // Later entries override earlier ones (same name)
@@ -127,7 +127,7 @@ impl FieldsContext {
         }
 
         for (name, yaml) in entities {
-            match serde_yaml::from_str::<EntityDef>(yaml) {
+            match serde_yaml_ng::from_str::<EntityDef>(yaml) {
                 Ok(def) => {
                     let idx = ctx.entities.len();
                     if let Some(&old_idx) = ctx.entity_index.get(&def.name) {
@@ -180,7 +180,7 @@ impl FieldsContext {
 
     /// Write (create or update) a field definition. Persists to YAML immediately.
     pub async fn write_field(&mut self, def: &FieldDef) -> Result<()> {
-        let yaml = serde_yaml::to_string(def)?;
+        let yaml = serde_yaml_ng::to_string(def)?;
         let path = self.definition_path(&def.name);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
@@ -253,7 +253,7 @@ impl FieldsContext {
 
     /// Write (create or update) an entity template. Persists to YAML immediately.
     pub async fn write_entity(&mut self, def: &EntityDef) -> Result<()> {
-        let yaml = serde_yaml::to_string(def)?;
+        let yaml = serde_yaml_ng::to_string(def)?;
         let path = self.entity_path(&def.name);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
@@ -319,7 +319,7 @@ impl FieldsContext {
                 continue;
             }
             let content = fs::read_to_string(&path).await?;
-            match serde_yaml::from_str::<FieldDef>(&content) {
+            match serde_yaml_ng::from_str::<FieldDef>(&content) {
                 Ok(def) => {
                     let idx = self.fields.len();
                     self.name_index.insert(def.name.clone(), idx);
@@ -346,7 +346,7 @@ impl FieldsContext {
                 continue;
             }
             let content = fs::read_to_string(&path).await?;
-            match serde_yaml::from_str::<EntityDef>(&content) {
+            match serde_yaml_ng::from_str::<EntityDef>(&content) {
                 Ok(def) => {
                     let idx = self.entities.len();
                     self.entity_index.insert(def.name.clone(), idx);

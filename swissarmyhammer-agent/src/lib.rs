@@ -609,7 +609,7 @@ async fn initialize_agent(agent: &Arc<dyn Agent + Send + Sync>) -> AcpResult<()>
     let init_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapability::new()
+                .fs(agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(false))
                 .terminal(false),

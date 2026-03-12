@@ -86,18 +86,9 @@ pub async fn execute_fetch(
             )
             .await;
 
-            Ok(CallToolResult {
-                content: vec![rmcp::model::Annotated::new(
-                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                        text: result.markdown,
-                        meta: None,
-                    }),
-                    None,
-                )],
-                structured_content: None,
-                meta: None,
-                is_error: Some(false),
-            })
+            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                result.markdown,
+            )]))
         }
         Err(e) => {
             let (error_type, response_time_ms) = match &e {
@@ -139,18 +130,9 @@ pub async fn execute_fetch(
                 "metadata": metadata
             });
 
-            Ok(CallToolResult {
-                content: vec![rmcp::model::Annotated::new(
-                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                        text: serde_json::to_string_pretty(&response).unwrap_or_default(),
-                        meta: None,
-                    }),
-                    None,
-                )],
-                meta: None,
-                structured_content: None,
-                is_error: Some(true),
-            })
+            Ok(CallToolResult::error(vec![rmcp::model::Content::text(
+                serde_json::to_string_pretty(&response).unwrap_or_default(),
+            )]))
         }
     }
 }

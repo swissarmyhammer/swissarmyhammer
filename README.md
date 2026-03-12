@@ -4,7 +4,7 @@
 
 # SwissArmyHammer
 
-**Write specs, not code.**
+**Agent-driven engineering**
 
 [![CI](https://github.com/swissarmyhammer/swissarmyhammer/workflows/CI/badge.svg)](https://github.com/swissarmyhammer/swissarmyhammer/actions)
 [![License](https://img.shields.io/badge/License-blue.svg)](LICENSE)
@@ -98,7 +98,6 @@ Every stage of the software development lifecycle gets the same treatment: a **t
 | **Coverage** | Find untested code, create cards for the gaps | `/coverage` |
 | **Review** | Structured code review -- findings become kanban cards | `/review` |
 | **Commit** | Stage changes, write a conventional commit message | `/commit` |
-| **TDD** | Enforce strict RED-GREEN-REFACTOR -- no exceptions | `/tdd` |
 | **Explore** | Semantic code search and symbol lookup across 25+ languages | `/code-context` |
 | **Deduplicate** | Find near-duplicate code and refactor it | `/deduplicate` |
 

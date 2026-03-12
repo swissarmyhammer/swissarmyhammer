@@ -73,6 +73,12 @@ Parse the user's natural language for commit count ("last N commits"), commit re
 
 Read the full content of every changed file — diffs alone lack context. Understand the **purpose** of the change before reviewing (PR description, commit messages, kanban cards).
 
+When a `range` was used (explicit or auto-defaulted), use `get diff` with `file@<start-ref>` and `file@<end-ref>` syntax to get semantic diffs for each changed file. For example, to diff a file across a range:
+
+```json
+{"op": "get diff", "left": "src/main.rs@HEAD~4", "right": "src/main.rs"}
+```
+
 ### 2. Layered Examination
 
 Review in progressive layers. Do not skip layers — each catches different classes of problems.
@@ -145,6 +151,7 @@ Add subtasks for each fix step. Every card MUST include a verification subtask.
 ### 7. Summarize
 
 - One-sentence overall assessment
+- **Scope reviewed**: branch name and parent, or the revision range used (e.g. "Reviewed `HEAD~4..HEAD` on main")
 - Count of findings by severity (e.g., "1 blocker, 3 warnings, 5 nits")
 - List of kanban cards created with their IDs and titles
 - Verdict: **approve**, **request changes**, or **comment only**

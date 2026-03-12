@@ -32,7 +32,7 @@ mod tests {
 
         // Set full client capabilities for tests to ensure ACP compliance
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -381,7 +381,7 @@ mod tests {
 
         // Set client capabilities for ACP compliance
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -730,7 +730,7 @@ mod tests {
 
         // Set client capabilities WITHOUT terminal capability
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false); // Explicitly disable terminal capability
@@ -803,7 +803,7 @@ mod tests {
 
         // Set client capabilities WITHOUT terminal capability
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -919,7 +919,7 @@ mod tests {
 
         // Set client capabilities WITHOUT file read capability
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(false) // Explicitly disable read capability
                 .write_text_file(true))
             .terminal(false);
@@ -983,7 +983,7 @@ mod tests {
 
         // Set client capabilities WITHOUT file write capability
         let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapability::new()
+            .fs(agent_client_protocol::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(false)) // Explicitly disable write capability
             .terminal(false);

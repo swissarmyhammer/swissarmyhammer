@@ -81,7 +81,7 @@ pub fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
 /// Load a single LSP server specification from a YAML file
 fn load_single_server(path: &Path) -> Result<OwnedLspServerSpec, Box<dyn std::error::Error>> {
     let contents = std::fs::read_to_string(path)?;
-    let spec: OwnedLspServerSpec = serde_yaml::from_str(&contents)?;
+    let spec: OwnedLspServerSpec = serde_yaml_ng::from_str(&contents)?;
     Ok(spec)
 }
 

@@ -24,7 +24,7 @@ pub mod watcher;
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
-use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
+use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
 use std::path::Path;
 use swissarmyhammer_code_context::{
@@ -737,7 +737,8 @@ impl McpTool for CodeContextTool {
 
         // Append LSP degradation notice to query operations (not status operations)
         match op_str {
-            "get status" | "build status" | "clear status" | "lsp status" | "detect projects" | "" => result,
+            "get status" | "build status" | "clear status" | "lsp status" | "detect projects"
+            | "" => result,
             _ => result.map(|r| maybe_append_lsp_notice(r, context)),
         }
     }
@@ -773,15 +774,7 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpErro
         McpError::internal_error(format!("Failed to serialize result: {}", e), None)
     })?;
 
-    Ok(CallToolResult {
-        content: vec![Annotated::new(
-            RawContent::Text(RawTextContent { text, meta: None }),
-            None,
-        )],
-        is_error: Some(false),
-        structured_content: None,
-        meta: None,
-    })
+    Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
 /// Convert a CodeContextError into an McpError.
@@ -807,18 +800,7 @@ fn check_ts_readiness(ws: &CodeContextWorkspace) -> Result<Option<CallToolResult
                 "Index not ready — {}/{} files indexed ({:.0}% complete). Please retry shortly.",
                 indexed_files, total_files, progress_percent
             );
-            Ok(Some(CallToolResult {
-                content: vec![Annotated::new(
-                    RawContent::Text(RawTextContent {
-                        text: msg,
-                        meta: None,
-                    }),
-                    None,
-                )],
-                is_error: Some(false),
-                structured_content: None,
-                meta: None,
-            }))
+            Ok(Some(CallToolResult::success(vec![Content::text(msg)])))
         }
     }
 }
@@ -896,13 +878,7 @@ fn maybe_append_lsp_notice(mut result: CallToolResult, context: &ToolContext) ->
     let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
 
     if let Some(notice) = lsp_degradation_notice(&workspace_root) {
-        result.content.push(Annotated::new(
-            RawContent::Text(RawTextContent {
-                text: notice,
-                meta: None,
-            }),
-            None,
-        ));
+        result.content.push(Content::text(notice));
     }
     result
 }

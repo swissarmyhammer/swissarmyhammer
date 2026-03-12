@@ -53,19 +53,11 @@ impl FilteringMcpProxy {
         let transport = StreamableHttpClientTransport::from_uri(self.upstream_url.clone());
 
         // Create client info
-        let client_info = InitializeRequestParams {
-            meta: None,
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "filtering-proxy".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                title: Some("Filtering Proxy".into()),
-                description: None,
-                website_url: None,
-                icons: None,
-            },
-        };
+        let client_info = ClientInfo::new(
+            ClientCapabilities::default(),
+            Implementation::new("filtering-proxy", env!("CARGO_PKG_VERSION"))
+                .with_title("Filtering Proxy"),
+        );
 
         // Connect and initialize
         let running = serve_client(client_info, transport).await.map_err(|e| {
@@ -85,27 +77,20 @@ impl FilteringMcpProxy {
 
     /// Create proxy implementation metadata
     fn proxy_implementation() -> Implementation {
-        Implementation {
-            name: "swissarmyhammer-filtering-proxy".into(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            title: Some("SwissArmyHammer Filtering Proxy".into()),
-            description: None,
-            website_url: None,
-            icons: None,
-        }
+        Implementation::new("swissarmyhammer-filtering-proxy", env!("CARGO_PKG_VERSION"))
+            .with_title("SwissArmyHammer Filtering Proxy")
     }
 
     /// Create proxy capabilities
     fn proxy_capabilities() -> ServerCapabilities {
-        ServerCapabilities {
-            prompts: Some(PromptsCapability {
-                list_changed: Some(false),
-            }),
-            tools: Some(ToolsCapability {
-                list_changed: Some(false),
-            }),
-            ..Default::default()
-        }
+        let mut caps = ServerCapabilities::default();
+        caps.prompts = Some(PromptsCapability {
+            list_changed: Some(false),
+        });
+        caps.tools = Some(ToolsCapability {
+            list_changed: Some(false),
+        });
+        caps
     }
 
     /// Map upstream service errors to MCP errors
@@ -128,12 +113,9 @@ impl ServerHandler for FilteringMcpProxy {
 
         // Return proxy's own initialization - we don't need to initialize upstream
         // The upstream server is already running and initialized
-        Ok(InitializeResult {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: Self::proxy_capabilities(),
-            instructions: Some("Filtering proxy for MCP tool access control".into()),
-            server_info: Self::proxy_implementation(),
-        })
+        Ok(ServerInfo::new(Self::proxy_capabilities())
+            .with_server_info(Self::proxy_implementation())
+            .with_instructions("Filtering proxy for MCP tool access control"))
     }
 
     /// Forward list_prompts request to upstream server via rmcp peer.
@@ -247,11 +229,8 @@ impl ServerHandler for FilteringMcpProxy {
 
     /// Return server info for the proxy itself
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: Self::proxy_capabilities(),
-            server_info: Self::proxy_implementation(),
-            instructions: Some("Filtering proxy for MCP tool access control".into()),
-        }
+        ServerInfo::new(Self::proxy_capabilities())
+            .with_server_info(Self::proxy_implementation())
+            .with_instructions("Filtering proxy for MCP tool access control")
     }
 }

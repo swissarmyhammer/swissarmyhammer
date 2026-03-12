@@ -19,15 +19,27 @@ Perform a structured code review on the current changes.
 
 ### 1. Get the Changes
 
-Use `git` with `op: "get changes"` to get the list of files changed on the current branch. This returns committed changes since diverging from the parent branch plus any uncommitted work.
+Use `git` with `op: "get changes"` to get the list of changed files.
 
-If a specific branch was requested, pass it as the `branch` parameter:
+**Determine the scope from the user's request:**
 
-```json
-{"op": "get changes", "branch": "feature-branch"}
-```
+| User says | `get changes` call |
+|-----------|-------------------|
+| `/review` (nothing else) | `{"op": "get changes"}` — auto-detects branch or defaults to last commit on main |
+| `/review the last 4 commits` | `{"op": "get changes", "range": "HEAD~4..HEAD"}` |
+| `/review since abc123` | `{"op": "get changes", "range": "abc123..HEAD"}` |
+| `/review abc123..def456` | `{"op": "get changes", "range": "abc123..def456"}` |
+| `/review feature-branch` | `{"op": "get changes", "branch": "feature-branch"}` |
+
+Parse the user's natural language for commit count ("last N commits"), commit refs, or ranges, and map to the `range` parameter. If the user mentions a branch name instead, use `branch`. When in doubt, omit both and let the tool auto-detect.
 
 Read the full content of every changed file — diffs alone lack context. Understand the **purpose** of the change before reviewing (PR description, commit messages, kanban cards).
+
+When a `range` was used (explicit or auto-defaulted), use `get diff` with `file@<start-ref>` and `file@<end-ref>` syntax to get semantic diffs for each changed file. For example, to diff a file across a range:
+
+```json
+{"op": "get diff", "left": "src/main.rs@HEAD~4", "right": "src/main.rs"}
+```
 
 ### 2. Layered Examination
 
@@ -101,6 +113,7 @@ Add subtasks for each fix step. Every card MUST include a verification subtask.
 ### 7. Summarize
 
 - One-sentence overall assessment
+- **Scope reviewed**: branch name and parent, or the revision range used (e.g. "Reviewed `HEAD~4..HEAD` on main")
 - Count of findings by severity (e.g., "1 blocker, 3 warnings, 5 nits")
 - List of kanban cards created with their IDs and titles
 - Verdict: **approve**, **request changes**, or **comment only**

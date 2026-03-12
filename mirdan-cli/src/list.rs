@@ -270,7 +270,7 @@ fn read_frontmatter_version(path: &Path) -> String {
     };
 
     let frontmatter = &rest[..end];
-    if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
+    if let Ok(yaml) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(frontmatter) {
         if let Some(version) = yaml
             .get("metadata")
             .and_then(|m| m.get("version"))

@@ -32,7 +32,7 @@ impl CommandsRegistry {
 
         for (name, yaml) in sources {
             // Each YAML file is a list of command definitions
-            match serde_yaml::from_str::<Vec<serde_yaml::Value>>(yaml) {
+            match serde_yaml_ng::from_str::<Vec<serde_yaml_ng::Value>>(yaml) {
                 Ok(defs) => {
                     for val in defs {
                         registry.merge_yaml_value(val, name);
@@ -58,7 +58,7 @@ impl CommandsRegistry {
     /// are inserted as-is.
     pub fn merge_yaml_sources(&mut self, sources: &[(&str, &str)]) {
         for (name, yaml) in sources {
-            match serde_yaml::from_str::<Vec<serde_yaml::Value>>(yaml) {
+            match serde_yaml_ng::from_str::<Vec<serde_yaml_ng::Value>>(yaml) {
                 Ok(defs) => {
                     for val in defs {
                         self.merge_yaml_value(val, name);
@@ -99,7 +99,7 @@ impl CommandsRegistry {
     ///
     /// If a command with the same ID already exists, perform a partial merge:
     /// only fields present in the override replace existing values.
-    fn merge_yaml_value(&mut self, val: serde_yaml::Value, source_name: &str) {
+    fn merge_yaml_value(&mut self, val: serde_yaml_ng::Value, source_name: &str) {
         let id = match val.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
@@ -110,16 +110,16 @@ impl CommandsRegistry {
 
         if let Some(existing) = self.commands.get(&id) {
             // Partial merge: serialize existing to YAML value, overlay new fields
-            let mut base = match serde_yaml::to_value(existing) {
-                Ok(serde_yaml::Value::Mapping(m)) => m,
+            let mut base = match serde_yaml_ng::to_value(existing) {
+                Ok(serde_yaml_ng::Value::Mapping(m)) => m,
                 _ => return,
             };
-            if let serde_yaml::Value::Mapping(overlay) = val {
+            if let serde_yaml_ng::Value::Mapping(overlay) = val {
                 for (k, v) in overlay {
                     base.insert(k, v);
                 }
             }
-            match serde_yaml::from_value::<CommandDef>(serde_yaml::Value::Mapping(base)) {
+            match serde_yaml_ng::from_value::<CommandDef>(serde_yaml_ng::Value::Mapping(base)) {
                 Ok(merged) => {
                     self.commands.insert(id, merged);
                 }
@@ -129,7 +129,7 @@ impl CommandsRegistry {
             }
         } else {
             // New command — parse directly
-            match serde_yaml::from_value::<CommandDef>(val) {
+            match serde_yaml_ng::from_value::<CommandDef>(val) {
                 Ok(def) => {
                     self.commands.insert(id, def);
                 }

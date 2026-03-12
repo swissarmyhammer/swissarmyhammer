@@ -53,7 +53,9 @@ pub use lsp_indexer::{
 pub use lsp_server::{
     detect_rust_analyzer, find_executable, start_lsp_server, LspServerConfig, LspServerHandle,
 };
-pub use lsp_worker::{spawn_lsp_indexing_worker, LspWorkerConfig, SharedLspClient};
+pub use lsp_worker::{
+    new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig, SharedLspClient, ShutdownFlag,
+};
 pub use ops::find_duplicates::{
     find_duplicates, ChunkRef, DuplicateGroup, DuplicateMatch, FindDuplicatesOptions,
     FindDuplicatesResult,

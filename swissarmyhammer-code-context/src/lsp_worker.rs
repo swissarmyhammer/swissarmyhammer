@@ -10,10 +10,12 @@
 //! When `None`, the worker sleeps and retries.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use rusqlite::types::Value;
 use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
@@ -50,9 +52,19 @@ impl Default for LspWorkerConfig {
 /// requests. The daemon's owner is responsible for populating and clearing this.
 pub type SharedLspClient = Arc<Mutex<Option<LspJsonRpcClient>>>;
 
+/// Shared flag for signaling graceful shutdown to worker threads.
+///
+/// Set to `true` to request the worker to exit at the next loop iteration.
+pub type ShutdownFlag = Arc<AtomicBool>;
+
+/// Create a new shutdown flag initialized to `false`.
+pub fn new_shutdown_flag() -> ShutdownFlag {
+    Arc::new(AtomicBool::new(false))
+}
+
 /// Spawn a background thread that indexes files via LSP.
 ///
-/// The thread loops indefinitely:
+/// The thread loops until `shutdown` is set to `true`:
 /// 1. Lock the shared client; if `None`, sleep and retry.
 /// 2. Query `lsp_indexed = 0` files from the database.
 /// 3. For each file: read content, send `didOpen`, request `documentSymbol`,
@@ -66,18 +78,27 @@ pub type SharedLspClient = Arc<Mutex<Option<LspJsonRpcClient>>>;
 /// * `client` - Shared handle to the LSP JSON-RPC client.
 /// * `config` - Worker configuration.
 /// * `server_name` - Command name of the LSP server (used in log messages).
+/// * `shutdown` - Shared flag; set to `true` to request graceful shutdown.
 pub fn spawn_lsp_indexing_worker(
     workspace_root: PathBuf,
     db: SharedDb,
     client: SharedLspClient,
     config: LspWorkerConfig,
     server_name: String,
+    shutdown: ShutdownFlag,
 ) -> JoinHandle<()> {
     let thread_name = format!("code-context-lsp-indexer-{}", server_name);
     thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            match run_lsp_indexing_loop(&workspace_root, &db, &client, &config, &server_name) {
+            match run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                &server_name,
+                &shutdown,
+            ) {
                 Ok(()) => info!(server = %server_name, "LSP indexing worker completed"),
                 Err(e) => warn!(server = %server_name, "LSP indexing worker error: {}", e),
             }
@@ -85,7 +106,7 @@ pub fn spawn_lsp_indexing_worker(
         .expect("Failed to spawn LSP indexing worker thread")
 }
 
-/// Main indexing loop. Runs until the thread is terminated.
+/// Main indexing loop. Runs until shutdown is signaled or an error occurs.
 ///
 /// Uses the leader's shared write connection for all DB operations.
 /// The mutex is locked only for the duration of each DB call, so the
@@ -96,6 +117,7 @@ fn run_lsp_indexing_loop(
     client: &SharedLspClient,
     config: &LspWorkerConfig,
     server_name: &str,
+    shutdown: &AtomicBool,
 ) -> Result<(), CodeContextError> {
     let extensions = lsp_supported_extensions(server_name);
     info!(
@@ -117,6 +139,11 @@ fn run_lsp_indexing_loop(
     let mut total_indexed = 0u64;
 
     loop {
+        if shutdown.load(Ordering::Relaxed) {
+            info!(server = %server_name, "LSP indexing worker shutting down ({} files indexed)", total_indexed);
+            return Ok(());
+        }
+
         // 1. Query dirty files filtered to extensions this server handles
         let dirty_files = {
             let conn = db.lock().unwrap_or_else(|p| p.into_inner());
@@ -276,21 +303,30 @@ fn query_lsp_dirty_files(
         return Ok(Vec::new());
     }
 
-    // Build WHERE clause: lsp_indexed = 0 AND (file_path LIKE '%.rs' OR ...)
-    let like_clauses: Vec<String> = extensions
-        .iter()
-        .map(|ext| format!("file_path LIKE '%.{}'", ext))
+    // Build WHERE clause with parameterized LIKE placeholders
+    let like_clauses: Vec<String> = (1..=extensions.len())
+        .map(|i| format!("file_path LIKE ?{}", i))
         .collect();
     let filter = like_clauses.join(" OR ");
 
     let sql = format!(
-        "SELECT file_path FROM indexed_files WHERE lsp_indexed = 0 AND ({}) LIMIT ?",
-        filter
+        "SELECT file_path FROM indexed_files WHERE lsp_indexed = 0 AND ({}) LIMIT ?{}",
+        filter,
+        extensions.len() + 1
     );
+
+    // Bind extension patterns and limit as parameters
+    let mut params: Vec<Value> = extensions
+        .iter()
+        .map(|ext| Value::Text(format!("%.{}", ext)))
+        .collect();
+    params.push(Value::Integer(limit as i64));
 
     let mut stmt = db.prepare(&sql)?;
     let files = stmt
-        .query_map([limit as i64], |row| row.get::<_, String>(0))?
+        .query_map(rusqlite::params_from_iter(params), |row| {
+            row.get::<_, String>(0)
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(files)
 }
