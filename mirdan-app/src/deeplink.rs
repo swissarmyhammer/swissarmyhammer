@@ -3,7 +3,7 @@
 //! Parses incoming URLs and dispatches to the appropriate mirdan library
 //! functions. Currently supports:
 //!
-//! - `mirdan://install/{package}` — install a package by name (optionally `name@version`)
+//! - `mirdan://install/{spec}` — install a package (name, name@version, or git URL)
 
 use tauri::AppHandle;
 use tracing::{error, info, warn};
@@ -14,28 +14,29 @@ pub enum DeepLinkAction {
     Install { package: String },
 }
 
-/// Check that a decoded package spec contains only safe characters.
+/// Reject obviously malicious specs from deep links.
 ///
-/// Package specs can be:
-/// - Simple names: `no-secrets`, `no-secrets@1.2.0`
-/// - Git URLs: `https://github.com/owner/repo/skill@latest`
-///
-/// Rejects `..` sequences and shell metacharacters.
-fn is_valid_package_spec(spec: &str) -> bool {
+/// We don't try to validate the full format — mirdan's install logic
+/// handles classification (registry, git, local path). We just block
+/// path traversal and shell metacharacters.
+fn is_safe_spec(spec: &str) -> bool {
     !spec.is_empty()
         && !spec.contains("..")
-        && spec.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(c, '-' | '_' | '.' | '@' | '/' | ':' | ' ' | '+' | '~')
-        })
+        && !spec.contains(';')
+        && !spec.contains('|')
+        && !spec.contains('&')
+        && !spec.contains('`')
+        && !spec.contains('$')
+        && !spec.contains('\\')
 }
 
 /// Parse a `mirdan://` URL into an action.
 ///
-/// Supports:
+/// Supports any spec that `mirdan install` accepts:
 /// - `mirdan://install/no-secrets`
 /// - `mirdan://install/no-secrets@1.2.0`
-/// - `mirdan://install/https://github.com/owner/repo/skill@latest`
+/// - `mirdan://install/https://github.com/owner/repo`
+/// - `mirdan://install/https://github.com/owner/repo/skill`
 ///
 /// Returns `None` for unrecognized or malformed URLs.
 pub fn parse_url(url: &str) -> Option<DeepLinkAction> {
@@ -56,7 +57,7 @@ pub fn parse_url(url: &str) -> Option<DeepLinkAction> {
     // URL-decode the package spec (browsers may encode @ as %40, etc.)
     let decoded = urlencoding::decode(spec).ok()?;
 
-    if !is_valid_package_spec(&decoded) {
+    if !is_safe_spec(&decoded) {
         return None;
     }
 
@@ -93,12 +94,11 @@ pub fn handle_url(_app: &AppHandle, url: String) {
                     }
                 };
 
-                let is_git = package.starts_with("https://") || package.starts_with("http://");
                 let result = rt.block_on(mirdan::install::run_install(
-                    &package, // package_spec
+                    &package, // package_spec — let mirdan classify it
                     None,     // agent_filter — install for all agents
                     true,     // global — tray app has no project CWD
-                    is_git,   // git — auto-detect from URL
+                    false,    // git — mirdan auto-detects URLs
                     None,     // skill_select
                 ));
 

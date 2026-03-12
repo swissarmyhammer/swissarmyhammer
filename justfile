@@ -13,6 +13,7 @@ app-dev:
     hdiutil detach /Volumes/Mirdan -quiet
     @echo "Installed Mirdan.app to /Applications"
     @echo "Test deep links: open mirdan://install/no-secrets"
+    open /Applications/Mirdan.app
 
 # Run the installed Mirdan tray app
 app-run:
