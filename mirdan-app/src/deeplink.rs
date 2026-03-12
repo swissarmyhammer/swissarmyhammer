@@ -1,120 +1,69 @@
 //! Deep-link handler for the `mirdan://` URL scheme.
 //!
-//! Parses incoming URLs and dispatches to the appropriate mirdan library
-//! functions. Currently supports:
-//!
-//! - `mirdan://install/{spec}` — install a package (name, name@version, or git URL)
+//! Strips the `mirdan://install/` prefix and hands the rest verbatim
+//! to `mirdan::install::run_install`. No parsing, no validation —
+//! mirdan handles all of that.
 
 use tauri::AppHandle;
 use tracing::{error, info, warn};
 
-/// A parsed deep-link action.
-#[derive(Debug, PartialEq, Eq)]
-pub enum DeepLinkAction {
-    Install { package: String },
-}
-
-/// Reject obviously malicious specs from deep links.
+/// Extract the package spec from a `mirdan://install/...` URL.
 ///
-/// We don't try to validate the full format — mirdan's install logic
-/// handles classification (registry, git, local path). We just block
-/// path traversal and shell metacharacters.
-fn is_safe_spec(spec: &str) -> bool {
-    !spec.is_empty()
-        && !spec.contains("..")
-        && !spec.contains(';')
-        && !spec.contains('|')
-        && !spec.contains('&')
-        && !spec.contains('`')
-        && !spec.contains('$')
-        && !spec.contains('\\')
-}
-
-/// Parse a `mirdan://` URL into an action.
-///
-/// Supports any spec that `mirdan install` accepts:
-/// - `mirdan://install/no-secrets`
-/// - `mirdan://install/no-secrets@1.2.0`
-/// - `mirdan://install/https://github.com/owner/repo`
-/// - `mirdan://install/https://github.com/owner/repo/skill`
-///
-/// Returns `None` for unrecognized or malformed URLs.
-pub fn parse_url(url: &str) -> Option<DeepLinkAction> {
-    // Strip the scheme prefix.
-    let path = url.strip_prefix("mirdan://")?;
-
-    // Extract the action (first segment) and the rest as the package spec.
-    let path = path.trim_matches('/');
-    let (action, spec) = path.split_once('/')?;
-
-    if action != "install" || spec.is_empty() {
+/// Returns the raw spec after `install/`, or `None` if the URL
+/// doesn't match the expected scheme.
+fn extract_install_spec(url: &str) -> Option<String> {
+    let path = url.strip_prefix("mirdan://install/")?;
+    let spec = path.trim_end_matches('/');
+    if spec.is_empty() {
         return None;
     }
-
-    // Strip trailing slashes from the spec.
-    let spec = spec.trim_end_matches('/');
-
-    // URL-decode the package spec (browsers may encode @ as %40, etc.)
-    let decoded = urlencoding::decode(spec).ok()?;
-
-    if !is_safe_spec(&decoded) {
-        return None;
-    }
-
-    Some(DeepLinkAction::Install {
-        package: decoded.into_owned(),
-    })
+    // URL-decode (browsers may encode @ as %40, etc.)
+    urlencoding::decode(spec).ok().map(|s| s.into_owned())
 }
 
 /// Handle an incoming deep-link URL.
 ///
 /// Spawns the install on a background thread so it doesn't block the Tauri
-/// event loop, then posts a native notification with the result.
+/// event loop.
 pub fn handle_url(_app: &AppHandle, url: String) {
-    let action = match parse_url(&url) {
-        Some(a) => a,
+    let spec = match extract_install_spec(&url) {
+        Some(s) => s,
         None => {
             warn!(url, "unrecognized deep-link URL");
             return;
         }
     };
 
-    match action {
-        DeepLinkAction::Install { package } => {
-            info!(package, "deep-link install requested");
+    info!(spec, "deep-link install requested");
 
-            // Run the async install on a dedicated tokio runtime so we don't
-            // block the Tauri event loop.
-            std::thread::spawn(move || {
-                let rt = match tokio::runtime::Runtime::new() {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        error!("failed to create tokio runtime for deep-link install: {e}");
-                        return;
-                    }
-                };
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                error!("failed to create tokio runtime for deep-link install: {e}");
+                return;
+            }
+        };
 
-                let result = rt.block_on(mirdan::install::run_install(
-                    &package, // package_spec — let mirdan classify it
-                    None,     // agent_filter — install for all agents
-                    true,     // global — tray app has no project CWD
-                    false,    // git — mirdan auto-detects URLs
-                    None,     // skill_select
-                ));
+        let result = rt.block_on(mirdan::install::run_install(
+            &spec, // passed verbatim — mirdan classifies it
+            None,  // agent_filter
+            true,  // global
+            false, // git
+            None,  // skill_select
+        ));
 
-                match result {
-                    Ok(()) => {
-                        info!(package, "installed successfully");
-                        // TODO: native notification
-                    }
-                    Err(e) => {
-                        error!(package, "install failed: {e}");
-                        // TODO: native notification
-                    }
-                }
-            });
+        match result {
+            Ok(()) => {
+                info!(spec, "installed successfully");
+                // TODO: native notification
+            }
+            Err(e) => {
+                error!(spec, "install failed: {e}");
+                // TODO: native notification
+            }
         }
-    }
+    });
 }
 
 #[cfg(test)]
@@ -122,103 +71,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_install_simple() {
+    fn extract_simple() {
         assert_eq!(
-            parse_url("mirdan://install/no-secrets"),
-            Some(DeepLinkAction::Install {
-                package: "no-secrets".to_string(),
-            })
+            extract_install_spec("mirdan://install/no-secrets"),
+            Some("no-secrets".into())
         );
     }
 
     #[test]
-    fn test_parse_install_with_version() {
+    fn extract_with_version() {
         assert_eq!(
-            parse_url("mirdan://install/no-secrets@1.2.0"),
-            Some(DeepLinkAction::Install {
-                package: "no-secrets@1.2.0".to_string(),
-            })
+            extract_install_spec("mirdan://install/no-secrets%401.2.0"),
+            Some("no-secrets@1.2.0".into())
         );
     }
 
     #[test]
-    fn test_parse_install_trailing_slash() {
+    fn extract_git_url() {
         assert_eq!(
-            parse_url("mirdan://install/foo/"),
-            Some(DeepLinkAction::Install {
-                package: "foo".to_string(),
-            })
+            extract_install_spec("mirdan://install/https://github.com/owner/repo/skill"),
+            Some("https://github.com/owner/repo/skill".into())
         );
     }
 
     #[test]
-    fn test_parse_unknown_action() {
-        assert_eq!(parse_url("mirdan://unknown/thing"), None);
-    }
-
-    #[test]
-    fn test_parse_empty_package() {
-        assert_eq!(parse_url("mirdan://install/"), None);
-    }
-
-    #[test]
-    fn test_parse_wrong_scheme() {
-        assert_eq!(parse_url("https://install/foo"), None);
-    }
-
-    #[test]
-    fn test_parse_bare_scheme() {
-        assert_eq!(parse_url("mirdan://"), None);
-    }
-
-    #[test]
-    fn test_parse_url_encoded_at() {
-        // Browsers may encode @ as %40
+    fn extract_trailing_slash() {
         assert_eq!(
-            parse_url("mirdan://install/no-secrets%401.2.0"),
-            Some(DeepLinkAction::Install {
-                package: "no-secrets@1.2.0".to_string(),
-            })
+            extract_install_spec("mirdan://install/foo/"),
+            Some("foo".into())
         );
     }
 
     #[test]
-    fn test_parse_url_encoded_spaces() {
-        assert_eq!(
-            parse_url("mirdan://install/my%20package"),
-            Some(DeepLinkAction::Install {
-                package: "my package".to_string(),
-            })
-        );
+    fn extract_empty() {
+        assert_eq!(extract_install_spec("mirdan://install/"), None);
     }
 
     #[test]
-    fn test_parse_rejects_path_traversal() {
-        assert_eq!(parse_url("mirdan://install/..%2F..%2Fetc%2Fpasswd"), None);
+    fn extract_wrong_scheme() {
+        assert_eq!(extract_install_spec("https://install/foo"), None);
     }
 
     #[test]
-    fn test_parse_rejects_shell_metacharacters() {
-        assert_eq!(parse_url("mirdan://install/foo;rm%20-rf"), None);
+    fn extract_wrong_action() {
+        assert_eq!(extract_install_spec("mirdan://uninstall/foo"), None);
     }
 
     #[test]
-    fn test_parse_git_url_package() {
-        assert_eq!(
-            parse_url("mirdan://install/https://github.com/0xdarkmatter/claude-mods/explain@latest"),
-            Some(DeepLinkAction::Install {
-                package: "https://github.com/0xdarkmatter/claude-mods/explain@latest".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_git_url_no_version() {
-        assert_eq!(
-            parse_url("mirdan://install/https://github.com/owner/repo"),
-            Some(DeepLinkAction::Install {
-                package: "https://github.com/owner/repo".to_string(),
-            })
-        );
+    fn extract_bare() {
+        assert_eq!(extract_install_spec("mirdan://"), None);
     }
 }
