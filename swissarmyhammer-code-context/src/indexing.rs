@@ -133,7 +133,10 @@ fn run_indexing_worker(
                     warn!("Failed to write chunks for {}: {}", file_path, e);
                     // Mark as indexed anyway to avoid infinite retry loop
                     if let Err(e2) = mark_ts_indexed(db, &file_path) {
-                        warn!("Failed to mark {} as indexed after chunk write error: {}", file_path, e2);
+                        warn!(
+                            "Failed to mark {} as indexed after chunk write error: {}",
+                            file_path, e2
+                        );
                     }
                     continue;
                 }
@@ -500,7 +503,10 @@ fn hello() {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(text, "fn new_only() {}", "Chunk text should be the new version");
+            assert_eq!(
+                text, "fn new_only() {}",
+                "Chunk text should be the new version"
+            );
         }
     }
 
