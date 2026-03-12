@@ -4,7 +4,7 @@
 
 # SwissArmyHammer
 
-**Write specs, not code.**
+**Agent-driven engineering.**
 
 [![CI](https://github.com/swissarmyhammer/swissarmyhammer/workflows/CI/badge.svg)](https://github.com/swissarmyhammer/swissarmyhammer/actions)
 [![License](https://img.shields.io/badge/License-blue.svg)](LICENSE)
