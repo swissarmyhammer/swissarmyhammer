@@ -1,37 +1,37 @@
-//! Web search pipeline — DuckDuckGo search with content fetching
+//! Web search pipeline — Brave Search with content fetching
 //!
 //! This module provides the `WebSearcher` struct with reusable search pipeline methods.
 
+pub mod brave;
 pub mod content_fetcher;
-pub mod duckduckgo;
 
+use crate::search::brave::BraveSearchClient;
 use crate::search::content_fetcher::ContentFetchConfig;
-use crate::search::duckduckgo::DuckDuckGoClient;
 use crate::types::ScoringConfig;
 use crate::types::*;
 use std::time::Duration;
 
-/// Reusable web search pipeline providing DuckDuckGo search, content fetching, and validation.
+/// Reusable web search pipeline providing Brave search, content fetching, and validation.
 #[derive(Default)]
 pub struct WebSearcher {
-    duckduckgo_client: Option<DuckDuckGoClient>,
+    brave_client: Option<BraveSearchClient>,
 }
 
 impl WebSearcher {
     /// Creates a new instance of the WebSearcher
     pub fn new() -> Self {
         Self {
-            duckduckgo_client: None,
+            brave_client: None,
         }
     }
 
-    /// Gets or creates a DuckDuckGo web search client
-    pub fn get_duckduckgo_client(&mut self) -> &mut DuckDuckGoClient {
-        if self.duckduckgo_client.is_none() {
+    /// Gets or creates a Brave Search client
+    pub fn get_search_client(&mut self) -> &BraveSearchClient {
+        if self.brave_client.is_none() {
             let config = Self::load_scoring_config();
-            self.duckduckgo_client = Some(DuckDuckGoClient::with_scoring_config(config));
+            self.brave_client = Some(BraveSearchClient::with_scoring_config(config));
         }
-        self.duckduckgo_client.as_mut().unwrap()
+        self.brave_client.as_ref().unwrap()
     }
 
     /// Helper function to load configuration with a callback for setting values
@@ -139,7 +139,7 @@ impl WebSearcher {
         )
     }
 
-    /// Loads configuration for DuckDuckGo scoring algorithm
+    /// Loads configuration for search scoring algorithm
     fn load_scoring_config() -> ScoringConfig {
         Self::load_config_with_callback(ScoringConfig::default(), |config, template_context| {
             if let Some(serde_json::Value::Number(base_score)) =

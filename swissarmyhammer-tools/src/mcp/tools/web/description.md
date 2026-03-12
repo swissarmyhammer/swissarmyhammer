@@ -2,7 +2,7 @@ Web operations for searching and fetching content.
 
 ## Operations
 
-- **search url**: Search the web using DuckDuckGo with optional content fetching
+- **search url**: Search the web using Brave Search with optional content fetching
 - **fetch url**: Fetch a specific URL and convert HTML to markdown
 
 ## Examples

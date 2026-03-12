@@ -439,26 +439,6 @@ impl Default for ScoringConfig {
     }
 }
 
-/// Configuration for DuckDuckGo client timing parameters
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct DuckDuckGoConfig {
-    /// Initial delay after page load to allow content to render (in milliseconds)
-    /// Default: 2000ms (2 seconds)
-    pub initial_page_load_delay_ms: u64,
-
-    /// Cleanup delay between browser operations (in milliseconds)
-    /// Default: 100ms
-    pub cleanup_delay_ms: u64,
-}
-
-impl Default for DuckDuckGoConfig {
-    fn default() -> Self {
-        Self {
-            initial_page_load_delay_ms: 2000,
-            cleanup_delay_ms: 100,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -510,7 +490,7 @@ mod tests {
             url: "https://example.com".to_string(),
             description: "Test description".to_string(),
             score: 0.95,
-            engine: "duckduckgo".to_string(),
+            engine: "brave".to_string(),
             content: None,
         };
 
@@ -535,7 +515,7 @@ mod tests {
                 language: "en".to_string(),
                 results_count: 0,
                 search_time_ms: 100,
-                instance_used: "https://duckduckgo.com".to_string(),
+                instance_used: "https://search.brave.com".to_string(),
                 total_results: 0,
                 engines_used: vec![],
                 content_fetch_stats: None,

@@ -6,7 +6,7 @@ use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
 /// Generate the MCP schema for the web tool from operation metadata
 pub fn generate_web_mcp_schema(operations: &[&dyn Operation]) -> Value {
     let config = SchemaConfig::new(
-        "Web operations for searching and fetching content. Use 'search url' to search the web via DuckDuckGo, and 'fetch url' to retrieve a specific page as markdown.",
+        "Web operations for searching and fetching content. Use 'search url' to search the web via Brave Search, and 'fetch url' to retrieve a specific page as markdown.",
     )
     .with_examples(generate_web_examples());
 

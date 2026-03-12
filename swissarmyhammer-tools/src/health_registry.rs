@@ -222,16 +222,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_web_search_chrome_check_included() {
+    async fn test_web_search_health_check_included() {
         let checks = collect_all_health_checks().await;
 
-        // Should have a Chrome check from web_search tool
-        let chrome_check = checks
+        // Should have a Brave Search check from web tool
+        let brave_check = checks
             .iter()
-            .find(|c| c.name.contains("Chrome") && c.category == "tools");
+            .find(|c| c.name.contains("Brave") && c.category == "tools");
         assert!(
-            chrome_check.is_some(),
-            "Should have Chrome check from web_search tool"
+            brave_check.is_some(),
+            "Should have Brave Search check from web tool. Checks: {:?}",
+            checks.iter().map(|c| format!("{}/{}", c.category, c.name)).collect::<Vec<_>>()
         );
     }
 

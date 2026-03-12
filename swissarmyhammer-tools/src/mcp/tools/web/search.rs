@@ -6,12 +6,12 @@ use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use std::time::Instant;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+use swissarmyhammer_web::search::brave::BraveSearchError;
 use swissarmyhammer_web::search::content_fetcher::ContentFetcher;
-use swissarmyhammer_web::search::duckduckgo::DuckDuckGoError;
 use swissarmyhammer_web::types::*;
 use swissarmyhammer_web::WebSearcher;
 
-/// Search the web using DuckDuckGo with optional content fetching
+/// Search the web using Brave Search with optional content fetching
 #[derive(Debug, Default, Deserialize)]
 pub struct SearchUrl {
     /// The search query string
@@ -65,7 +65,7 @@ impl Operation for SearchUrl {
         "url"
     }
     fn description(&self) -> &'static str {
-        "Search the web using DuckDuckGo with optional content fetching"
+        "Search the web using Brave Search with optional content fetching"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
         SEARCH_URL_PARAMS
@@ -101,7 +101,7 @@ pub async fn execute_search(
     )
     .await;
 
-    // Create a fresh search tool instance for its DuckDuckGo client
+    // Create a fresh search tool instance
     let mut search_tool = WebSearcher::new();
 
     send_mcp_log(
@@ -112,11 +112,11 @@ pub async fn execute_search(
     )
     .await;
 
-    // Perform search using DuckDuckGo browser automation
-    let duckduckgo_client = search_tool.get_duckduckgo_client();
-    let mut results = match duckduckgo_client.search(&request).await {
+    // Perform search using Brave Search (direct HTTP, no browser needed)
+    let search_client = search_tool.get_search_client();
+    let mut results = match search_client.search(&request).await {
         Ok(results) => results,
-        Err(DuckDuckGoError::NoResults) => {
+        Err(BraveSearchError::NoResults) => {
             send_mcp_log(
                 context,
                 LoggingLevel::Warning,
@@ -131,7 +131,7 @@ pub async fn execute_search(
                     "No web search results found for '{}'. The search may be too specific or the terms may not match any web pages.",
                     request.query
                 ),
-                attempted_instances: vec!["https://duckduckgo.com".to_string()],
+                attempted_instances: vec!["https://search.brave.com".to_string()],
                 retry_after: None,
             };
 
@@ -152,8 +152,8 @@ pub async fn execute_search(
 
             let error = WebSearchError {
                 error_type: "search_failed".to_string(),
-                error_details: format!("DuckDuckGo web search failed: {e}"),
-                attempted_instances: vec!["https://duckduckgo.com".to_string()],
+                error_details: format!("Brave web search failed: {e}"),
+                attempted_instances: vec!["https://search.brave.com".to_string()],
                 retry_after: Some(10),
             };
 
@@ -202,9 +202,9 @@ pub async fn execute_search(
             language: request.language.unwrap_or_else(|| "en".to_string()),
             results_count: results.len(),
             search_time_ms: search_time.as_millis() as u64,
-            instance_used: "https://duckduckgo.com".to_string(),
+            instance_used: "https://search.brave.com".to_string(),
             total_results: results.len(),
-            engines_used: vec!["duckduckgo".to_string()],
+            engines_used: vec!["brave".to_string()],
             content_fetch_stats,
             fetch_content: request.fetch_content.unwrap_or(true),
         },
