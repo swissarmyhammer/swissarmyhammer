@@ -77,7 +77,7 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-common",
  "tempfile",
  "thiserror 2.0.18",
@@ -478,7 +478,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "sha2",
  "swissarmyhammer-agent",
@@ -4070,7 +4070,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "swissarmyhammer-agents",
  "swissarmyhammer-common",
@@ -4096,7 +4096,7 @@ version = "0.8.0"
 dependencies = [
  "async-trait",
  "serde",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-common",
  "thiserror 2.0.18",
  "tokio",
@@ -4235,7 +4235,7 @@ dependencies = [
  "reqwest 0.13.2",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
@@ -4450,7 +4450,7 @@ dependencies = [
  "reqwest 0.13.2",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "sha2",
  "swissarmyhammer-common",
@@ -6934,38 +6934,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sem-core"
-version = "0.3.6"
-dependencies = [
- "git2",
- "rayon",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml_ng 0.9.36",
- "tempfile",
- "thiserror 2.0.18",
- "toml 1.0.6+spec-1.1.0",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-elixir",
- "tree-sitter-fortran",
- "tree-sitter-go",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-php",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-swift 0.7.1",
- "tree-sitter-typescript",
- "xxhash-rust",
-]
-
-[[package]]
 name = "semver"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7130,19 +7098,6 @@ name = "serde_yaml"
 version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap 2.13.0",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
-name = "serde_yaml_ng"
-version = "0.9.36"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd24347956e682cf958c95e82deb9914cad4010d3efc035d579f81f4c426038c"
 dependencies = [
  "indexmap 2.13.0",
  "itoa",
@@ -7605,7 +7560,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
@@ -7665,7 +7620,7 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-build",
  "swissarmyhammer-common",
  "swissarmyhammer-operations",
@@ -7715,7 +7670,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "sha2",
  "swissarmyhammer",
@@ -7756,7 +7711,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "sha2",
  "swissarmyhammer-directory",
  "swissarmyhammer-leader-election",
@@ -7774,7 +7729,7 @@ dependencies = [
  "async-trait",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "thiserror 2.0.18",
  "tokio-test",
  "tracing",
@@ -7796,7 +7751,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "swissarmyhammer-directory",
  "tempfile",
@@ -7818,7 +7773,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "swissarmyhammer-build",
  "swissarmyhammer-common",
@@ -7837,7 +7792,7 @@ version = "0.8.0"
 dependencies = [
  "dirs",
  "serde",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -7879,7 +7834,7 @@ dependencies = [
  "notify 6.1.1",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-common",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
@@ -7898,7 +7853,7 @@ dependencies = [
  "async-trait",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-common",
  "swissarmyhammer-js",
  "tempfile",
@@ -7954,7 +7909,7 @@ dependencies = [
  "include_dir",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-entity",
@@ -7981,7 +7936,7 @@ dependencies = [
  "notify 6.1.1",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "sha2",
  "swissarmyhammer-commands",
  "swissarmyhammer-kanban",
@@ -8018,7 +7973,7 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-code-context",
  "swissarmyhammer-project-detection",
  "thiserror 2.0.18",
@@ -8063,7 +8018,7 @@ dependencies = [
  "include_dir",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-prompts",
@@ -8122,7 +8077,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "swissarmyhammer-build",
  "swissarmyhammer-common",
@@ -8138,13 +8093,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-sem"
+version = "0.8.0"
+dependencies = [
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 1.0.6+spec-1.1.0",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-elixir",
+ "tree-sitter-fortran",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-swift",
+ "tree-sitter-typescript",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "swissarmyhammer-shell"
 version = "0.8.0"
 dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-directory",
@@ -8163,7 +8149,7 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-build",
  "swissarmyhammer-common",
  "swissarmyhammer-operations",
@@ -8181,7 +8167,7 @@ dependencies = [
  "git2",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "swissarmyhammer-code-context",
  "swissarmyhammer-directory",
  "swissarmyhammer-kanban",
@@ -8246,10 +8232,9 @@ dependencies = [
  "rmcp",
  "rusqlite",
  "schemars 0.8.22",
- "sem-core",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "serial_test",
  "swissarmyhammer-agents",
  "swissarmyhammer-code-context",
@@ -8264,6 +8249,7 @@ dependencies = [
  "swissarmyhammer-operations",
  "swissarmyhammer-project-detection",
  "swissarmyhammer-prompts",
+ "swissarmyhammer-sem",
  "swissarmyhammer-shell",
  "swissarmyhammer-skills",
  "swissarmyhammer-treesitter",
@@ -8331,7 +8317,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-scala",
  "tree-sitter-sequel",
- "tree-sitter-swift 0.6.0",
+ "tree-sitter-swift",
  "tree-sitter-toml-ng",
  "tree-sitter-typescript",
  "tree-sitter-yaml",
@@ -8345,7 +8331,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
- "serde_yaml_ng 0.10.0",
+ "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -9742,16 +9728,6 @@ name = "tree-sitter-sequel"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d198ad3c319c02e43c21efa1ec796b837afcb96ffaef1a40c1978fbdcec7d17"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-swift"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d65aeb41726119416567d0333ec17580ac4abfb96db1f67c4bd638c65f9992fe"
 dependencies = [
  "cc",
  "tree-sitter-language",

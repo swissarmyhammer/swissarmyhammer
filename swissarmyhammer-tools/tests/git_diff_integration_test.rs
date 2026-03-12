@@ -1,24 +1,26 @@
-//! Integration tests for the sem-core semantic diff engine.
+//! Integration tests for the swissarmyhammer-sem semantic diff engine.
 //!
 //! These tests exercise the semantic diff pipeline directly (not through the MCP
 //! tool layer) to verify entity-level change detection for Rust code. Covers:
 //! modified functions, added/deleted functions, reordering, renaming, struct
 //! changes, multi-file diffs, direct parser registry usage, and real git repo
-//! integration via GitBridge.
+//! integration.
 
-use sem_core::git::bridge::GitBridge;
-use sem_core::git::types::{FileChange, FileStatus};
-use sem_core::model::change::ChangeType;
-use sem_core::model::identity::match_entities;
-use sem_core::parser::differ::compute_semantic_diff;
-use sem_core::parser::plugins::create_default_registry;
 use std::process::Command;
+use swissarmyhammer_sem::git_types::{FileChange, FileStatus};
+use swissarmyhammer_sem::model::change::ChangeType;
+use swissarmyhammer_sem::model::identity::match_entities;
+use swissarmyhammer_sem::parser::differ::compute_semantic_diff;
+use swissarmyhammer_sem::parser::plugins::create_default_registry;
 use tempfile::TempDir;
 
 /// Helper: runs compute_semantic_diff on a single file with before/after Rust content.
 ///
 /// Returns the DiffResult for assertions.
-fn diff_single_rust_file(before: &str, after: &str) -> sem_core::parser::differ::DiffResult {
+fn diff_single_rust_file(
+    before: &str,
+    after: &str,
+) -> swissarmyhammer_sem::parser::differ::DiffResult {
     let registry = create_default_registry();
     let file_change = FileChange {
         file_path: "src/lib.rs".to_string(),
@@ -32,9 +34,9 @@ fn diff_single_rust_file(before: &str, after: &str) -> sem_core::parser::differ:
 
 /// Helper: find a change by entity name in a DiffResult.
 fn find_change_by_name<'a>(
-    result: &'a sem_core::parser::differ::DiffResult,
+    result: &'a swissarmyhammer_sem::parser::differ::DiffResult,
     name: &str,
-) -> Option<&'a sem_core::model::change::SemanticChange> {
+) -> Option<&'a swissarmyhammer_sem::model::change::SemanticChange> {
     result.changes.iter().find(|c| c.entity_name == name)
 }
 
@@ -336,8 +338,8 @@ fn new_fn() -> String {
     );
 
     // Use match_entities directly
-    let sim_fn = |a: &sem_core::model::entity::SemanticEntity,
-                  b: &sem_core::model::entity::SemanticEntity|
+    let sim_fn = |a: &swissarmyhammer_sem::model::entity::SemanticEntity,
+                  b: &swissarmyhammer_sem::model::entity::SemanticEntity|
      -> f64 { plugin.compute_similarity(a, b) };
 
     let match_result = match_entities(
@@ -377,11 +379,13 @@ fn new_fn() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: Real git repo integration
+// Test 8: Real git repo integration (using execute_auto_diff with shell git)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_real_git_repo_integration() {
+    use swissarmyhammer_tools::mcp::tools::git::diff::{execute_auto_diff, DiffResponse};
+
     let tmp = TempDir::new().expect("Failed to create temp dir");
     let repo_path = tmp.path();
 
@@ -439,33 +443,27 @@ fn unchanged() {
 "#;
     std::fs::write(&file_path, modified_content).unwrap();
 
-    // Use GitBridge to detect changes (working tree changes)
-    let bridge = GitBridge::open(repo_path).expect("Should open git repo");
-    let (_scope, file_changes) = bridge
-        .detect_and_get_files()
-        .expect("Should detect changed files");
-
-    assert!(
-        !file_changes.is_empty(),
-        "Should detect at least one changed file"
-    );
-
-    // Run semantic diff on the detected changes
-    let registry = create_default_registry();
-    let result = compute_semantic_diff(&file_changes, &registry, None, None);
+    // Use execute_auto_diff (shell git) to detect and diff changes
+    let result_json = execute_auto_diff(repo_path).expect("auto-diff should succeed");
+    let response: DiffResponse = serde_json::from_str(&result_json).unwrap();
 
     // The process function should be modified
-    let process_change =
-        find_change_by_name(&result, "process").expect("Should find a change for 'process'");
+    let process_change = response
+        .changes
+        .iter()
+        .find(|c| c.entity_name == "process")
+        .expect("Should find a change for 'process'");
     assert_eq!(
-        process_change.change_type,
-        ChangeType::Modified,
-        "process() body changed -- should be Modified"
+        process_change.change_type, "modified",
+        "process() body changed -- should be modified"
     );
 
     // unchanged() should NOT appear in changes
     assert!(
-        find_change_by_name(&result, "unchanged").is_none(),
+        !response
+            .changes
+            .iter()
+            .any(|c| c.entity_name == "unchanged"),
         "unchanged() should not appear in diff results"
     );
 }
