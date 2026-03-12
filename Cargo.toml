@@ -67,7 +67,7 @@ tag-name = "v{{version}}"      # Single tag for workspace
 consolidate-commits = true     # One commit for all version bumps
 
 [workspace.package]
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 rust-version = "1.91.1"
 authors = ["SwissArmyHammer Team"]
