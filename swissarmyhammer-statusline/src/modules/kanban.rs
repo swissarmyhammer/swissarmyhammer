@@ -54,18 +54,10 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let empty = width - filled;
     let bar = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
 
-    let style_str = if pct < cfg.thresholds.low.below {
-        &cfg.thresholds.low.style
-    } else if pct < cfg.thresholds.medium.below {
-        &cfg.thresholds.medium.style
-    } else {
-        &cfg.thresholds.high.style
-    };
-
     let mut vars = HashMap::new();
     vars.insert("bar".into(), bar);
     vars.insert("done".into(), done.to_string());
     vars.insert("total".into(), total.to_string());
     let text = interpolate(&cfg.format, &vars);
-    ModuleOutput::new(text, Style::parse(style_str))
+    ModuleOutput::new(text, Style::parse(&cfg.style))
 }

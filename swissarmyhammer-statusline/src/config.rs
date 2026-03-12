@@ -345,7 +345,7 @@ pub struct KanbanModuleConfig {
 impl Default for KanbanModuleConfig {
     fn default() -> Self {
         Self {
-            style: "yellow".into(),
+            style: "blue".into(),
             bar_width: 6,
             format: "\u{1f4cb} [$bar] $done/$total".into(),
             thresholds: KanbanThresholdConfig::default(),
