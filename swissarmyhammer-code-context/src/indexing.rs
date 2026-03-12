@@ -132,7 +132,9 @@ fn run_indexing_worker(
                 if let Err(e) = write_ts_chunks(db, &file_path, &chunks) {
                     warn!("Failed to write chunks for {}: {}", file_path, e);
                     // Mark as indexed anyway to avoid infinite retry loop
-                    let _ = mark_ts_indexed(db, &file_path);
+                    if let Err(e2) = mark_ts_indexed(db, &file_path) {
+                        warn!("Failed to mark {} as indexed after chunk write error: {}", file_path, e2);
+                    }
                     continue;
                 }
 
@@ -237,6 +239,10 @@ fn write_ts_chunks(
     chunks: &[(usize, String)],
 ) -> Result<(), CodeContextError> {
     let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    // Delete any existing chunks for this file before inserting new ones.
+    // Without this, re-indexing a file (after a hash change marks it dirty)
+    // would accumulate duplicate chunk rows.
+    conn.execute("DELETE FROM ts_chunks WHERE file_path = ?", [file_path])?;
     for (start_byte, content) in chunks {
         let end_byte = start_byte + content.len();
         // Count lines in the content
@@ -438,6 +444,87 @@ fn hello() {
         // Mark as indexed
         let mark_result = mark_ts_indexed(&db, file_path);
         assert!(mark_result.is_ok());
+    }
+
+    #[test]
+    fn test_write_ts_chunks_deletes_old_before_insert() {
+        let db = create_test_db();
+        let file_path = "reindexed.rs";
+
+        insert_test_file(&db, file_path);
+
+        // First write: 2 chunks
+        let chunks_v1 = vec![
+            (0usize, "fn old_v1() {}".to_string()),
+            (14usize, "fn old_v2() {}".to_string()),
+        ];
+        write_ts_chunks(&db, file_path, &chunks_v1).unwrap();
+
+        // Verify 2 chunks exist
+        {
+            let conn = db.lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?",
+                    [file_path],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 2, "Should have 2 chunks after first write");
+        }
+
+        // Second write: 1 chunk (simulates re-indexing after file edit)
+        let chunks_v2 = vec![(0usize, "fn new_only() {}".to_string())];
+        write_ts_chunks(&db, file_path, &chunks_v2).unwrap();
+
+        // Should have exactly 1 chunk, not 3 (old ones must be deleted)
+        {
+            let conn = db.lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?",
+                    [file_path],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                count, 1,
+                "Should have 1 chunk after re-index, not 3 (old chunks must be deleted)"
+            );
+
+            // Verify it's the new content
+            let text: String = conn
+                .query_row(
+                    "SELECT text FROM ts_chunks WHERE file_path = ?",
+                    [file_path],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(text, "fn new_only() {}", "Chunk text should be the new version");
+        }
+    }
+
+    #[test]
+    fn test_mark_ts_indexed_returns_error_on_broken_db() {
+        // Verify that mark_ts_indexed surfaces errors rather than silently
+        // swallowing them. This matters because the caller must log or
+        // propagate the error so files don't stay dirty forever.
+        let db = create_test_db();
+        insert_test_file(&db, "broken.rs");
+
+        // Drop the indexed_files table to simulate a broken database state
+        {
+            let conn = db.lock().unwrap();
+            conn.execute_batch("DROP TABLE ts_chunks; DROP TABLE indexed_files;")
+                .unwrap();
+        }
+
+        // mark_ts_indexed should return Err, not silently succeed
+        let result = mark_ts_indexed(&db, "broken.rs");
+        assert!(
+            result.is_err(),
+            "mark_ts_indexed should return an error when the table is missing"
+        );
     }
 
     #[test]
