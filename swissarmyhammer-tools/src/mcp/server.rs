@@ -32,7 +32,7 @@ use swissarmyhammer_skills::SkillLibrary;
 
 /// Server instructions displayed to MCP clients
 const SERVER_INSTRUCTIONS: &str =
-    "The only coding assistant you'll ever need. Write specs, not code.";
+    "The only coding assistant you'll ever need. Agent-driven engineering.";
 
 /// Build server instructions, optionally appending LSP health status.
 ///
