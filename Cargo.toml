@@ -49,6 +49,7 @@ members = [
     "swissarmyhammer-skills",
     "swissarmyhammer-agents",
     "swissarmyhammer-web",
+    "mirdan",
     "mirdan-cli",
     "mirdan-app",
     "swissarmyhammer-kanban-app",

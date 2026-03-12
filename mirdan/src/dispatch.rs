@@ -15,6 +15,17 @@ fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
     }
 }
 
+/// Like [`handle_registry_result`] but for commands that return a status message.
+fn handle_registry_result_msg(result: Result<String, RegistryError>) -> i32 {
+    match result {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            1
+        }
+    }
+}
+
 /// Dispatch a parsed CLI command and return an exit code.
 ///
 /// Returns `None` for `Commands::Start` — callers handle that variant
@@ -109,7 +120,7 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
 
         Commands::Outdated => handle_registry_result(outdated::run_outdated().await),
 
-        Commands::Update { name, global } => handle_registry_result(
+        Commands::Update { name, global } => handle_registry_result_msg(
             outdated::run_update(name.as_deref(), agent_filter, *global).await,
         ),
 

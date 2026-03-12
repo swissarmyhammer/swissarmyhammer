@@ -3,9 +3,22 @@
   "productName": "Mirdan",
   "version": "0.8.0",
   "identifier": "ai.mirdan.app",
-  "build": {},
+  "build": {
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "./ui" },
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "./ui" },
+    "frontendDist": "./ui/dist"
+  },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Mirdan",
+        "width": 900,
+        "height": 600,
+        "visible": false
+      }
+    ],
     "security": {
       "csp": null
     }

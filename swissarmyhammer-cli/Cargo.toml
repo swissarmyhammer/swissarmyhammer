@@ -43,7 +43,7 @@ swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
 swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
 swissarmyhammer-statusline = { path = "../swissarmyhammer-statusline" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
-mirdan-cli = { path = "../mirdan-cli" }
+mirdan = { path = "../mirdan" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 
 llama-agent = { workspace = true }

@@ -91,6 +91,25 @@ impl Lockfile {
     pub fn get_package(&self, name: &str) -> Option<&LockedPackage> {
         self.packages.get(name)
     }
+
+    /// Find a package by display name (last path segment of the key).
+    ///
+    /// Lockfile keys are source URLs like `https://github.com/owner/repo/skill`
+    /// but the GUI and user-facing commands use the display name (`skill`).
+    /// Returns `(key, entry)` if a unique match is found.
+    pub fn find_by_display_name(&self, name: &str) -> Option<(&str, &LockedPackage)> {
+        let mut found = None;
+        for (key, entry) in &self.packages {
+            let last_segment = key.rsplit('/').next().unwrap_or(key);
+            if last_segment == name || key == name {
+                if found.is_some() {
+                    return None; // ambiguous — multiple matches
+                }
+                found = Some((key.as_str(), entry));
+            }
+        }
+        found
+    }
 }
 
 /// Get the lockfile path for a project root.

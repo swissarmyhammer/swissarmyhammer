@@ -758,15 +758,34 @@ pub async fn run_uninstall(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
+    // Try both CWD and HOME for lockfile (GUI sets CWD to HOME,
+    // CLI may be in a project directory).
     let project_root = std::env::current_dir()?;
-    let lf = Lockfile::load(&project_root)?;
+    let mut lf = Lockfile::load(&project_root)?;
 
-    // If not a direct package name, check if it's a git source and find matching packages
-    if lf.get_package(name).is_none() {
+    // Also check HOME if CWD lockfile is empty and differs from HOME
+    let home = dirs::home_dir();
+    if lf.packages.is_empty() {
+        if let Some(ref h) = home {
+            if *h != project_root {
+                if let Ok(home_lf) = Lockfile::load(h) {
+                    if !home_lf.packages.is_empty() {
+                        lf = home_lf;
+                    }
+                }
+            }
+        }
+    }
+
+    // Resolve the lockfile key — try exact match, then display name, then git source
+    let lockfile_key = if lf.get_package(name).is_some() {
+        Some(name.to_string())
+    } else if let Some((key, _)) = lf.find_by_display_name(name) {
+        Some(key.to_string())
+    } else {
         let matching = find_packages_by_git_source(&lf, name);
-
         if !matching.is_empty() {
-            let mut lf = Lockfile::load(&project_root)?;
+            // Uninstall all packages from this git source
             for pkg_name in &matching {
                 let pkg = lf.get_package(pkg_name).unwrap();
                 let pkg_type = pkg.package_type;
@@ -778,38 +797,40 @@ pub async fn run_uninstall(
                     PackageType::Agent => uninstall_agent(pkg_name, agent_filter, global)?,
                 }
                 lf.remove_package(pkg_name);
-                println!("  Uninstalled {}", pkg_name);
+                tracing::info!(pkg_name, "uninstalled");
             }
-            lf.save(&project_root)?;
-            println!("  Updated mirdan-lock.json");
-            println!("\nUninstalled {} package(s) from {}", matching.len(), name);
+            let save_dir = home.as_deref().unwrap_or(&project_root);
+            lf.save(save_dir)?;
+            tracing::info!(count = matching.len(), source = name, "uninstalled packages");
             return Ok(());
         }
-    }
+        None
+    };
 
-    // Direct package name lookup
+    // Use the resolved key, or fall back to the display name for filesystem-only removal
+    let key = lockfile_key.as_deref().unwrap_or(name);
+
+    // Determine the display name (last segment) for filesystem operations
+    let display_name = key.rsplit('/').next().unwrap_or(key);
+
     let pkg_type = lf
-        .get_package(name)
+        .get_package(key)
         .map(|p| p.package_type)
-        .unwrap_or_else(|| {
-            // Try to detect from installed locations
-            guess_installed_type(name, global)
-        });
+        .unwrap_or_else(|| guess_installed_type(display_name, global));
 
     match pkg_type {
-        PackageType::Skill => uninstall_skill(name, agent_filter, global)?,
-        PackageType::Validator => uninstall_validator(name, global)?,
-        PackageType::Tool => uninstall_tool(name, agent_filter, global)?,
-        PackageType::Plugin => uninstall_plugin(name, agent_filter, global)?,
-        PackageType::Agent => uninstall_agent(name, agent_filter, global)?,
+        PackageType::Skill => uninstall_skill(display_name, agent_filter, global)?,
+        PackageType::Validator => uninstall_validator(display_name, global)?,
+        PackageType::Tool => uninstall_tool(display_name, agent_filter, global)?,
+        PackageType::Plugin => uninstall_plugin(display_name, agent_filter, global)?,
+        PackageType::Agent => uninstall_agent(display_name, agent_filter, global)?,
     }
 
     // Update lockfile
-    let mut lf = Lockfile::load(&project_root)?;
-    lf.remove_package(name);
-    lf.save(&project_root)?;
-    println!("  Updated mirdan-lock.json");
-    println!("\nUninstalled {}", name);
+    lf.remove_package(key);
+    let save_dir = home.as_deref().unwrap_or(&project_root);
+    lf.save(save_dir)?;
+    tracing::info!(key, "uninstalled");
 
     Ok(())
 }

@@ -123,6 +123,36 @@ pub fn discover_packages(
     merge_packages(packages)
 }
 
+/// Get the mirdan.ai registry URL for a package.
+///
+/// Looks up the source URL from the lockfile (where the key is the full
+/// source like `https://github.com/owner/repo/skill`), then constructs
+/// `https://mirdan.ai/package/{url_encoded_source}`.
+pub fn registry_url(name: &str) -> String {
+    use crate::lockfile::Lockfile;
+
+    let lockfile_dirs = [
+        dirs::home_dir(),
+        std::env::current_dir().ok(),
+    ];
+
+    for dir in lockfile_dirs.iter().flatten() {
+        if let Ok(lf) = Lockfile::load(dir) {
+            for key in lf.packages.keys() {
+                let last_segment = key.rsplit('/').next().unwrap_or(key);
+                if last_segment == name || key == name {
+                    return format!(
+                        "https://mirdan.ai/package/{}",
+                        urlencoding::encode(key)
+                    );
+                }
+            }
+        }
+    }
+
+    format!("https://mirdan.ai/package/{}", urlencoding::encode(name))
+}
+
 /// Run the list command.
 ///
 /// Scans all package locations for installed packages.

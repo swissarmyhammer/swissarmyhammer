@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod commands;
 mod deeplink;
 mod tray;
 
@@ -10,6 +11,7 @@ use tracing_subscriber::EnvFilter;
 
 use mirdan::{agents, banner};
 use mirdan::{Cli, Commands};
+use tauri::Manager;
 
 /// Initialize tracing for tray mode — routes to macOS Console.app via os_log.
 fn init_tray_tracing() {
@@ -24,6 +26,14 @@ fn run_tray() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::list_packages,
+            commands::uninstall_package,
+            commands::update_package,
+            commands::get_package_path,
+            commands::get_registry_url,
+            commands::open_external,
+        ])
         .setup(|app| {
             // Accessory app: no Dock icon, tray only.
             #[cfg(target_os = "macos")]
@@ -45,6 +55,18 @@ fn run_tray() {
                     deeplink::handle_url(&handle, url.to_string());
                 }
             });
+
+            // Hide the window on close instead of destroying it.
+            // The app stays running as a tray accessory.
+            if let Some(window) = app.get_webview_window("main") {
+                let w = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w.hide();
+                    }
+                });
+            }
 
             Ok(())
         })

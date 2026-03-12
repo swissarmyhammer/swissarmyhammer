@@ -1,27 +1,41 @@
 //! System tray icon and native menu for the Mirdan desktop app.
 //!
-//! Builds a macOS/Windows/Linux tray icon with a context menu showing
-//! installed packages, an update check placeholder, and a link to the
-//! Mirdan registry.
+//! Builds a macOS/Windows/Linux tray icon with a context menu.
+//! "Manage Packages..." opens (or focuses) the webview window.
 
 use tauri::{
     menu::MenuBuilder,
     tray::TrayIconBuilder,
-    AppHandle,
+    AppHandle, Manager,
 };
 
 /// Menu item IDs used for event dispatch.
 mod ids {
+    pub const MANAGE_PACKAGES: &str = "manage-packages";
     pub const CHECK_UPDATES: &str = "check-updates";
     pub const OPEN_REGISTRY: &str = "open-registry";
     pub const QUIT: &str = "quit";
+}
+
+/// Show or focus the main webview window.
+///
+/// If the window exists, show and focus it. The window is defined in
+/// tauri.conf.json with `visible: false`, so Tauri creates it at startup
+/// but keeps it hidden until we call show().
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        tracing::error!("main window not found");
+    }
 }
 
 /// Build and attach the system tray icon with its native context menu.
 ///
 /// The menu contains:
 /// - A disabled version label
-/// - A submenu listing every installed package (or a placeholder when empty)
+/// - "Manage Packages..." (opens the GUI window)
 /// - "Check for Updates" (stub)
 /// - "Open Registry" (opens the browser)
 /// - "Quit"
@@ -32,37 +46,10 @@ mod ids {
 pub fn setup_tray(app: &AppHandle) -> anyhow::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
 
-    // --- Installed-packages submenu ------------------------------------------
-    let packages = mirdan::list::discover_packages(false, false, false, false, None);
-
-    let mut pkg_submenu = tauri::menu::SubmenuBuilder::new(app, "Installed Packages");
-
-    if packages.is_empty() {
-        pkg_submenu = pkg_submenu.text("no-packages", "No packages installed");
-    } else {
-        for pkg in &packages {
-            let label = format!("{} {} ({})", pkg.name, pkg.version, pkg.package_type);
-            let id = format!("pkg-{}", pkg.name);
-            pkg_submenu = pkg_submenu.text(id, label);
-        }
-    }
-
-    let pkg_submenu = pkg_submenu.build()?;
-
-    // Disable all items inside the submenu — they are informational only.
-    // (Tauri v2 SubmenuBuilder doesn't support per-item enabled on .text(),
-    // so we iterate after building.)
-    for item in pkg_submenu.items()? {
-        if let tauri::menu::MenuItemKind::MenuItem(mi) = item {
-            mi.set_enabled(false)?;
-        }
-    }
-
-    // --- Top-level menu ------------------------------------------------------
     let menu = MenuBuilder::new(app)
         .text("version", format!("Mirdan v{version}"))
         .separator()
-        .item(&pkg_submenu)
+        .text(ids::MANAGE_PACKAGES, "Manage Packages...")
         .text(ids::CHECK_UPDATES, "Check for Updates")
         .separator()
         .text(ids::OPEN_REGISTRY, "Open Registry")
@@ -96,8 +83,11 @@ pub fn setup_tray(app: &AppHandle) -> anyhow::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
             match event.id().as_ref() {
+                ids::MANAGE_PACKAGES => {
+                    show_main_window(app);
+                }
                 ids::CHECK_UPDATES => {
-                    tracing::info!("check for updates triggered (not yet implemented)");
+                    show_main_window(app);
                 }
                 ids::OPEN_REGISTRY => {
                     if let Err(e) = open::that("https://mirdan.ai") {

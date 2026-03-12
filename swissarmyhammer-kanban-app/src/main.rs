@@ -11,13 +11,14 @@ use clap::Parser;
 use cli::Cli;
 use state::AppState;
 use tauri::Manager;
+use tracing_subscriber::prelude::*;
 use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 fn main() {
     let cli = Cli::parse();
 
     // If a CLI subcommand was given (and it's not `gui`), handle it and exit.
-    // CLI mode gets its own tracing subscriber since tauri-plugin-log isn't active.
+    // CLI mode gets its own tracing subscriber — stderr only.
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     if cli.command.is_some() {
         tracing_subscriber::fmt()
@@ -31,23 +32,16 @@ fn main() {
         }
     }
 
-    // Otherwise, launch the Tauri GUI — tauri-plugin-log owns the `log` crate logger.
-    // The `tracing` crate's "log" feature (enabled in workspace Cargo.toml) makes
-    // tracing::info!() automatically emit log::info!() records, which tauri-plugin-log
-    // picks up. No explicit bridge needed.
+    // GUI mode — route tracing to macOS Console.app via os_log.
+    if cli.command.is_none() {
+        let oslog = tracing_oslog::OsLogger::new("com.swissarmyhammer.kanban", "default");
+        tracing_subscriber::registry().with(oslog).init();
+    }
 
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::Stderr,
-                ))
-                .level(log::LevelFilter::Info)
-                .build(),
-        )
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::all())

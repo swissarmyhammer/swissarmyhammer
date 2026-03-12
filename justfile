@@ -22,3 +22,11 @@ mirdan-run:
 # Tail Mirdan logs in Console (os_log)
 mirdan-logs:
     log stream --predicate 'subsystem == "ai.mirdan.app"' --level debug
+
+# Tail Kanban logs in Console (os_log)
+kanban-logs:
+    log stream --predicate 'subsystem == "com.swissarmyhammer.kanban"' --level debug
+
+# Tail all app logs (both Mirdan and Kanban)
+logs:
+    log stream --predicate 'subsystem == "ai.mirdan.app" OR subsystem == "com.swissarmyhammer.kanban"' --level debug
