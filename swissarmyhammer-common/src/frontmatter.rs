@@ -129,8 +129,8 @@ fn parse_frontmatter_internal<C: DirectoryConfig>(
             let body_content = parts[2].to_string();
 
             // Parse YAML frontmatter
-            let mut yaml_value: serde_yaml_ng::Value =
-                serde_yaml_ng::from_str(yaml_content).map_err(|e| SwissArmyHammerError::Other {
+            let mut yaml_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml_content)
+                .map_err(|e| SwissArmyHammerError::Other {
                     message: format!("Invalid YAML frontmatter: {e}"),
                 })?;
 

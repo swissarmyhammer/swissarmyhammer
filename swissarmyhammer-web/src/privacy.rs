@@ -202,7 +202,8 @@ impl RequestJitter {
 
         let delay = {
             let mut rng = rand::rng();
-            let delay_ms = rng.random_range(self.min_delay.as_millis()..=self.max_delay.as_millis());
+            let delay_ms =
+                rng.random_range(self.min_delay.as_millis()..=self.max_delay.as_millis());
             Duration::from_millis(delay_ms as u64)
         };
 

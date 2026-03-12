@@ -33,7 +33,9 @@ pub struct McpFrontmatter {
 }
 
 /// Parse the `mcp` section from TOOL.md YAML frontmatter.
-pub fn parse_tool_frontmatter(yaml: &serde_yaml_ng::Value) -> Result<McpFrontmatter, RegistryError> {
+pub fn parse_tool_frontmatter(
+    yaml: &serde_yaml_ng::Value,
+) -> Result<McpFrontmatter, RegistryError> {
     let mcp = yaml.get("mcp").ok_or_else(|| {
         RegistryError::Validation("TOOL.md frontmatter missing 'mcp' section".to_string())
     })?;

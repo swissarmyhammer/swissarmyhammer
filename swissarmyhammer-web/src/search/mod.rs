@@ -20,9 +20,7 @@ pub struct WebSearcher {
 impl WebSearcher {
     /// Creates a new instance of the WebSearcher
     pub fn new() -> Self {
-        Self {
-            brave_client: None,
-        }
+        Self { brave_client: None }
     }
 
     /// Gets or creates a Brave Search client

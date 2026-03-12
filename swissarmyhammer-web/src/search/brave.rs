@@ -90,10 +90,7 @@ impl BraveSearchClient {
             .await
             .map_err(|e| BraveSearchError::Http(format!("Failed to read response body: {e}")))?;
 
-        tracing::debug!(
-            "Retrieved {} bytes from Brave Search",
-            html_content.len()
-        );
+        tracing::debug!("Retrieved {} bytes from Brave Search", html_content.len());
 
         let max_results = request.results_count.unwrap_or(10);
         self.parse_html_results(&html_content, max_results)
@@ -110,9 +107,8 @@ impl BraveSearchClient {
         let document = Html::parse_document(html_content);
 
         // Brave uses data-pos attributes on result containers
-        let snippet_sel = Selector::parse("[data-pos]").map_err(|e| {
-            BraveSearchError::Parse(format!("Invalid selector: {e}"))
-        })?;
+        let snippet_sel = Selector::parse("[data-pos]")
+            .map_err(|e| BraveSearchError::Parse(format!("Invalid selector: {e}")))?;
 
         let title_sel = Selector::parse("a .title").ok();
         let title_a_sel = Selector::parse("a[href]").ok();
@@ -133,7 +129,12 @@ impl BraveSearchClient {
 
             if let Some(ref sel) = title_sel {
                 if let Some(title_el) = element.select(sel).next() {
-                    title = title_el.text().collect::<Vec<_>>().join(" ").trim().to_string();
+                    title = title_el
+                        .text()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string();
                     // Walk up to the <a> parent to get href
                     if let Some(ref a_sel) = title_a_sel {
                         if let Some(a_el) = element.select(a_sel).next() {
@@ -155,7 +156,12 @@ impl BraveSearchClient {
                             if href.starts_with("http") {
                                 url = href.to_string();
                                 if title.is_empty() {
-                                    title = a_el.text().collect::<Vec<_>>().join(" ").trim().to_string();
+                                    title = a_el
+                                        .text()
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                        .trim()
+                                        .to_string();
                                 }
                                 break;
                             }
@@ -178,7 +184,12 @@ impl BraveSearchClient {
             let mut description = String::new();
             if let Some(ref sel) = desc_sel {
                 if let Some(desc_el) = element.select(sel).next() {
-                    description = desc_el.text().collect::<Vec<_>>().join(" ").trim().to_string();
+                    description = desc_el
+                        .text()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string();
                 }
             }
             if description.is_empty() {

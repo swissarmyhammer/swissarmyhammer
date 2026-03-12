@@ -223,7 +223,8 @@ fn test_all_error_variants_have_severity() {
         ),
         (
             SwissArmyHammerError::Serialization(
-                serde_yaml_ng::from_str::<serde_yaml_ng::Value>("invalid: yaml: content:").unwrap_err(),
+                serde_yaml_ng::from_str::<serde_yaml_ng::Value>("invalid: yaml: content:")
+                    .unwrap_err(),
             ),
             ErrorSeverity::Error,
         ),

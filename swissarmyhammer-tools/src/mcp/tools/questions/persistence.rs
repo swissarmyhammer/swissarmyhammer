@@ -58,7 +58,8 @@ pub fn save_question_answer(question: &str, answer: &str) -> Result<PathBuf> {
     };
 
     // Serialize to YAML with header comment
-    let yaml_body = serde_yaml_ng::to_string(&entry).context("Failed to serialize entry to YAML")?;
+    let yaml_body =
+        serde_yaml_ng::to_string(&entry).context("Failed to serialize entry to YAML")?;
     let yaml_content = format!(
         "# Saved at {}\n{}",
         now.format("%Y-%m-%d %H:%M:%S UTC"),

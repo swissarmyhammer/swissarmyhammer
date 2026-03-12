@@ -503,7 +503,8 @@ async fn test_find_all_duplicates_detects_near_identical_functions() {
         !duplicates.is_empty(),
         "Should find at least one duplicate cluster, but found none. \
          Status: files_indexed={}, is_ready={}",
-        status.files_indexed, status.is_ready,
+        status.files_indexed,
+        status.is_ready,
     );
 
     // Find the cluster that contains utils_a.rs

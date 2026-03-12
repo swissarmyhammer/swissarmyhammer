@@ -22,7 +22,8 @@
 //!    - Response: `null` on success
 
 use agent_client_protocol::{
-    Agent, ClientCapabilities, ExtRequest, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
+    Agent, ClientCapabilities, ExtRequest, FileSystemCapabilities, InitializeRequest,
+    ProtocolVersion,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
 use serde_json::json;

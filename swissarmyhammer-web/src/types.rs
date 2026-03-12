@@ -439,7 +439,6 @@ impl Default for ScoringConfig {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

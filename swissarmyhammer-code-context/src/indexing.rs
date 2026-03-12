@@ -164,7 +164,8 @@ fn run_indexing_worker(
 /// Locks the shared connection for the duration of the query.
 fn query_dirty_files(db: &SharedDb, limit: usize) -> Result<Vec<String>, CodeContextError> {
     let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-    let mut stmt = conn.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed=0 LIMIT ?")?;
+    let mut stmt =
+        conn.prepare("SELECT file_path FROM indexed_files WHERE ts_indexed=0 LIMIT ?")?;
 
     let files = stmt
         .query_map([limit as i64], |row| row.get::<_, String>(0))?
@@ -458,6 +459,9 @@ fn hello() {
 
         // Read from original reference -- should see the write
         let dirty = query_dirty_files(&db, 10).unwrap();
-        assert!(dirty.is_empty(), "File should be indexed after write thread completes");
+        assert!(
+            dirty.is_empty(),
+            "File should be indexed after write thread completes"
+        );
     }
 }

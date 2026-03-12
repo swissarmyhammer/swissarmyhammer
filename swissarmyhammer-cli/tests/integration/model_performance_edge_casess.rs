@@ -775,9 +775,10 @@ async fn test_rapid_sequential_operations() -> Result<()> {
         if use_output.status.success() && config_path.exists() {
             let config_content = fs::read_to_string(&config_path)?;
             // Should be valid YAML
-            let _: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content).map_err(|e| {
-                anyhow::anyhow!("Config corrupted after rapid operation {}: {}", i, e)
-            })?;
+            let _: serde_yaml_ng::Value =
+                serde_yaml_ng::from_str(&config_content).map_err(|e| {
+                    anyhow::anyhow!("Config corrupted after rapid operation {}: {}", i, e)
+                })?;
         }
     }
 
@@ -835,9 +836,10 @@ agent:
         if config_path.exists() {
             let config_content = fs::read_to_string(&config_path)?;
             if !config_content.is_empty() {
-                let _: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content).map_err(|e| {
-                    anyhow::anyhow!("Config integrity lost after operation {}: {}", i, e)
-                })?;
+                let _: serde_yaml_ng::Value =
+                    serde_yaml_ng::from_str(&config_content).map_err(|e| {
+                        anyhow::anyhow!("Config integrity lost after operation {}: {}", i, e)
+                    })?;
             }
         }
     }

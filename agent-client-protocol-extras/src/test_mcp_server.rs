@@ -135,10 +135,7 @@ impl ServerHandler for TestMcpServer {
         });
 
         Ok(InitializeResult::new(caps)
-            .with_server_info(Implementation::new(
-                self.name.clone(),
-                self.version.clone(),
-            ))
+            .with_server_info(Implementation::new(self.name.clone(), self.version.clone()))
             .with_instructions("Test MCP server for ACP conformance testing"))
     }
 
@@ -271,10 +268,7 @@ impl ServerHandler for TestMcpServer {
         });
 
         ServerInfo::new(caps)
-            .with_server_info(Implementation::new(
-                self.name.clone(),
-                self.version.clone(),
-            ))
+            .with_server_info(Implementation::new(self.name.clone(), self.version.clone()))
             .with_instructions("Test MCP server for ACP conformance testing")
     }
 }

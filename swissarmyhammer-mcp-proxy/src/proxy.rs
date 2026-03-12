@@ -77,11 +77,8 @@ impl FilteringMcpProxy {
 
     /// Create proxy implementation metadata
     fn proxy_implementation() -> Implementation {
-        Implementation::new(
-            "swissarmyhammer-filtering-proxy",
-            env!("CARGO_PKG_VERSION"),
-        )
-        .with_title("SwissArmyHammer Filtering Proxy")
+        Implementation::new("swissarmyhammer-filtering-proxy", env!("CARGO_PKG_VERSION"))
+            .with_title("SwissArmyHammer Filtering Proxy")
     }
 
     /// Create proxy capabilities

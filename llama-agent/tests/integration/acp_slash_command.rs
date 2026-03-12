@@ -465,16 +465,8 @@ mod acp_slash_command_tests {
 
         // Create MCP prompts that overlap with skill names
         let prompts = vec![
-            Prompt::new(
-                "plan",
-                Some("MCP plan prompt (should be overridden)"),
-                None,
-            ),
-            Prompt::new(
-                "deploy",
-                Some("Deploy to production (MCP-only)"),
-                None,
-            ),
+            Prompt::new("plan", Some("MCP plan prompt (should be overridden)"), None),
+            Prompt::new("deploy", Some("Deploy to production (MCP-only)"), None),
         ];
 
         let mcp_client = Arc::new(MockMCPClientWithPrompts::new(prompts));

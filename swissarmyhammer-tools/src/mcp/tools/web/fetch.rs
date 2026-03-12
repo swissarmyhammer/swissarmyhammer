@@ -86,9 +86,9 @@ pub async fn execute_fetch(
             )
             .await;
 
-            Ok(CallToolResult::success(vec![
-                rmcp::model::Content::text(result.markdown),
-            ]))
+            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                result.markdown,
+            )]))
         }
         Err(e) => {
             let (error_type, response_time_ms) = match &e {

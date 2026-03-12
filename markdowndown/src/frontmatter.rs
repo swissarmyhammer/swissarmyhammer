@@ -200,8 +200,8 @@ impl FrontmatterBuilder {
         // Add additional fields if any
         if !self.additional_fields.is_empty() {
             // Parse the existing YAML to add additional fields
-            let mut yaml_value: serde_yaml_ng::Value =
-                serde_yaml_ng::from_str(&yaml_content).map_err(|e| MarkdownError::ParseError {
+            let mut yaml_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml_content)
+                .map_err(|e| MarkdownError::ParseError {
                     message: format!(
                         "Failed to parse generated YAML (content length: {} chars): {}",
                         yaml_content.len(),

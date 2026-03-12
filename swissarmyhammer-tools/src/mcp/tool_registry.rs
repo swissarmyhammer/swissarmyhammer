@@ -983,12 +983,8 @@ impl ToolRegistry {
                     serde_json::Map::new()
                 };
 
-                Tool::new(
-                    McpTool::name(tool.as_ref()),
-                    tool.description(),
-                    schema_map,
-                )
-                .with_title(McpTool::name(tool.as_ref()))
+                Tool::new(McpTool::name(tool.as_ref()), tool.description(), schema_map)
+                    .with_title(McpTool::name(tool.as_ref()))
             })
             .collect()
     }

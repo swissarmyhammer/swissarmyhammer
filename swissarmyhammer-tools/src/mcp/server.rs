@@ -1288,12 +1288,8 @@ impl ServerHandler for McpServer {
                             )
                         };
 
-                        Prompt::new(
-                            p.name.clone(),
-                            p.description.clone(),
-                            arguments,
-                        )
-                        .with_title(p.name.clone())
+                        Prompt::new(p.name.clone(), p.description.clone(), arguments)
+                            .with_title(p.name.clone())
                     })
                     .collect();
 

@@ -424,7 +424,8 @@ match:
             .unwrap();
 
         // Note: @ must be quoted in YAML
-        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str("\"@file_groups/frontend\"").unwrap();
+        let input: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("\"@file_groups/frontend\"").unwrap();
         let expanded = expander.expand(input).unwrap();
 
         let seq = expanded.as_sequence().unwrap();
