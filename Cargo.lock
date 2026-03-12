@@ -7812,7 +7812,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-embedding"
-version = "0.2.0"
+version = "0.9.0"
 dependencies = [
  "ane-embedding",
  "async-trait",
