@@ -6,6 +6,49 @@ metadata:
   version: "1.2"
 ---
 
+## Project Detection
+
+To discover project types, build commands, and language-specific guidelines for this workspace, call the code_context tool:
+
+```json
+{"op": "detect projects"}
+```
+
+This will scan the directory tree and return:
+- All detected project types (Rust, Node.js, Python, Go, Java, C#, CMake, Makefile, Flutter, PHP)
+- Project locations as relative paths
+- Workspace/monorepo membership
+- Language-specific guidelines for testing, building, formatting, and linting
+
+**Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
+
+## Code Quality
+
+- Write clean, readable code that follows existing patterns in the codebase
+- Prefer simple, obvious solutions over clever ones
+- Make minimal changes to achieve the goal - avoid unnecessary refactoring
+- Don't add features, abstractions, or "improvements" beyond what was asked
+
+## Style
+
+- Follow the project's existing conventions for naming, formatting, and structure
+- Match the indentation, quotes, and spacing style already in use
+- If the project has a formatter config (prettier, rustfmt, black), respect it
+
+## Documentation
+
+- Every function needs a docstring explaining what it does
+- Document parameters, return values, and errors
+- Update existing documentation if your changes make it stale
+- Inline comments explain "why", not "what"
+
+## Error Handling
+
+- Handle errors at appropriate boundaries
+- Don't add defensive code for scenarios that can't happen
+- Trust internal code and framework guarantees
+
+
 # Plan
 
 Use this skill whenever you enter Plan Mode or the user asks you to plan work. The output of planning is a kanban board with cards and subtasks — NOT a markdown plan file.
@@ -34,7 +77,15 @@ If no file was provided, the user's message or conversation context IS the spec.
 
 ### 3. Research the codebase
 
-Explore thoroughly — read relevant files, understand the architecture, identify affected areas. Use Glob, Grep, and Read tools to understand what exists.
+Explore thoroughly using `code_context` as your primary research tool. Follow this sequence:
+
+1. **Check index health** — `code_context` with `op: "get status"`. If indexing is incomplete, wait or trigger a build.
+2. **Find relevant symbols** — `code_context` with `op: "search symbol"` using domain keywords from the spec. Use `op: "get symbol"` to read implementations.
+3. **Map the blast radius** — for each file or symbol you expect to change, run `code_context` with `op: "get blastradius"` to discover what depends on it. This is how you find work you'd otherwise miss — the blast radius reveals callers, downstream consumers, and tests that will be affected.
+4. **Trace call chains** — `code_context` with `op: "get callgraph"` and `direction: "inbound"` on key symbols to understand who depends on them, and `direction: "outbound"` to understand what they depend on.
+5. **Fill gaps with text search** — use Glob, Grep, and Read for string literals, config files, or patterns that aren't captured by symbol indexing.
+
+The blast radius is the most important research step. It turns a vague "this file needs to change" into a concrete map of every symbol and file that could be affected. Use it to size cards accurately and to avoid missing downstream work.
 
 ### 4. Create kanban cards as you discover work
 
