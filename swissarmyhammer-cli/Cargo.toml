@@ -34,7 +34,6 @@ swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
 swissarmyhammer-lsp = { path = "../swissarmyhammer-lsp" }
 swissarmyhammer-project-detection = { path = "../swissarmyhammer-project-detection" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }

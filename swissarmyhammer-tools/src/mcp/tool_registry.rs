@@ -1681,11 +1681,6 @@ macro_rules! register_tool_category {
     };
 }
 
-register_tool_category!(
-    register_js_tools,
-    js,
-    "Register all JavaScript expression tools with the registry"
-);
 
 /// Send an MCP LoggingMessageNotification via the peer (fire-and-forget).
 ///
@@ -1764,7 +1759,6 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     // Register all tools exactly like McpServer does
-    register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_git_tools(&mut registry);
     register_questions_tools(&mut registry);

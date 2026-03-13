@@ -21,7 +21,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_code_context_tools, register_file_tools, register_git_tools, register_js_tools,
+    register_code_context_tools, register_file_tools, register_git_tools,
     register_kanban_tools, register_questions_tools, register_ralph_tools, register_shell_tools,
     register_web_tools, ToolContext, ToolRegistry,
 };
@@ -765,7 +765,6 @@ impl McpServer {
         register_questions_tools(tool_registry);
         register_web_tools(tool_registry);
         register_code_context_tools(tool_registry);
-        register_js_tools(tool_registry);
         register_shell_tools(tool_registry);
         register_ralph_tools(tool_registry);
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());

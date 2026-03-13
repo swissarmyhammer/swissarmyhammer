@@ -24,7 +24,6 @@ swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
 swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
-swissarmyhammer-js = { path = "../swissarmyhammer-js" }
 swissarmyhammer-web = { path = "../swissarmyhammer-web" }
 swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
 swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }

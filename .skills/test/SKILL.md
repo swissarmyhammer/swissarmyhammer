@@ -117,14 +117,7 @@ Create kanban cards for each remaining failure:
 {"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<error message>\n\n<what you tried>", "tags": ["test-failure"]}
 ```
 
-### 6. Record the overall result
-
-Record the result using the `js` tool:
-
-- All pass: `js` with `op: "set expression"`, `name: "are_tests_passing"`, `expression: "true"`
-- Any fail: `js` with `op: "set expression"`, `name: "are_tests_passing"`, `expression: "false"`
-
-### 7. Report back
+### 6. Report back
 
 Report: pass/fail, what was fixed, what's left. If you get stuck, report what you tried and where you're blocked — don't silently give up.
 

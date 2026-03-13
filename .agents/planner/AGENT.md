@@ -250,6 +250,8 @@ use the skill tool to load the full instructions, then follow them.
 
 - **implement**: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent. (local)
 
+- **implement-all**: Implement all planned kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards. (local)
+
 - **kanban**: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item. (local)
 
 - **lsp**: Diagnose and install missing LSP servers for your project. Use when the user says "lsp", "language servers", "check lsp", or wants to ensure code intelligence is fully working. (local)
