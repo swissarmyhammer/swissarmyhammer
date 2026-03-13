@@ -89,7 +89,7 @@ fn render_banner(out: &mut dyn Write, use_color: bool) {
 ///
 /// Returns true when no subcommand is given (bare invocation) or when
 /// the only argument is `--help` / `-h`.
-pub(crate) fn should_show_banner(args: &[String]) -> bool {
+pub fn should_show_banner(args: &[String]) -> bool {
     match args.len() {
         1 => io::stdin().is_terminal(),
         2 => args[1] == "--help" || args[1] == "-h",
@@ -101,9 +101,19 @@ pub(crate) fn should_show_banner(args: &[String]) -> bool {
 ///
 /// Respects `NO_COLOR` env var and non-TTY output by falling back to
 /// plain (uncolored) text.
-pub(crate) fn print_banner() {
+pub fn print_banner() {
     let use_color = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let mut out = io::stdout().lock();
+    render_banner(&mut out, use_color);
+}
+
+/// Print the branded banner to stderr (for use alongside reporter output).
+///
+/// Same as [`print_banner`] but writes to stderr so it stays with the
+/// reporter's event output rather than mixing with stdout.
+pub fn print_banner_stderr() {
+    let use_color = io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let mut out = io::stderr().lock();
     render_banner(&mut out, use_color);
 }
 

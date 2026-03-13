@@ -7,6 +7,8 @@
 //! - `init` / `deinit` — one-time project setup/teardown (`sah init` / `sah deinit`)
 //! - `start` / `stop` — runtime background work (indexing, LSP, watchers)
 
+use crate::reporter::InitReporter;
+
 /// Scope for init/deinit operations — mirrors CLI install targets without coupling to clap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitScope {
@@ -96,12 +98,18 @@ pub trait Initializable {
     }
 
     /// One-time project setup. Called by `sah init`.
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+    ///
+    /// The `reporter` parameter receives progress events; components should call
+    /// `reporter.emit(...)` instead of `println!`/`eprintln!`.
+    fn init(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
         vec![]
     }
 
     /// One-time project teardown. Called by `sah deinit`.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+    ///
+    /// The `reporter` parameter receives progress events; components should call
+    /// `reporter.emit(...)` instead of `println!`/`eprintln!`.
+    fn deinit(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
         vec![]
     }
 
@@ -140,13 +148,16 @@ impl InitRegistry {
         indices
     }
 
-    pub fn run_all_init(&self, scope: &InitScope) -> Vec<InitResult> {
+    /// Run init on all registered components in priority order.
+    ///
+    /// Pass `&NullReporter` when no output is desired (e.g. tests).
+    pub fn run_all_init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         self.sorted_indices()
             .into_iter()
             .flat_map(|i| {
                 let c = &self.components[i];
                 if c.is_applicable(scope) {
-                    c.init(scope)
+                    c.init(scope, reporter)
                 } else {
                     vec![InitResult::skipped(c.name(), "not applicable")]
                 }
@@ -154,7 +165,14 @@ impl InitRegistry {
             .collect()
     }
 
-    pub fn run_all_deinit(&self, scope: &InitScope) -> Vec<InitResult> {
+    /// Run deinit on all registered components in reverse priority order.
+    ///
+    /// Pass `&NullReporter` when no output is desired (e.g. tests).
+    pub fn run_all_deinit(
+        &self,
+        scope: &InitScope,
+        reporter: &dyn InitReporter,
+    ) -> Vec<InitResult> {
         // Deinit in reverse priority order
         let mut indices = self.sorted_indices();
         indices.reverse();
@@ -163,7 +181,7 @@ impl InitRegistry {
             .flat_map(|i| {
                 let c = &self.components[i];
                 if c.is_applicable(scope) {
-                    c.deinit(scope)
+                    c.deinit(scope, reporter)
                 } else {
                     vec![InitResult::skipped(c.name(), "not applicable")]
                 }
@@ -205,6 +223,7 @@ impl Default for InitRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reporter::NullReporter;
 
     struct TestComponent {
         name: &'static str,
@@ -247,14 +266,14 @@ mod tests {
             }
         }
 
-        fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+        fn init(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
             vec![InitResult::ok(
                 self.name,
                 format!("{} initialized", self.name),
             )]
         }
 
-        fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+        fn deinit(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
             vec![InitResult::ok(
                 self.name,
                 format!("{} deinitialized", self.name),
@@ -277,7 +296,7 @@ mod tests {
         reg.register(TestComponent::new("A-first", 10));
         reg.register(TestComponent::new("B-middle", 20));
 
-        let results = reg.run_all_init(&InitScope::Project);
+        let results = reg.run_all_init(&InitScope::Project, &NullReporter);
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["A-first", "B-middle", "C-last"]);
     }
@@ -289,7 +308,7 @@ mod tests {
         reg.register(TestComponent::new("B-middle", 20));
         reg.register(TestComponent::new("C-last", 30));
 
-        let results = reg.run_all_deinit(&InitScope::Project);
+        let results = reg.run_all_deinit(&InitScope::Project, &NullReporter);
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["C-last", "B-middle", "A-first"]);
     }
@@ -301,7 +320,7 @@ mod tests {
         reg.register(TestComponent::new("local-only", 20).with_scopes(vec![InitScope::Local]));
         reg.register(TestComponent::new("everywhere", 30));
 
-        let results = reg.run_all_init(&InitScope::Project);
+        let results = reg.run_all_init(&InitScope::Project, &NullReporter);
         let statuses: Vec<(&str, InitStatus)> = results
             .iter()
             .map(|r| (r.name.as_str(), r.status))
@@ -346,8 +365,8 @@ mod tests {
         let mut reg = InitRegistry::new();
         reg.register(Minimal);
 
-        assert_eq!(reg.run_all_init(&InitScope::Project).len(), 0);
-        assert_eq!(reg.run_all_deinit(&InitScope::Project).len(), 0);
+        assert_eq!(reg.run_all_init(&InitScope::Project, &NullReporter).len(), 0);
+        assert_eq!(reg.run_all_deinit(&InitScope::Project, &NullReporter).len(), 0);
         assert_eq!(reg.run_all_start().len(), 0);
         assert_eq!(reg.run_all_stop().len(), 0);
     }

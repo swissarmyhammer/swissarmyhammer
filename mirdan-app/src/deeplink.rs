@@ -56,7 +56,7 @@ pub fn handle_url(_app: &AppHandle, url: String) {
         ));
 
         match result {
-            Ok(()) => {
+            Ok(_results) => {
                 info!(spec, "installed successfully");
                 // TODO: native notification
             }

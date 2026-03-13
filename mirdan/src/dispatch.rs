@@ -1,5 +1,6 @@
 //! Shared command dispatch logic used by both the CLI and Tauri app binaries.
 
+use crate::deploy_result::{DeployAction, DeployResult};
 use crate::registry::RegistryError;
 use crate::{agents, auth, doctor, info, install, list, new, outdated, publish, search, sync};
 use crate::{Cli, Commands, NewKind};
@@ -25,6 +26,45 @@ fn handle_registry_result_msg(result: Result<String, RegistryError>) -> i32 {
         Err(e) => {
             eprintln!("Error: {}", e);
             1
+        }
+    }
+}
+
+/// Handle a deploy result: print each entry, then return an exit code.
+fn handle_deploy_result(result: Result<Vec<DeployResult>, RegistryError>) -> i32 {
+    match result {
+        Ok(results) => {
+            format_deploy_results(&results);
+            0
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            1
+        }
+    }
+}
+
+/// Format deploy results to stdout/stderr, preserving the original CLI output style.
+///
+/// Each result's `message` field contains the same text that was previously
+/// passed directly to `println!`. This function simply prints them with the
+/// original indentation already baked into the message strings.
+pub fn format_deploy_results(results: &[DeployResult]) {
+    for r in results {
+        match r.action {
+            DeployAction::Created
+            | DeployAction::Updated
+            | DeployAction::Removed
+            | DeployAction::Linked => {
+                println!("  {}", r.message);
+            }
+            DeployAction::Skipped => {
+                // Silent — matches the original behaviour where skipped items
+                // were only logged via tracing, not printed.
+            }
+            DeployAction::Warning => {
+                eprintln!("  {}", r.message);
+            }
         }
     }
 }
@@ -67,12 +107,12 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
                 let Some(cmd) = command else {
                     unreachable!("clap enforces --command with --mcp")
                 };
-                handle_registry_result(
+                handle_deploy_result(
                     install::run_install_mcp(package, cmd, args.clone(), agent_filter, *global)
                         .await,
                 )
             } else {
-                handle_registry_result(
+                handle_deploy_result(
                     install::run_install(package, agent_filter, *global, *git, skill.as_deref())
                         .await,
                 )
@@ -80,7 +120,7 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
         }
 
         Commands::Uninstall { name, global } => {
-            handle_registry_result(install::run_uninstall(name, agent_filter, *global).await)
+            handle_deploy_result(install::run_uninstall(name, agent_filter, *global).await)
         }
 
         Commands::List {

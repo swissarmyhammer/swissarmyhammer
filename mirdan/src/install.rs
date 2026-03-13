@@ -44,21 +44,29 @@ pub async fn run_install(
     global: bool,
     git: bool,
     skill_select: Option<&str>,
-) -> Result<(), RegistryError> {
+) -> Result<Vec<crate::DeployResult>, RegistryError> {
     match git_source::classify_source(package_spec, git) {
-        InstallSource::LocalPath(path) => run_install_local(&path, agent_filter, global).await,
+        InstallSource::LocalPath(path) => {
+            run_install_local(&path, agent_filter, global).await?;
+            Ok(vec![crate::DeployResult::message(crate::DeployAction::Created, format!("Installed from local path: {}", path))])
+        }
         InstallSource::GitRepo(source) => {
-            run_install_git(&source, agent_filter, global, skill_select).await
+            run_install_git(&source, agent_filter, global, skill_select).await?;
+            Ok(vec![crate::DeployResult::message(crate::DeployAction::Created, format!("Installed from git: {}", source.display_name))])
         }
         InstallSource::Registry(spec) => {
             match run_install_registry(&spec, agent_filter, global).await {
-                Ok(()) => Ok(()),
+                Ok(()) => Ok(vec![crate::DeployResult::message(crate::DeployAction::Created, "Installed from registry")]),
                 Err(RegistryError::NotFound(_)) => {
                     // Registry miss — try as git source before giving up
                     match git_source::parse_git_source(package_spec, skill_select) {
                         Ok(source) => {
-                            println!("  Not found in registry, trying as git repository...");
-                            run_install_git(&source, agent_filter, global, skill_select).await
+                            tracing::debug!("  Not found in registry, trying as git repository...");
+                            run_install_git(&source, agent_filter, global, skill_select).await?;
+                            Ok(vec![
+                                crate::DeployResult::message(crate::DeployAction::Warning, "Not found in registry, trying as git repository..."),
+                                crate::DeployResult::message(crate::DeployAction::Created, format!("Installed from git: {}", source.display_name)),
+                            ])
                         }
                         Err(_) => {
                             // Git parse also failed — report the original registry error
@@ -113,7 +121,7 @@ async fn run_install_local(
         PackageType::Agent => read_frontmatter(&dir.join("AGENT.md"))?,
     };
 
-    println!("Installing {} from local path ({})...", name, pkg_type);
+    tracing::debug!("Installing {} from local path ({})...", name, pkg_type);
 
     let targets = match pkg_type {
         PackageType::Skill => deploy_skill(&name, &dir, agent_filter, global).await?,
@@ -138,14 +146,14 @@ async fn run_install_local(
         },
     );
     lf.save(&project_root)?;
-    println!("  Updated mirdan-lock.json");
+    tracing::debug!("  Updated mirdan-lock.json");
 
-    println!(
+    tracing::debug!(
         "\nInstalled {}@{} ({}) from local path",
         name, version, pkg_type
     );
     for target in &targets {
-        println!("  -> {}", target);
+        tracing::debug!("  -> {}", target);
     }
 
     Ok(())
@@ -160,7 +168,7 @@ async fn run_install_git(
     global: bool,
     skill_select: Option<&str>,
 ) -> Result<(), RegistryError> {
-    println!("Cloning {}...", source.display_name);
+    tracing::debug!("Cloning {}...", source.display_name);
 
     let temp_dir = git_source::git_clone(source)?;
 
@@ -170,20 +178,20 @@ async fn run_install_git(
     let packages =
         git_source::discover_packages(temp_dir.path(), source.subpath.as_deref(), select)?;
 
-    println!(
+    tracing::debug!(
         "  Found {} package(s) in {}",
         packages.len(),
         source.display_name
     );
     for pkg in &packages {
-        println!("    - {} ({})", pkg.name, pkg.package_type);
+        tracing::debug!("    - {} ({})", pkg.name, pkg.package_type);
     }
 
     let project_root = std::env::current_dir()?;
     let mut lf = Lockfile::load(&project_root)?;
 
     for pkg in &packages {
-        println!("\nInstalling {} ({})...", pkg.name, pkg.package_type);
+        tracing::debug!("\nInstalling {} ({})...", pkg.name, pkg.package_type);
 
         let targets = match pkg.package_type {
             PackageType::Skill => deploy_skill(&pkg.name, &pkg.path, agent_filter, global).await?,
@@ -222,17 +230,17 @@ async fn run_install_git(
             },
         );
 
-        println!(
+        tracing::debug!(
             "Installed {}@{} ({}) from git",
             pkg.name, version, pkg.package_type
         );
         for target in &targets {
-            println!("  -> {}", target);
+            tracing::debug!("  -> {}", target);
         }
     }
 
     lf.save(&project_root)?;
-    println!("  Updated mirdan-lock.json");
+    tracing::debug!("  Updated mirdan-lock.json");
 
     // temp_dir drops here, cleaning up the clone
     Ok(())
@@ -295,15 +303,15 @@ async fn run_install_registry(
 
     // Resolve version
     let version_detail = if let Some(ref ver) = version {
-        println!("Resolving {}@{}...", name, ver);
+        tracing::debug!("Resolving {}@{}...", name, ver);
         client.version_info(&name, ver).await?
     } else {
-        println!("Resolving {} (latest)...", name);
+        tracing::debug!("Resolving {} (latest)...", name);
         client.latest_version(&name).await?
     };
 
     let resolved_version = &version_detail.version;
-    println!("Installing {}@{}...", name, resolved_version);
+    tracing::debug!("Installing {}@{}...", name, resolved_version);
 
     // Try downloading the package artifact
     let download_result = download_package(&client, &version_detail).await;
@@ -356,7 +364,7 @@ async fn download_package(
     let integrity_hash = version_detail.integrity.as_deref().unwrap_or("");
     if !integrity_hash.is_empty() {
         lockfile::verify_integrity(&data, integrity_hash).map_err(RegistryError::Integrity)?;
-        println!("  Integrity verified");
+        tracing::debug!("  Integrity verified");
     }
 
     Ok(data)
@@ -429,12 +437,12 @@ async fn install_tool_from_metadata(
     // 3. Fetch package detail for tool_md/mcp
 
     if let Some(ref mcp) = version_detail.mcp {
-        println!("  Installing from registry MCP metadata...");
+        tracing::debug!("  Installing from registry MCP metadata...");
         return install_tool_from_mcp_config(name, version_detail, mcp, agent_filter, global).await;
     }
 
     if let Some(ref tool_md) = version_detail.tool_md {
-        println!("  Installing from registry TOOL.md...");
+        tracing::debug!("  Installing from registry TOOL.md...");
         return install_tool_from_tool_md_content(
             name,
             version_detail,
@@ -450,7 +458,7 @@ async fn install_tool_from_metadata(
     let detail = client.package_info(name).await?;
 
     if let Some(ref mcp) = detail.mcp {
-        println!("  Installing from registry MCP metadata...");
+        tracing::debug!("  Installing from registry MCP metadata...");
         let mcp_clone = mcp.clone();
         return install_tool_from_mcp_config(
             name,
@@ -463,7 +471,7 @@ async fn install_tool_from_metadata(
     }
 
     if let Some(ref tool_md) = detail.tool_md {
-        println!("  Installing from registry TOOL.md...");
+        tracing::debug!("  Installing from registry TOOL.md...");
         return install_tool_from_tool_md_content(
             name,
             version_detail,
@@ -508,7 +516,7 @@ async fn install_tool_from_mcp_config(
             };
             if let Some(config_path) = config_path {
                 mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
-                println!(
+                tracing::debug!(
                     "  Registered in {} ({})",
                     config_path.display(),
                     agent.def.name
@@ -559,14 +567,14 @@ fn record_install(
         },
     );
     lf.save(&project_root)?;
-    println!("  Updated mirdan-lock.json");
+    tracing::debug!("  Updated mirdan-lock.json");
 
-    println!(
+    tracing::debug!(
         "\nInstalled {}@{} ({})",
         name, version_detail.version, pkg_type
     );
     for target in targets {
-        println!("  -> {}", target);
+        tracing::debug!("  -> {}", target);
     }
     Ok(())
 }
@@ -597,7 +605,7 @@ pub fn deploy_skill_to_agents(
     store::remove_if_exists(&store_path)?;
 
     copy_dir_recursive(source_dir, &store_path)?;
-    println!("  Stored in {}", store_path.display());
+    tracing::debug!("  Stored in {}", store_path.display());
 
     // 2. Create symlinks from each agent's skill directory
     let mut targets = Vec::new();
@@ -615,7 +623,7 @@ pub fn deploy_skill_to_agents(
         store::remove_if_exists(&link_path)?;
 
         store::create_skill_link(&store_path, &link_path)?;
-        println!(
+        tracing::debug!(
             "  Linked {} -> {} ({})",
             link_path.display(),
             store_path.display(),
@@ -664,7 +672,7 @@ pub fn deploy_agent_to_agents(
     store::remove_if_exists(&store_path)?;
 
     copy_dir_recursive(source_dir, &store_path)?;
-    println!("  Stored in {}", store_path.display());
+    tracing::debug!("  Stored in {}", store_path.display());
 
     // 2. Create symlinks from each coding agent's agent directory
     let mut targets = Vec::new();
@@ -684,7 +692,7 @@ pub fn deploy_agent_to_agents(
             store::remove_if_exists(&link_path)?;
 
             store::create_skill_link(&store_path, &link_path)?;
-            println!(
+            tracing::debug!(
                 "  Linked {} -> {} ({})",
                 link_path.display(),
                 store_path.display(),
@@ -726,7 +734,7 @@ fn deploy_validator(
 
     copy_dir_recursive(source_dir, &target_dir)?;
     let target_path = target_dir.display().to_string();
-    println!("  Deployed to {}", target_path);
+    tracing::debug!("  Deployed to {}", target_path);
 
     Ok(vec![target_path])
 }
@@ -757,7 +765,7 @@ pub async fn run_uninstall(
     name: &str,
     agent_filter: Option<&str>,
     global: bool,
-) -> Result<(), RegistryError> {
+) -> Result<Vec<crate::DeployResult>, RegistryError> {
     // Try both CWD and HOME for lockfile (GUI sets CWD to HOME,
     // CLI may be in a project directory).
     let project_root = std::env::current_dir()?;
@@ -797,16 +805,16 @@ pub async fn run_uninstall(
                     PackageType::Agent => uninstall_agent(pkg_name, agent_filter, global)?,
                 }
                 lf.remove_package(pkg_name);
-                tracing::info!(pkg_name, "uninstalled");
+                tracing::debug!(pkg_name, "uninstalled");
             }
             let save_dir = home.as_deref().unwrap_or(&project_root);
             lf.save(save_dir)?;
-            tracing::info!(
+            tracing::debug!(
                 count = matching.len(),
                 source = name,
                 "uninstalled packages"
             );
-            return Ok(());
+            return Ok(vec![crate::DeployResult::message(crate::DeployAction::Removed, format!("Uninstalled {} package(s) from {}", matching.len(), name))]);
         }
         None
     };
@@ -834,9 +842,9 @@ pub async fn run_uninstall(
     lf.remove_package(key);
     let save_dir = home.as_deref().unwrap_or(&project_root);
     lf.save(save_dir)?;
-    tracing::info!(key, "uninstalled");
+    tracing::debug!(key, "uninstalled");
 
-    Ok(())
+    Ok(vec![crate::DeployResult::message(crate::DeployAction::Removed, format!("Uninstalled {}", key))])
 }
 
 fn uninstall_skill(
@@ -863,7 +871,7 @@ fn uninstall_skill(
         // Check if the path exists (symlink or real dir)
         if std::fs::symlink_metadata(&link_path).is_ok() {
             store::remove_if_exists(&link_path)?;
-            println!(
+            tracing::debug!(
                 "  Removed from {} ({})",
                 link_path.display(),
                 agent.def.name
@@ -880,7 +888,7 @@ fn uninstall_skill(
     let flat_path = store_root.join(&sanitized);
     if flat_path.exists() {
         std::fs::remove_dir_all(&flat_path)?;
-        tracing::info!(path = %flat_path.display(), "removed store entry");
+        tracing::debug!(path = %flat_path.display(), "removed store entry");
     }
     // Also scan recursively for nested store entries with matching SKILL.md name
     remove_matching_store_entries(&store_root, name)?;
@@ -913,7 +921,7 @@ fn remove_matching_store_entries(dir: &Path, name: &str) -> Result<(), RegistryE
                 let dir_name = path.file_name().map(|n| n.to_string_lossy().to_string());
                 if fm_name.as_deref() == Some(name) || dir_name.as_deref() == Some(name) {
                     std::fs::remove_dir_all(&path)?;
-                    tracing::info!(path = %path.display(), "removed nested store entry");
+                    tracing::debug!(path = %path.display(), "removed nested store entry");
                     // Clean up empty parent directories up to the store root
                     let mut parent = path.parent();
                     while let Some(p) = parent {
@@ -964,7 +972,7 @@ fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {
     }
 
     std::fs::remove_dir_all(&target_dir)?;
-    println!("  Removed from {}", target_dir.display());
+    tracing::debug!("  Removed from {}", target_dir.display());
     Ok(())
 }
 
@@ -978,7 +986,7 @@ pub async fn run_install_mcp(
     args: Vec<String>,
     agent_filter: Option<&str>,
     global: bool,
-) -> Result<(), RegistryError> {
+) -> Result<Vec<crate::DeployResult>, RegistryError> {
     let config = agents::load_agents_config()?;
     let target_agents = agents::resolve_target_agents(&config, agent_filter)?;
 
@@ -1000,7 +1008,7 @@ pub async fn run_install_mcp(
 
             if let Some(config_path) = config_path {
                 mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
-                println!(
+                tracing::debug!(
                     "  Installed MCP server '{}' for {} ({})",
                     name,
                     agent.def.name,
@@ -1009,13 +1017,13 @@ pub async fn run_install_mcp(
                 installed.push(agent.def.id.clone());
             }
         } else {
-            println!("  Skipped {} (no MCP support)", agent.def.name);
+            tracing::debug!("  Skipped {} (no MCP support)", agent.def.name);
         }
     }
 
     if installed.is_empty() {
-        println!("No agents with MCP support found.");
-        return Ok(());
+        tracing::debug!("No agents with MCP support found.");
+        return Ok(vec![crate::DeployResult::message(crate::DeployAction::Skipped, "No agents with MCP support found.")]);
     }
 
     // Update lockfile
@@ -1033,14 +1041,14 @@ pub async fn run_install_mcp(
         },
     );
     lf.save(&project_root)?;
-    println!("  Updated mirdan-lock.json");
+    tracing::debug!("  Updated mirdan-lock.json");
 
-    println!(
+    tracing::debug!(
         "\nInstalled MCP server '{}' for {} agent(s)",
         name,
         installed.len()
     );
-    Ok(())
+    Ok(vec![crate::DeployResult::message(crate::DeployAction::Created, format!("Installed MCP server '{}' for {} agent(s)", name, installed.len()))])
 }
 
 /// Uninstall an MCP server from all detected (or filtered) agents.
@@ -1048,10 +1056,11 @@ pub async fn run_uninstall_mcp(
     name: &str,
     agent_filter: Option<&str>,
     global: bool,
-) -> Result<(), RegistryError> {
+) -> Result<Vec<crate::DeployResult>, RegistryError> {
     let config = agents::load_agents_config()?;
     let target_agents = agents::resolve_target_agents(&config, agent_filter)?;
 
+    let mut results = Vec::new();
     let mut removed = 0;
 
     for agent in &target_agents {
@@ -1064,12 +1073,13 @@ pub async fn run_uninstall_mcp(
 
             if let Some(config_path) = config_path {
                 if mcp_config::unregister_mcp_server(&config_path, &mcp_cfg.servers_key, name)? {
-                    println!(
-                        "  Removed MCP server '{}' from {} ({})",
-                        name,
-                        agent.def.name,
-                        config_path.display()
-                    );
+                    results.push(crate::DeployResult::removed(
+                        &config_path,
+                        format!(
+                            "Removed MCP server '{}' from {} ({})",
+                            name, agent.def.name, config_path.display()
+                        ),
+                    ));
                     removed += 1;
                 }
             }
@@ -1081,13 +1091,19 @@ pub async fn run_uninstall_mcp(
     let mut lf = Lockfile::load(&project_root)?;
     lf.remove_package(name);
     lf.save(&project_root)?;
-    println!("  Updated mirdan-lock.json");
+    results.push(crate::DeployResult::updated(
+        project_root.join("mirdan-lock.json"),
+        "Updated mirdan-lock.json".to_string(),
+    ));
 
-    println!(
-        "\nUninstalled MCP server '{}' from {} agent(s)",
-        name, removed
-    );
-    Ok(())
+    results.push(crate::DeployResult::message(
+        crate::DeployAction::Removed,
+        format!(
+            "Uninstalled MCP server '{}' from {} agent(s)",
+            name, removed
+        ),
+    ));
+    Ok(results)
 }
 
 /// Guess the package type based on what's installed.
@@ -1153,7 +1169,7 @@ fn deploy_tool(
 
     store::remove_if_exists(&store_path)?;
     copy_dir_recursive(source_dir, &store_path)?;
-    println!("  Stored in {}", store_path.display());
+    tracing::debug!("  Stored in {}", store_path.display());
 
     // 3. Register in each agent's MCP config
     let entry = mcp_config::McpServerEntry {
@@ -1174,7 +1190,7 @@ fn deploy_tool(
 
             if let Some(config_path) = config_path {
                 mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
-                println!(
+                tracing::debug!(
                     "  Registered in {} ({})",
                     config_path.display(),
                     agent.def.name
@@ -1213,7 +1229,7 @@ fn deploy_plugin(
             let target = base_dir.join(&sanitized);
             store::remove_if_exists(&target)?;
             copy_dir_recursive(source_dir, &target)?;
-            println!("  Deployed to {} ({})", target.display(), agent.def.name);
+            tracing::debug!("  Deployed to {} ({})", target.display(), agent.def.name);
             targets.push(agent.def.id.clone());
 
             // If plugin contains .mcp.json, also register those MCP servers
@@ -1245,7 +1261,7 @@ fn deploy_plugin(
                                                 server_name,
                                                 &entry,
                                             );
-                                            println!(
+                                            tracing::debug!(
                                                 "  Registered MCP server '{}' from plugin",
                                                 server_name
                                             );
@@ -1294,7 +1310,7 @@ fn uninstall_tool(
 
             if let Some(config_path) = config_path {
                 if mcp_config::unregister_mcp_server(&config_path, &mcp_cfg.servers_key, name)? {
-                    println!(
+                    tracing::debug!(
                         "  Unregistered from {} ({})",
                         config_path.display(),
                         agent.def.name
@@ -1309,7 +1325,7 @@ fn uninstall_tool(
     let store_path = store::tool_store_dir(global).join(&sanitized);
     if store_path.exists() {
         std::fs::remove_dir_all(&store_path)?;
-        println!("  Removed store entry {}", store_path.display());
+        tracing::debug!("  Removed store entry {}", store_path.display());
         removed += 1;
     }
 
@@ -1346,7 +1362,7 @@ fn uninstall_plugin(
             let target = base_dir.join(&sanitized);
             if target.exists() {
                 std::fs::remove_dir_all(&target)?;
-                println!("  Removed from {} ({})", target.display(), agent.def.name);
+                tracing::debug!("  Removed from {} ({})", target.display(), agent.def.name);
                 removed += 1;
             }
         }
@@ -1388,7 +1404,7 @@ fn uninstall_agent(
 
             if std::fs::symlink_metadata(&link_path).is_ok() {
                 store::remove_if_exists(&link_path)?;
-                println!(
+                tracing::debug!(
                     "  Removed from {} ({})",
                     link_path.display(),
                     agent.def.name
@@ -1423,7 +1439,7 @@ fn uninstall_agent(
 
         if !store::store_entry_still_referenced(&store_path, &all_agent_dirs) {
             std::fs::remove_dir_all(&store_path)?;
-            println!("  Removed store entry {}", store_path.display());
+            tracing::debug!("  Removed store entry {}", store_path.display());
         }
     }
 
@@ -1436,7 +1452,7 @@ pub async fn install_package(
     version: &str,
     agent_filter: Option<&str>,
     global: bool,
-) -> Result<(), RegistryError> {
+) -> Result<Vec<crate::DeployResult>, RegistryError> {
     let spec = format!("{}@{}", name, version);
     run_install(&spec, agent_filter, global, false, None).await
 }

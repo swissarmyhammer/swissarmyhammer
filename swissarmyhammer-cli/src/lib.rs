@@ -1,4 +1,5 @@
 // Re-export modules for use in tests
+pub mod banner;
 pub mod cli;
 pub mod cli_executor;
 pub mod commands;

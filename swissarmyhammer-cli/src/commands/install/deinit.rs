@@ -2,8 +2,11 @@
 //!
 //! Delegates to composable `Initializable` components registered in `super::components`.
 
+use std::time::Instant;
+
 use crate::cli::InstallTarget;
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope, InitStatus};
+use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
 
 use super::components;
 use super::settings;
@@ -14,37 +17,53 @@ use super::settings;
 /// reverse priority order. The `remove_directory` flag controls whether
 /// `ProjectStructure` removes `.swissarmyhammer/` and `.prompts/`.
 pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {
+    let reporter = CliReporter;
+    let start = Instant::now();
     let scope: InitScope = target.into();
     let global = matches!(target, InstallTarget::User);
+
+    crate::banner::print_banner_stderr();
+    reporter.emit(&InitEvent::Header {
+        message: format!("Removing for {:?} scope", scope),
+    });
 
     let mut registry = InitRegistry::new();
     components::register_all(&mut registry, global, remove_directory);
 
-    let results = registry.run_all_deinit(&scope);
+    let results = registry.run_all_deinit(&scope, &reporter);
 
     // Remove Bash deny rule from Claude Code settings
     if matches!(target, InstallTarget::Project | InstallTarget::Local) {
-        uninstall_deny_bash()?;
+        uninstall_deny_bash(&reporter)?;
     }
 
     // Remove statusline from Claude Code settings
     if matches!(target, InstallTarget::Project | InstallTarget::Local) {
-        uninstall_statusline()?;
+        uninstall_statusline(&reporter)?;
     }
 
     // Display results and check for errors
     let mut has_errors = false;
     for r in &results {
         match r.status {
-            InitStatus::Ok => {} // component already printed its messages
-            InitStatus::Warning => eprintln!("Warning: {}", r.message),
+            InitStatus::Ok => {} // component already emitted its messages
+            InitStatus::Warning => reporter.emit(&InitEvent::Warning {
+                message: r.message.clone(),
+            }),
             InitStatus::Error => {
-                eprintln!("Error: {}", r.message);
+                reporter.emit(&InitEvent::Error {
+                    message: r.message.clone(),
+                });
                 has_errors = true;
             }
             InitStatus::Skipped => {} // silent
         }
     }
+
+    reporter.emit(&InitEvent::Finished {
+        message: "sah removal".to_string(),
+        elapsed_ms: start.elapsed().as_millis() as u64,
+    });
 
     if has_errors {
         Err("Some components failed to deinitialize".to_string())
@@ -54,7 +73,7 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
 }
 
 /// Remove statusline configuration from .claude/settings.json.
-fn uninstall_statusline() -> Result<(), String> {
+fn uninstall_statusline(reporter: &dyn InitReporter) -> Result<(), String> {
     let path = settings::claude_settings_path();
     if !path.exists() {
         return Ok(());
@@ -65,13 +84,16 @@ fn uninstall_statusline() -> Result<(), String> {
 
     if changed {
         settings::write_settings(&path, &claude_settings)?;
-        println!("Statusline removed from {}", path.display());
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!("statusline from {}", path.display()),
+        });
     }
     Ok(())
 }
 
 /// Remove "Bash" from permissions.deny in .claude/settings.json.
-fn uninstall_deny_bash() -> Result<(), String> {
+fn uninstall_deny_bash(reporter: &dyn InitReporter) -> Result<(), String> {
     let path = settings::claude_settings_path();
     if !path.exists() {
         return Ok(());
@@ -82,7 +104,10 @@ fn uninstall_deny_bash() -> Result<(), String> {
 
     if changed {
         settings::write_settings(&path, &claude_settings)?;
-        println!("Bash tool deny rule removed from {}", path.display());
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!("Bash tool deny rule from {}", path.display()),
+        });
     }
     Ok(())
 }
@@ -92,6 +117,7 @@ mod tests {
     use super::components::{remove_if_symlink, remove_store_entries};
     use std::fs;
     use std::path::Path;
+    use swissarmyhammer_common::NullReporter;
     use tempfile::TempDir;
 
     /// Set up a simulated agent skill directory structure like .github/copilot/skills/
@@ -133,7 +159,7 @@ mod tests {
         let (_store_path, link_path) = create_skill_symlink(&store_dir, &agent_dir, "commit");
 
         assert!(link_path.exists(), "Symlink should exist before removal");
-        let removed = remove_if_symlink(&link_path);
+        let removed = remove_if_symlink(&link_path, &NullReporter);
         assert!(removed, "Should return true when removing a symlink");
         assert!(!link_path.exists(), "Symlink should be gone after removal");
     }
@@ -149,7 +175,7 @@ mod tests {
         fs::create_dir_all(&real_dir).unwrap();
         fs::write(real_dir.join("SKILL.md"), "# Real skill").unwrap();
 
-        let removed = remove_if_symlink(&real_dir);
+        let removed = remove_if_symlink(&real_dir, &NullReporter);
         assert!(!removed, "Should return false for a real directory");
         assert!(real_dir.exists(), "Real directory must not be deleted");
         assert!(
@@ -164,7 +190,7 @@ mod tests {
         let file_path = tmp.path().join("some_file.txt");
         fs::write(&file_path, "important data").unwrap();
 
-        let removed = remove_if_symlink(&file_path);
+        let removed = remove_if_symlink(&file_path, &NullReporter);
         assert!(!removed, "Should return false for a regular file");
         assert!(file_path.exists(), "Regular file must not be deleted");
     }
@@ -174,7 +200,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let nonexistent = tmp.path().join("does_not_exist");
 
-        let removed = remove_if_symlink(&nonexistent);
+        let removed = remove_if_symlink(&nonexistent, &NullReporter);
         assert!(!removed, "Should return false for nonexistent path");
     }
 
@@ -193,8 +219,8 @@ mod tests {
         fs::write(workflows_dir.join("ci.yml"), "name: CI").unwrap();
 
         // Remove both symlinks
-        remove_if_symlink(&agent_dir.join("commit"));
-        remove_if_symlink(&agent_dir.join("plan"));
+        remove_if_symlink(&agent_dir.join("commit"), &NullReporter);
+        remove_if_symlink(&agent_dir.join("plan"), &NullReporter);
 
         // Agent skill directory must still exist (even though it's now empty)
         assert!(
@@ -216,7 +242,7 @@ mod tests {
         let (store_path, link_path) = create_skill_symlink(&store_dir, &agent_dir, "test");
 
         // Remove the symlink
-        remove_if_symlink(&link_path);
+        remove_if_symlink(&link_path, &NullReporter);
 
         // Store entry should still exist — remove_if_symlink only removes the link
         assert!(
@@ -244,7 +270,7 @@ mod tests {
             "Dangling symlink should still be detectable"
         );
 
-        let removed = remove_if_symlink(&link_path);
+        let removed = remove_if_symlink(&link_path, &NullReporter);
         assert!(removed, "Should remove dangling symlinks too");
         assert!(
             std::fs::symlink_metadata(&link_path).is_err(),
@@ -299,7 +325,14 @@ mod tests {
         let link_dirs = vec![link_dir.clone()];
         let policies = vec![mirdan::agents::SymlinkPolicy::LastSegment];
 
-        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+        remove_store_entries(
+            &store_dir,
+            &names,
+            &link_dirs,
+            &policies,
+            "agent",
+            &NullReporter,
+        );
 
         assert!(!link_path.exists(), "Symlink should be removed");
         assert!(!store_path.exists(), "Store entry should be removed");
@@ -324,7 +357,14 @@ mod tests {
         let link_dirs = vec![link_dir.clone()];
         let policies = vec![mirdan::agents::SymlinkPolicy::LastSegment];
 
-        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+        remove_store_entries(
+            &store_dir,
+            &names,
+            &link_dirs,
+            &policies,
+            "agent",
+            &NullReporter,
+        );
 
         assert!(
             unrelated_store.exists(),
@@ -366,7 +406,14 @@ mod tests {
             mirdan::agents::SymlinkPolicy::LastSegment,
         ];
 
-        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+        remove_store_entries(
+            &store_dir,
+            &names,
+            &link_dirs,
+            &policies,
+            "agent",
+            &NullReporter,
+        );
 
         assert!(!link_a.exists(), "Symlink A should be removed");
         assert!(!link_b.exists(), "Symlink B should be removed");
@@ -388,7 +435,14 @@ mod tests {
         let policies = vec![mirdan::agents::SymlinkPolicy::LastSegment];
 
         // Should not panic — gracefully handles missing symlinks
-        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+        remove_store_entries(
+            &store_dir,
+            &names,
+            &link_dirs,
+            &policies,
+            "agent",
+            &NullReporter,
+        );
 
         assert!(!store_path.exists(), "Store entry should still be removed");
     }
@@ -409,7 +463,14 @@ mod tests {
         let link_dirs = vec![link_dir.clone()];
         let policies = vec![mirdan::agents::SymlinkPolicy::LastSegment];
 
-        remove_store_entries(&store_dir, &names, &link_dirs, &policies, "agent");
+        remove_store_entries(
+            &store_dir,
+            &names,
+            &link_dirs,
+            &policies,
+            "agent",
+            &NullReporter,
+        );
 
         assert!(
             real_dir.exists(),

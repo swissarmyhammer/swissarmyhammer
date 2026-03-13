@@ -59,7 +59,7 @@ pub async fn uninstall_package(spec: String) -> Result<String, String> {
 
     mirdan::install::run_uninstall(&spec, None, true)
         .await
-        .map(|()| format!("Uninstalled {spec}"))
+        .map(|_results| format!("Uninstalled {spec}"))
         .map_err(|e| {
             error!(spec, "uninstall failed: {e}");
             e.to_string()
@@ -100,6 +100,7 @@ pub fn get_registry_url(name: String) -> String {
 /// Search the registry for packages.
 #[tauri::command]
 pub async fn search_registry(query: String) -> Result<Vec<SearchResult>, String> {
+    info!(query = %query, "search_registry called from GUI");
     let client = RegistryClient::authenticated().unwrap_or_else(|e| {
         debug!("registry auth failed, falling back to unauthenticated: {e}");
         RegistryClient::default()
@@ -107,7 +108,17 @@ pub async fn search_registry(query: String) -> Result<Vec<SearchResult>, String>
     let response = client
         .fuzzy_search(&query, Some(20))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            error!(query = %query, error = %e, "search_registry failed");
+            e.to_string()
+        })?;
+
+    info!(
+        query = %query,
+        total = response.total,
+        count = response.results.len(),
+        "search_registry returned results"
+    );
 
     Ok(response
         .results
@@ -133,7 +144,7 @@ pub async fn install_package(spec: String) -> Result<String, String> {
 
     mirdan::install::run_install(&spec, None, true, false, None)
         .await
-        .map(|()| format!("Installed {spec}"))
+        .map(|_results| format!("Installed {spec}"))
         .map_err(|e| {
             error!(spec, "install failed: {e}");
             e.to_string()

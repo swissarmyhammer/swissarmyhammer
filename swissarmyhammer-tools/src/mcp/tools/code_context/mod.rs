@@ -581,6 +581,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
     fn init(
         &self,
         _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        _reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
 
@@ -634,6 +635,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
     fn deinit(
         &self,
         _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        _reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
 

@@ -37,6 +37,7 @@ pub mod parameter_conditions;
 pub mod parameters;
 pub mod prompt_visibility;
 pub mod rate_limiter;
+pub mod reporter;
 pub mod test_organization;
 pub mod test_utils;
 pub mod traits;
@@ -91,6 +92,9 @@ pub use glob_utils::{
 
 // Re-export prompt visibility utilities for convenience
 pub use prompt_visibility::{is_prompt_partial, is_prompt_visible};
+
+// Re-export reporter types for convenience
+pub use reporter::{CliReporter, InitEvent, InitReporter, NullReporter};
 
 // Re-export test utilities for convenience (when testing)
 pub use test_utils::{acquire_semantic_db_lock, create_temp_dir, ProcessGuard};

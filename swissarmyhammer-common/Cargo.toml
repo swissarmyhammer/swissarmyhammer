@@ -35,6 +35,8 @@ walkdir.workspace = true
 dirs.workspace = true
 glob.workspace = true
 ignore.workspace = true
+colored.workspace = true
+indicatif.workspace = true
 
 # Directory management (shared with AVP)
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
