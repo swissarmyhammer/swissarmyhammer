@@ -31,6 +31,7 @@ brew install swissarmyhammer/tap/mirdan-cli
 * [`mirdan update`↴](#mirdan-update)
 * [`mirdan sync`↴](#mirdan-sync)
 * [`mirdan doctor`↴](#mirdan-doctor)
+* [`mirdan start`↴](#mirdan-start)
 
 ## `mirdan`
 
@@ -67,6 +68,7 @@ Environment variables:
 * `update` — Update installed packages to latest versions
 * `sync` — Reconcile .skills/ with agent directories and verify lockfile
 * `doctor` — Diagnose Mirdan setup and configuration
+* `start` — Start the Mirdan tray/accessory app
 
 ###### **Options:**
 
@@ -354,6 +356,14 @@ Diagnose Mirdan setup and configuration
 ###### **Options:**
 
 * `-v`, `--verbose` — Show detailed output including fix suggestions
+
+
+
+## `mirdan start`
+
+Start the Mirdan tray/accessory app
+
+**Usage:** `mirdan start`
 
 
 

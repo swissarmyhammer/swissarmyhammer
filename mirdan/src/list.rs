@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::agents::{self, agent_project_skill_dir};
+use crate::lockfile::Lockfile;
 use crate::mcp_config;
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
@@ -10,8 +11,12 @@ use crate::store;
 use crate::table;
 
 /// An installed package found during scanning.
+#[derive(Debug, Clone)]
 pub struct InstalledPackage {
     pub name: String,
+    /// The lockfile key (source URL or name) used for install/uninstall operations.
+    pub source: String,
+    pub description: String,
     pub package_type: PackageType,
     pub version: String,
     pub targets: Vec<String>,
@@ -37,8 +42,38 @@ pub fn discover_packages(
     // If none are set, scan all types.
     let scan_all = !skills_only && !validators_only && !tools_only && !plugins_only;
 
-    // Scan skills from agent directories
+    // Scan skills from the central store and agent project directories.
+    //
+    // The store (`~/.skills/` global, `.skills/` project) is the source of truth
+    // for installed packages. Agent directories (`.claude/skills/`, etc.) contain
+    // symlinks into the store, which can break (e.g. when `~/.claude` is itself
+    // a symlink to iCloud). Scanning the store directly is robust.
+    //
+    // We also scan agent project-level directories for skills installed without
+    // the store (e.g. manually placed skills).
     if skills_only || scan_all {
+        // Global store
+        let global_store = store::skill_store_dir(true);
+        if global_store.exists() {
+            scan_skills_recursive(&global_store, &global_store, "global", &mut packages);
+        }
+
+        // Project store — skip if it resolves to the same path as global.
+        // Note: canonicalize() fails when a path doesn't exist or isn't accessible
+        // (e.g. permission denied). In those cases skip_project is false and both
+        // stores are scanned, which may produce duplicates if the project store is
+        // an inaccessible symlink to the global store. This is unlikely in practice.
+        let project_store = store::skill_store_dir(false);
+        let skip_project = project_store
+            .canonicalize()
+            .ok()
+            .zip(global_store.canonicalize().ok())
+            .is_some_and(|(p, g)| p == g);
+        if !skip_project && project_store.exists() {
+            scan_skills_recursive(&project_store, &project_store, "project", &mut packages);
+        }
+
+        // Also scan agent project-level skill dirs for non-store skills
         if let Ok(config) = agents::load_agents_config() {
             let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
 
@@ -99,7 +134,53 @@ pub fn discover_packages(
         }
     }
 
-    merge_packages(packages)
+    let mut merged = merge_packages(packages);
+
+    // Enrich source field from lockfiles so callers (e.g. GUI) can pass
+    // the correct identifier for uninstall/update operations.
+    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
+    for dir in lockfile_dirs.iter().flatten() {
+        if let Ok(lf) = Lockfile::load(dir) {
+            for pkg in &mut merged {
+                // If source is just the display name, try to find the full lockfile key
+                if pkg.source == pkg.name {
+                    for key in lf.packages.keys() {
+                        let last_segment = key.rsplit('/').next().unwrap_or(key);
+                        if last_segment == pkg.name {
+                            pkg.source = key.clone();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    merged
+}
+
+/// Get the mirdan.ai registry URL for a package.
+///
+/// Looks up the source URL from the lockfile (where the key is the full
+/// source like `https://github.com/owner/repo/skill`), then constructs
+/// `https://mirdan.ai/package/{url_encoded_source}`.
+pub fn registry_url(name: &str) -> String {
+    use crate::lockfile::Lockfile;
+
+    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
+
+    for dir in lockfile_dirs.iter().flatten() {
+        if let Ok(lf) = Lockfile::load(dir) {
+            for key in lf.packages.keys() {
+                let last_segment = key.rsplit('/').next().unwrap_or(key);
+                if last_segment == name || key == name {
+                    return format!("https://mirdan.ai/package/{}", urlencoding::encode(key));
+                }
+            }
+        }
+    }
+
+    format!("https://mirdan.ai/package/{}", urlencoding::encode(name))
 }
 
 /// Run the list command.
@@ -163,6 +244,61 @@ pub fn run_list(
     Ok(())
 }
 
+/// Recursively scan a store directory for skill packages (any nested dir containing SKILL.md).
+///
+/// The store uses nested paths like `~/.skills/owner/repo/skill/SKILL.md`.
+/// The skill name is derived from the path relative to the store root.
+fn scan_skills_recursive(
+    dir: &Path,
+    store_root: &Path,
+    location: &str,
+    packages: &mut Vec<InstalledPackage>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.join("SKILL.md").exists() {
+                let skill_md = path.join("SKILL.md");
+                // Store-relative path preserves provenance (e.g.
+                // `0xdarkmatter/claude-mods/explain`) — use as source key.
+                let source = path
+                    .strip_prefix(store_root)
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| {
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                    });
+                // Display name: frontmatter name, or terminal path segment. Never a full path.
+                let name = read_frontmatter_name(&skill_md).unwrap_or_else(|| {
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                });
+                let description = read_frontmatter_description(&skill_md);
+                let version = read_frontmatter_version(&skill_md);
+                packages.push(InstalledPackage {
+                    source,
+                    name,
+                    description,
+                    package_type: PackageType::Skill,
+                    version,
+                    targets: vec![location.to_string()],
+                });
+            } else {
+                // Recurse into subdirectories
+                scan_skills_recursive(&path, store_root, location, packages);
+            }
+        }
+    }
+}
+
 /// Scan a directory for skill packages (subdirs containing SKILL.md).
 fn scan_skills(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
     let entries = match std::fs::read_dir(dir) {
@@ -173,10 +309,14 @@ fn scan_skills(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.join("SKILL.md").exists() {
+            let skill_md = path.join("SKILL.md");
             let name = entry.file_name().to_string_lossy().to_string();
-            let version = read_frontmatter_version(&path.join("SKILL.md"));
+            let description = read_frontmatter_description(&skill_md);
+            let version = read_frontmatter_version(&skill_md);
             packages.push(InstalledPackage {
+                source: name.clone(),
                 name,
+                description,
                 package_type: PackageType::Skill,
                 version,
                 targets: vec![agent_name.to_string()],
@@ -195,10 +335,14 @@ fn scan_validators(dir: &Path, location: &str, packages: &mut Vec<InstalledPacka
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.join("VALIDATOR.md").exists() && path.join("rules").is_dir() {
+            let md = path.join("VALIDATOR.md");
             let name = entry.file_name().to_string_lossy().to_string();
-            let version = read_frontmatter_version(&path.join("VALIDATOR.md"));
+            let description = read_frontmatter_description(&md);
+            let version = read_frontmatter_version(&md);
             packages.push(InstalledPackage {
+                source: name.clone(),
                 name,
+                description,
                 package_type: PackageType::Validator,
                 version,
                 targets: vec![location.to_string()],
@@ -217,10 +361,14 @@ fn scan_tools(dir: &Path, location: &str, packages: &mut Vec<InstalledPackage>) 
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.join("TOOL.md").exists() {
+            let md = path.join("TOOL.md");
             let name = entry.file_name().to_string_lossy().to_string();
-            let version = read_frontmatter_version(&path.join("TOOL.md"));
+            let description = read_frontmatter_description(&md);
+            let version = read_frontmatter_version(&md);
             packages.push(InstalledPackage {
+                source: name.clone(),
                 name,
+                description,
                 package_type: PackageType::Tool,
                 version,
                 targets: vec![location.to_string()],
@@ -242,7 +390,9 @@ fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackag
             let name = mcp_config::read_plugin_json(&path.join(".claude-plugin/plugin.json"))
                 .unwrap_or_else(|_| entry.file_name().to_string_lossy().to_string());
             packages.push(InstalledPackage {
+                source: name.clone(),
                 name,
+                description: String::new(),
                 package_type: PackageType::Plugin,
                 version: "latest".to_string(),
                 targets: vec![agent_name.to_string()],
@@ -251,37 +401,44 @@ fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackag
     }
 }
 
-/// Read version from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
-fn read_frontmatter_version(path: &Path) -> String {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return "latest".to_string(),
-    };
-
+/// Parse YAML frontmatter from a markdown file, returning the parsed YAML value.
+fn parse_frontmatter(path: &Path) -> Option<serde_yaml_ng::Value> {
+    let content = std::fs::read_to_string(path).ok()?;
     let content = content.trim();
-    if !content.starts_with("---") {
-        return "latest".to_string();
-    }
-
-    let rest = &content[3..];
-    let end = match rest.find("---") {
-        Some(pos) => pos,
-        None => return "latest".to_string(),
-    };
-
+    let rest = content.strip_prefix("---")?;
+    let end = rest.find("---")?;
     let frontmatter = &rest[..end];
-    if let Ok(yaml) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(frontmatter) {
-        if let Some(version) = yaml
-            .get("metadata")
-            .and_then(|m| m.get("version"))
-            .and_then(|v| v.as_str())
-            .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
-        {
-            return version.to_string();
-        }
-    }
+    serde_yaml_ng::from_str(frontmatter).ok()
+}
 
-    "latest".to_string()
+/// Read name from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
+pub fn read_frontmatter_name(path: &Path) -> Option<String> {
+    parse_frontmatter(path)?
+        .get("name")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// Read description from YAML frontmatter.
+fn read_frontmatter_description(path: &Path) -> String {
+    parse_frontmatter(path)
+        .and_then(|y| y.get("description")?.as_str().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// Read version from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
+///
+/// Checks `metadata.version` first, then top-level `version`. Falls back to "latest".
+fn read_frontmatter_version(path: &Path) -> String {
+    parse_frontmatter(path)
+        .and_then(|yaml| {
+            yaml.get("metadata")
+                .and_then(|m| m.get("version"))
+                .and_then(|v| v.as_str())
+                .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "latest".to_string())
 }
 
 /// Merge packages with the same name (combining targets).
@@ -341,13 +498,17 @@ metadata:
     fn test_merge_packages() {
         let packages = vec![
             InstalledPackage {
+                source: "skill-a".to_string(),
                 name: "skill-a".to_string(),
+                description: String::new(),
                 package_type: PackageType::Skill,
                 version: "1.0.0".to_string(),
                 targets: vec!["Claude Code".to_string()],
             },
             InstalledPackage {
+                source: "skill-a".to_string(),
                 name: "skill-a".to_string(),
+                description: String::new(),
                 package_type: PackageType::Skill,
                 version: "1.0.0".to_string(),
                 targets: vec!["Cursor".to_string()],
@@ -408,6 +569,80 @@ metadata:
         assert!(result.is_ok());
 
         std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_scan_skills_recursive_nested_structure() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_root = dir.path();
+
+        // Create nested owner/repo/skill/SKILL.md structure
+        let skill_dir = store_root.join("owner/repo/my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: A test skill\nmetadata:\n  version: \"1.0.0\"\n---\n# My Skill\n",
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        scan_skills_recursive(store_root, store_root, "global", &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "my-skill");
+        assert_eq!(packages[0].source, "owner/repo/my-skill");
+        assert_eq!(packages[0].description, "A test skill");
+        assert_eq!(packages[0].version, "1.0.0");
+        assert_eq!(packages[0].targets, vec!["global"]);
+    }
+
+    #[test]
+    fn test_scan_skills_recursive_uses_dir_name_when_no_frontmatter_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_root = dir.path();
+
+        let skill_dir = store_root.join("fallback-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "# No frontmatter\n").unwrap();
+
+        let mut packages = Vec::new();
+        scan_skills_recursive(store_root, store_root, "global", &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "fallback-skill");
+        assert_eq!(packages[0].source, "fallback-skill");
+        assert_eq!(packages[0].version, "latest");
+    }
+
+    #[test]
+    fn test_read_frontmatter_description_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---\nname: test\ndescription: Hello world\n---\n# Test\n",
+        )
+        .unwrap();
+
+        assert_eq!(read_frontmatter_description(&path), "Hello world");
+    }
+
+    #[test]
+    fn test_read_frontmatter_description_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(&path, "---\nname: test\n---\n# Test\n").unwrap();
+
+        assert_eq!(read_frontmatter_description(&path), "");
+    }
+
+    #[test]
+    fn test_read_frontmatter_description_no_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(&path, "# No frontmatter").unwrap();
+
+        assert_eq!(read_frontmatter_description(&path), "");
     }
 
     #[test]

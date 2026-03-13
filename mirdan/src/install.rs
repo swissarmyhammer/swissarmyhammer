@@ -758,15 +758,34 @@ pub async fn run_uninstall(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
+    // Try both CWD and HOME for lockfile (GUI sets CWD to HOME,
+    // CLI may be in a project directory).
     let project_root = std::env::current_dir()?;
-    let lf = Lockfile::load(&project_root)?;
+    let mut lf = Lockfile::load(&project_root)?;
 
-    // If not a direct package name, check if it's a git source and find matching packages
-    if lf.get_package(name).is_none() {
+    // Also check HOME if CWD lockfile is empty and differs from HOME
+    let home = dirs::home_dir();
+    if lf.packages.is_empty() {
+        if let Some(ref h) = home {
+            if *h != project_root {
+                if let Ok(home_lf) = Lockfile::load(h) {
+                    if !home_lf.packages.is_empty() {
+                        lf = home_lf;
+                    }
+                }
+            }
+        }
+    }
+
+    // Resolve the lockfile key — try exact match, then display name, then git source
+    let lockfile_key = if lf.get_package(name).is_some() {
+        Some(name.to_string())
+    } else if let Some((key, _)) = lf.find_by_display_name(name) {
+        Some(key.to_string())
+    } else {
         let matching = find_packages_by_git_source(&lf, name);
-
         if !matching.is_empty() {
-            let mut lf = Lockfile::load(&project_root)?;
+            // Uninstall all packages from this git source
             for pkg_name in &matching {
                 let pkg = lf.get_package(pkg_name).unwrap();
                 let pkg_type = pkg.package_type;
@@ -778,38 +797,44 @@ pub async fn run_uninstall(
                     PackageType::Agent => uninstall_agent(pkg_name, agent_filter, global)?,
                 }
                 lf.remove_package(pkg_name);
-                println!("  Uninstalled {}", pkg_name);
+                tracing::info!(pkg_name, "uninstalled");
             }
-            lf.save(&project_root)?;
-            println!("  Updated mirdan-lock.json");
-            println!("\nUninstalled {} package(s) from {}", matching.len(), name);
+            let save_dir = home.as_deref().unwrap_or(&project_root);
+            lf.save(save_dir)?;
+            tracing::info!(
+                count = matching.len(),
+                source = name,
+                "uninstalled packages"
+            );
             return Ok(());
         }
-    }
+        None
+    };
 
-    // Direct package name lookup
+    // Use the resolved key, or fall back to the display name for filesystem-only removal
+    let key = lockfile_key.as_deref().unwrap_or(name);
+
+    // Determine the display name (last segment) for filesystem operations
+    let display_name = key.rsplit('/').next().unwrap_or(key);
+
     let pkg_type = lf
-        .get_package(name)
+        .get_package(key)
         .map(|p| p.package_type)
-        .unwrap_or_else(|| {
-            // Try to detect from installed locations
-            guess_installed_type(name, global)
-        });
+        .unwrap_or_else(|| guess_installed_type(display_name, global));
 
     match pkg_type {
-        PackageType::Skill => uninstall_skill(name, agent_filter, global)?,
-        PackageType::Validator => uninstall_validator(name, global)?,
-        PackageType::Tool => uninstall_tool(name, agent_filter, global)?,
-        PackageType::Plugin => uninstall_plugin(name, agent_filter, global)?,
-        PackageType::Agent => uninstall_agent(name, agent_filter, global)?,
+        PackageType::Skill => uninstall_skill(display_name, agent_filter, global)?,
+        PackageType::Validator => uninstall_validator(display_name, global)?,
+        PackageType::Tool => uninstall_tool(display_name, agent_filter, global)?,
+        PackageType::Plugin => uninstall_plugin(display_name, agent_filter, global)?,
+        PackageType::Agent => uninstall_agent(display_name, agent_filter, global)?,
     }
 
     // Update lockfile
-    let mut lf = Lockfile::load(&project_root)?;
-    lf.remove_package(name);
-    lf.save(&project_root)?;
-    println!("  Updated mirdan-lock.json");
-    println!("\nUninstalled {}", name);
+    lf.remove_package(key);
+    let save_dir = home.as_deref().unwrap_or(&project_root);
+    lf.save(save_dir)?;
+    tracing::info!(key, "uninstalled");
 
     Ok(())
 }
@@ -847,37 +872,84 @@ fn uninstall_skill(
         }
     }
 
+    // 2. Remove all store entries matching this skill name.
+    // Skills can exist at both flat paths (e.g. ~/.skills/explain/) and
+    // nested paths (e.g. ~/.skills/owner/repo/explain/) depending on
+    // how they were installed (git vs registry). Remove all of them.
+    let store_root = store::skill_store_dir(global);
+    let flat_path = store_root.join(&sanitized);
+    if flat_path.exists() {
+        std::fs::remove_dir_all(&flat_path)?;
+        tracing::info!(path = %flat_path.display(), "removed store entry");
+    }
+    // Also scan recursively for nested store entries with matching SKILL.md name
+    remove_matching_store_entries(&store_root, name)?;
+
     if removed == 0 {
-        let scope = if global { "global" } else { "project" };
-        return Err(RegistryError::NotFound(format!(
-            "Skill '{}' not found in any agent ({} scope)",
-            name, scope
-        )));
+        tracing::warn!(
+            name,
+            "no symlinks found in agent dirs (already cleaned up?)"
+        );
     }
 
-    // 2. Remove store entry if no remaining symlinks reference it
-    let store_path = store::skill_store_dir(global).join(&sanitized);
-    if store_path.exists() {
-        // Collect all agent skill dirs to check for remaining references
-        let all_agents = agents::get_detected_agents(&config);
-        let all_skill_dirs: Vec<PathBuf> = all_agents
-            .iter()
-            .map(|a| {
-                if global {
-                    agent_global_skill_dir(&a.def)
-                } else {
-                    agent_project_skill_dir(&a.def)
-                }
-            })
-            .collect();
+    Ok(())
+}
 
-        if !store::store_entry_still_referenced(&store_path, &all_skill_dirs) {
-            std::fs::remove_dir_all(&store_path)?;
-            println!("  Removed store entry {}", store_path.display());
+/// Recursively scan the store for directories containing SKILL.md whose
+/// frontmatter name matches, and remove them. Also cleans up empty parent dirs.
+fn remove_matching_store_entries(dir: &Path, name: &str) -> Result<(), RegistryError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                // Check if this skill's name matches
+                let fm_name = read_skill_frontmatter_name(&skill_md);
+                let dir_name = path.file_name().map(|n| n.to_string_lossy().to_string());
+                if fm_name.as_deref() == Some(name) || dir_name.as_deref() == Some(name) {
+                    std::fs::remove_dir_all(&path)?;
+                    tracing::info!(path = %path.display(), "removed nested store entry");
+                    // Clean up empty parent directories up to the store root
+                    let mut parent = path.parent();
+                    while let Some(p) = parent {
+                        if p == dir {
+                            break;
+                        }
+                        if std::fs::read_dir(p)
+                            .map(|mut d| d.next().is_none())
+                            .unwrap_or(false)
+                        {
+                            std::fs::remove_dir(p)?;
+                        } else {
+                            break;
+                        }
+                        parent = p.parent();
+                    }
+                }
+            } else {
+                // Recurse into subdirectories
+                remove_matching_store_entries(&path, name)?;
+            }
         }
     }
 
     Ok(())
+}
+
+/// Read the name field from a SKILL.md frontmatter.
+fn read_skill_frontmatter_name(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let content = content.trim();
+    let rest = content.strip_prefix("---")?;
+    let end = rest.find("---")?;
+    let frontmatter = &rest[..end];
+    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).ok()?;
+    yaml.get("name")?.as_str().map(|s| s.to_string())
 }
 
 fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {

@@ -426,9 +426,7 @@ impl McpServer {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
                 let promoted = {
-                    let mut ws_lock = reelection_ws
-                        .lock()
-                        .expect("workspace mutex poisoned");
+                    let mut ws_lock = reelection_ws.lock().expect("workspace mutex poisoned");
                     if ws_lock.is_leader() {
                         break;
                     }

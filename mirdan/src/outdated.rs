@@ -3,6 +3,8 @@
 //! Scans installed packages on the filesystem and compares versions
 //! against the registry.
 
+use tracing::info;
+
 use crate::install;
 use crate::list;
 use crate::registry::{RegistryClient, RegistryError};
@@ -69,52 +71,71 @@ pub async fn run_outdated() -> Result<(), RegistryError> {
 /// Run the update command.
 ///
 /// Updates one or all installed packages to their latest registry versions.
+/// Returns a human-readable status message describing what happened.
 pub async fn run_update(
     name: Option<&str>,
     agent_filter: Option<&str>,
     global: bool,
-) -> Result<(), RegistryError> {
+) -> Result<String, RegistryError> {
     let packages = list::discover_packages(false, false, false, false, agent_filter);
 
     if packages.is_empty() {
-        println!("No packages installed.");
-        return Ok(());
+        let msg = "No packages installed.".to_string();
+        info!("{msg}");
+        return Ok(msg);
     }
 
     let client = RegistryClient::new();
 
     // If a specific name is given, just update that one
     if let Some(name) = name {
-        let pkg = packages.iter().find(|p| p.name == name).ok_or_else(|| {
-            RegistryError::NotFound(format!("Package '{}' is not installed", name))
-        })?;
+        let pkg = packages
+            .iter()
+            .find(|p| p.name == name || p.source == name)
+            .ok_or_else(|| {
+                RegistryError::NotFound(format!("Package '{}' is not installed", name))
+            })?;
 
-        println!("Checking for updates to {}...", name);
+        // Use the display name for registry lookups, source for matching
+        let registry_name = &pkg.name;
+        info!(registry_name, "checking for updates");
 
-        let detail = client.package_info(name).await?;
+        let detail = match client.package_info(registry_name).await {
+            Ok(d) => d,
+            Err(RegistryError::NotFound(_)) => {
+                let msg = format!("{registry_name} is a local-only package (not in registry)");
+                info!("{msg}");
+                return Ok(msg);
+            }
+            Err(e) => return Err(e),
+        };
 
         if detail.latest == pkg.version {
-            println!("{} is already up to date ({})", name, pkg.version);
-            return Ok(());
+            let msg = format!("{registry_name} is already up to date ({})", pkg.version);
+            info!("{msg}");
+            return Ok(msg);
         }
 
-        println!("Updating {}: {} -> {}", name, pkg.version, detail.latest);
-        install::install_package(name, &detail.latest, agent_filter, global).await?;
-        return Ok(());
+        // Use source (qualified name) for install to avoid ambiguity
+        let install_spec = &pkg.source;
+        info!(install_spec, from = %pkg.version, to = %detail.latest, "updating package");
+        install::install_package(install_spec, &detail.latest, agent_filter, global).await?;
+        let msg = format!(
+            "Updated {registry_name}: {} → {}",
+            pkg.version, detail.latest
+        );
+        return Ok(msg);
     }
 
     // Update all that have registry updates
-    println!("Checking for updates...");
+    info!("checking all packages for updates");
 
     let mut updated = 0;
 
     for pkg in &packages {
         match client.package_info(&pkg.name).await {
             Ok(detail) if detail.latest != pkg.version => {
-                println!(
-                    "  Updating {}: {} -> {}",
-                    pkg.name, pkg.version, detail.latest
-                );
+                info!(name = %pkg.name, from = %pkg.version, to = %detail.latest, "updating package");
                 install::install_package(&pkg.name, &detail.latest, agent_filter, global).await?;
                 updated += 1;
             }
@@ -122,11 +143,12 @@ pub async fn run_update(
         }
     }
 
-    if updated > 0 {
-        println!("\n{} package(s) updated.", updated);
+    let msg = if updated > 0 {
+        format!("{updated} package(s) updated.")
     } else {
-        println!("All packages are up to date.");
-    }
+        "All packages are up to date.".to_string()
+    };
+    info!("{msg}");
 
-    Ok(())
+    Ok(msg)
 }

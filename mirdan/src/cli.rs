@@ -197,6 +197,9 @@ pub enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Start the Mirdan tray/accessory app
+    Start,
 }
 
 #[derive(Subcommand, Debug)]

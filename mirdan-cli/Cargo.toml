@@ -5,11 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Mirdan - Universal skill and validator package manager for AI coding agents"
-
-[lib]
-name = "mirdan"
-path = "src/lib.rs"
+description = "Mirdan CLI - Command-line interface for the Mirdan package manager"
 
 [[bin]]
 name = "mirdan"
@@ -19,58 +15,11 @@ path = "src/main.rs"
 formula = "mirdan"
 
 [dependencies]
-# Shared doctor infrastructure
-swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
-
-# Git detection
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-
-# Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_yaml_ng = { workspace = true }
-
-# CLI
+mirdan = { path = "../mirdan" }
 clap = { workspace = true }
-
-# Terminal interaction
-crossterm = { workspace = true }
-
-# Table display
-comfy-table = { workspace = true }
-
-# Async runtime
 tokio = { workspace = true }
-
-# Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-# File system
-dirs = { workspace = true }
-walkdir = { workspace = true }
-
-# Authentication
-axum = { workspace = true }
-reqwest = { workspace = true }
-urlencoding = { workspace = true }
-rand = { workspace = true }
-
-# Package management
-zip = { workspace = true }
-sha2 = { workspace = true }
-base64 = { workspace = true }
-bytes = { workspace = true }
-futures-util = { workspace = true }
-indicatif = { workspace = true }
-dialoguer = { workspace = true }
-chrono = { workspace = true }
-thiserror = { workspace = true }
-which = { workspace = true }
-tempfile = { workspace = true }
-pathdiff = { workspace = true }
-git2 = { workspace = true, features = ["https", "vendored-openssl"] }
-url = { workspace = true }
 
 [build-dependencies]
 clap = { workspace = true }
@@ -79,5 +28,4 @@ clap_mangen = { workspace = true }
 clap_complete = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
-serial_test = { workspace = true }
+clap = { workspace = true }
