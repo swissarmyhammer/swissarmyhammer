@@ -22,8 +22,20 @@ const TEST_MIN_CHUNK_BYTES: usize = 5;
 /// in .config/nextest.toml — do not inflate this timeout to compensate.
 const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Longer timeout for embedding-enabled tests (model inference is slow under load).
+const TEST_EMBEDDING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Open a workspace with a custom IndexConfig and wait for background indexing.
 async fn open_and_wait_with_config(dir: &Path, config: IndexConfig) -> Workspace {
+    open_and_wait_with_config_timeout(dir, config, TEST_INDEX_TIMEOUT).await
+}
+
+/// Open a workspace with a custom IndexConfig and explicit timeout.
+async fn open_and_wait_with_config_timeout(
+    dir: &Path,
+    config: IndexConfig,
+    timeout: std::time::Duration,
+) -> Workspace {
     let notify = Arc::new(tokio::sync::Notify::new());
     let notify_clone = notify.clone();
     let workspace = Workspace::new(dir)
@@ -36,7 +48,7 @@ async fn open_and_wait_with_config(dir: &Path, config: IndexConfig) -> Workspace
         .open()
         .await
         .expect("workspace should open successfully");
-    tokio::time::timeout(TEST_INDEX_TIMEOUT, notify.notified())
+    tokio::time::timeout(timeout, notify.notified())
         .await
         .expect("background indexing did not complete within timeout");
     workspace
@@ -521,7 +533,8 @@ async fn test_find_all_duplicates_detects_near_identical_functions() {
         embedding_enabled: true,
         ..Default::default()
     };
-    let workspace = open_and_wait_with_config(dir.path(), config).await;
+    let workspace =
+        open_and_wait_with_config_timeout(dir.path(), config, TEST_EMBEDDING_TIMEOUT).await;
 
     // Verify indexing actually happened
     let status = workspace
