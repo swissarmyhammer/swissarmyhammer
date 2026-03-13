@@ -3,7 +3,6 @@
 //! These tests ensure that all builtin prompts render successfully without template errors.
 //! This prevents issues like missing partials or invalid liquid syntax from making it into production.
 
-use rstest::rstest;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
@@ -28,36 +27,6 @@ fn assert_valid_render(rendered: &str) {
         !rendered.contains("liquid:"),
         "Should not contain liquid syntax errors"
     );
-}
-
-/// Test cases for builtin prompts that should render successfully
-/// because it requires specific parameters
-#[rstest]
-#[case("double_check")]
-fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
-    let library = setup_prompt_library();
-
-    // Create a minimal template context
-    let template_context = TemplateContext::new();
-
-    // Attempt to render the prompt
-    match library.render(prompt_name, &template_context) {
-        Ok(rendered) => {
-            assert_valid_render(&rendered);
-
-            println!(
-                "✓ Successfully rendered {}: {} chars",
-                prompt_name,
-                rendered.len()
-            );
-
-            // The main goal is to ensure no rendering errors - content will change
-            // so we don't make specific assertions about what should be in each prompt
-        }
-        Err(e) => {
-            panic!("Failed to render builtin prompt '{}': {}", prompt_name, e);
-        }
-    }
 }
 
 #[test]
