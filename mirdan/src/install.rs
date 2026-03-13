@@ -868,18 +868,78 @@ fn uninstall_skill(
         }
     }
 
-    // 2. Remove store entry regardless of symlink state
-    let store_path = store::skill_store_dir(global).join(&sanitized);
-    if store_path.exists() {
-        std::fs::remove_dir_all(&store_path)?;
-        tracing::info!(path = %store_path.display(), "removed store entry");
+    // 2. Remove all store entries matching this skill name.
+    // Skills can exist at both flat paths (e.g. ~/.skills/explain/) and
+    // nested paths (e.g. ~/.skills/owner/repo/explain/) depending on
+    // how they were installed (git vs registry). Remove all of them.
+    let store_root = store::skill_store_dir(global);
+    let flat_path = store_root.join(&sanitized);
+    if flat_path.exists() {
+        std::fs::remove_dir_all(&flat_path)?;
+        tracing::info!(path = %flat_path.display(), "removed store entry");
     }
+    // Also scan recursively for nested store entries with matching SKILL.md name
+    remove_matching_store_entries(&store_root, name)?;
 
     if removed == 0 {
         tracing::warn!(name, "no symlinks found in agent dirs (already cleaned up?)");
     }
 
     Ok(())
+}
+
+/// Recursively scan the store for directories containing SKILL.md whose
+/// frontmatter name matches, and remove them. Also cleans up empty parent dirs.
+fn remove_matching_store_entries(dir: &Path, name: &str) -> Result<(), RegistryError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                // Check if this skill's name matches
+                let fm_name = read_skill_frontmatter_name(&skill_md);
+                let dir_name = path.file_name().map(|n| n.to_string_lossy().to_string());
+                if fm_name.as_deref() == Some(name) || dir_name.as_deref() == Some(name) {
+                    std::fs::remove_dir_all(&path)?;
+                    tracing::info!(path = %path.display(), "removed nested store entry");
+                    // Clean up empty parent directories up to the store root
+                    let mut parent = path.parent();
+                    while let Some(p) = parent {
+                        if p == dir {
+                            break;
+                        }
+                        if std::fs::read_dir(p).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                            std::fs::remove_dir(p)?;
+                        } else {
+                            break;
+                        }
+                        parent = p.parent();
+                    }
+                }
+            } else {
+                // Recurse into subdirectories
+                remove_matching_store_entries(&path, name)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Read the name field from a SKILL.md frontmatter.
+fn read_skill_frontmatter_name(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let content = content.trim();
+    let rest = content.strip_prefix("---")?;
+    let end = rest.find("---")?;
+    let frontmatter = &rest[..end];
+    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    yaml.get("name")?.as_str().map(|s| s.to_string())
 }
 
 fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {
