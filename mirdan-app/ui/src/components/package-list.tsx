@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { usePackages } from "@/lib/use-packages";
 import { PackageCard } from "@/components/package-card";
-import { Search, Package, Loader2 } from "lucide-react";
+import { Search, Package, Loader2, X } from "lucide-react";
 
 export function PackageList() {
   const { packages, loading, searching, error, query, setQuery, refresh } =
@@ -39,11 +39,19 @@ export function PackageList() {
             placeholder="Search packages..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring"
+            className="w-full pl-9 pr-8 py-2 text-sm bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          {searching && (
+          {searching ? (
             <Loader2 className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin text-muted-foreground" />
-          )}
+          ) : query ? (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="absolute right-2.5 top-2.5 h-4 w-4 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
         </div>
       </div>
 

@@ -48,12 +48,10 @@ export function PackageCard({
   const packageType = pkg.data.package_type;
 
   // Extract fields with proper type narrowing
-  const description =
-    pkg.kind === "available" ? pkg.data.description : undefined;
+  const description = pkg.data.description || undefined;
   const author = pkg.kind === "available" ? pkg.data.author : undefined;
   const downloads = pkg.kind === "available" ? pkg.data.downloads : 0;
   const version = pkg.kind === "installed" ? pkg.data.version : undefined;
-  const targets = pkg.kind === "installed" ? pkg.data.targets : [];
 
   async function handleInstall() {
     setBusy("install");
@@ -265,15 +263,10 @@ export function PackageCard({
         </div>
       </div>
 
-      {/* Row 2: description or targets — full width */}
+      {/* Row 2: description — full width */}
       {description && (
         <div className="text-xs text-muted-foreground mt-1">
           {description}
-        </div>
-      )}
-      {targets.length > 0 && (
-        <div className="text-xs text-muted-foreground mt-1">
-          {targets.join(", ")}
         </div>
       )}
 

@@ -3,6 +3,7 @@ export interface PackageInfo {
   name: string;
   /** Lockfile key / source URL — use for uninstall and update operations. */
   source: string;
+  description: string;
   package_type: string;
   version: string;
   targets: string[];

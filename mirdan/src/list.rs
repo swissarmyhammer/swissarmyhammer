@@ -15,6 +15,7 @@ pub struct InstalledPackage {
     pub name: String,
     /// The lockfile key (source URL or name) used for install/uninstall operations.
     pub source: String,
+    pub description: String,
     pub package_type: PackageType,
     pub version: String,
     pub targets: Vec<String>,
@@ -56,9 +57,14 @@ pub fn discover_packages(
             scan_skills_recursive(&global_store, &global_store, "global", &mut packages);
         }
 
-        // Project store
+        // Project store — skip if it resolves to the same path as global
         let project_store = store::skill_store_dir(false);
-        if project_store.exists() {
+        let skip_project = project_store
+            .canonicalize()
+            .ok()
+            .zip(global_store.canonicalize().ok())
+            .is_some_and(|(p, g)| p == g);
+        if !skip_project && project_store.exists() {
             scan_skills_recursive(&project_store, &project_store, "project", &mut packages);
         }
 
@@ -276,10 +282,12 @@ fn scan_skills_recursive(
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default()
                 });
+                let description = read_frontmatter_description(&skill_md);
                 let version = read_frontmatter_version(&skill_md);
                 packages.push(InstalledPackage {
                     source,
                     name,
+                    description,
                     package_type: PackageType::Skill,
                     version,
                     targets: vec![location.to_string()],
@@ -302,11 +310,14 @@ fn scan_skills(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.join("SKILL.md").exists() {
+            let skill_md = path.join("SKILL.md");
             let name = entry.file_name().to_string_lossy().to_string();
-            let version = read_frontmatter_version(&path.join("SKILL.md"));
+            let description = read_frontmatter_description(&skill_md);
+            let version = read_frontmatter_version(&skill_md);
             packages.push(InstalledPackage {
                 source: name.clone(),
                 name,
+                description,
                 package_type: PackageType::Skill,
                 version,
                 targets: vec![agent_name.to_string()],
@@ -325,11 +336,14 @@ fn scan_validators(dir: &Path, location: &str, packages: &mut Vec<InstalledPacka
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.join("VALIDATOR.md").exists() && path.join("rules").is_dir() {
+            let md = path.join("VALIDATOR.md");
             let name = entry.file_name().to_string_lossy().to_string();
-            let version = read_frontmatter_version(&path.join("VALIDATOR.md"));
+            let description = read_frontmatter_description(&md);
+            let version = read_frontmatter_version(&md);
             packages.push(InstalledPackage {
                 source: name.clone(),
                 name,
+                description,
                 package_type: PackageType::Validator,
                 version,
                 targets: vec![location.to_string()],
@@ -348,11 +362,14 @@ fn scan_tools(dir: &Path, location: &str, packages: &mut Vec<InstalledPackage>) 
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.join("TOOL.md").exists() {
+            let md = path.join("TOOL.md");
             let name = entry.file_name().to_string_lossy().to_string();
-            let version = read_frontmatter_version(&path.join("TOOL.md"));
+            let description = read_frontmatter_description(&md);
+            let version = read_frontmatter_version(&md);
             packages.push(InstalledPackage {
                 source: name.clone(),
                 name,
+                description,
                 package_type: PackageType::Tool,
                 version,
                 targets: vec![location.to_string()],
@@ -376,6 +393,7 @@ fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackag
             packages.push(InstalledPackage {
                 source: name.clone(),
                 name,
+                description: String::new(),
                 package_type: PackageType::Plugin,
                 version: "latest".to_string(),
                 targets: vec![agent_name.to_string()],
@@ -384,15 +402,26 @@ fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackag
     }
 }
 
-/// Read name from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
-fn read_frontmatter_name(path: &Path) -> Option<String> {
+/// Parse YAML frontmatter from a markdown file, returning the parsed YAML value.
+fn parse_frontmatter(path: &Path) -> Option<serde_yaml::Value> {
     let content = std::fs::read_to_string(path).ok()?;
     let content = content.trim();
     let rest = content.strip_prefix("---")?;
     let end = rest.find("---")?;
     let frontmatter = &rest[..end];
-    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
-    yaml.get("name")?.as_str().map(|s| s.to_string())
+    serde_yaml::from_str(frontmatter).ok()
+}
+
+/// Read name from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
+fn read_frontmatter_name(path: &Path) -> Option<String> {
+    parse_frontmatter(path)?.get("name")?.as_str().map(|s| s.to_string())
+}
+
+/// Read description from YAML frontmatter.
+fn read_frontmatter_description(path: &Path) -> String {
+    parse_frontmatter(path)
+        .and_then(|y| y.get("description")?.as_str().map(|s| s.to_string()))
+        .unwrap_or_default()
 }
 
 /// Read version from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
@@ -487,6 +516,7 @@ metadata:
             InstalledPackage {
                 source: "skill-a".to_string(),
                 name: "skill-a".to_string(),
+                description: String::new(),
                 package_type: PackageType::Skill,
                 version: "1.0.0".to_string(),
                 targets: vec!["Claude Code".to_string()],
@@ -494,6 +524,7 @@ metadata:
             InstalledPackage {
                 source: "skill-a".to_string(),
                 name: "skill-a".to_string(),
+                description: String::new(),
                 package_type: PackageType::Skill,
                 version: "1.0.0".to_string(),
                 targets: vec!["Cursor".to_string()],

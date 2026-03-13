@@ -73,9 +73,11 @@ export function usePackages() {
     })
     .map((data) => ({ kind: "installed" as const, data }));
 
-  const available: UnifiedPackage[] = searchResults
-    .filter((r) => !installedNames.has(r.name))
-    .map((data) => ({ kind: "available" as const, data }));
+  const available: UnifiedPackage[] = query.trim()
+    ? searchResults
+        .filter((r) => !installedNames.has(r.name))
+        .map((data) => ({ kind: "available" as const, data }))
+    : [];
 
   const packages = [...filteredInstalled, ...available];
 

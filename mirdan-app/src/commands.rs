@@ -11,6 +11,7 @@ pub struct PackageInfo {
     pub name: String,
     /// Lockfile key / source URL — use this for uninstall and update, not `name`.
     pub source: String,
+    pub description: String,
     pub package_type: String,
     pub version: String,
     pub targets: Vec<String>,
@@ -41,6 +42,7 @@ pub fn list_packages() -> Vec<PackageInfo> {
             PackageInfo {
                 name: p.name,
                 source: p.source,
+                description: p.description,
                 package_type: p.package_type.to_string(),
                 version: p.version,
                 targets: p.targets,
@@ -216,6 +218,7 @@ mod tests {
         let info = PackageInfo {
             name: "test-skill".to_string(),
             source: "https://github.com/owner/repo/test-skill".to_string(),
+            description: "A test skill".to_string(),
             package_type: "skill".to_string(),
             version: "1.0.0".to_string(),
             targets: vec!["Claude Code".to_string()],
