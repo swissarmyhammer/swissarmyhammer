@@ -71,7 +71,11 @@ pub async fn uninstall_package(spec: String) -> Result<String, String> {
 pub async fn update_package(spec: String) -> Result<String, String> {
     info!(spec, "update requested from GUI");
 
-    let name = if spec.is_empty() { None } else { Some(spec.as_str()) };
+    let name = if spec.is_empty() {
+        None
+    } else {
+        Some(spec.as_str())
+    };
 
     mirdan::outdated::run_update(name, None, true)
         .await
@@ -193,7 +197,6 @@ fn find_in_store(dir: &std::path::Path, name: &str, max_depth: u32) -> Option<st
 
     None
 }
-
 
 #[cfg(test)]
 mod tests {

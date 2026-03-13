@@ -31,8 +31,8 @@
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use mirdan::{agents, banner};
 use mirdan::Cli;
+use mirdan::{agents, banner};
 
 #[tokio::main]
 async fn main() {
@@ -92,8 +92,8 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use mirdan::{Cli, Commands, NewKind};
     use clap::Parser;
+    use mirdan::{Cli, Commands, NewKind};
 
     #[test]
     fn test_cli_parsing_agents() {

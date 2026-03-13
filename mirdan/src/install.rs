@@ -801,7 +801,11 @@ pub async fn run_uninstall(
             }
             let save_dir = home.as_deref().unwrap_or(&project_root);
             lf.save(save_dir)?;
-            tracing::info!(count = matching.len(), source = name, "uninstalled packages");
+            tracing::info!(
+                count = matching.len(),
+                source = name,
+                "uninstalled packages"
+            );
             return Ok(());
         }
         None
@@ -882,7 +886,10 @@ fn uninstall_skill(
     remove_matching_store_entries(&store_root, name)?;
 
     if removed == 0 {
-        tracing::warn!(name, "no symlinks found in agent dirs (already cleaned up?)");
+        tracing::warn!(
+            name,
+            "no symlinks found in agent dirs (already cleaned up?)"
+        );
     }
 
     Ok(())
@@ -913,7 +920,10 @@ fn remove_matching_store_entries(dir: &Path, name: &str) -> Result<(), RegistryE
                         if p == dir {
                             break;
                         }
-                        if std::fs::read_dir(p).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                        if std::fs::read_dir(p)
+                            .map(|mut d| d.next().is_none())
+                            .unwrap_or(false)
+                        {
                             std::fs::remove_dir(p)?;
                         } else {
                             break;

@@ -37,9 +37,7 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
     let agent_filter = cli.agent.as_deref();
 
     let code = match &cli.command {
-        Commands::Agents { all, json } => {
-            handle_registry_result(agents::run_agents(*all, *json))
-        }
+        Commands::Agents { all, json } => handle_registry_result(agents::run_agents(*all, *json)),
 
         Commands::New { kind } => match kind {
             NewKind::Skill { name, global } => {
@@ -105,9 +103,7 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
             None => handle_registry_result(search::run_interactive_search().await),
         },
 
-        Commands::Info { name } => {
-            handle_registry_result(info::run_info(name, agent_filter).await)
-        }
+        Commands::Info { name } => handle_registry_result(info::run_info(name, agent_filter).await),
 
         Commands::Login => handle_registry_result(auth::login().await),
         Commands::Logout => handle_registry_result(auth::logout().await),
@@ -127,9 +123,7 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
             outdated::run_update(name.as_deref(), agent_filter, *global).await,
         ),
 
-        Commands::Sync { global } => {
-            handle_registry_result(sync::run_sync(agent_filter, *global))
-        }
+        Commands::Sync { global } => handle_registry_result(sync::run_sync(agent_filter, *global)),
 
         Commands::Doctor { verbose } => doctor::run_doctor(*verbose).await,
 

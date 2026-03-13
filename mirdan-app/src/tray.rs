@@ -3,11 +3,7 @@
 //! Builds a macOS/Windows/Linux tray icon with a context menu.
 //! "Manage Packages..." opens (or focuses) the webview window.
 
-use tauri::{
-    menu::MenuBuilder,
-    tray::TrayIconBuilder,
-    AppHandle, Manager,
-};
+use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, AppHandle, Manager};
 
 /// Menu item IDs used for event dispatch.
 mod ids {
@@ -81,24 +77,22 @@ pub fn setup_tray(app: &AppHandle) -> anyhow::Result<()> {
         .tooltip(format!("Mirdan v{version}"))
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| {
-            match event.id().as_ref() {
-                ids::MANAGE_PACKAGES => {
-                    show_main_window(app);
-                }
-                ids::CHECK_UPDATES => {
-                    show_main_window(app);
-                }
-                ids::OPEN_REGISTRY => {
-                    if let Err(e) = open::that("https://mirdan.ai") {
-                        tracing::error!("failed to open registry URL: {e}");
-                    }
-                }
-                ids::QUIT => {
-                    app.exit(0);
-                }
-                _ => {}
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            ids::MANAGE_PACKAGES => {
+                show_main_window(app);
             }
+            ids::CHECK_UPDATES => {
+                show_main_window(app);
+            }
+            ids::OPEN_REGISTRY => {
+                if let Err(e) = open::that("https://mirdan.ai") {
+                    tracing::error!("failed to open registry URL: {e}");
+                }
+            }
+            ids::QUIT => {
+                app.exit(0);
+            }
+            _ => {}
         })
         .build(app)?;
 

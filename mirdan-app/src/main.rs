@@ -134,7 +134,9 @@ fn main() {
 
     let exit_code = rt.block_on(async {
         // dispatch returns None for Commands::Start, which we already handled above.
-        mirdan::dispatch(&cli).await.unwrap_or_else(|| unreachable!())
+        mirdan::dispatch(&cli)
+            .await
+            .unwrap_or_else(|| unreachable!())
     });
 
     std::process::exit(exit_code);
@@ -142,8 +144,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use mirdan::{Cli, Commands};
     use clap::Parser;
+    use mirdan::{Cli, Commands};
 
     #[test]
     fn test_start_subcommand_parses() {

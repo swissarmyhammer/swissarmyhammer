@@ -167,20 +167,14 @@ pub fn discover_packages(
 pub fn registry_url(name: &str) -> String {
     use crate::lockfile::Lockfile;
 
-    let lockfile_dirs = [
-        dirs::home_dir(),
-        std::env::current_dir().ok(),
-    ];
+    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
 
     for dir in lockfile_dirs.iter().flatten() {
         if let Ok(lf) = Lockfile::load(dir) {
             for key in lf.packages.keys() {
                 let last_segment = key.rsplit('/').next().unwrap_or(key);
                 if last_segment == name || key == name {
-                    return format!(
-                        "https://mirdan.ai/package/{}",
-                        urlencoding::encode(key)
-                    );
+                    return format!("https://mirdan.ai/package/{}", urlencoding::encode(key));
                 }
             }
         }
@@ -419,7 +413,10 @@ fn parse_frontmatter(path: &Path) -> Option<serde_yaml_ng::Value> {
 
 /// Read name from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
 pub fn read_frontmatter_name(path: &Path) -> Option<String> {
-    parse_frontmatter(path)?.get("name")?.as_str().map(|s| s.to_string())
+    parse_frontmatter(path)?
+        .get("name")?
+        .as_str()
+        .map(|s| s.to_string())
 }
 
 /// Read description from YAML frontmatter.

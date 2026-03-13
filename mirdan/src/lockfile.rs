@@ -264,10 +264,7 @@ mod tests {
         );
         let found = lf.find_by_display_name("explain");
         assert!(found.is_some());
-        assert_eq!(
-            found.unwrap().0,
-            "https://github.com/owner/repo/explain"
-        );
+        assert_eq!(found.unwrap().0, "https://github.com/owner/repo/explain");
     }
 
     #[test]

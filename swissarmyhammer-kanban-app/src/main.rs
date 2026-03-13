@@ -11,8 +11,8 @@ use clap::Parser;
 use cli::Cli;
 use state::AppState;
 use tauri::Manager;
-use tracing_subscriber::prelude::*;
 use tauri_plugin_window_state::{StateFlags, WindowExt};
+use tracing_subscriber::prelude::*;
 
 fn main() {
     let cli = Cli::parse();

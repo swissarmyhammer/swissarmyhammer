@@ -120,7 +120,10 @@ pub async fn run_update(
         let install_spec = &pkg.source;
         info!(install_spec, from = %pkg.version, to = %detail.latest, "updating package");
         install::install_package(install_spec, &detail.latest, agent_filter, global).await?;
-        let msg = format!("Updated {registry_name}: {} → {}", pkg.version, detail.latest);
+        let msg = format!(
+            "Updated {registry_name}: {} → {}",
+            pkg.version, detail.latest
+        );
         return Ok(msg);
     }
 
