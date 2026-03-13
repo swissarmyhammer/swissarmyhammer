@@ -2,7 +2,7 @@
  * Canonical actor color palette and deterministic hash.
  *
  * These values are copied verbatim from the Rust implementation in
- * `swissarmyhammer-kanban-app/src/state.rs` (the source of truth).
+ * `kanban-app/src/state.rs` (the source of truth).
  * Any changes must be made in Rust first, then mirrored here.
  */
 

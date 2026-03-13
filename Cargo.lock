@@ -3836,6 +3836,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "kanban-app"
+version = "0.9.1"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "dirs",
+ "notify 6.1.1",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "swissarmyhammer-commands",
+ "swissarmyhammer-kanban",
+ "swissarmyhammer-views",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-window-state",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-log",
+ "tracing-oslog",
+ "tracing-subscriber",
+ "whoami",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8008,36 +8038,6 @@ dependencies = [
  "tokio-test",
  "tracing",
  "ulid",
-]
-
-[[package]]
-name = "swissarmyhammer-kanban-app"
-version = "0.9.1"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "clap",
- "dirs",
- "notify 6.1.1",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "swissarmyhammer-commands",
- "swissarmyhammer-kanban",
- "swissarmyhammer-views",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-window-state",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-log",
- "tracing-oslog",
- "tracing-subscriber",
- "whoami",
 ]
 
 [[package]]

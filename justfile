@@ -18,7 +18,7 @@ mirdan-dev:
 
 # Build the Kanban app (debug) and install to /Applications
 kanban-dev:
-    cd swissarmyhammer-kanban-app && cargo tauri build --debug
+    cd kanban-app && cargo tauri build --debug
     rm -rf /Applications/Kanban.app
     hdiutil attach target/debug/bundle/dmg/Kanban_*.dmg -nobrowse -quiet
     cp -r /Volumes/Kanban/Kanban.app /Applications/

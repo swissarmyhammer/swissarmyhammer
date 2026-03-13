@@ -23,12 +23,15 @@ Works with Claude Code, Cursor, Windsurf, or any MCP-compatible agent.
 
 ## Get Started in 30 Seconds
 
+Get in your project directory and run:
+
 ```bash
+cd <your project directory>
 brew install swissarmyhammer/tap/swissarmyhammer-cli
 sah init
 ```
 
-That's it. Your agent now has skills, tools, and workflows.
+That's it. Your agent now has skills, tools, and workflows. 
 
 ## Two Ways to Plan
 
@@ -69,7 +72,8 @@ The plan evolves through conversation. Cards get added, split, merged, and reord
 Either way, once the plan is on the board:
 
 ```
-> /implement                     # Execute every task, autonomously
+> /implement                     # Do one kanban card at a time, with context-aware code editing and testing
+> /implement-all                 # RalphLoop those kanban cards. Go for a walk with your 🦮.
 > /review                        # Code review -- findings become new cards
 > /test                          # Run tests, fix failures
 > /commit                        # Clean conventional commit

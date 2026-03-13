@@ -9,7 +9,7 @@ use swissarmyhammer_kanban::{
 
 #[derive(Parser)]
 #[command(
-    name = "swissarmyhammer-kanban-app",
+    name = "kanban-app",
     about = "Kanban board desktop app and CLI"
 )]
 pub struct Cli {

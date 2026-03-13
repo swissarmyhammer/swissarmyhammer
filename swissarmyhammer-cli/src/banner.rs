@@ -76,7 +76,7 @@ fn render_banner(out: &mut dyn Write, use_color: bool) {
     if use_color {
         let _ = writeln!(
             out,
-            "  {}SwissArmyHammer — the coding agent's toolkit{}",
+            "  {}SwissArmyHammer — Agent-driven engineering{}",
             DIM, RESET
         );
     } else {

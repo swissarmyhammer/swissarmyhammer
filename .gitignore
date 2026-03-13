@@ -65,7 +65,7 @@ swissarmyhammer-agent-executor/.swissarmyhammer
 swissarmyhammer-cli/.swissarmyhammer
 swissarmyhammer-workflow/.swissarmyhammer
 swissarmyhammer-tools/.swissarmyhammer
-swissarmyhammer-kanban-app/.swissarmyhammer
+kanban-app/.swissarmyhammer
 claude-agent/.swissarmyhammer/sessions
 acp-conformance/.swissarmyhammer/sessions
 

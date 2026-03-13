@@ -21,7 +21,7 @@ The following project(s) were automatically detected:
 
 
 **Workspace:** Yes (40 members)
-  **Members:** swissarmyhammer, swissarmyhammer-cli, swissarmyhammer-tools, swissarmyhammer-config, swissarmyhammer-common, swissarmyhammer-directory, swissarmyhammer-build, swissarmyhammer-git, swissarmyhammer-shell, swissarmyhammer-templating, swissarmyhammer-prompts, swissarmyhammer-modes, swissarmyhammer-workflow, swissarmyhammer-agent, swissarmyhammer-mcp-proxy, swissarmyhammer-js, markdowndown, llama-agent, llama-common, llama-embedding, llama-loader, mermaid-parser, acp-conformance, claude-agent, agent-client-protocol-extras, model-context-protocol-extras, swissarmyhammer-project-detection, avp-common, avp-cli, swissarmyhammer-doctor, swissarmyhammer-treesitter, swissarmyhammer-leader-election, swissarmyhammer-kanban, swissarmyhammer-operations, swissarmyhammer-operations-macros, swissarmyhammer-skills, swissarmyhammer-agents, swissarmyhammer-web, mirdan-cli, swissarmyhammer-kanban-app
+  **Members:** swissarmyhammer, swissarmyhammer-cli, swissarmyhammer-tools, swissarmyhammer-config, swissarmyhammer-common, swissarmyhammer-directory, swissarmyhammer-build, swissarmyhammer-git, swissarmyhammer-shell, swissarmyhammer-templating, swissarmyhammer-prompts, swissarmyhammer-modes, swissarmyhammer-workflow, swissarmyhammer-agent, swissarmyhammer-mcp-proxy, swissarmyhammer-js, markdowndown, llama-agent, llama-common, llama-embedding, llama-loader, mermaid-parser, acp-conformance, claude-agent, agent-client-protocol-extras, model-context-protocol-extras, swissarmyhammer-project-detection, avp-common, avp-cli, swissarmyhammer-doctor, swissarmyhammer-treesitter, swissarmyhammer-leader-election, swissarmyhammer-kanban, swissarmyhammer-operations, swissarmyhammer-operations-macros, swissarmyhammer-skills, swissarmyhammer-agents, swissarmyhammer-web, mirdan-cli, kanban-app
 
 
 
@@ -236,7 +236,7 @@ The following project(s) were automatically detected:
 
 ### 28. Rust Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-kanban-app`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/kanban-app`
 **Markers:** Cargo.toml
 
 
@@ -244,7 +244,7 @@ The following project(s) were automatically detected:
 
 ### 29. Nodejs Project
 
-**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-kanban-app/ui`
+**Location:** `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/kanban-app/ui`
 **Markers:** package.json
 
 
