@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "./ui/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": { "script": "npm run dev", "cwd": "./ui" },
-    "beforeBuildCommand": { "script": "npm run build", "cwd": "./ui" }
+    "beforeDevCommand": { "script": "npm install && npm run dev", "cwd": "./ui" },
+    "beforeBuildCommand": { "script": "npm install && npm run build", "cwd": "./ui" }
   },
   "app": {
     "windows": [
@@ -26,6 +26,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png"]
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.png"]
   }
 }

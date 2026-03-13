@@ -4,6 +4,7 @@ install:
     cargo install --path avp-cli
     cargo install --path mirdan-cli
     just mirdan-dev
+    just kanban-dev
 
 # Build the Mirdan tray app (debug) and install to /Applications for deep link testing
 mirdan-dev:
@@ -14,6 +15,15 @@ mirdan-dev:
     hdiutil detach /Volumes/Mirdan -quiet
     @echo "Installed Mirdan.app to /Applications"
     @echo "Test deep links: open mirdan://install/no-secrets"
+
+# Build the Kanban app (debug) and install to /Applications
+kanban-dev:
+    cd swissarmyhammer-kanban-app && cargo tauri build --debug
+    rm -rf /Applications/Kanban.app
+    hdiutil attach target/debug/bundle/dmg/Kanban_*.dmg -nobrowse -quiet
+    cp -r /Volumes/Kanban/Kanban.app /Applications/
+    hdiutil detach /Volumes/Kanban -quiet
+    @echo "Installed Kanban.app to /Applications"
 
 # Run the installed Mirdan tray app
 mirdan-run:

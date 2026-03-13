@@ -5,8 +5,8 @@
   "identifier": "ai.mirdan.app",
   "build": {
     "devUrl": "http://localhost:5174",
-    "beforeDevCommand": { "script": "npm run dev", "cwd": "./ui" },
-    "beforeBuildCommand": { "script": "npm run build", "cwd": "./ui" },
+    "beforeDevCommand": { "script": "npm install && npm run dev", "cwd": "./ui" },
+    "beforeBuildCommand": { "script": "npm install && npm run build", "cwd": "./ui" },
     "frontendDist": "./ui/dist"
   },
   "app": {
