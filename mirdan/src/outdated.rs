@@ -107,11 +107,6 @@ pub async fn run_update(
                 info!("{msg}");
                 return Ok(msg);
             }
-            Err(RegistryError::Conflict(_)) => {
-                let msg = format!("{registry_name} is already up to date ({})", pkg.version);
-                info!("{msg}");
-                return Ok(msg);
-            }
             Err(e) => return Err(e),
         };
 

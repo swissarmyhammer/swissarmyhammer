@@ -18,7 +18,10 @@ fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
 /// Like [`handle_registry_result`] but for commands that return a status message.
 fn handle_registry_result_msg(result: Result<String, RegistryError>) -> i32 {
     match result {
-        Ok(_) => 0,
+        Ok(msg) => {
+            println!("{msg}");
+            0
+        }
         Err(e) => {
             eprintln!("Error: {}", e);
             1

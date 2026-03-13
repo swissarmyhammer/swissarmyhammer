@@ -73,8 +73,7 @@ export function PackageList() {
           </div>
         ) : (
           packages.map((pkg) => {
-            const name =
-              pkg.kind === "installed" ? pkg.data.name : pkg.data.name;
+            const name = pkg.data.name;
             return (
               <PackageCard
                 key={`${pkg.kind}-${name}`}

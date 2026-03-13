@@ -1,7 +1,7 @@
 //! Tauri commands exposing mirdan package operations to the frontend.
 
 use serde::Serialize;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use mirdan::registry::RegistryClient;
 
@@ -57,11 +57,6 @@ pub fn list_packages() -> Vec<PackageInfo> {
 pub async fn uninstall_package(spec: String) -> Result<String, String> {
     info!(spec, "uninstall requested from GUI");
 
-    // Set CWD to HOME (same as deeplink handler — app bundle CWD is read-only)
-    if let Some(home) = std::env::var_os("HOME") {
-        let _ = std::env::set_current_dir(&home);
-    }
-
     mirdan::install::run_uninstall(&spec, None, true)
         .await
         .map(|()| format!("Uninstalled {spec}"))
@@ -75,10 +70,6 @@ pub async fn uninstall_package(spec: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn update_package(spec: String) -> Result<String, String> {
     info!(spec, "update requested from GUI");
-
-    if let Some(home) = std::env::var_os("HOME") {
-        let _ = std::env::set_current_dir(&home);
-    }
 
     let name = if spec.is_empty() { None } else { Some(spec.as_str()) };
 
@@ -105,7 +96,10 @@ pub fn get_registry_url(name: String) -> String {
 /// Search the registry for packages.
 #[tauri::command]
 pub async fn search_registry(query: String) -> Result<Vec<SearchResult>, String> {
-    let client = RegistryClient::authenticated().unwrap_or_default();
+    let client = RegistryClient::authenticated().unwrap_or_else(|e| {
+        debug!("registry auth failed, falling back to unauthenticated: {e}");
+        RegistryClient::default()
+    });
     let response = client
         .fuzzy_search(&query, Some(20))
         .await
@@ -133,10 +127,6 @@ pub async fn search_registry(query: String) -> Result<Vec<SearchResult>, String>
 pub async fn install_package(spec: String) -> Result<String, String> {
     info!(spec, "install requested from GUI");
 
-    if let Some(home) = std::env::var_os("HOME") {
-        let _ = std::env::set_current_dir(&home);
-    }
-
     mirdan::install::run_install(&spec, None, true, false, None)
         .await
         .map(|()| format!("Installed {spec}"))
@@ -158,12 +148,12 @@ pub fn open_external(target: String) -> Result<(), String> {
 /// a directory containing SKILL.md whose frontmatter name matches.
 fn find_store_path(name: &str) -> Option<String> {
     let global_store = mirdan::store::skill_store_dir(true);
-    if let Some(path) = find_in_store(&global_store, name) {
+    if let Some(path) = find_in_store(&global_store, name, 5) {
         return Some(path.to_string_lossy().to_string());
     }
 
     let project_store = mirdan::store::skill_store_dir(false);
-    if let Some(path) = find_in_store(&project_store, name) {
+    if let Some(path) = find_in_store(&project_store, name, 5) {
         return Some(path.to_string_lossy().to_string());
     }
 
@@ -171,7 +161,13 @@ fn find_store_path(name: &str) -> Option<String> {
 }
 
 /// Recursively search a store directory for a skill matching the given name.
-fn find_in_store(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+///
+/// `max_depth` guards against symlink cycles or unexpectedly deep nesting.
+/// The store structure is normally `~/.skills/owner/repo/skill/SKILL.md` (3 levels).
+fn find_in_store(dir: &std::path::Path, name: &str, max_depth: u32) -> Option<std::path::PathBuf> {
+    if max_depth == 0 {
+        return None;
+    }
     let entries = std::fs::read_dir(dir).ok()?;
 
     for entry in entries.flatten() {
@@ -184,12 +180,12 @@ fn find_in_store(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf
                     return Some(path);
                 }
                 // Check frontmatter name
-                if let Some(fm_name) = read_frontmatter_name(&path.join("SKILL.md")) {
+                if let Some(fm_name) = mirdan::list::read_frontmatter_name(&path.join("SKILL.md")) {
                     if fm_name == name {
                         return Some(path);
                     }
                 }
-            } else if let Some(found) = find_in_store(&path, name) {
+            } else if let Some(found) = find_in_store(&path, name, max_depth - 1) {
                 return Some(found);
             }
         }
@@ -198,16 +194,6 @@ fn find_in_store(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf
     None
 }
 
-/// Read the name field from SKILL.md frontmatter.
-fn read_frontmatter_name(path: &std::path::Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let content = content.trim();
-    let rest = content.strip_prefix("---")?;
-    let end = rest.find("---")?;
-    let frontmatter = &rest[..end];
-    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
-    yaml.get("name")?.as_str().map(|s| s.to_string())
-}
 
 #[cfg(test)]
 mod tests {

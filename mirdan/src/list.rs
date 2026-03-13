@@ -11,6 +11,7 @@ use crate::store;
 use crate::table;
 
 /// An installed package found during scanning.
+#[derive(Debug, Clone)]
 pub struct InstalledPackage {
     pub name: String,
     /// The lockfile key (source URL or name) used for install/uninstall operations.
@@ -57,7 +58,11 @@ pub fn discover_packages(
             scan_skills_recursive(&global_store, &global_store, "global", &mut packages);
         }
 
-        // Project store — skip if it resolves to the same path as global
+        // Project store — skip if it resolves to the same path as global.
+        // Note: canonicalize() fails when a path doesn't exist or isn't accessible
+        // (e.g. permission denied). In those cases skip_project is false and both
+        // stores are scanned, which may produce duplicates if the project store is
+        // an inaccessible symlink to the global store. This is unlikely in practice.
         let project_store = store::skill_store_dir(false);
         let skip_project = project_store
             .canonicalize()
@@ -413,7 +418,7 @@ fn parse_frontmatter(path: &Path) -> Option<serde_yaml::Value> {
 }
 
 /// Read name from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
-fn read_frontmatter_name(path: &Path) -> Option<String> {
+pub fn read_frontmatter_name(path: &Path) -> Option<String> {
     parse_frontmatter(path)?.get("name")?.as_str().map(|s| s.to_string())
 }
 
@@ -425,36 +430,18 @@ fn read_frontmatter_description(path: &Path) -> String {
 }
 
 /// Read version from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
+///
+/// Checks `metadata.version` first, then top-level `version`. Falls back to "latest".
 fn read_frontmatter_version(path: &Path) -> String {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return "latest".to_string(),
-    };
-
-    let content = content.trim();
-    if !content.starts_with("---") {
-        return "latest".to_string();
-    }
-
-    let rest = &content[3..];
-    let end = match rest.find("---") {
-        Some(pos) => pos,
-        None => return "latest".to_string(),
-    };
-
-    let frontmatter = &rest[..end];
-    if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
-        if let Some(version) = yaml
-            .get("metadata")
-            .and_then(|m| m.get("version"))
-            .and_then(|v| v.as_str())
-            .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
-        {
-            return version.to_string();
-        }
-    }
-
-    "latest".to_string()
+    parse_frontmatter(path)
+        .and_then(|yaml| {
+            yaml.get("metadata")
+                .and_then(|m| m.get("version"))
+                .and_then(|v| v.as_str())
+                .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "latest".to_string())
 }
 
 /// Merge packages with the same name (combining targets).
@@ -585,6 +572,80 @@ metadata:
         assert!(result.is_ok());
 
         std::env::set_current_dir(old_dir).unwrap();
+    }
+
+    #[test]
+    fn test_scan_skills_recursive_nested_structure() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_root = dir.path();
+
+        // Create nested owner/repo/skill/SKILL.md structure
+        let skill_dir = store_root.join("owner/repo/my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: A test skill\nmetadata:\n  version: \"1.0.0\"\n---\n# My Skill\n",
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        scan_skills_recursive(store_root, store_root, "global", &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "my-skill");
+        assert_eq!(packages[0].source, "owner/repo/my-skill");
+        assert_eq!(packages[0].description, "A test skill");
+        assert_eq!(packages[0].version, "1.0.0");
+        assert_eq!(packages[0].targets, vec!["global"]);
+    }
+
+    #[test]
+    fn test_scan_skills_recursive_uses_dir_name_when_no_frontmatter_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_root = dir.path();
+
+        let skill_dir = store_root.join("fallback-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "# No frontmatter\n").unwrap();
+
+        let mut packages = Vec::new();
+        scan_skills_recursive(store_root, store_root, "global", &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "fallback-skill");
+        assert_eq!(packages[0].source, "fallback-skill");
+        assert_eq!(packages[0].version, "latest");
+    }
+
+    #[test]
+    fn test_read_frontmatter_description_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---\nname: test\ndescription: Hello world\n---\n# Test\n",
+        )
+        .unwrap();
+
+        assert_eq!(read_frontmatter_description(&path), "Hello world");
+    }
+
+    #[test]
+    fn test_read_frontmatter_description_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(&path, "---\nname: test\n---\n# Test\n").unwrap();
+
+        assert_eq!(read_frontmatter_description(&path), "");
+    }
+
+    #[test]
+    fn test_read_frontmatter_description_no_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(&path, "# No frontmatter").unwrap();
+
+        assert_eq!(read_frontmatter_description(&path), "");
     }
 
     #[test]

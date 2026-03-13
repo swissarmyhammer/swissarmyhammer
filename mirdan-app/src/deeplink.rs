@@ -37,11 +37,7 @@ pub fn handle_url(_app: &AppHandle, url: String) {
     info!(spec, "deep-link install requested");
 
     std::thread::spawn(move || {
-        // The .app bundle's CWD is read-only. Move to $HOME so mirdan
-        // can write temp files during install.
-        if let Some(home) = std::env::var_os("HOME") {
-            let _ = std::env::set_current_dir(home);
-        }
+        // CWD is set to $HOME at app startup (run_tray), so no per-call mutation needed.
 
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,

@@ -21,6 +21,13 @@ fn init_tray_tracing() {
 
 /// Launch the Tauri tray application.
 fn run_tray() {
+    // Set CWD to HOME once at startup. The .app bundle's CWD is read-only,
+    // and mirdan operations need a writable directory for lockfiles/temp files.
+    // Done here instead of per-command to avoid a process-global data race.
+    if let Some(home) = std::env::var_os("HOME") {
+        let _ = std::env::set_current_dir(home);
+    }
+
     init_tray_tracing();
     use tauri_plugin_deep_link::DeepLinkExt;
 

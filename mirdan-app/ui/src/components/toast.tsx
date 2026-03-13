@@ -8,6 +8,9 @@ export interface Toast {
   variant: "success" | "error";
 }
 
+// Module-level state: acceptable for a single-page Tauri tray app.
+// nextId is monotonic and never resets, so IDs aren't unique across
+// hot-reloads — harmless since old toasts are already dismissed.
 let nextId = 0;
 let addToastFn: ((message: string, variant: "success" | "error") => void) | null = null;
 
