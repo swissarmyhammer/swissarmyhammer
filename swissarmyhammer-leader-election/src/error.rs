@@ -16,10 +16,6 @@ pub enum ElectionError {
     /// Failed to acquire lock
     #[error("Failed to acquire lock: {0}")]
     LockAcquisition(#[source] io::Error),
-
-    /// Socket path error
-    #[error("Socket error: {0}")]
-    SocketError(#[source] io::Error),
 }
 
 /// Result type for election operations
@@ -62,9 +58,5 @@ mod tests {
         let io_err = io::Error::new(io::ErrorKind::NotFound, "test");
         let acquisition = ElectionError::LockAcquisition(io_err);
         assert!(format!("{}", acquisition).contains("acquire lock"));
-
-        let io_err = io::Error::new(io::ErrorKind::NotFound, "test");
-        let socket = ElectionError::SocketError(io_err);
-        assert!(format!("{}", socket).contains("Socket error"));
     }
 }

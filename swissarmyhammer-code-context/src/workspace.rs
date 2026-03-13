@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
-use swissarmyhammer_leader_election::{ElectionConfig, ElectionError, LeaderElection, LeaderGuard};
+use swissarmyhammer_leader_election::{
+    ElectionConfig, ElectionOutcome, FollowerGuard, LeaderElection, LeaderGuard,
+};
 
 use crate::db;
 use crate::error::CodeContextError;
@@ -34,10 +36,12 @@ pub enum WorkspaceMode {
         /// Guard that holds the leader lock; dropped when the workspace is dropped
         _guard: LeaderGuard,
     },
-    /// Reader: queries the DB read-only
-    Reader {
+    /// Follower: queries the DB read-only, can re-contest the election
+    Follower {
         /// A read-only database connection
         db: Connection,
+        /// Guard that can attempt promotion to leader
+        follower: FollowerGuard,
     },
 }
 
@@ -45,14 +49,14 @@ impl fmt::Debug for WorkspaceMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WorkspaceMode::Leader { .. } => f.write_str("Leader"),
-            WorkspaceMode::Reader { .. } => f.write_str("Reader"),
+            WorkspaceMode::Follower { .. } => f.write_str("Follower"),
         }
     }
 }
 
 /// Manages the `.code-context/` directory and database lifecycle
 pub struct CodeContextWorkspace {
-    /// The mode (leader or reader)
+    /// The mode (leader or follower)
     mode: WorkspaceMode,
     /// Root of the workspace (parent of `.code-context/`)
     workspace_root: PathBuf,
@@ -74,7 +78,7 @@ impl CodeContextWorkspace {
     ///
     /// - Creates `.code-context/` if it doesn't exist
     /// - Writes `.gitignore` with `*` to exclude from version control
-    /// - Attempts leader election
+    /// - Runs leader election (winner writes, followers read)
     /// - Opens the database in WAL mode
     /// - Creates the schema if leader
     pub fn open(workspace_root: &Path) -> Result<Self, CodeContextError> {
@@ -95,8 +99,8 @@ impl CodeContextWorkspace {
 
         let db_path = context_dir.join(DB_NAME);
 
-        match election.try_become_leader() {
-            Ok(guard) => {
+        match election.elect().map_err(CodeContextError::Election)? {
+            ElectionOutcome::Leader(guard) => {
                 tracing::info!(
                     "Becoming code-context leader for {}",
                     workspace_root.display()
@@ -118,26 +122,43 @@ impl CodeContextWorkspace {
                     context_dir,
                 })
             }
-            Err(ElectionError::LockHeld) => {
+            ElectionOutcome::Follower(follower) => {
                 tracing::debug!(
-                    "Joining as code-context reader for {}",
+                    "Joining as code-context follower for {}",
                     workspace_root.display()
                 );
 
-                let db = Connection::open_with_flags(
-                    &db_path,
-                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-                )?;
+                // Wait for the leader to create the DB file before opening it
+                // read-only. On the very first run the file may not exist yet.
+                // SQLite read-only open does not create the file, so we retry
+                // with a short backoff (up to ~5 seconds) until it appears.
+                let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+                let mut attempts = 0u32;
+                let db = loop {
+                    match Connection::open_with_flags(&db_path, flags) {
+                        Ok(conn) => break conn,
+                        Err(e) if attempts < 10 => {
+                            tracing::debug!(
+                                attempt = attempts + 1,
+                                path = %db_path.display(),
+                                error = %e,
+                                "follower waiting for leader to create DB file",
+                            );
+                            attempts += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                };
                 db::configure_connection(&db)?;
 
                 Ok(Self {
-                    mode: WorkspaceMode::Reader { db },
+                    mode: WorkspaceMode::Follower { db, follower },
                     workspace_root: workspace_root.to_path_buf(),
                     context_dir,
                 })
             }
-            Err(e) => Err(CodeContextError::Election(e)),
         }
     }
 
@@ -148,28 +169,70 @@ impl CodeContextWorkspace {
 
     /// Get a reference to the database connection.
     ///
-    /// For leaders, locks the shared mutex. For readers, returns the
+    /// For leaders, locks the shared mutex. For followers, returns the
     /// read-only connection directly. Callers should not hold the
     /// returned reference across await points.
     pub fn db(&self) -> DbRef<'_> {
         match &self.mode {
             WorkspaceMode::Leader { db, .. } => {
-                DbRef::Shared(db.lock().unwrap_or_else(|p| p.into_inner()))
+                DbRef::Shared(db.lock().expect("workspace db mutex poisoned"))
             }
-            WorkspaceMode::Reader { db } => DbRef::Owned(db),
+            WorkspaceMode::Follower { db, .. } => DbRef::Owned(db),
         }
     }
 
     /// Get the shared write connection handle (leader only).
     ///
-    /// Returns `None` for reader workspaces. Workers use this to get
+    /// Returns `None` for follower workspaces. Workers use this to get
     /// their own clone of the `Arc<Mutex<Connection>>` so they can
     /// write to the database through the single shared connection.
     pub fn shared_db(&self) -> Option<SharedDb> {
         match &self.mode {
             WorkspaceMode::Leader { db, .. } => Some(Arc::clone(db)),
-            WorkspaceMode::Reader { .. } => None,
+            WorkspaceMode::Follower { .. } => None,
         }
+    }
+
+    /// Re-contest the election. Call this periodically on follower workspaces.
+    ///
+    /// If the current leader has exited (flock released), this process takes
+    /// over: opens a read-write connection, runs startup cleanup, and
+    /// transitions to leader mode. Returns `Ok(Some(shared_db))` with the
+    /// new write connection so callers can start indexing workers.
+    ///
+    /// Returns `Ok(None)` if already leader or if another process still holds the lock.
+    pub fn try_promote(&mut self) -> Result<Option<SharedDb>, CodeContextError> {
+        let follower = match &self.mode {
+            WorkspaceMode::Leader { .. } => return Ok(None),
+            WorkspaceMode::Follower { follower, .. } => follower,
+        };
+
+        let guard = match follower.try_promote().map_err(CodeContextError::Election)? {
+            Some(guard) => guard,
+            None => return Ok(None),
+        };
+
+        tracing::info!(
+            "Promoted to code-context leader for {}",
+            self.workspace_root.display()
+        );
+
+        // Open a read-write connection (the old read-only one is dropped with the mode)
+        let db_path = self.context_dir.join(DB_NAME);
+        let conn = Connection::open(&db_path)?;
+        db::configure_connection(&conn)?;
+        db::create_schema(&conn)?;
+        crate::startup_cleanup(&conn, &self.workspace_root)?;
+
+        let new_db = Arc::new(Mutex::new(conn));
+        let shared = Arc::clone(&new_db);
+
+        self.mode = WorkspaceMode::Leader {
+            db: new_db,
+            _guard: guard,
+        };
+
+        Ok(Some(shared))
     }
 
     /// Root of the workspace (parent of `.code-context/`)
@@ -188,6 +251,15 @@ impl CodeContextWorkspace {
 pub enum DbRef<'a> {
     Shared(std::sync::MutexGuard<'a, Connection>),
     Owned(&'a Connection),
+}
+
+impl std::fmt::Debug for DbRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DbRef::Shared(_) => f.debug_struct("DbRef::Shared").finish_non_exhaustive(),
+            DbRef::Owned(_) => f.debug_struct("DbRef::Owned").finish_non_exhaustive(),
+        }
+    }
 }
 
 impl std::ops::Deref for DbRef<'_> {
@@ -290,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_shared_db_reader_returns_none() {
+    fn test_shared_db_follower_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         let ws1 = CodeContextWorkspace::open(dir.path()).unwrap();
         assert!(ws1.is_leader());
@@ -298,5 +370,67 @@ mod tests {
         let ws2 = CodeContextWorkspace::open(dir.path()).unwrap();
         assert!(!ws2.is_leader());
         assert!(ws2.shared_db().is_none());
+    }
+
+    #[test]
+    fn test_try_promote_noop_for_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(ws.is_leader());
+
+        // Promoting a leader is a no-op
+        let result = ws.try_promote().unwrap();
+        assert!(result.is_none());
+        assert!(ws.is_leader());
+    }
+
+    #[test]
+    fn test_try_promote_fails_while_leader_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let _ws1 = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let mut ws2 = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!ws2.is_leader());
+
+        // Leader still alive — promotion should fail
+        let result = ws2.try_promote().unwrap();
+        assert!(result.is_none());
+        assert!(!ws2.is_leader());
+    }
+
+    #[test]
+    fn test_try_promote_succeeds_after_leader_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws1 = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(ws1.is_leader());
+
+        let mut ws2 = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!ws2.is_leader());
+
+        // Leader exits
+        drop(ws1);
+
+        // Follower promotes
+        let shared_db = ws2.try_promote().unwrap();
+        assert!(shared_db.is_some());
+        assert!(ws2.is_leader());
+        assert!(ws2.shared_db().is_some());
+    }
+
+    #[test]
+    fn test_promoted_workspace_blocks_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws1 = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let mut ws2 = CodeContextWorkspace::open(dir.path()).unwrap();
+        drop(ws1);
+
+        // ws2 promotes
+        let _db = ws2.try_promote().unwrap().unwrap();
+        assert!(ws2.is_leader());
+
+        // ws3 should be a follower
+        let ws3 = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!ws3.is_leader());
     }
 }

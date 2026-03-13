@@ -2010,8 +2010,9 @@ impl McpTool for ShellExecuteTool {
                 }
 
                 // Apply max_lines capping to combined stdout+stderr
-                let max_lines = request.max_lines.unwrap_or(200);
-                if max_lines == 0 {
+                // -1 means unlimited (all lines), 0 means status-only, positive means cap
+                let raw_max_lines = request.max_lines.unwrap_or(32);
+                if raw_max_lines == 0 {
                     // Status-only response
                     let duration = result.execution_time_ms;
                     let total_lines = result.stdout.lines().count() + result.stderr.lines().count();
@@ -2019,8 +2020,8 @@ impl McpTool for ShellExecuteTool {
                         "command_id: {}\nstatus: completed\nexit_code: {}\nlines: {}\nduration: {}ms\nUse 'get lines' id={} or 'search history' to retrieve output.",
                         cmd_id, result.exit_code, total_lines, duration, cmd_id,
                     )));
-                } else if max_lines > 0 {
-                    let max = max_lines as usize;
+                } else if raw_max_lines > 0 {
+                    let max = raw_max_lines as usize;
                     let stdout_lines: Vec<&str> = result.stdout.lines().collect();
                     let stderr_lines: Vec<&str> = result.stderr.lines().collect();
                     let total = stdout_lines.len() + stderr_lines.len();
@@ -2043,7 +2044,7 @@ impl McpTool for ShellExecuteTool {
                         return format_success_result(truncated_result);
                     }
                 }
-                // max_lines == -1 or output within limits: return full output
+                // Output within limits: return full output
                 format_success_result(result)
             }
             Err(shell_error) => {
