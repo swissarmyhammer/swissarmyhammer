@@ -987,19 +987,36 @@ fn test_lsp_reindexing_after_file_change() {
         std::sync::Arc::clone(&shared),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
-    thread::sleep(Duration::from_secs(2));
 
-    // Verify TS indexing completed
+    // Poll until all 4 files are TS-indexed (avoids fixed sleep race).
+    // The mutex guard from ws.db() must be dropped before sleeping so the
+    // background indexing worker can acquire the lock and make progress.
     {
-        let db = ws.db();
-        let ts_count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 1",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(ts_count, 4, "All 4 files should be TS-indexed");
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(30);
+        let poll_interval = Duration::from_millis(200);
+        loop {
+            let ts_count: i64 = {
+                let db = ws.db();
+                db.query_row(
+                    "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0)
+                // db (MutexGuard) is dropped here, before the sleep
+            };
+            if ts_count >= 4 {
+                break;
+            }
+            assert!(
+                start.elapsed() < timeout,
+                "Timed out waiting for TS indexing: only {}/4 files indexed after {:?}",
+                ts_count,
+                timeout
+            );
+            thread::sleep(poll_interval);
+        }
     }
 
     // -- Phase 2: spawn rust-analyzer and LSP-index lib.rs --
@@ -1150,7 +1167,36 @@ mod tests {
         std::sync::Arc::clone(&shared),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
-    thread::sleep(Duration::from_secs(2));
+
+    // Poll until lib.rs is TS-indexed again (avoids fixed sleep race).
+    // The mutex guard from ws.db() must be dropped before sleeping so the
+    // background indexing worker can acquire the lock and make progress.
+    {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(30);
+        let poll_interval = Duration::from_millis(200);
+        loop {
+            let ts_flag: i64 = {
+                let db = ws.db();
+                db.query_row(
+                    "SELECT ts_indexed FROM indexed_files WHERE file_path LIKE '%lib.rs'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0)
+                // db (MutexGuard) is dropped here, before the sleep
+            };
+            if ts_flag == 1 {
+                break;
+            }
+            assert!(
+                start.elapsed() < timeout,
+                "Timed out waiting for lib.rs TS re-indexing after {:?}",
+                timeout
+            );
+            thread::sleep(poll_interval);
+        }
+    }
 
     // Re-open the modified file in rust-analyzer
     let modified_content = std::fs::read_to_string(&lib_rs_abs).unwrap();

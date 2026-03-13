@@ -44,9 +44,9 @@ impl std::fmt::Display for AgentName {
 pub enum AgentSource {
     /// Embedded in the binary
     Builtin,
-    /// From project-level .agents/ or .swissarmyhammer/agents/
+    /// From project-level .agents/ or .sah/agents/
     Local,
-    /// From user-level ~/.agents/ or ~/.swissarmyhammer/agents/
+    /// From user-level ~/.agents/ or ~/.sah/agents/
     User,
 }
 

@@ -17,7 +17,7 @@ use swissarmyhammer_kanban::Execute;
 use crate::watcher::{self, BoardWatcher, EntityCache};
 
 const MAX_RECENT_BOARDS: usize = 20;
-const CONFIG_DIR_NAME: &str = "swissarmyhammer-kanban";
+const CONFIG_APP_SUBDIR: &str = "kanban-app";
 const CONFIG_FILE_NAME: &str = "config.json";
 
 /// A handle to a single open kanban board.
@@ -562,11 +562,15 @@ fn macos_profile_picture(_username: &str) -> Option<String> {
 }
 
 /// Get the path to the app config file.
+///
+/// Uses XDG config directory: `$XDG_CONFIG_HOME/sah/kanban-app/config.json`
+/// Falls back to `~/.config/sah/kanban-app/config.json` if XDG_CONFIG_HOME is not set.
 fn config_file_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(CONFIG_DIR_NAME)
-        .join(CONFIG_FILE_NAME)
+    use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
+
+    ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
+        .map(|dir| dir.root().join(CONFIG_APP_SUBDIR).join(CONFIG_FILE_NAME))
+        .unwrap_or_else(|_| PathBuf::from(".").join(CONFIG_APP_SUBDIR).join(CONFIG_FILE_NAME))
 }
 
 #[cfg(test)]

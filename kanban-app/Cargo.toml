@@ -15,6 +15,7 @@ path = "src/main.rs"
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-views = { path = "../swissarmyhammer-views" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"

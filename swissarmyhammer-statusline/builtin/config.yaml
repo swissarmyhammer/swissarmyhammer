@@ -3,8 +3,8 @@
 #
 # This is the default (builtin) configuration for the sah statusline.
 # To customize, copy this file to:
-#   Project: .swissarmyhammer/statusline/config.yaml
-#   User:    ~/.swissarmyhammer/statusline/config.yaml
+#   Project: .sah/statusline/config.yaml
+#   User:    ~/.sah/statusline/config.yaml
 #
 # Config layers are merged with "last wins" semantics:
 #   builtin -> user -> project

@@ -7,7 +7,7 @@
 //! # Features
 //!
 //! - **Multiple file formats**: TOML, YAML, JSON with automatic format detection
-//! - **File discovery**: Automatic discovery in standard `.swissarmyhammer/` directories
+//! - **File discovery**: Automatic discovery in standard `.sah/` directories
 //! - **Environment integration**: Full environment variable support with `SAH_` and `SWISSARMYHAMMER_` prefixes
 //! - **Variable substitution**: Shell-style `${VAR}` and `${VAR:-default}` syntax in config files
 //! - **Proper precedence**: Clear precedence ordering: defaults → global → project → env → CLI
@@ -39,8 +39,8 @@
 //!
 //! SwissArmyHammer discovers configuration files in these locations:
 //!
-//! - Global: `~/.swissarmyhammer/sah.{toml,yaml,yml,json}`
-//! - Project: `./.swissarmyhammer/sah.{toml,yaml,yml,json}`
+//! - Global: `~/.sah/sah.{toml,yaml,yml,json}`
+//! - Project: `./.sah/sah.{toml,yaml,yml,json}`
 //!
 //! ## Example TOML Configuration
 //!
@@ -210,12 +210,12 @@ pub use template_context::TemplateContext;
 /// Load configuration from discovered sources with proper precedence
 ///
 /// This is the main entry point for loading configuration. It discovers configuration
-/// files in standard locations (global and project `.swissarmyhammer/` directories)
+/// files in standard locations (global and project `.sah/` directories)
 /// and merges them according to the precedence rules:
 ///
 /// 1. Default values (lowest precedence)
-/// 2. Global config files (`~/.swissarmyhammer/sah.*`)
-/// 3. Project config files (`./.swissarmyhammer/sah.*`)
+/// 2. Global config files (`~/.sah/sah.*`)
+/// 3. Project config files (`./.sah/sah.*`)
 /// 4. Environment variables (`SAH_*` and `SWISSARMYHAMMER_*`)
 /// 5. CLI arguments (highest precedence, if provided)
 ///

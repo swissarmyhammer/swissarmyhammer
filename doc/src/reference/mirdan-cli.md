@@ -38,7 +38,7 @@ brew install swissarmyhammer/tap/mirdan-cli
 Mirdan manages skills, validators, tools, and plugins across all detected AI coding agents.
 
 Skills are deployed to each agent's skill directory (e.g. .claude/skills/, .cursor/skills/).
-Validators are deployed to .avp/validators/ (project) or ~/.avp/validators/ (global).
+Validators are deployed to .avp/validators/ (project) or $XDG_DATA_HOME/avp/validators/ (global, defaults to ~/.local/share/avp/validators/).
 Tools are deployed to .tools/ and registered in agent MCP configs.
 Plugins are deployed to agent plugin directories (e.g. .claude/plugins/).
 
@@ -134,7 +134,7 @@ Scaffold a new validator (AVP spec)
 
 ###### **Options:**
 
-* `--global` — Create in ~/.avp/validators/ instead of .avp/validators/
+* `--global` — Create in $XDG_DATA_HOME/avp/validators/ instead of .avp/validators/
 
 
 
@@ -150,7 +150,7 @@ Scaffold a new tool (MCP server definition)
 
 ###### **Options:**
 
-* `--global` — Create in ~/.tools/ instead of .tools/
+* `--global` — Create in $XDG_DATA_HOME/avp/tools/ instead of current directory
 
 
 

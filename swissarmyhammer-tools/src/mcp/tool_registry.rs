@@ -332,7 +332,7 @@ pub struct ToolContext {
     /// Working directory for tool operations
     ///
     /// This is the base directory where tools should operate. For example:
-    /// - Kanban storage will be in `{working_dir}/.swissarmyhammer/kanban/`
+    /// - Kanban storage will be in `{working_dir}/.sah/kanban/`
     ///
     /// If None, tools should use `std::env::current_dir()` or git root detection
     /// as a fallback. In tests, this should always be set to an isolated directory.

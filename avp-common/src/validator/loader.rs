@@ -2,7 +2,7 @@
 //!
 //! Loads validators from multiple directories with precedence:
 //! 1. Builtin validators (embedded in the binary) - lowest precedence
-//! 2. User validators (~/<AVP_DIR>/validators)
+//! 2. User validators ($XDG_DATA_HOME/avp/validators)
 //! 3. Project validators (./<AVP_DIR>/validators) - highest precedence
 //!
 //! Later sources override earlier ones with the same name.
@@ -87,7 +87,7 @@ impl ValidatorLoader {
     /// Load validators from directories specified in the context.
     ///
     /// This loads validators using the AvpContext to get directory paths:
-    /// 1. User validators from ~/<AVP_DIR>/validators (if exists)
+    /// 1. User validators from $XDG_DATA_HOME/avp/validators (if exists)
     /// 2. Project validators from ./<AVP_DIR>/validators (if exists)
     ///
     /// Later sources override earlier ones with the same name.
@@ -113,7 +113,7 @@ impl ValidatorLoader {
     ///
     /// This loads validators from:
     /// 1. Builtin validators (call `load_builtins()` first if needed)
-    /// 2. User validators from ~/<AVP_DIR>/validators
+    /// 2. User validators from $XDG_DATA_HOME/avp/validators
     /// 3. Project validators from ./<AVP_DIR>/validators
     ///
     /// Later sources override earlier ones with the same name.
@@ -121,8 +121,8 @@ impl ValidatorLoader {
     /// Note: Prefer `load_from_context()` when an AvpContext is available.
     /// Note: Call `load_includes()` before this to enable `@` reference expansion.
     pub fn load_all(&mut self) -> Result<(), AvpError> {
-        // Load RuleSets from user directory (~/<AVP_DIR>/validators)
-        if let Ok(dir) = ManagedDirectory::<AvpConfig>::from_user_home() {
+        // Load RuleSets from user directory ($XDG_DATA_HOME/avp/validators)
+        if let Ok(dir) = ManagedDirectory::<AvpConfig>::xdg_data() {
             let validators_dir = dir.subdir("validators");
             if validators_dir.exists() {
                 self.load_rulesets_directory(&validators_dir, ValidatorSource::User)?;
@@ -278,7 +278,7 @@ impl ValidatorLoader {
         let mut dirs = Vec::new();
 
         // User directory
-        if let Ok(dir) = ManagedDirectory::<AvpConfig>::from_user_home() {
+        if let Ok(dir) = ManagedDirectory::<AvpConfig>::xdg_data() {
             let validators_dir = dir.subdir("validators");
             if validators_dir.exists() {
                 dirs.push(validators_dir);
@@ -440,7 +440,7 @@ impl ValidatorLoader {
         };
 
         // Check user directory
-        match ManagedDirectory::<AvpConfig>::from_user_home() {
+        match ManagedDirectory::<AvpConfig>::xdg_data() {
             Ok(dir) => {
                 let validators_dir = dir.subdir("validators");
                 user_dir_info.path = Some(validators_dir.clone());
@@ -501,7 +501,7 @@ pub struct DirectoryInfo {
 /// Diagnostic information about validator loading.
 #[derive(Debug, Clone)]
 pub struct ValidatorDiagnostics {
-    /// Information about the user validators directory (~/.avp/validators).
+    /// Information about the user validators directory ($XDG_DATA_HOME/avp/validators).
     pub user_directory: DirectoryInfo,
     /// Information about the project validators directory (.avp/validators).
     pub project_directory: DirectoryInfo,

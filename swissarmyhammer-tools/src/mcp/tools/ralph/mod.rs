@@ -1,13 +1,13 @@
 //! Ralph tool for persistent agent loop instructions
 //!
-//! Ralph stores per-session instructions as markdown files in `.sah/ralph/`.
+//! Ralph stores per-session instructions as markdown files in `.ralph/`.
 //! Used by Stop hooks to prevent Claude from stopping while work remains.
 //!
 //! ## Architecture
 //!
 //! The ralph tool has three submodules:
 //! - `execute/` — MCP tool implementation (`RalphTool`, `McpTool` trait impl)
-//! - `state.rs` — File-based state management (read/write `.sah/ralph/<session_id>.md`)
+//! - `state.rs` — File-based state management (read/write `.ralph/<session_id>.md`)
 //!
 //! ## File Format
 //!

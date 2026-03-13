@@ -44,12 +44,12 @@ Run the planning workflow to analyze your specification and create implementatio
 sah plan specification/index.md
 ```
 
-This generates rules and todos in the `.swissarmyhammer/` directory. Rules define acceptance criteria, and todos represent specific tasks.
+This generates rules and todos in the `.sah/` directory. Rules define acceptance criteria, and todos represent specific tasks.
 
 ### Step 4: Commit the Plan
 
 ```bash
-git add .swissarmyhammer/rules .swissarmyhammer/todo.yaml
+git add .sah/rules .sah/todo.yaml
 git commit -m "plan: add calculator rules and todos"
 ```
 
@@ -92,7 +92,7 @@ sah doctor
 
 # Generate the plan
 sah plan specification/index.md
-git add .swissarmyhammer/rules .swissarmyhammer/todo.yaml
+git add .sah/rules .sah/todo.yaml
 git commit -am 'plan'
 
 # Let it build
@@ -109,10 +109,10 @@ Create a personal prompts directory and your first prompt:
 
 ```bash
 # Create the directory structure
-mkdir -p ~/.swissarmyhammer/prompts
+mkdir -p ~/.sah/prompts
 
 # Create a simple helper prompt
-cat > ~/.swissarmyhammer/prompts/task-helper.md << 'EOF'
+cat > ~/.sah/prompts/task-helper.md << 'EOF'
 ---
 title: Task Helper
 description: Helps with various programming tasks
@@ -203,9 +203,9 @@ sah prompt test debug --var error="segmentation fault in C program"
 Workflows allow you to chain multiple prompts and actions. Create your first workflow:
 
 ```bash
-mkdir -p ~/.swissarmyhammer/workflows
+mkdir -p ~/.sah/workflows
 
-cat > ~/.swissarmyhammer/workflows/code-review.md << 'EOF'
+cat > ~/.sah/workflows/code-review.md << 'EOF'
 ---
 name: code-review
 description: Complete code review workflow
@@ -293,10 +293,10 @@ Create prompts specific to your project:
 
 ```bash
 # In your project directory
-mkdir -p .swissarmyhammer/prompts
+mkdir -p .sah/prompts
 
 # Create a project-specific prompt
-cat > .swissarmyhammer/prompts/api-docs.md << 'EOF'
+cat > .sah/prompts/api-docs.md << 'EOF'
 ---
 title: API Documentation
 description: Generate API documentation for this project

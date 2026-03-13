@@ -18,6 +18,9 @@ swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
 # Git detection
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
+# XDG directory helpers
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }

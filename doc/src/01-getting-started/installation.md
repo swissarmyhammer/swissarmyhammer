@@ -34,7 +34,7 @@ sah init
 
 This does two things:
 1. Registers `sah` as an MCP server in `.mcp.json`
-2. Creates the `.swissarmyhammer/` project directory with `prompts/` and `workflows/`
+2. Creates the `.sah/` project directory with `prompts/` and `workflows/`
 
 Verify the setup:
 ```bash
@@ -60,7 +60,7 @@ sah init local     # Install locally (not committed)
 
 ```bash
 sah deinit                     # Remove from project settings
-sah deinit --remove-directory  # Also remove .swissarmyhammer/
+sah deinit --remove-directory  # Also remove .sah/
 sah deinit user                # Remove from user settings
 ```
 
@@ -77,8 +77,8 @@ claude mcp add --scope user sah sah serve
 
 ```bash
 # Personal prompts and workflows (optional)
-mkdir -p ~/.swissarmyhammer/prompts
-mkdir -p ~/.swissarmyhammer/workflows
+mkdir -p ~/.sah/prompts
+mkdir -p ~/.sah/workflows
 ```
 
 Built-in prompts and workflows are embedded in the binary and available immediately.
@@ -100,7 +100,7 @@ sah completions fish > ~/.config/fish/completions/sah.fish
 
 ## Configuration (Optional)
 
-SwissArmyHammer works with sensible defaults. Optionally create `~/.swissarmyhammer/sah.toml`:
+SwissArmyHammer works with sensible defaults. Optionally create `~/.sah/sah.toml`:
 
 ```toml
 [general]

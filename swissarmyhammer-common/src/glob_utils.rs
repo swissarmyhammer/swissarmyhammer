@@ -23,7 +23,7 @@ pub struct GlobExpansionConfig {
     pub max_files: usize,
     /// Whether to sort results by modification time (most recent first)
     pub sort_by_mtime: bool,
-    /// Paths to explicitly exclude (e.g., .swissarmyhammer directory)
+    /// Paths to explicitly exclude (e.g., .sah directory)
     pub exclude_paths: Vec<PathBuf>,
 }
 
@@ -633,7 +633,7 @@ mod tests {
         fs::write(temp_dir.path().join("visible.rs"), "fn main() {}").unwrap();
 
         // Create various hidden directories
-        let hidden_dirs = [".git", ".vscode", ".idea", ".swissarmyhammer", ".cache"];
+        let hidden_dirs = [".git", ".vscode", ".idea", ".sah", ".cache"];
         for dir in &hidden_dirs {
             let hidden_dir = temp_dir.path().join(dir);
             fs::create_dir(&hidden_dir).unwrap();

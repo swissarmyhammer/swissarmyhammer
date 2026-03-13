@@ -72,7 +72,7 @@ impl Doctor {
             }
         };
 
-        // Check .swissarmyhammer directory
+        // Check .sah directory
         self.check_swissarmyhammer_directory(&git_root)?;
 
         // Run all checks
@@ -182,7 +182,7 @@ impl Doctor {
                     self.checks.push(Check {
                         name: "Directory Type".to_string(),
                         status: CheckStatus::Error,
-                        message: ".swissarmyhammer exists but is not a directory".to_string(),
+                        message: ".sah exists but is not a directory".to_string(),
                         fix: Some(
                             "Remove the file and let SwissArmyHammer recreate it as a directory"
                                 .to_string(),
@@ -194,7 +194,7 @@ impl Doctor {
                 self.checks.push(Check {
                     name: "Directory Access".to_string(),
                     status: CheckStatus::Error,
-                    message: format!("Cannot access .swissarmyhammer directory: {}", e),
+                    message: format!("Cannot access .sah directory: {}", e),
                     fix: Some("Check file permissions and ownership".to_string()),
                 });
             }

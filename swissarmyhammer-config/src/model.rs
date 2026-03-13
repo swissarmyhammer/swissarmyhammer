@@ -180,17 +180,17 @@ use thiserror::Error;
 /// Pass this to `ModelManager` methods that read/write config.
 #[derive(Debug, Clone)]
 pub struct ModelPaths {
-    /// Directory name relative to project root (e.g. ".swissarmyhammer" or ".avp")
+    /// Directory name relative to project root (e.g. ".sah" or ".avp")
     pub dir_name: &'static str,
     /// Config filename within the directory (e.g. "sah.yaml" or "avp.yaml")
     pub config_filename: &'static str,
 }
 
 impl ModelPaths {
-    /// Paths for SwissArmyHammer CLI: `.swissarmyhammer/sah.yaml`
+    /// Paths for SwissArmyHammer CLI: `.sah/sah.yaml`
     pub fn sah() -> Self {
         Self {
-            dir_name: ".swissarmyhammer",
+            dir_name: ".sah",
             config_filename: "sah.yaml",
         }
     }
@@ -1492,8 +1492,8 @@ impl ModelManager {
     /// file found or None if no configuration exists.
     ///
     /// # Search Order
-    /// 1. `.swissarmyhammer/sah.yaml` (preferred)
-    /// 2. `.swissarmyhammer/sah.toml` (fallback)
+    /// 1. `.sah/sah.yaml` (preferred)
+    /// 2. `.sah/sah.toml` (fallback)
     ///
     /// # Returns
     /// * `Option<PathBuf>` - Path to existing config file or None if not found
@@ -1530,7 +1530,7 @@ impl ModelManager {
 
     /// Ensure project configuration directory structure exists
     ///
-    /// Creates the `.swissarmyhammer/` directory if it doesn't exist and returns the path
+    /// Creates the `.sah/` directory if it doesn't exist and returns the path
     /// to the configuration file that should be used. If an existing configuration file
     /// is found, returns that path. Otherwise, returns the path for a new YAML configuration.
     ///
@@ -2042,7 +2042,7 @@ mod tests {
         let guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
-        std::fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        std::fs::create_dir_all(&sah_dir).expect("Failed to create .sah dir");
 
         let config_path = sah_dir.join(config_filename);
         if let Some(content) = initial_content {
@@ -3161,7 +3161,7 @@ quiet: false"#;
         let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
-        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        fs::create_dir_all(&sah_dir).expect("Failed to create .sah dir");
         let yaml_path = sah_dir.join("sah.yaml");
         fs::write(&yaml_path, "agent: {}\n").expect("Failed to write yaml config");
 
@@ -3175,8 +3175,8 @@ quiet: false"#;
             "Should find sah.yaml file"
         );
         assert!(
-            found_path.ends_with(".swissarmyhammer/sah.yaml"),
-            "Should end with .swissarmyhammer/sah.yaml"
+            found_path.ends_with(".sah/sah.yaml"),
+            "Should end with .sah/sah.yaml"
         );
     }
 
@@ -3192,7 +3192,7 @@ quiet: false"#;
         let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
-        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        fs::create_dir_all(&sah_dir).expect("Failed to create .sah dir");
         let toml_path = sah_dir.join("sah.toml");
         fs::write(&toml_path, "[agent]\n").expect("Failed to write toml config");
 
@@ -3206,8 +3206,8 @@ quiet: false"#;
             "Should find sah.toml file"
         );
         assert!(
-            found_path.ends_with(".swissarmyhammer/sah.toml"),
-            "Should end with .swissarmyhammer/sah.toml"
+            found_path.ends_with(".sah/sah.toml"),
+            "Should end with .sah/sah.toml"
         );
     }
 
@@ -3222,9 +3222,9 @@ quiet: false"#;
         fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
         let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
 
-        // Create .swissarmyhammer directory with both yaml and toml configs
+        // Create .sah directory with both yaml and toml configs
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
-        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        fs::create_dir_all(&sah_dir).expect("Failed to create .sah dir");
         let yaml_path = sah_dir.join("sah.yaml");
         let toml_path = sah_dir.join("sah.toml");
         fs::write(&yaml_path, "agent: {}\n").expect("Failed to write yaml config");
@@ -3240,8 +3240,8 @@ quiet: false"#;
             "Should prefer yaml over toml"
         );
         assert!(
-            found_path.ends_with(".swissarmyhammer/sah.yaml"),
-            "Should end with .swissarmyhammer/sah.yaml"
+            found_path.ends_with(".sah/sah.yaml"),
+            "Should end with .sah/sah.yaml"
         );
     }
 
@@ -3269,13 +3269,13 @@ quiet: false"#;
             "Should return path to sah.yaml"
         );
         assert!(
-            config_path.ends_with(".swissarmyhammer/sah.yaml"),
-            "Should end with .swissarmyhammer/sah.yaml"
+            config_path.ends_with(".sah/sah.yaml"),
+            "Should end with .sah/sah.yaml"
         );
 
         // Check that the directory was created
         let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
-        assert!(sah_dir.exists(), "Should create .swissarmyhammer directory");
+        assert!(sah_dir.exists(), "Should create .sah directory");
         assert!(sah_dir.is_dir(), "Should create directory, not file");
     }
 
@@ -3306,8 +3306,8 @@ quiet: false"#;
             "Should return path to sah.yaml"
         );
         assert!(
-            config_path.ends_with(".swissarmyhammer/sah.yaml"),
-            "Should end with .swissarmyhammer/sah.yaml"
+            config_path.ends_with(".sah/sah.yaml"),
+            "Should end with .sah/sah.yaml"
         );
     }
 
@@ -3339,7 +3339,7 @@ quiet: false"#;
             "Should return existing config file"
         );
         assert!(
-            config_path.ends_with(".swissarmyhammer/sah.toml"),
+            config_path.ends_with(".sah/sah.toml"),
             "Should return existing toml config"
         );
     }

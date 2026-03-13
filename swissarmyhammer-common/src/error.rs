@@ -209,12 +209,12 @@ pub enum SwissArmyHammerError {
     #[error("SwissArmyHammer must be run from within a Git repository")]
     NotInGitRepository,
 
-    /// Failed to create .swissarmyhammer directory
-    #[error("Failed to create .swissarmyhammer directory: {0}")]
+    /// Failed to create .sah directory
+    #[error("Failed to create .sah directory: {0}")]
     DirectoryCreation(String),
 
-    /// Git repository found but .swissarmyhammer directory is not accessible
-    #[error("Git repository found but .swissarmyhammer directory is not accessible: {0}")]
+    /// Git repository found but .sah directory is not accessible
+    #[error("Git repository found but .sah directory is not accessible: {0}")]
     DirectoryAccess(String),
 
     /// Invalid path encountered

@@ -103,7 +103,7 @@ Prompts validated from:
 
 Workflows validated from:
 • Built-in workflows (embedded in binary)
-• User workflows (~/.swissarmyhammer/workflows/)
+• User workflows (~/.sah/workflows/)
 • Project workflows (./workflows/)
 
 MCP tools validated from:

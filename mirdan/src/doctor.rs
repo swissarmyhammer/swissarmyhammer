@@ -10,6 +10,7 @@
 use std::env;
 use std::path::PathBuf;
 
+use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 use swissarmyhammer_doctor::{Check, CheckStatus, DoctorRunner};
 
 use crate::agents;
@@ -123,7 +124,7 @@ impl MirdanDoctor {
                     name: "Agents Detected".to_string(),
                     status: CheckStatus::Error,
                     message: format!("Failed to load agents config: {}", e),
-                    fix: Some("Check ~/.mirdan/agents.yaml for syntax errors".to_string()),
+                    fix: Some("Check $XDG_CONFIG_HOME/mirdan/ (or ~/.config/mirdan/) for syntax errors".to_string()),
                 });
             }
         }
@@ -132,7 +133,10 @@ impl MirdanDoctor {
     /// Check if .avp/ directory exists for validators.
     fn check_avp_directory(&mut self) {
         let local_avp = PathBuf::from(".avp");
-        let global_avp = dirs::home_dir().map(|h| h.join(".avp"));
+        // Global AVP validators live under $XDG_DATA_HOME/avp/ (defaults to ~/.local/share/avp/)
+        let global_avp = ManagedDirectory::<AvpConfig>::xdg_data()
+            .ok()
+            .map(|dir| dir.root().to_path_buf());
 
         let local_exists = local_avp.exists();
         let global_exists = global_avp.as_ref().is_some_and(|p| p.exists());
@@ -143,7 +147,7 @@ impl MirdanDoctor {
                 locations.push("project (.avp/)");
             }
             if global_exists {
-                locations.push("global (~/.avp/)");
+                locations.push("global ($XDG_DATA_HOME/avp/)");
             }
             self.add_check(Check {
                 name: "AVP Directory".to_string(),
@@ -221,7 +225,7 @@ impl MirdanDoctor {
                 let source = if env::var("MIRDAN_TOKEN").is_ok() {
                     "MIRDAN_TOKEN env var"
                 } else {
-                    "~/.mirdan/credentials"
+                    "$XDG_CONFIG_HOME/mirdan/credentials (or ~/.config/mirdan/credentials)"
                 };
                 self.add_check(Check {
                     name: "Credentials".to_string(),

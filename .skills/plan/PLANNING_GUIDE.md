@@ -19,7 +19,7 @@ Follow a zoom-in funnel from broad to specific. Do NOT chain `cd`, `ls`, `cat` c
 
 - Read project config files (`Cargo.toml`, `package.json`, `pyproject.toml`, etc.) to understand the tech stack, dependencies, and build system.
 - Use `files` with `op: "glob"` to list the top-level directory structure and understand project organization.
-- Check for project conventions in `CLAUDE.md`, `AGENTS.md`, or `.swissarmyhammer/` directories.
+- Check for project conventions in `CLAUDE.md`, `AGENTS.md`, or `.sah/` directories.
 
 ### Step 2: Keyword search for relevant areas
 

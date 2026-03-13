@@ -20,7 +20,7 @@ SwissArmyHammer already has a comprehensive agent system with:
 **Agent discovery hierarchy:**
 1. Built-in agents (embedded in binary)
 2. Project agents (`./agents/*.yaml`)
-3. User agents (`~/.swissarmyhammer/agents/*.yaml`)
+3. User agents (`~/.sah/agents/*.yaml`)
 
 **Commands:**
 - `sah agent list` - List all available agents
@@ -43,7 +43,7 @@ Since we already have an agent system with a registry of available agents, we ju
 Add a simple config key to specify which agent to use:
 
 ```yaml
-# .swissarmyhammer/config.yaml
+# .sah/config.yaml
 rule_checker:
   agent: "qwen-coder-flash"  # Use fast local model for rule checking
 ```
@@ -63,7 +63,7 @@ rule_checker:
 Config default with CLI flag override:
 
 ```yaml
-# .swissarmyhammer/config.yaml
+# .sah/config.yaml
 rule_checker:
   agent: "qwen-coder-flash"  # Default
 ```
@@ -91,7 +91,7 @@ sah rules check --agent claude-code
 Instead of just "use an agent", configure different agents for different use cases:
 
 ```yaml
-# .swissarmyhammer/config.yaml
+# .sah/config.yaml
 agents:
   root: "claude-code"           # Default agent for general operations
   rules: "qwen-coder-flash"     # Agent for rule checking
@@ -168,7 +168,7 @@ sah agent use rules qwen-coder
 ## Config Schema
 
 ```yaml
-# .swissarmyhammer/config.yaml
+# .sah/config.yaml
 agents:
   root: "claude-code"           # Default agent (fallback)
   rules: "qwen-coder-flash"     # Agent for rule checking

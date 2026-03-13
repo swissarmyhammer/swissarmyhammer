@@ -49,7 +49,7 @@ async fn test_commands_work_in_git_repository() {
     use git2::Repository;
     Repository::init(&temp_dir).expect("Failed to initialize git repository");
 
-    // Create .swissarmyhammer directory
+    // Create .sah directory
     fs::create_dir_all(temp_dir.join(SwissarmyhammerDirectory::dir_name()))
         .expect("Failed to create directory");
 

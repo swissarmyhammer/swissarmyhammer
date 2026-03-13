@@ -150,7 +150,7 @@ Initialize SwissArmyHammer for use with Claude Code.
 
 This command:
 1. Registers sah as an MCP server in Claude Code settings
-2. Creates the .swissarmyhammer/ project directory (workflows/) and .prompts/
+2. Creates the .sah/ project directory (workflows/) and .prompts/
 
 The command is idempotent - safe to run multiple times.
 
@@ -190,12 +190,12 @@ Examples:
 Remove SwissArmyHammer MCP server configuration from Claude Code settings.
 
 By default, only the MCP server entry is removed from the settings file.
-Use --remove-directory to also delete the .swissarmyhammer/ project directory.
+Use --remove-directory to also delete the .sah/ project directory.
 
 Examples:
   sah deinit                     # Remove from project settings
   sah deinit user                # Remove from user settings
-  sah deinit --remove-directory  # Also remove .swissarmyhammer/
+  sah deinit --remove-directory  # Also remove .sah/
 
 
 **Usage:** `swissarmyhammer deinit [OPTIONS] [TARGET]`
@@ -217,7 +217,7 @@ Examples:
 
 ###### **Options:**
 
-* `--remove-directory` — Also remove .swissarmyhammer/ project directory
+* `--remove-directory` — Also remove .sah/ project directory
 
 
 
@@ -360,7 +360,7 @@ WORKFLOW DISCOVERY
 
 Workflows are loaded from multiple sources:
 • Built-in workflows - Standard development workflows included
-• User workflows (~/.swissarmyhammer/workflows/) - Personal automations
+• User workflows (~/.sah/workflows/) - Personal automations
 • Project workflows (./workflows/) - Project-specific processes
 
 COMMON WORKFLOWS
@@ -569,7 +569,7 @@ Prompts validated from:
 
 Workflows validated from:
 • Built-in workflows (embedded in binary)
-• User workflows (~/.swissarmyhammer/workflows/)
+• User workflows (~/.sah/workflows/)
 • Project workflows (./workflows/)
 
 MCP tools validated from:
@@ -813,7 +813,7 @@ The model system provides two main commands:
 • list - Display all available models from all sources with descriptions
 • use - Apply a model configuration to the current project
 
-When you 'use' a model, it creates or updates .swissarmyhammer/sah.yaml in your
+When you 'use' a model, it creates or updates .sah/sah.yaml in your
 project with the model's configuration. This configures how SwissArmyHammer 
 executes AI workflows in your project.
 
@@ -940,7 +940,7 @@ Examples:
 Apply a specific model configuration to the current project or for a specific use case.
 
 This command finds the specified model by name and applies its configuration
-to the project by creating or updating .swissarmyhammer/sah.yaml. The model
+to the project by creating or updating .sah/sah.yaml. The model
 configuration determines how SwissArmyHammer executes AI workflows in your
 project, including which AI model to use and how to execute tools.
 

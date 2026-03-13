@@ -101,7 +101,7 @@ Skills are bundles of instructions that teach the agent how to do specific tasks
 
 ### Custom Skills
 
-Drop a `SKILL.md` file in `~/.swissarmyhammer/skills/<name>/` or `.swissarmyhammer/skills/<name>/` in your project:
+Drop a `SKILL.md` file in `~/.sah/skills/<name>/` or `.sah/skills/<name>/` in your project:
 
 ```markdown
 ---
@@ -132,7 +132,7 @@ sah do                 # Shortcut for the do workflow
 ## Configuration
 
 sah looks for configuration in:
-- `~/.swissarmyhammer/` -- user-level config, prompts, workflows, skills
-- `.swissarmyhammer/` -- project-level config, prompts, workflows, skills
+- `~/.sah/` -- user-level config, prompts, workflows, skills
+- `.sah/` -- project-level config, prompts, workflows, skills
 
 Project-level settings override user-level. Supports TOML, YAML, and JSON config files.

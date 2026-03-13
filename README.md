@@ -159,7 +159,7 @@ The core. An MCP server that gives your agent everything it needs:
 
 Skills are markdown files. They teach your agent *how* to do things, not just *what* to do. Each skill defines a step-by-step process, and a specialized agent type executes it. This is what turns a generic LLM into a focused engineer.
 
-You can write your own skills too -- drop a `SKILL.md` in `.swissarmyhammer/skills/my-skill/` and your agent picks it up automatically.
+You can write your own skills too -- drop a `SKILL.md` in `.sah/skills/my-skill/` and your agent picks it up automatically.
 
 ### [avp](https://agentvalidatorprotocol.com) -- Agent Validator Protocol
 
@@ -191,14 +191,14 @@ mirdan publish                 # Share your own
 **Everything is markdown.** Skills, validators, workflows, prompts -- all markdown with YAML frontmatter and Liquid templating. No proprietary formats, no databases, no cloud lock-in. Everything lives in your repo or your home directory, fully version-controllable.
 
 ```
-~/.swissarmyhammer/
+~/.sah/
   skills/           # Installed skills (markdown)
   validators/       # Installed validators (markdown)
   prompts/          # Custom prompts (markdown + Liquid)
   workflows/        # State machine workflows (markdown + Mermaid)
 ```
 
-Project-level overrides go in `.swissarmyhammer/` in your repo. Project settings win over user settings.
+Project-level overrides go in `.sah/` in your repo. Project settings win over user settings.
 
 The MCP server itself is a single Rust binary -- fast startup, no runtime dependencies, no Docker, no cloud services. It runs locally alongside your agent.
 

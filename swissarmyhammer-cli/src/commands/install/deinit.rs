@@ -15,7 +15,7 @@ use super::settings;
 ///
 /// Creates an `InitRegistry`, registers all components, and runs `deinit` in
 /// reverse priority order. The `remove_directory` flag controls whether
-/// `ProjectStructure` removes `.swissarmyhammer/` and `.prompts/`.
+/// `ProjectStructure` removes `.sah/` and `.prompts/`.
 pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {
     let reporter = CliReporter;
     let start = Instant::now();

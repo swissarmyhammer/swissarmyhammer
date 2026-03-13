@@ -86,7 +86,7 @@ The server runs until:
 
 ## Logging and Debugging
 
-Comprehensive logging to `.swissarmyhammer/mcp.log`:
+Comprehensive logging to `.sah/mcp.log`:
 • DEBUG level for detailed operation information
 • All tool invocations and parameters
 • Client communication events
@@ -165,7 +165,7 @@ Automated todo execution:
 Server won't start:
 • Check port availability and permissions
 • Verify sah is in PATH
-• Review .swissarmyhammer/mcp.log for errors
+• Review .sah/mcp.log for errors
 • Try with --debug flag for detailed output
 
 Client can't connect:
@@ -175,7 +175,7 @@ Client can't connect:
 • Ensure no firewall blocking communication
 
 Tools not working:
-• Check .swissarmyhammer/mcp.log for tool errors
+• Check .sah/mcp.log for tool errors
 • Verify file system permissions
 • Ensure git repository is properly initialized
 • Review tool-specific requirements
@@ -190,7 +190,7 @@ The MCP server provides AI with direct access to:
 
 Best practices:
 • Run server only when actively using AI features
-• Monitor .swissarmyhammer/mcp.log for unusual activity
+• Monitor .sah/mcp.log for unusual activity
 • Review AI-generated changes before committing
 • Use in trusted development environments
 • Shut down server when not in use

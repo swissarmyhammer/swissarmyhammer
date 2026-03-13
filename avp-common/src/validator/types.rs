@@ -280,7 +280,7 @@ impl ValidatorFrontmatter {
 pub enum ValidatorSource {
     /// Builtin validators embedded in the binary.
     Builtin,
-    /// User validators from ~/<AVP_DIR>/validators.
+    /// User validators from $XDG_DATA_HOME/avp/validators.
     User,
     /// Project validators from ./<AVP_DIR>/validators.
     Project,

@@ -3,9 +3,9 @@
 use crate::directory::SwissarmyhammerDirectory;
 use std::path::PathBuf;
 
-/// Get the SwissArmyHammer directory (.swissarmyhammer)
+/// Get the SwissArmyHammer directory (.sah)
 ///
-/// This function creates a simple .swissarmyhammer directory in the current working directory
+/// This function creates a simple .sah directory in the current working directory
 /// if it doesn't exist. This is a simplified version for use in the memoranda crate.
 ///
 /// # Deprecated

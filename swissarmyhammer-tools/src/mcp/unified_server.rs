@@ -189,7 +189,7 @@ fn setup_tracing_subscriber(
     true
 }
 
-/// Configure MCP logging to write to `.swissarmyhammer/` directory
+/// Configure MCP logging to write to `.sah/` directory
 ///
 /// This function sets up file-based logging similar to what `sah serve` does,
 /// ensuring that in-process MCP servers have the same debugging capabilities.
@@ -200,7 +200,7 @@ fn setup_tracing_subscriber(
 /// * `log_filter` - Optional log filter string (defaults to "rmcp=warn,debug")
 ///
 /// # Behavior
-/// - Creates `.swissarmyhammer/` directory if it doesn't exist
+/// - Creates `.sah/` directory if it doesn't exist
 /// - Sets up tracing subscriber with file output (uses `SWISSARMYHAMMER_LOG_FILE` env var or defaults to `mcp.log`)
 /// - Falls back to stderr logging if file creation fails
 /// - Only configures logging once per process (subsequent calls are no-op)

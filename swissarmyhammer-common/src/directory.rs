@@ -1,6 +1,6 @@
 //! SwissArmyHammer directory structure management
 //!
-//! This module provides a centralized representation of the .swissarmyhammer directory
+//! This module provides a centralized representation of the .sah directory
 //! structure, supporting different root locations (Git root, user home, custom paths).
 //!
 //! This module re-exports types from `swissarmyhammer-directory` with the
@@ -126,15 +126,15 @@ mod tests {
         let sah_dir =
             SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
 
-        // Create a file inside .swissarmyhammer
+        // Create a file inside .sah
         let todo_dir = sah_dir.ensure_subdir("todo").unwrap();
         let todo_file = todo_dir.join("todo.yaml");
         fs::write(&todo_file, "test").unwrap();
 
-        // Should detect file is inside .swissarmyhammer
+        // Should detect file is inside .sah
         assert!(sah_dir.contains_path(&todo_file));
 
-        // File outside .swissarmyhammer should return false
+        // File outside .sah should return false
         let outside_file = temp.path().join("outside.txt");
         fs::write(&outside_file, "test").unwrap();
         assert!(!sah_dir.contains_path(&outside_file));
@@ -192,7 +192,7 @@ mod tests {
     fn test_gitignore_not_overwritten() {
         let temp = TempDir::new().unwrap();
 
-        // Create .swissarmyhammer directory manually with custom .gitignore
+        // Create .sah directory manually with custom .gitignore
         let sah_path = temp.path().join(DIR_NAME);
         fs::create_dir_all(&sah_path).unwrap();
 

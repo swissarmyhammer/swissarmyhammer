@@ -135,7 +135,7 @@ impl SkillResolver {
         let dot_skills = cwd.join(".skills");
         self.validate_directory(&dot_skills, SkillSource::Local, issues);
 
-        let sah_skills = cwd.join(".swissarmyhammer").join("skills");
+        let sah_skills = cwd.join(".sah").join("skills");
         self.validate_directory(&sah_skills, SkillSource::Local, issues);
     }
 
@@ -145,7 +145,7 @@ impl SkillResolver {
             let user_skills = home.join(".skills");
             self.validate_directory(&user_skills, SkillSource::User, issues);
 
-            let user_sah_skills = home.join(".swissarmyhammer").join("skills");
+            let user_sah_skills = home.join(".sah").join("skills");
             self.validate_directory(&user_sah_skills, SkillSource::User, issues);
         }
     }
@@ -254,8 +254,8 @@ impl SkillResolver {
         let dot_skills = cwd.join(".skills");
         self.load_from_directory(&dot_skills, SkillSource::Local, skills);
 
-        // Try .swissarmyhammer/skills/ in project root
-        let sah_skills = cwd.join(".swissarmyhammer").join("skills");
+        // Try .sah/skills/ in project root
+        let sah_skills = cwd.join(".sah").join("skills");
         self.load_from_directory(&sah_skills, SkillSource::Local, skills);
     }
 
@@ -266,8 +266,8 @@ impl SkillResolver {
             let user_skills = home.join(".skills");
             self.load_from_directory(&user_skills, SkillSource::User, skills);
 
-            // Try ~/.swissarmyhammer/skills/
-            let user_sah_skills = home.join(".swissarmyhammer").join("skills");
+            // Try ~/.sah/skills/
+            let user_sah_skills = home.join(".sah").join("skills");
             self.load_from_directory(&user_sah_skills, SkillSource::User, skills);
         }
     }

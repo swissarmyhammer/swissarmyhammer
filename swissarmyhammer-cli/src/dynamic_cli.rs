@@ -676,7 +676,7 @@ Initialize SwissArmyHammer for use with Claude Code.
 
 This command:
 1. Registers sah as an MCP server in Claude Code settings
-2. Creates the .swissarmyhammer/ project directory and .prompts/
+2. Creates the .sah/ project directory and .prompts/
 
 The command is idempotent - safe to run multiple times.
 
@@ -695,12 +695,12 @@ const DEINIT_COMMAND_LONG_ABOUT: &str = "
 Remove SwissArmyHammer MCP server configuration from Claude Code settings.
 
 By default, only the MCP server entry is removed from the settings file.
-Use --remove-directory to also delete the .swissarmyhammer/ project directory.
+Use --remove-directory to also delete the .sah/ project directory.
 
 Examples:
   sah deinit                     # Remove from project settings
   sah deinit user                # Remove from user settings
-  sah deinit --remove-directory  # Also remove .swissarmyhammer/
+  sah deinit --remove-directory  # Also remove .sah/
 ";
 
 const DOCTOR_COMMAND_LONG_ABOUT: &str = "
@@ -907,7 +907,7 @@ const MODEL_USE_LONG_ABOUT: &str = "
 Apply a specific model configuration to the current project.
 
 This command finds the specified model by name and applies its configuration
-to the project by creating or updating .swissarmyhammer/sah.yaml.
+to the project by creating or updating .sah/sah.yaml.
 
 Model precedence (highest to lowest):
 • User models: ~/.models/<name>.yaml
@@ -1690,7 +1690,7 @@ impl CliBuilder {
                 .default_value("project".to_string()),
                 ArgSpec::new(
                     "remove-directory",
-                    "Also remove .swissarmyhammer/ project directory",
+                    "Also remove .sah/ project directory",
                 )
                 .long("remove-directory")
                 .action(ArgSpecAction::SetTrue),
@@ -2095,11 +2095,11 @@ impl CliBuilder {
                     Use 'sah statusline config' to dump the full annotated builtin config.\n\n\
                     The statusline is configured via YAML with 3-layer stacking:\n\
                     1. Builtin defaults (embedded in binary)\n\
-                    2. User config (~/.swissarmyhammer/statusline/config.yaml)\n\
-                    3. Project config (.swissarmyhammer/statusline/config.yaml)\n\n\
+                    2. User config (~/.sah/statusline/config.yaml)\n\
+                    3. Project config (.sah/statusline/config.yaml)\n\n\
                     Examples:\n\
                       echo '{\"model\":{\"display_name\":\"Opus\"}}' | sah statusline\n\
-                      sah statusline config > .swissarmyhammer/statusline/config.yaml",
+                      sah statusline config > .sah/statusline/config.yaml",
             },
             vec![Command::new("config").about("Dump the full annotated builtin config to stdout")],
         )

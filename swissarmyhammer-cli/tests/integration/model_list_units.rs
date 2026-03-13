@@ -435,7 +435,7 @@ executor:
 quiet: false"#;
     fs::write(actual_models.join("symlink-test.yaml"), test_model)?;
 
-    // Create .swissarmyhammer directory
+    // Create .sah directory
     let sah_dir = temp_home.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir)?;
 

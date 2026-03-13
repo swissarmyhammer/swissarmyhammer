@@ -2,7 +2,7 @@
 //!
 //! This crate provides a reusable pattern for loading files from multiple directories
 //! with precedence: builtin → user home → project root. It supports different
-//! directory configurations (e.g., `.swissarmyhammer`, `.avp`) through the
+//! directory configurations (e.g., `.sah`, `.avp`) through the
 //! `DirectoryConfig` trait.
 //!
 //! # Overview
@@ -47,6 +47,7 @@
 //!
 //! impl DirectoryConfig for MyToolConfig {
 //!     const DIR_NAME: &'static str = ".mytool";
+//!     const XDG_NAME: &'static str = "mytool";
 //!     const GITIGNORE_CONTENT: &'static str = "*.log\ntmp/\n";
 //!
 //!     fn init_subdirs() -> &'static [&'static str] {
@@ -66,10 +67,11 @@ mod yaml_expander;
 
 // Re-export main types
 pub use config::{
-    AvpConfig, CodeContextConfig, DirectoryConfig, ShellConfig, SwissarmyhammerConfig,
+    AvpConfig, CodeContextConfig, DirectoryConfig, RalphConfig, ShellConfig, SwissarmyhammerConfig,
 };
 pub use directory::{
-    find_git_repository_root, find_git_repository_root_from, DirectoryRootType, ManagedDirectory,
+    find_git_repository_root, find_git_repository_root_from, warn_legacy_paths,
+    DirectoryRootType, ManagedDirectory,
 };
 pub use error::{DirectoryError, Result};
 pub use file_loader::{FileEntry, FileSource, SearchPath, VirtualFileSystem};

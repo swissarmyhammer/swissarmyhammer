@@ -1,10 +1,11 @@
 //! Ralph state management
 //!
 //! Stores per-session instructions as markdown files with YAML frontmatter
-//! in `.sah/ralph/<session_id>.md`.
+//! in `.ralph/<session_id>.md`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use swissarmyhammer_directory::{ManagedDirectory, RalphConfig};
 
 /// Per-session ralph instruction state
 ///
@@ -92,25 +93,29 @@ fn unescape_yaml_value(s: &str) -> String {
 
 /// Get the ralph directory path
 ///
-/// Returns the `.sah/ralph/` directory under the given base directory.
-fn ralph_dir(base_dir: &Path) -> PathBuf {
-    base_dir.join(".sah").join("ralph")
+/// Returns the `.ralph/` directory under the given base directory, using
+/// `ManagedDirectory<RalphConfig>` which auto-creates the dir and seeds `.gitignore`.
+fn ralph_dir(base_dir: &Path) -> anyhow::Result<PathBuf> {
+    let dir =
+        ManagedDirectory::<RalphConfig>::from_custom_root(base_dir.to_path_buf()).map_err(|e| {
+            anyhow::anyhow!("Failed to initialize .ralph directory: {e}")
+        })?;
+    Ok(dir.root().to_path_buf())
 }
 
 /// Get the file path for a session's ralph instruction
 ///
 /// Returns the path to `<session_id>.md` in the ralph directory.
-fn ralph_file(base_dir: &Path, session_id: &str) -> PathBuf {
-    ralph_dir(base_dir).join(format!("{session_id}.md"))
+fn ralph_file(base_dir: &Path, session_id: &str) -> anyhow::Result<PathBuf> {
+    Ok(ralph_dir(base_dir)?.join(format!("{session_id}.md")))
 }
 
 /// Ensure the ralph directory exists
 ///
-/// Creates `.sah/ralph/` and all parent directories if they don't exist.
+/// Creates `.ralph/` and seeds `.gitignore` if they don't exist.
 /// This operation is idempotent — calling it multiple times has no effect.
 pub fn ensure_ralph_dir(base_dir: &Path) -> anyhow::Result<()> {
-    let dir = ralph_dir(base_dir);
-    fs::create_dir_all(&dir)?;
+    ralph_dir(base_dir)?;
     Ok(())
 }
 
@@ -122,7 +127,7 @@ pub fn ensure_ralph_dir(base_dir: &Path) -> anyhow::Result<()> {
 /// them as "no state".
 pub fn read_ralph(base_dir: &Path, session_id: &str) -> anyhow::Result<Option<RalphState>> {
     validate_session_id(session_id)?;
-    let path = ralph_file(base_dir, session_id);
+    let path = ralph_file(base_dir, session_id)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -133,12 +138,11 @@ pub fn read_ralph(base_dir: &Path, session_id: &str) -> anyhow::Result<Option<Ra
 
 /// Write a session's ralph state to disk
 ///
-/// Creates `.sah/ralph/<session_id>.md` with YAML frontmatter containing
+/// Creates `.ralph/<session_id>.md` with YAML frontmatter containing
 /// instruction, iteration, and max_iterations. The `state.body` field is
 /// written as the markdown body after the frontmatter.
 pub fn write_ralph(base_dir: &Path, session_id: &str, state: &RalphState) -> anyhow::Result<()> {
     validate_session_id(session_id)?;
-    ensure_ralph_dir(base_dir)?;
 
     // Quote the instruction to prevent YAML injection via newlines or special chars
     let escaped_instruction = escape_yaml_value(&state.instruction);
@@ -147,17 +151,17 @@ pub fn write_ralph(base_dir: &Path, session_id: &str, state: &RalphState) -> any
         state.iteration, state.max_iterations, state.body
     );
 
-    fs::write(ralph_file(base_dir, session_id), content)?;
+    fs::write(ralph_file(base_dir, session_id)?, content)?;
     Ok(())
 }
 
 /// Delete a session's ralph state file
 ///
-/// Removes `.sah/ralph/<session_id>.md` if it exists. No-ops if the file
+/// Removes `.ralph/<session_id>.md` if it exists. No-ops if the file
 /// doesn't exist.
 pub fn delete_ralph(base_dir: &Path, session_id: &str) -> anyhow::Result<()> {
     validate_session_id(session_id)?;
-    let path = ralph_file(base_dir, session_id);
+    let path = ralph_file(base_dir, session_id)?;
     if path.exists() {
         fs::remove_file(path)?;
     }
@@ -234,7 +238,7 @@ mod tests {
     fn test_ensure_ralph_dir_creates_directory() {
         let tmp = setup();
         ensure_ralph_dir(tmp.path()).unwrap();
-        assert!(tmp.path().join(".sah").join("ralph").is_dir());
+        assert!(tmp.path().join(".ralph").is_dir());
     }
 
     #[test]
@@ -242,7 +246,7 @@ mod tests {
         let tmp = setup();
         ensure_ralph_dir(tmp.path()).unwrap();
         ensure_ralph_dir(tmp.path()).unwrap();
-        assert!(tmp.path().join(".sah").join("ralph").is_dir());
+        assert!(tmp.path().join(".ralph").is_dir());
     }
 
     #[test]
@@ -283,11 +287,7 @@ mod tests {
 
         write_ralph(tmp.path(), "test-session", &state).unwrap();
 
-        let expected_path = tmp
-            .path()
-            .join(".sah")
-            .join("ralph")
-            .join("test-session.md");
+        let expected_path = tmp.path().join(".ralph").join("test-session.md");
         assert!(expected_path.exists());
     }
 

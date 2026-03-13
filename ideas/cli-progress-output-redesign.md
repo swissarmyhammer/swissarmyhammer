@@ -12,7 +12,7 @@ Current output looks like:
 ```
 sah MCP server installed for Claude Code (/path/to/.mcp.json)
 Bash tool denied in /path/to/.claude/settings.json (use shell tool instead)
-Project structure initialized at /path/to/.swissarmyhammer
+Project structure initialized at /path/to/.sah
 Installed 12 builtin skills (lockfile updated)
 Installed 7 builtin agents (lockfile updated)
 Statusline installed in /path/to/.claude/settings.json
@@ -32,7 +32,7 @@ Cargo/bun-style output with right-aligned verbs, consistent coloring, and timing
   Registering MCP server for 3 agents
   Configuring permissions (deny Bash)
   Configuring statusline
-  Scaffolding .swissarmyhammer/
+  Scaffolding .sah/
   Scaffolding .prompts/
    Deploying  12 builtin skills
    Deploying  7 builtin agents

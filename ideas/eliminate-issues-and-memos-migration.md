@@ -21,14 +21,14 @@ Everything else is redundant.
 - **Crates**: `swissarmyhammer-issues`
 - **MCP Tools**: `issue_create`, `issue_show`, `issue_list`, `issue_update`, `issue_mark_complete`, `issue_all_complete`
 - **CLI Commands**: `sah issue ...`
-- **Storage**: `.swissarmyhammer/issues/`
+- **Storage**: `.sah/issues/`
 - **Workflows using it**: `do_issue`, `implement`, `test`
 
 ### Memos System
 - **Crates**: `swissarmyhammer-memoranda`
 - **MCP Tools**: `memo_create`, `memo_get`, `memo_list`, `memo_get_all_context`
 - **CLI Commands**: `sah memo ...`
-- **Storage**: `.swissarmyhammer/memos/`
+- **Storage**: `.sah/memos/`
 - **Current usage**: System prompt context injection
 
 ## New Tool Needed
@@ -51,12 +51,12 @@ Any valuable patterns from old memos can be recreated as rules when needed.
 ## rule_create Tool Design
 
 ### Design Decisions
-- ✅ **Location**: `.swissarmyhammer/rules/` with subdirectory support
-  - Example: `.swissarmyhammer/rules/code-quality/my-rule.md`
+- ✅ **Location**: `.sah/rules/` with subdirectory support
+  - Example: `.sah/rules/code-quality/my-rule.md`
   - Should already work if manually created
 - ✅ **Category**: Derived from subdirectory in filename
   - User specifies: `name: "code-quality/my-rule"`
-  - Creates: `.swissarmyhammer/rules/code-quality/my-rule.md`
+  - Creates: `.sah/rules/code-quality/my-rule.md`
   - Category field in YAML is redundant (can be removed from existing rules)
 - ✅ **Auto-generate frontmatter**: AI agent provides structured parameters
 - ✅ **Description**: NOT in frontmatter - it's the markdown body
@@ -204,8 +204,8 @@ Check for global mutable state...
 - Entire `swissarmyhammer-memoranda` crate
 - 6+ MCP tools (issue_*, memo_*)
 - CLI commands (sah issue, sah memo)
-- `.swissarmyhammer/issues/` directory and all content
-- `.swissarmyhammer/memos/` directory and all content
+- `.sah/issues/` directory and all content
+- `.sah/memos/` directory and all content
 - Builtin workflows: `do_issue`, `implement`
 - Builtin prompts: `are_issues_complete`, `issue/complete`, `issue/placeholders`, `code/issue`
 
@@ -220,7 +220,7 @@ Check for global mutable state...
 
 ### What gets updated
 - `plan` workflow/prompt → creates rules + todos (not issues)
-- `.gitignore` → add `.swissarmyhammer/issues/` and `.swissarmyhammer/memos/` (stop tracking them)
+- `.gitignore` → add `.sah/issues/` and `.sah/memos/` (stop tracking them)
 
 ### The New Workflow
 1. **Plan**: `sah plan spec.md`

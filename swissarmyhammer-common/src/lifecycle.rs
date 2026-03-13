@@ -12,7 +12,7 @@ use crate::reporter::InitReporter;
 /// Scope for init/deinit operations — mirrors CLI install targets without coupling to clap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitScope {
-    /// Project-level: `.swissarmyhammer/`, `.skills/`, `.agents/`, etc.
+    /// Project-level: `.sah/`, `.skills/`, `.agents/`, etc.
     Project,
     /// Local user scope: `~/.claude.json` MCP registration
     Local,

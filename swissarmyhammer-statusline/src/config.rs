@@ -424,7 +424,7 @@ impl Default for LanguagesModuleConfig {
 }
 
 /// Load the statusline config with 3-layer stacking:
-/// builtin -> user (~/.swissarmyhammer/statusline/config.yaml) -> project (.swissarmyhammer/statusline/config.yaml)
+/// builtin -> user (~/.sah/statusline/config.yaml) -> project (.sah/statusline/config.yaml)
 ///
 /// Overlay files are deep-merged into the base so that a user or project config
 /// only needs to specify the fields they want to override. Unspecified fields
@@ -436,7 +436,7 @@ pub fn load_config() -> StatuslineConfig {
     // User layer
     if let Some(home) = dirs::home_dir() {
         let user_path = home
-            .join(".swissarmyhammer")
+            .join(".sah")
             .join("statusline")
             .join("config.yaml");
         if let Some(overlay) = load_yaml_value(&user_path) {
@@ -445,7 +445,7 @@ pub fn load_config() -> StatuslineConfig {
     }
 
     // Project layer
-    let project_path = Path::new(".swissarmyhammer")
+    let project_path = Path::new(".sah")
         .join("statusline")
         .join("config.yaml");
     if let Some(overlay) = load_yaml_value(&project_path) {

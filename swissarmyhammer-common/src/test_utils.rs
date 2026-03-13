@@ -256,7 +256,7 @@ fn create_isolated_test_home() -> (TempDir, PathBuf) {
 
     // Create mock SwissArmyHammer directory structure using centralized directory management
     let sah_dir = crate::directory::SwissarmyhammerDirectory::from_custom_root(home_path.clone())
-        .expect("Failed to create .swissarmyhammer directory");
+        .expect("Failed to create .sah directory");
     // Create .prompts/ directory (the dot-directory path used by PromptResolver)
     let dot_prompts_dir = home_path.join(".prompts");
     std::fs::create_dir_all(&dot_prompts_dir).expect("Failed to create .prompts directory");
@@ -327,7 +327,7 @@ impl IsolatedTestHome {
         self._temp_dir.path().to_path_buf()
     }
 
-    /// Get the path to the .swissarmyhammer directory in the isolated home
+    /// Get the path to the .sah directory in the isolated home
     pub fn swissarmyhammer_dir(&self) -> PathBuf {
         crate::directory::SwissarmyhammerDirectory::from_custom_root(self.home_path())
             .expect("Failed to get swissarmyhammer directory")
@@ -357,7 +357,7 @@ impl IsolatedTestEnvironment {
     /// Creates a new isolated test environment with temporary HOME directory only.
     ///
     /// This creates:
-    /// - A temporary home directory with mock .swissarmyhammer structure
+    /// - A temporary home directory with mock .sah structure
     /// - A temporary directory that can be used as working directory if needed
     /// - Does NOT change the current working directory to allow parallel test execution
     pub fn new() -> std::io::Result<Self> {
@@ -429,7 +429,7 @@ impl IsolatedTestEnvironment {
         self._home_guard.home_path()
     }
 
-    /// Get the path to the .swissarmyhammer directory in the isolated home
+    /// Get the path to the .sah directory in the isolated home
     pub fn swissarmyhammer_dir(&self) -> PathBuf {
         self._home_guard.swissarmyhammer_dir()
     }
@@ -501,7 +501,7 @@ mod tests {
         assert!(isolated_home.exists());
         assert!(isolated_home.is_dir());
 
-        // Verify .swissarmyhammer directory was created
+        // Verify .sah directory was created
         let sah_dir = guard.swissarmyhammer_dir();
         assert!(sah_dir.exists());
         assert!(sah_dir.is_dir());
@@ -509,7 +509,7 @@ mod tests {
         // Verify expected subdirectories exist
         assert!(sah_dir.join("workflows").exists());
 
-        // Verify .prompts/ directory was created (sibling to .swissarmyhammer/)
+        // Verify .prompts/ directory was created (sibling to .sah/)
         assert!(isolated_home.join(".prompts").exists());
 
         // Verify HOME is set to our temporary directory

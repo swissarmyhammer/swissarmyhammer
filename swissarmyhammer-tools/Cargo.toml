@@ -17,6 +17,7 @@ categories = ["command-line-utilities", "development-tools"]
 # Core library dependency removed - now uses domain crates only
 
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }

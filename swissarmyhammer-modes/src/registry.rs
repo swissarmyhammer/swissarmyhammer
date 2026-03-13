@@ -13,8 +13,8 @@ use swissarmyhammer_common::Pretty;
 /// The [`ModeRegistry`] uses the standard SwissArmyHammer VirtualFileSystem
 /// to load mode definitions with proper precedence:
 /// 1. Builtin modes (embedded in binary)
-/// 2. User modes (~/.swissarmyhammer/modes/)
-/// 3. Local modes (.swissarmyhammer/modes/ in Git root)
+/// 2. User modes (~/.sah/modes/)
+/// 3. Local modes (.sah/modes/ in Git root)
 ///
 /// # Examples
 ///
@@ -55,8 +55,8 @@ impl ModeRegistry {
     ///
     /// Uses VirtualFileSystem to load from (in precedence order):
     /// 1. Built-in modes (embedded in binary) - lowest priority
-    /// 2. User `~/.swissarmyhammer/modes/` - overrides builtin
-    /// 3. Project `.swissarmyhammer/modes/` - highest priority, overrides all
+    /// 2. User `~/.sah/modes/` - overrides builtin
+    /// 3. Project `.sah/modes/` - highest priority, overrides all
     ///
     /// This follows the same override stack as prompts, rules, and other resources.
     ///

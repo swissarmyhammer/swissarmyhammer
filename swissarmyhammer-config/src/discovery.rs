@@ -6,9 +6,9 @@ use tracing::{debug, error, info, trace};
 /// Configuration file discovery paths
 #[derive(Debug, Clone)]
 pub struct DiscoveryPaths {
-    /// Global configuration directory (~/.swissarmyhammer/)
+    /// Global configuration directory (~/.sah/)
     pub global_dir: Option<PathBuf>,
-    /// Project configuration directory (./.swissarmyhammer/)
+    /// Project configuration directory (./.sah/)
     pub project_dir: Option<PathBuf>,
 }
 
@@ -56,7 +56,7 @@ impl ConfigurationDiscovery {
         }
 
         // Project config files from all discovered directories (higher precedence)
-        // Find all .swissarmyhammer directories in the path hierarchy
+        // Find all .sah directories in the path hierarchy
         let project_dirs = Self::find_all_project_config_dirs().unwrap_or_default();
         for project_dir in project_dirs {
             files.extend(self.find_config_files_in_dir(&project_dir));
@@ -86,7 +86,7 @@ impl ConfigurationDiscovery {
             .collect()
     }
 
-    /// Find global config directory (~/.swissarmyhammer/)
+    /// Find global config directory (~/.sah/)
     fn find_global_config_dir() -> ConfigurationResult<Option<PathBuf>> {
         // First try to get HOME environment variable (respects test environment)
         let home = std::env::var("HOME")
@@ -115,7 +115,7 @@ impl ConfigurationDiscovery {
         }
     }
 
-    /// Find project config directory (./.swissarmyhammer/ or walk up to find repo root)
+    /// Find project config directory (./.sah/ or walk up to find repo root)
     fn find_project_config_dir() -> ConfigurationResult<Option<PathBuf>> {
         let all_dirs = Self::find_all_project_config_dirs()?;
         // Return the closest (most specific) directory if any found
@@ -342,11 +342,11 @@ mod tests {
 
         // Verify our directories are found and in correct order
         assert!(
-            config_dirs[0].ends_with("workspace/.swissarmyhammer"),
+            config_dirs[0].ends_with("workspace/.sah"),
             "First should be workspace config"
         );
         assert!(
-            config_dirs[1].ends_with("my-project/.swissarmyhammer"),
+            config_dirs[1].ends_with("my-project/.sah"),
             "Second should be project config"
         );
     }

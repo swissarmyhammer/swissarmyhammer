@@ -179,7 +179,7 @@ impl RuleCache {
 }
 ```
 
-This would move cache into `.swissarmyhammer/cache/rules/` (project-level) instead of `~/.cache/swissarmyhammer/rules/` (user-level).
+This would move cache into `.sah/cache/rules/` (project-level) instead of `~/.cache/swissarmyhammer/rules/` (user-level).
 
 ## Recommendations
 
@@ -196,7 +196,7 @@ Use Option A or B to prevent tests from clearing production cache.
 - ❌ Different team members don't share cache
 - ❌ CI/CD has to rebuild cache every time
 
-**Project-level** (`.swissarmyhammer/cache/rules/`):
+**Project-level** (`.sah/cache/rules/`):
 - ✅ Can be committed to git (shared cache across team)
 - ✅ CI/CD can cache between runs
 - ✅ Isolated per project

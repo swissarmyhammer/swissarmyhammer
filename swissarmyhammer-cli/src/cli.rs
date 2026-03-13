@@ -173,7 +173,7 @@ Set up SwissArmyHammer for all detected AI coding agents.
 
 This command:
 1. Registers sah as an MCP server for all detected agents (Claude Code, Cursor, Windsurf, etc.)
-2. Creates the .swissarmyhammer/ project directory and .prompts/
+2. Creates the .sah/ project directory and .prompts/
 3. Installs builtin skills to the central .skills/ store with symlinks to each agent
 
 The command is idempotent - safe to run multiple times.
@@ -198,18 +198,18 @@ Examples:
 Remove SwissArmyHammer from all detected AI coding agents.
 
 By default, only the MCP server entries are removed from agent config files.
-Use --remove-directory to also delete .swissarmyhammer/, .prompts/, and installed skills.
+Use --remove-directory to also delete .sah/, .prompts/, and installed skills.
 
 Examples:
   sah deinit                     # Remove from project settings
   sah deinit user                # Remove from user settings
-  sah deinit --remove-directory  # Also remove .swissarmyhammer/ and skills
+  sah deinit --remove-directory  # Also remove .sah/ and skills
 ")]
     Deinit {
         /// Where to remove the MCP server configuration from
         #[arg(value_enum, default_value_t = InstallTarget::Project)]
         target: InstallTarget,
-        /// Also remove .swissarmyhammer/ project directory
+        /// Also remove .sah/ project directory
         #[arg(long)]
         remove_directory: bool,
     },
@@ -308,12 +308,12 @@ Use 'sah statusline config' to dump the full annotated builtin config.
 
 The statusline is configured via YAML with 3-layer stacking:
   1. Builtin defaults (embedded in binary)
-  2. User config (~/.swissarmyhammer/statusline/config.yaml)
-  3. Project config (.swissarmyhammer/statusline/config.yaml)
+  2. User config (~/.sah/statusline/config.yaml)
+  3. Project config (.sah/statusline/config.yaml)
 
 Examples:
   echo '{\"model\":{\"display_name\":\"Opus\"}}' | sah statusline
-  sah statusline config > .swissarmyhammer/statusline/config.yaml
+  sah statusline config > .sah/statusline/config.yaml
 ")]
     Statusline {
         #[command(subcommand)]
@@ -400,7 +400,7 @@ Examples:
 Apply a specific model configuration to the current project.
 
 This command finds the specified model by name and applies its configuration
-to the project by creating or updating .swissarmyhammer/sah.yaml. The model
+to the project by creating or updating .sah/sah.yaml. The model
 configuration determines how SwissArmyHammer executes AI workflows in your
 project, including which AI model to use and how to execute tools.
 

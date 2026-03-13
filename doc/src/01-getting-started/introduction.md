@@ -33,8 +33,8 @@ SwissArmyHammer uses a hierarchical file system approach:
 Clear precedence rules across three locations:
 
 1. **Builtin** - Pre-installed prompts and workflows embedded in the binary
-2. **User** - Personal collection in `~/.swissarmyhammer/`  
-3. **Local** - Project-specific files in `./.swissarmyhammer/`
+2. **User** - Personal collection in `~/.sah/`  
+3. **Local** - Project-specific files in `./.sah/`
 
 ### Liquid Template Engine
 - Dynamic content with variables, conditionals, and loops
