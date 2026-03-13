@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 pub struct FuzzySearchResult {
     pub name: String,
+    /// The fully qualified name for install routing (e.g. "owner/repo/skill").
+    #[serde(default)]
+    pub qualified_name: Option<String>,
     pub description: String,
     pub author: String,
     #[serde(rename = "type")]

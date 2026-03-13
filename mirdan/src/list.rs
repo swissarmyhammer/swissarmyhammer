@@ -259,15 +259,26 @@ fn scan_skills_recursive(
         if path.is_dir() {
             if path.join("SKILL.md").exists() {
                 let skill_md = path.join("SKILL.md");
+                // Store-relative path preserves provenance (e.g.
+                // `0xdarkmatter/claude-mods/explain`) — use as source key.
+                let source = path
+                    .strip_prefix(store_root)
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| {
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                    });
+                // Display name: frontmatter name, or terminal path segment. Never a full path.
                 let name = read_frontmatter_name(&skill_md).unwrap_or_else(|| {
-                    path.strip_prefix(store_root)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .to_string()
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()
                 });
                 let version = read_frontmatter_version(&skill_md);
                 packages.push(InstalledPackage {
-                    source: name.clone(),
+                    source,
                     name,
                     package_type: PackageType::Skill,
                     version,

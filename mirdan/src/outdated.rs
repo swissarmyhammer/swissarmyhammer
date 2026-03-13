@@ -89,21 +89,26 @@ pub async fn run_update(
 
     // If a specific name is given, just update that one
     if let Some(name) = name {
-        let pkg = packages.iter().find(|p| p.name == name).ok_or_else(|| {
-            RegistryError::NotFound(format!("Package '{}' is not installed", name))
-        })?;
+        let pkg = packages
+            .iter()
+            .find(|p| p.name == name || p.source == name)
+            .ok_or_else(|| {
+                RegistryError::NotFound(format!("Package '{}' is not installed", name))
+            })?;
 
-        info!(name, "checking for updates");
+        // Use the display name for registry lookups, source for matching
+        let registry_name = &pkg.name;
+        info!(registry_name, "checking for updates");
 
-        let detail = match client.package_info(name).await {
+        let detail = match client.package_info(registry_name).await {
             Ok(d) => d,
             Err(RegistryError::NotFound(_)) => {
-                let msg = format!("{name} is a local-only package (not in registry)");
+                let msg = format!("{registry_name} is a local-only package (not in registry)");
                 info!("{msg}");
                 return Ok(msg);
             }
             Err(RegistryError::Conflict(_)) => {
-                let msg = format!("{name} is already up to date ({})", pkg.version);
+                let msg = format!("{registry_name} is already up to date ({})", pkg.version);
                 info!("{msg}");
                 return Ok(msg);
             }
@@ -111,14 +116,16 @@ pub async fn run_update(
         };
 
         if detail.latest == pkg.version {
-            let msg = format!("{name} is already up to date ({})", pkg.version);
+            let msg = format!("{registry_name} is already up to date ({})", pkg.version);
             info!("{msg}");
             return Ok(msg);
         }
 
-        info!(name, from = %pkg.version, to = %detail.latest, "updating package");
-        install::install_package(name, &detail.latest, agent_filter, global).await?;
-        let msg = format!("Updated {name}: {} → {}", pkg.version, detail.latest);
+        // Use source (qualified name) for install to avoid ambiguity
+        let install_spec = &pkg.source;
+        info!(install_spec, from = %pkg.version, to = %detail.latest, "updating package");
+        install::install_package(install_spec, &detail.latest, agent_filter, global).await?;
+        let msg = format!("Updated {registry_name}: {} → {}", pkg.version, detail.latest);
         return Ok(msg);
     }
 

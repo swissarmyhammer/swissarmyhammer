@@ -3,6 +3,8 @@
 use serde::Serialize;
 use tracing::{error, info};
 
+use mirdan::registry::RegistryClient;
+
 /// Serializable package info returned to the frontend.
 #[derive(Debug, Serialize)]
 pub struct PackageInfo {
@@ -15,6 +17,18 @@ pub struct PackageInfo {
     pub store_path: Option<String>,
 }
 
+/// A registry search result returned to the frontend.
+#[derive(Debug, Serialize)]
+pub struct SearchResult {
+    pub name: String,
+    /// Qualified name for install routing (e.g. "owner/repo/skill").
+    pub qualified_name: String,
+    pub description: String,
+    pub author: String,
+    pub package_type: String,
+    pub downloads: u64,
+}
+
 /// List all installed packages.
 #[tauri::command]
 pub fn list_packages() -> Vec<PackageInfo> {
@@ -23,7 +37,6 @@ pub fn list_packages() -> Vec<PackageInfo> {
     packages
         .into_iter()
         .map(|p| {
-            // Try to find the store path for this package
             let store_path = find_store_path(&p.name);
             PackageInfo {
                 name: p.name,
@@ -85,6 +98,50 @@ pub fn get_package_path(name: String) -> Option<String> {
 #[tauri::command]
 pub fn get_registry_url(name: String) -> String {
     mirdan::list::registry_url(&name)
+}
+
+/// Search the registry for packages.
+#[tauri::command]
+pub async fn search_registry(query: String) -> Result<Vec<SearchResult>, String> {
+    let client = RegistryClient::authenticated().unwrap_or_default();
+    let response = client
+        .fuzzy_search(&query, Some(20))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(response
+        .results
+        .into_iter()
+        .map(|r| {
+            let qualified = r.qualified_name.clone().unwrap_or_else(|| r.name.clone());
+            SearchResult {
+                name: r.name,
+                qualified_name: qualified,
+                description: r.description,
+                author: r.author,
+                package_type: r.package_type.unwrap_or_default(),
+                downloads: r.downloads,
+            }
+        })
+        .collect())
+}
+
+/// Install a package from the registry by name.
+#[tauri::command]
+pub async fn install_package(spec: String) -> Result<String, String> {
+    info!(spec, "install requested from GUI");
+
+    if let Some(home) = std::env::var_os("HOME") {
+        let _ = std::env::set_current_dir(&home);
+    }
+
+    mirdan::install::run_install(&spec, None, true, false, None)
+        .await
+        .map(|()| format!("Installed {spec}"))
+        .map_err(|e| {
+            error!(spec, "install failed: {e}");
+            e.to_string()
+        })
 }
 
 /// Open a URL or path using the system default handler.

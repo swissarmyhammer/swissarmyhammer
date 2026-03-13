@@ -28,6 +28,8 @@ fn run_tray() {
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             commands::list_packages,
+            commands::search_registry,
+            commands::install_package,
             commands::uninstall_package,
             commands::update_package,
             commands::get_package_path,
