@@ -6,6 +6,7 @@
 use std::fs;
 
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope, Initializable};
+use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::PromptLibrary;
 
@@ -52,7 +53,7 @@ impl Initializable for McpRegistration {
     }
 
     /// Install sah MCP server to all detected agents using mirdan's mcp_config.
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         let mut results = Vec::new();
 
         let config = match mirdan::agents::load_agents_config() {
@@ -88,18 +89,23 @@ impl Initializable for McpRegistration {
                         &entry,
                     ) {
                         Ok(()) => {
-                            println!(
-                                "sah MCP server installed for {} ({})",
-                                agent.def.name,
-                                config_path.display()
-                            );
+                            reporter.emit(&InitEvent::Action {
+                                verb: "Installed".to_string(),
+                                message: format!(
+                                    "MCP server for {} ({})",
+                                    agent.def.name,
+                                    config_path.display()
+                                ),
+                            });
                             installed_count += 1;
                         }
                         Err(e) => {
-                            eprintln!(
-                                "Warning: failed to install MCP for {}: {}",
-                                agent.def.name, e
-                            );
+                            reporter.emit(&InitEvent::Warning {
+                                message: format!(
+                                    "failed to install MCP for {}: {}",
+                                    agent.def.name, e
+                                ),
+                            });
                         }
                     }
                 }
@@ -108,7 +114,7 @@ impl Initializable for McpRegistration {
 
         if installed_count == 0 {
             // Fallback to legacy settings.rs for backward compat
-            if let Err(e) = install_project_legacy() {
+            if let Err(e) = install_project_legacy(reporter) {
                 results.push(InitResult::error(self.name(), e));
                 return results;
             }
@@ -122,7 +128,7 @@ impl Initializable for McpRegistration {
     }
 
     /// Remove sah MCP server from all detected agents using mirdan's mcp_config.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         let config = match mirdan::agents::load_agents_config() {
             Ok(c) => c,
             Err(e) => {
@@ -149,19 +155,24 @@ impl Initializable for McpRegistration {
                         "sah",
                     ) {
                         Ok(true) => {
-                            println!(
-                                "sah MCP server removed from {} ({})",
-                                agent.def.name,
-                                config_path.display()
-                            );
+                            reporter.emit(&InitEvent::Action {
+                                verb: "Removed".to_string(),
+                                message: format!(
+                                    "MCP server from {} ({})",
+                                    agent.def.name,
+                                    config_path.display()
+                                ),
+                            });
                             removed_count += 1;
                         }
                         Ok(false) => {}
                         Err(e) => {
-                            eprintln!(
-                                "Warning: failed to remove MCP from {}: {}",
-                                agent.def.name, e
-                            );
+                            reporter.emit(&InitEvent::Warning {
+                                message: format!(
+                                    "failed to remove MCP from {}: {}",
+                                    agent.def.name, e
+                                ),
+                            });
                         }
                     }
                 }
@@ -170,7 +181,7 @@ impl Initializable for McpRegistration {
 
         if removed_count == 0 {
             // Fallback: try legacy project-level removal
-            if let Err(e) = uninstall_project_legacy() {
+            if let Err(e) = uninstall_project_legacy(reporter) {
                 return vec![InitResult::error(self.name(), e)];
             }
         }
@@ -183,25 +194,34 @@ impl Initializable for McpRegistration {
 }
 
 /// Legacy project-level install via .mcp.json (backward compat fallback).
-fn install_project_legacy() -> Result<(), String> {
+fn install_project_legacy(reporter: &dyn InitReporter) -> Result<(), String> {
     let path = settings::mcp_json_path();
     let mut mcp_settings = settings::read_settings(&path)?;
     let changed = settings::merge_mcp_server(&mut mcp_settings);
     settings::write_settings(&path, &mcp_settings)?;
 
     if changed {
-        println!("sah MCP server installed to {}", path.display());
+        reporter.emit(&InitEvent::Action {
+            verb: "Installed".to_string(),
+            message: format!("MCP server to {}", path.display()),
+        });
     } else {
-        println!("sah MCP server already configured in {}", path.display());
+        reporter.emit(&InitEvent::Action {
+            verb: "Unchanged".to_string(),
+            message: format!("MCP server already configured in {}", path.display()),
+        });
     }
     Ok(())
 }
 
 /// Legacy project-level uninstall via .mcp.json (backward compat fallback).
-fn uninstall_project_legacy() -> Result<(), String> {
+fn uninstall_project_legacy(reporter: &dyn InitReporter) -> Result<(), String> {
     let path = settings::mcp_json_path();
     if !path.exists() {
-        println!("No {} file found, nothing to uninstall", path.display());
+        reporter.emit(&InitEvent::Skipped {
+            component: "mcp-registration".to_string(),
+            reason: format!("No {} file found, nothing to uninstall", path.display()),
+        });
         return Ok(());
     }
 
@@ -217,15 +237,21 @@ fn uninstall_project_legacy() -> Result<(), String> {
     if mcp_settings == serde_json::json!({}) {
         fs::remove_file(&path)
             .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
-        println!(
-            "sah MCP server uninstalled, removed empty {}",
-            path.display()
-        );
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!("MCP server, removed empty {}", path.display()),
+        });
     } else if changed {
         settings::write_settings(&path, &mcp_settings)?;
-        println!("sah MCP server uninstalled from {}", path.display());
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!("MCP server from {}", path.display()),
+        });
     } else {
-        println!("sah MCP server was not configured in {}", path.display());
+        reporter.emit(&InitEvent::Skipped {
+            component: "mcp-registration".to_string(),
+            reason: format!("MCP server was not configured in {}", path.display()),
+        });
     }
 
     Ok(())
@@ -254,7 +280,7 @@ impl Initializable for ClaudeLocalScope {
     }
 
     /// Install to local scope: `~/.claude.json` under `projects.<project-path>.mcpServers`.
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         let path = settings::claude_json_path();
         let key = match settings::project_key() {
             Ok(k) => k,
@@ -272,23 +298,29 @@ impl Initializable for ClaudeLocalScope {
         }
 
         if changed {
-            println!(
-                "sah MCP server installed to {} (local scope, project: {})",
-                path.display(),
-                key
-            );
+            reporter.emit(&InitEvent::Action {
+                verb: "Installed".to_string(),
+                message: format!(
+                    "MCP server to {} (local scope, project: {})",
+                    path.display(),
+                    key
+                ),
+            });
         } else {
-            println!(
-                "sah MCP server already configured in {} (local scope, project: {})",
-                path.display(),
-                key
-            );
+            reporter.emit(&InitEvent::Action {
+                verb: "Unchanged".to_string(),
+                message: format!(
+                    "MCP server already configured in {} (local scope, project: {})",
+                    path.display(),
+                    key
+                ),
+            });
         }
         vec![InitResult::ok(self.name(), "Claude local scope configured")]
     }
 
     /// Uninstall from local scope: `~/.claude.json` under `projects.<project-path>.mcpServers`.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         let path = settings::claude_json_path();
         let key = match settings::project_key() {
             Ok(k) => k,
@@ -296,7 +328,10 @@ impl Initializable for ClaudeLocalScope {
         };
 
         if !path.exists() {
-            println!("No {} file found, nothing to uninstall", path.display());
+            reporter.emit(&InitEvent::Skipped {
+                component: self.name().to_string(),
+                reason: format!("No {} file found, nothing to uninstall", path.display()),
+            });
             return vec![InitResult::ok(self.name(), "Nothing to uninstall")];
         }
 
@@ -325,17 +360,23 @@ impl Initializable for ClaudeLocalScope {
             if let Err(e) = settings::write_settings(&path, &root) {
                 return vec![InitResult::error(self.name(), e)];
             }
-            println!(
-                "sah MCP server uninstalled from {} (local scope, project: {})",
-                path.display(),
-                key
-            );
+            reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: format!(
+                    "MCP server from {} (local scope, project: {})",
+                    path.display(),
+                    key
+                ),
+            });
         } else {
-            println!(
-                "sah MCP server was not configured in {} (local scope, project: {})",
-                path.display(),
-                key
-            );
+            reporter.emit(&InitEvent::Skipped {
+                component: self.name().to_string(),
+                reason: format!(
+                    "MCP server was not configured in {} (local scope, project: {})",
+                    path.display(),
+                    key
+                ),
+            });
         }
 
         vec![InitResult::ok(
@@ -368,7 +409,7 @@ impl Initializable for DenyBash {
     }
 
     /// Add "Bash" to permissions.deny in .claude/settings.json.
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         let path = settings::claude_settings_path();
         let mut claude_settings = match settings::read_settings(&path) {
             Ok(s) => s,
@@ -380,16 +421,19 @@ impl Initializable for DenyBash {
         }
 
         if changed {
-            println!(
-                "Bash tool denied in {} (use shell tool instead)",
-                path.display()
-            );
+            reporter.emit(&InitEvent::Action {
+                verb: "Configured".to_string(),
+                message: format!(
+                    "Bash tool denied in {} (use shell tool instead)",
+                    path.display()
+                ),
+            });
         }
         vec![InitResult::ok(self.name(), "Bash deny rule configured")]
     }
 
     /// Remove "Bash" from permissions.deny in .claude/settings.json.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         let path = settings::claude_settings_path();
         if !path.exists() {
             return vec![InitResult::ok(self.name(), "Settings file not found")];
@@ -405,7 +449,10 @@ impl Initializable for DenyBash {
             if let Err(e) = settings::write_settings(&path, &claude_settings) {
                 return vec![InitResult::error(self.name(), e)];
             }
-            println!("Bash tool deny rule removed from {}", path.display());
+            reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: format!("Bash tool deny rule from {}", path.display()),
+            });
         }
         vec![InitResult::ok(self.name(), "Bash deny rule removed")]
     }
@@ -442,7 +489,7 @@ impl Initializable for ProjectStructure {
     }
 
     /// Create the project directory structure with .prompts, .swissarmyhammer, and workflows.
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         use swissarmyhammer_common::SwissarmyhammerDirectory;
 
         let sah_dir = match SwissarmyhammerDirectory::from_git_root().or_else(|_| {
@@ -480,16 +527,16 @@ impl Initializable for ProjectStructure {
             )];
         }
 
-        println!(
-            "Project structure initialized at {}",
-            sah_dir.root().display()
-        );
+        reporter.emit(&InitEvent::Action {
+            verb: "Created".to_string(),
+            message: format!("project structure at {}", sah_dir.root().display()),
+        });
 
         vec![InitResult::ok(self.name(), "Project structure initialized")]
     }
 
     /// Remove `.swissarmyhammer/` and `.prompts/` directories if `remove_directory` is true.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         if !self.remove_directory {
             return vec![InitResult::skipped(
                 self.name(),
@@ -515,7 +562,10 @@ impl Initializable for ProjectStructure {
                     format!("Failed to remove {}: {}", sah_dir.display(), e),
                 )];
             }
-            println!("Removed {}", sah_dir.display());
+            reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: format!("{}", sah_dir.display()),
+            });
         }
 
         let prompts_dir = cwd.join(".prompts");
@@ -526,7 +576,10 @@ impl Initializable for ProjectStructure {
                     format!("Failed to remove {}: {}", prompts_dir.display(), e),
                 )];
             }
-            println!("Removed {}", prompts_dir.display());
+            reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: format!("{}", prompts_dir.display()),
+            });
         }
 
         vec![InitResult::ok(self.name(), "Project directories removed")]
@@ -567,7 +620,7 @@ impl Initializable for SkillDeployment {
     ///
     /// Skill instructions are rendered through the prompt library's Liquid template
     /// engine before writing to disk, so `{% include %}` partials are expanded.
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         use swissarmyhammer_skills::SkillResolver;
 
         let resolver = SkillResolver::new();
@@ -596,6 +649,8 @@ impl Initializable for SkillDeployment {
         };
 
         let mut installed_count = 0;
+        let mut installed_names: Vec<String> = Vec::new();
+        let mut agent_names: Vec<String> = Vec::new();
         for (name, skill) in &skills {
             let temp_dir = match tempfile::tempdir() {
                 Ok(d) => d,
@@ -654,6 +709,11 @@ impl Initializable for SkillDeployment {
                 }
             };
 
+            // Collect agent names from first skill (same for all)
+            if agent_names.is_empty() {
+                agent_names = targets.clone();
+            }
+
             // Record in lockfile
             let version = skill
                 .metadata
@@ -672,6 +732,7 @@ impl Initializable for SkillDeployment {
                 },
             );
 
+            installed_names.push(name.clone());
             installed_count += 1;
         }
 
@@ -682,10 +743,14 @@ impl Initializable for SkillDeployment {
                     format!("Failed to save lockfile: {}", e),
                 )];
             }
-            println!(
-                "Installed {} builtin skills (lockfile updated)",
-                installed_count
-            );
+            reporter.emit(&InitEvent::Action {
+                verb: "Installed".to_string(),
+                message: format!(
+                    "{} skills → {}",
+                    installed_count,
+                    agent_names.join(", ")
+                ),
+            });
         }
 
         vec![InitResult::ok(
@@ -695,7 +760,7 @@ impl Initializable for SkillDeployment {
     }
 
     /// Remove builtin skill symlinks from agent directories and clean up the .skills/ store.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         use swissarmyhammer_skills::SkillResolver;
 
         let store_dir = mirdan::store::skill_store_dir(self.global);
@@ -731,13 +796,25 @@ impl Initializable for SkillDeployment {
             .map(|agent| agent.def.symlink_policy.clone())
             .collect();
 
+        let agent_names: Vec<String> = agents.iter().map(|a| a.def.id.clone()).collect();
+
         remove_store_entries(
             &store_dir,
             &builtin_names,
             &link_dirs,
             &symlink_policies,
             "skill",
+            reporter,
         );
+
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!(
+                "{} skills from {}",
+                builtin_names.len(),
+                agent_names.join(", ")
+            ),
+        });
 
         vec![InitResult::ok(self.name(), "Builtin skills removed")]
     }
@@ -756,6 +833,7 @@ fn render_skill_instructions(
         match prompt_library.render_text(&skill.instructions, template_context) {
             Ok(rendered) => rendered,
             Err(e) => {
+                // render_skill_instructions does not have reporter access; leave as eprintln
                 eprintln!(
                     "Warning: failed to render partials for skill '{}': {}",
                     skill.name, e
@@ -834,7 +912,7 @@ impl Initializable for AgentDeployment {
     ///
     /// Agent instructions are rendered through the prompt library's Liquid template
     /// engine before writing to disk, so `{% include %}` partials are expanded.
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         use swissarmyhammer_agents::AgentResolver;
 
         let resolver = AgentResolver::new();
@@ -863,6 +941,7 @@ impl Initializable for AgentDeployment {
         };
 
         let mut installed_count = 0;
+        let mut agent_targets: Vec<String> = Vec::new();
         for (name, agent) in &agents {
             let temp_dir = match tempfile::tempdir() {
                 Ok(d) => d,
@@ -886,10 +965,12 @@ impl Initializable for AgentDeployment {
                 match prompt_library.render_text(&agent.instructions, &template_context) {
                     Ok(rendered) => rendered,
                     Err(e) => {
-                        eprintln!(
-                            "Warning: failed to render partials for agent '{}': {}",
-                            name, e
-                        );
+                        reporter.emit(&InitEvent::Warning {
+                            message: format!(
+                                "failed to render partials for agent '{}': {}",
+                                name, e
+                            ),
+                        });
                         agent.instructions.clone()
                     }
                 };
@@ -919,6 +1000,11 @@ impl Initializable for AgentDeployment {
                 }
             };
 
+            // Collect agent targets from first deploy (same for all)
+            if agent_targets.is_empty() {
+                agent_targets = targets.clone();
+            }
+
             // Record in lockfile
             lockfile.add_package(
                 name.clone(),
@@ -942,10 +1028,14 @@ impl Initializable for AgentDeployment {
                     format!("Failed to save lockfile: {}", e),
                 )];
             }
-            println!(
-                "Installed {} builtin agents (lockfile updated)",
-                installed_count
-            );
+            reporter.emit(&InitEvent::Action {
+                verb: "Installed".to_string(),
+                message: format!(
+                    "{} agents → {}",
+                    installed_count,
+                    agent_targets.join(", ")
+                ),
+            });
         }
 
         vec![InitResult::ok(
@@ -955,7 +1045,7 @@ impl Initializable for AgentDeployment {
     }
 
     /// Remove builtin agent symlinks from coding agent directories and clean up the .agents/ store.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         use swissarmyhammer_agents::AgentResolver;
 
         let store_dir = mirdan::store::agent_store_dir(self.global);
@@ -990,13 +1080,25 @@ impl Initializable for AgentDeployment {
             }
         }
 
+        let agent_names: Vec<String> = agents.iter().map(|a| a.def.id.clone()).collect();
+
         remove_store_entries(
             &store_dir,
             &builtin_names,
             &link_dirs,
             &symlink_policies,
             "agent",
+            reporter,
         );
+
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!(
+                "{} agents from {}",
+                builtin_names.len(),
+                agent_names.join(", ")
+            ),
+        });
 
         vec![InitResult::ok(self.name(), "Builtin agents removed")]
     }
@@ -1066,13 +1168,13 @@ impl Initializable for LockfileCleanup {
         32
     }
 
-    fn init(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn init(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
         // Lockfile entries are written by SkillDeployment and AgentDeployment
         vec![]
     }
 
     /// Remove lockfile entries for all builtin skills and agents.
-    fn deinit(&self, _scope: &InitScope) -> Vec<InitResult> {
+    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         use swissarmyhammer_agents::AgentResolver;
         use swissarmyhammer_skills::SkillResolver;
 
@@ -1118,12 +1220,55 @@ impl Initializable for LockfileCleanup {
             )];
         }
 
-        println!("Lockfile entries cleaned up");
+        reporter.emit(&InitEvent::Action {
+            verb: "Cleaned".to_string(),
+            message: "lockfile entries".to_string(),
+        });
         vec![InitResult::ok(self.name(), "Lockfile entries cleaned up")]
     }
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────
+
+/// Map mirdan `DeployResult` entries to reporter events.
+///
+/// Each `DeployResult` is translated to an `InitEvent::Action` or `InitEvent::Warning`
+/// depending on the action type. `Skipped` results are silently ignored.
+///
+/// This bridges the mirdan deploy layer (which returns structured results) with the
+/// sah lifecycle reporter (which formats output for the user).
+///
+/// Currently unused because `deploy_skill_to_agents` and `deploy_agent_to_agents`
+/// still return `Vec<String>` (agent IDs). Once those functions are updated to
+/// return `Vec<DeployResult>`, the call sites should switch from per-target
+/// emissions to calling this function instead.
+#[allow(dead_code)]
+fn map_deploy_results(results: &[mirdan::DeployResult], reporter: &dyn InitReporter) {
+    for r in results {
+        match r.action {
+            mirdan::DeployAction::Created => reporter.emit(&InitEvent::Action {
+                verb: "Created".to_string(),
+                message: r.message.clone(),
+            }),
+            mirdan::DeployAction::Updated => reporter.emit(&InitEvent::Action {
+                verb: "Updated".to_string(),
+                message: r.message.clone(),
+            }),
+            mirdan::DeployAction::Removed => reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: r.message.clone(),
+            }),
+            mirdan::DeployAction::Linked => reporter.emit(&InitEvent::Action {
+                verb: "Linked".to_string(),
+                message: r.message.clone(),
+            }),
+            mirdan::DeployAction::Skipped => {}
+            mirdan::DeployAction::Warning => reporter.emit(&InitEvent::Warning {
+                message: r.message.clone(),
+            }),
+        }
+    }
+}
 
 /// Remove named entries from a store directory and their symlinks from link directories.
 ///
@@ -1135,6 +1280,7 @@ pub(crate) fn remove_store_entries(
     link_dirs: &[std::path::PathBuf],
     symlink_policies: &[mirdan::agents::SymlinkPolicy],
     kind: &str,
+    reporter: &dyn InitReporter,
 ) {
     for name in names {
         let store_path = store_dir.join(name);
@@ -1143,19 +1289,21 @@ pub(crate) fn remove_store_entries(
         for (dir, policy) in link_dirs.iter().zip(symlink_policies.iter()) {
             let link_name = mirdan::store::symlink_name(name, policy);
             let link_path = dir.join(&link_name);
-            remove_if_symlink(&link_path);
+            remove_if_symlink(&link_path, reporter);
         }
 
         // Remove entry from the store
         if store_path.exists() {
             if let Err(e) = fs::remove_dir_all(&store_path) {
-                eprintln!(
-                    "Warning: failed to remove store entry {}: {}",
-                    store_path.display(),
-                    e
-                );
+                reporter.emit(&InitEvent::Warning {
+                    message: format!(
+                        "failed to remove store entry {}: {}",
+                        store_path.display(),
+                        e
+                    ),
+                });
             } else {
-                println!("Removed {} store: {}", kind, store_path.display());
+                tracing::debug!("Removed {} store: {}", kind, store_path.display());
             }
         }
     }
@@ -1174,14 +1322,16 @@ pub(crate) fn remove_store_entries(
 ///
 /// This is the safety-critical function: it ensures deinit never deletes
 /// real directories or files that weren't created by `sah init`.
-pub(crate) fn remove_if_symlink(path: &std::path::Path) -> bool {
+pub(crate) fn remove_if_symlink(path: &std::path::Path, reporter: &dyn InitReporter) -> bool {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
             if let Err(e) = std::fs::remove_file(path) {
-                eprintln!("Warning: failed to remove {}: {}", path.display(), e);
+                reporter.emit(&InitEvent::Warning {
+                    message: format!("failed to remove {}: {}", path.display(), e),
+                });
                 false
             } else {
-                println!("Removed skill link: {}", path.display());
+                tracing::debug!("Removed link: {}", path.display());
                 true
             }
         }

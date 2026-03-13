@@ -7803,6 +7803,7 @@ name = "swissarmyhammer-common"
 version = "0.9.1"
 dependencies = [
  "anyhow",
+ "colored 2.2.0",
  "dashmap",
  "dialoguer",
  "dirs",
@@ -7810,6 +7811,7 @@ dependencies = [
  "glob",
  "governor",
  "ignore",
+ "indicatif",
  "nonzero_ext",
  "regex",
  "serde",
@@ -8001,6 +8003,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2",
  "swissarmyhammer-commands",
+ "swissarmyhammer-common",
  "swissarmyhammer-kanban",
  "swissarmyhammer-views",
  "tauri",

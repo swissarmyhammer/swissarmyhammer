@@ -10,6 +10,8 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { InspectProvider } from "@/lib/inspect-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "sonner";
+import { InitProgressListener } from "@/components/init-progress-listener";
 import { AppShell } from "@/components/app-shell";
 import { NavBar } from "@/components/nav-bar";
 import { LeftNav } from "@/components/left-nav";
@@ -246,6 +248,8 @@ function App() {
 
   return (
     <TooltipProvider delayDuration={400}>
+    <Toaster position="bottom-right" richColors />
+    <InitProgressListener />
     <SchemaProvider>
     <EntityStoreProvider entities={entityStore}>
     <EntityFocusProvider>

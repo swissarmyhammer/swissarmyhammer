@@ -119,7 +119,8 @@ pub async fn run_update(
         // Use source (qualified name) for install to avoid ambiguity
         let install_spec = &pkg.source;
         info!(install_spec, from = %pkg.version, to = %detail.latest, "updating package");
-        install::install_package(install_spec, &detail.latest, agent_filter, global).await?;
+        let _results =
+            install::install_package(install_spec, &detail.latest, agent_filter, global).await?;
         let msg = format!(
             "Updated {registry_name}: {} → {}",
             pkg.version, detail.latest
@@ -136,7 +137,9 @@ pub async fn run_update(
         match client.package_info(&pkg.name).await {
             Ok(detail) if detail.latest != pkg.version => {
                 info!(name = %pkg.name, from = %pkg.version, to = %detail.latest, "updating package");
-                install::install_package(&pkg.name, &detail.latest, agent_filter, global).await?;
+                let _results =
+                    install::install_package(&pkg.name, &detail.latest, agent_filter, global)
+                        .await?;
                 updated += 1;
             }
             _ => {}

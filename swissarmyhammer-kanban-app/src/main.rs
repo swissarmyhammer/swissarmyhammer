@@ -5,7 +5,10 @@ mod cli;
 mod commands;
 mod menu;
 mod state;
+mod tauri_reporter;
 mod watcher;
+
+pub use tauri_reporter::TauriReporter;
 
 use clap::Parser;
 use cli::Cli;

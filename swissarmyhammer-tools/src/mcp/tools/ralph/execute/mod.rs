@@ -184,6 +184,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for RalphTool {
     fn init(
         &self,
         _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        _reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use super::state::ensure_ralph_dir;
         use swissarmyhammer_common::lifecycle::InitResult;

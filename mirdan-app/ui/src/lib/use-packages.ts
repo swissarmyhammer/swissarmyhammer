@@ -42,12 +42,16 @@ export function usePackages() {
     setSearching(true);
     debounceRef.current = setTimeout(async () => {
       try {
+        const trimmed = query.trim();
+        console.debug("[search] invoking search_registry", { query: trimmed });
         const results = await invoke<SearchResult[]>("search_registry", {
-          query: query.trim(),
+          query: trimmed,
         });
+        console.debug("[search] got results", { count: results.length, query: trimmed });
         setSearchResults(results);
-      } catch {
+      } catch (e) {
         // Search failures are non-fatal — just show installed
+        console.error("[search] search_registry failed", e);
         setSearchResults([]);
       } finally {
         setSearching(false);
