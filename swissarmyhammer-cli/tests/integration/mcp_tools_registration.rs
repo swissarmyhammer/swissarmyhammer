@@ -4,8 +4,7 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_file_tools, register_js_tools, register_kanban_tools, register_shell_tools,
-    register_web_tools,
+    register_file_tools, register_kanban_tools, register_shell_tools, register_web_tools,
 };
 
 /// Test that verifies all expected MCP tools are registered
@@ -14,7 +13,6 @@ async fn test_mcp_tools_are_registered() {
     let mut registry = ToolRegistry::new();
 
     // This mirrors exactly what McpServer does in its constructor
-    register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
@@ -23,17 +21,17 @@ async fn test_mcp_tools_are_registered() {
     let tool_count = registry.len();
     println!("📊 Registered {} MCP tools", tool_count);
 
-    // We should have a significant number of tools. The threshold of 5 is based on the
-    // minimum set of core tools across all categories (files, shell, kanban, web, etc.).
+    // We should have a significant number of tools. The threshold of 4 is based on the
+    // minimum set of core tools across all categories (files, shell, kanban, web).
     // This acts as a smoke test to catch missing tool registrations.
     assert!(
-        tool_count >= 5,
-        "Expected at least 5 tools, got {}. This suggests tools are not being registered properly.",
+        tool_count >= 4,
+        "Expected at least 4 tools, got {}. This suggests tools are not being registered properly.",
         tool_count
     );
 
     // Check for specific tools we know should be there (internal names, not MCP prefixed)
-    let expected_tools = ["js", "files", "shell", "kanban", "web"];
+    let expected_tools = ["files", "shell", "kanban", "web"];
 
     let mut missing_tools = Vec::new();
     let mut found_tools = Vec::new();
@@ -109,7 +107,6 @@ async fn test_cli_categories_are_available() {
     let mut registry = ToolRegistry::new();
 
     // Register all tools
-    register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
@@ -162,7 +159,6 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     let mut registry = ToolRegistry::new();
 
     // Register all tools
-    register_js_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);

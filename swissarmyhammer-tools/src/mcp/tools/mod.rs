@@ -40,7 +40,6 @@ pub mod code_context;
 pub mod files;
 
 pub mod git;
-pub mod js;
 pub mod kanban;
 pub mod questions;
 pub mod ralph;
