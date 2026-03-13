@@ -13,47 +13,66 @@ Before exploring any code, make sure you understand what's being asked.
 
 ## Phase 2: Explore the Codebase
 
-Follow a zoom-in funnel from broad to specific. Do NOT chain `cd`, `ls`, `cat` commands — use purpose-built search tools.
+Use `code_context` as your primary exploration tool. It provides indexed, structural code intelligence that is faster and more precise than raw text search. Follow a zoom-in funnel from broad to specific.
 
-### Step 1: Project structure and configuration
+### Step 1: Check index health and project structure
 
-- Read project config files (`Cargo.toml`, `package.json`, `pyproject.toml`, etc.) to understand the tech stack, dependencies, and build system.
-- Use `files` with `op: "glob"` to list the top-level directory structure and understand project organization.
-- Check for project conventions in `CLAUDE.md`, `AGENTS.md`, or `.swissarmyhammer/` directories.
+- Run `code_context` with `op: "get status"` to confirm the index is ready. If indexing is incomplete, trigger a build with `op: "build status"`.
+- Run `code_context` with `op: "detect projects"` to discover project types, build commands, and language-specific guidelines.
+- Read project config files (`Cargo.toml`, `package.json`, `pyproject.toml`, etc.) for dependencies and build system details.
 
-### Step 2: Keyword search for relevant areas
+### Step 2: Find relevant symbols
 
-- Use `files` with `op: "grep"` and keywords from the task description to locate relevant files across the codebase.
-- Search for type names, function names, error messages, or domain terms mentioned in the request.
-- Use `treesitter_search` to find definitions of types, functions, and structs by name.
+- Use `code_context` with `op: "search symbol"` and domain keywords from the task to find relevant types, functions, and methods.
+- Use `op: "get symbol"` to jump to definitions and read source text.
+- Use `op: "list symbols"` to get a structural overview of key files before reading them in full.
+- Use `op: "grep code"` for string literals, error messages, or patterns not captured by symbol indexing.
 
-### Step 3: Read relevant files
+### Step 3: Map the blast radius
 
-- Read the most relevant files found in step 2. Follow imports and references to understand dependency chains.
-- Use `treesitter_query` to extract structure (function signatures, type definitions) without reading entire files.
-- Pay attention to patterns: how is error handling done? What naming conventions are used? How are tests structured?
+This is the most important exploration step. For each file or symbol you expect to change:
 
-### Step 4: Find existing tests
+- Run `code_context` with `op: "get blastradius"`, `file_path: "<file>"`, `max_hops: 3` to discover everything that depends on it.
+- The blast radius reveals callers, downstream consumers, tests, and transitive dependencies — work you'd otherwise miss.
+- Use the results to identify files that need coordinated changes and tests that will be affected.
+- If the blast radius is large (many files at hop 2-3), consider whether the change can be scoped more narrowly.
 
-- Search for test files covering the affected areas.
+### Step 4: Trace call chains
+
+- Use `code_context` with `op: "get callgraph"`, `direction: "inbound"` on key symbols to understand who calls them.
+- Use `direction: "outbound"` to understand what they depend on.
+- This reveals execution flow and helps identify the right boundaries for cards.
+
+### Step 5: Find existing tests
+
+- Search for test files covering the affected areas (check blast radius results — tests often appear at hop 1-2).
 - Understand the testing patterns used (unit tests, integration tests, fixtures, mocks).
 - Note the test runner and how tests are invoked.
 
-### Step 5: Check recent history
+### Step 6: Check recent history
 
 - Use `git` with `op: "get changes"` to review recent changes to the affected files.
 - This reveals change patterns, active development areas, and potential conflicts.
 
+### When to fall back to raw search
+
+Use Glob, Grep, and Read directly only for:
+- Quick one-off string matches where you already know the exact text
+- Config files, YAML, TOML, or other non-code files not in the index
+- Exploring directory structure
+
 ## Phase 3: Assess Scope
 
-Based on your exploration, classify the work:
+Use the blast radius results from Phase 2 to classify the work concretely:
 
-- **File count** — how many files need modification? (1-3 = small, 4-10 = medium, 10+ = large)
-- **Cross-cutting concerns** — does this touch multiple layers (API, business logic, database, UI)?
-- **Dependency fan-out** — how many other files import or reference the files being changed?
-- **Test impact** — are there existing tests? Will new tests be needed? Could this break existing tests?
+- **File count** — how many files appear in the blast radius at hop 1? (1-3 = small, 4-10 = medium, 10+ = large)
+- **Cross-cutting concerns** — does the blast radius span multiple layers (API, business logic, database, UI)?
+- **Dependency fan-out** — count unique files at hop 1-2 in the blast radius. High fan-out means more coordinated changes and more cards.
+- **Test impact** — which test files appear in the blast radius? These need to be run and potentially updated.
 - **Migration concerns** — does this affect data schemas, configurations, or external APIs?
 - **Pattern consistency** — does the codebase have established patterns the change should follow?
+
+If you haven't run blast radius yet for a file you plan to change, do it now. Every file in the plan should have its blast radius checked before cards are created.
 
 Flag risks explicitly: breaking changes, data concerns, external API impacts, security implications.
 
@@ -142,6 +161,7 @@ Small cards (50–100 lines) are fine. Two small cards with a dependency beat on
 
 ## Anti-Patterns to Avoid
 
+- **Skipping blast radius** — creating cards without checking `get blastradius` on affected files leads to missed downstream work and surprise breakage.
 - **Skipping exploration** — jumping to a plan without reading code leads to wrong assumptions.
 - **Unbounded searches** — searching `**/*.rs` returns thousands of results. Scope searches to specific directories.
 - **Vague tasks** — "improve error handling" is not actionable. "Add Result return type to parse_config and propagate errors to callers in main.rs and cli.rs" is.

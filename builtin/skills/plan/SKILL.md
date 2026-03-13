@@ -37,7 +37,15 @@ If no file was provided, the user's message or conversation context IS the spec.
 
 ### 3. Research the codebase
 
-Explore thoroughly — read relevant files, understand the architecture, identify affected areas. Use Glob, Grep, and Read tools to understand what exists.
+Explore thoroughly using `code_context` as your primary research tool. Follow this sequence:
+
+1. **Check index health** — `code_context` with `op: "get status"`. If indexing is incomplete, wait or trigger a build.
+2. **Find relevant symbols** — `code_context` with `op: "search symbol"` using domain keywords from the spec. Use `op: "get symbol"` to read implementations.
+3. **Map the blast radius** — for each file or symbol you expect to change, run `code_context` with `op: "get blastradius"` to discover what depends on it. This is how you find work you'd otherwise miss — the blast radius reveals callers, downstream consumers, and tests that will be affected.
+4. **Trace call chains** — `code_context` with `op: "get callgraph"` and `direction: "inbound"` on key symbols to understand who depends on them, and `direction: "outbound"` to understand what they depend on.
+5. **Fill gaps with text search** — use Glob, Grep, and Read for string literals, config files, or patterns that aren't captured by symbol indexing.
+
+The blast radius is the most important research step. It turns a vague "this file needs to change" into a concrete map of every symbol and file that could be affected. Use it to size cards accurately and to avoid missing downstream work.
 
 ### 4. Create kanban cards as you discover work
 

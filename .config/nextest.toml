@@ -29,3 +29,13 @@ filter = "package(llama-embedding)"
 test-group = "llama-embedding-serial"
 # Warn every 30s, kill after 10 periods (5 minutes)
 slow-timeout = { period = "30s", terminate-after = 10 }
+
+# treesitter workspace tests that use embeddings are slow under load
+[test-groups.treesitter-embedding]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-treesitter) & test(duplicate)"
+test-group = "treesitter-embedding"
+# Warn every 60s, kill after 8 periods (~8 minutes)
+slow-timeout = { period = "60s", terminate-after = 8 }
