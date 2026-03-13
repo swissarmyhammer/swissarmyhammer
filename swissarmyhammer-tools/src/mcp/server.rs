@@ -21,9 +21,9 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_code_context_tools, register_file_tools, register_git_tools,
-    register_kanban_tools, register_questions_tools, register_ralph_tools, register_shell_tools,
-    register_web_tools, ToolContext, ToolRegistry,
+    register_code_context_tools, register_file_tools, register_git_tools, register_kanban_tools,
+    register_questions_tools, register_ralph_tools, register_shell_tools, register_web_tools,
+    ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -426,9 +426,7 @@ impl McpServer {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
                 let promoted = {
-                    let mut ws_lock = reelection_ws
-                        .lock()
-                        .expect("workspace mutex poisoned");
+                    let mut ws_lock = reelection_ws.lock().expect("workspace mutex poisoned");
                     if ws_lock.is_leader() {
                         break;
                     }

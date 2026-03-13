@@ -150,7 +150,10 @@ async fn test_leader_indexes_files() {
     assert!(!workspace.is_leader());
 
     // Background task should have indexed the files
-    let status = workspace.status().await.expect("should get workspace status");
+    let status = workspace
+        .status()
+        .await
+        .expect("should get workspace status");
     assert!(
         status.files_total > 0,
         "Background indexer should have found files to index"
@@ -161,7 +164,10 @@ async fn test_leader_indexes_files() {
     );
 
     // Should be able to list indexed files
-    let files = workspace.list_files().await.expect("should list indexed files");
+    let files = workspace
+        .list_files()
+        .await
+        .expect("should list indexed files");
     assert!(
         !files.is_empty(),
         "Background indexer should have indexed files"
@@ -235,14 +241,19 @@ async fn test_reader_can_query_chunks() {
 
     // Reader queries the database
     let db_path = database_path(dir.path());
-    let db = IndexDatabase::open_readonly(&db_path).expect("should open database in read-only mode");
+    let db =
+        IndexDatabase::open_readonly(&db_path).expect("should open database in read-only mode");
 
     // Reader should be able to query chunks
     let chunks = db.get_all_embedded_chunks();
     assert!(chunks.is_ok(), "Reader should be able to query chunks");
 
     // Extract unique file paths from chunks
-    let file_paths: HashSet<PathBuf> = chunks.expect("should retrieve embedded chunks").iter().map(|c| c.path.clone()).collect();
+    let file_paths: HashSet<PathBuf> = chunks
+        .expect("should retrieve embedded chunks")
+        .iter()
+        .map(|c| c.path.clone())
+        .collect();
 
     // Verify files are present (may be empty if no embeddings computed)
     // The important thing is the query succeeded
@@ -272,7 +283,10 @@ async fn test_database_persists_after_leader_drops() {
     // Leader indexes and drops
     let file_count = {
         let workspace = open_no_embedding(dir.path()).await;
-        let files = workspace.list_files().await.expect("should list files from initial leader");
+        let files = workspace
+            .list_files()
+            .await
+            .expect("should list files from initial leader");
         files.len()
     };
 
@@ -285,7 +299,10 @@ async fn test_database_persists_after_leader_drops() {
 
     // New leader should see the same files
     let workspace = open_no_embedding(dir.path()).await;
-    let files = workspace.list_files().await.expect("should list files from new leader");
+    let files = workspace
+        .list_files()
+        .await
+        .expect("should list files from new leader");
     assert_eq!(
         files.len(),
         file_count,
@@ -300,13 +317,20 @@ async fn test_new_leader_can_reopen_existing_database() {
     // First background indexer populates database
     let original_file_count = {
         let workspace = open_and_wait(dir.path()).await;
-        workspace.list_files().await.expect("should list files from first workspace").len()
+        workspace
+            .list_files()
+            .await
+            .expect("should list files from first workspace")
+            .len()
     };
 
     // New workspace opens existing database
     let workspace = open_and_wait(dir.path()).await;
 
-    let files = workspace.list_files().await.expect("should list files from reopened workspace");
+    let files = workspace
+        .list_files()
+        .await
+        .expect("should list files from reopened workspace");
     assert_eq!(
         files.len(),
         original_file_count,
@@ -320,7 +344,10 @@ async fn test_leader_detects_file_changes() {
 
     // Initial indexing
     let workspace = open_no_embedding(dir.path()).await;
-    let initial_status = workspace.status().await.expect("should get initial workspace status");
+    let initial_status = workspace
+        .status()
+        .await
+        .expect("should get initial workspace status");
 
     // Add a new file
     std::fs::write(
@@ -339,7 +366,10 @@ async fn test_leader_detects_file_changes() {
 
     // File changes will be picked up on next process start when content hash differs
     // For now, verify the workspace is still queryable
-    let status = workspace.status().await.expect("should get workspace status after file change");
+    let status = workspace
+        .status()
+        .await
+        .expect("should get workspace status after file change");
     assert_eq!(status.files_indexed, initial_status.files_indexed);
 }
 
@@ -354,14 +384,19 @@ async fn test_empty_workspace_leader_succeeds() {
     let workspace = open_and_wait(dir.path()).await;
 
     // Empty workspace should be queryable
-    let status = workspace.status().await.expect("should get status for empty workspace");
+    let status = workspace
+        .status()
+        .await
+        .expect("should get status for empty workspace");
     assert_eq!(status.files_total, 0);
 
     let duplicates = workspace
         .find_all_duplicates(TEST_MIN_SIMILARITY, TEST_MIN_CHUNK_BYTES)
         .await;
     assert!(duplicates.is_ok());
-    assert!(duplicates.expect("find_all_duplicates should succeed on empty workspace").is_empty());
+    assert!(duplicates
+        .expect("find_all_duplicates should succeed on empty workspace")
+        .is_empty());
 }
 
 #[tokio::test]
@@ -489,7 +524,10 @@ async fn test_find_all_duplicates_detects_near_identical_functions() {
     let workspace = open_and_wait_with_config(dir.path(), config).await;
 
     // Verify indexing actually happened
-    let status = workspace.status().await.expect("should get status for duplicate detection workspace");
+    let status = workspace
+        .status()
+        .await
+        .expect("should get status for duplicate detection workspace");
     assert_eq!(status.files_indexed, 3, "All 3 files should be indexed");
 
     // Find duplicates with a high threshold — the near-identical functions should

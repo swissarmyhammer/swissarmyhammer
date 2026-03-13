@@ -1681,7 +1681,6 @@ macro_rules! register_tool_category {
     };
 }
 
-
 /// Send an MCP LoggingMessageNotification via the peer (fire-and-forget).
 ///
 /// Shared helper for all tools that need to send log notifications to the MCP client.

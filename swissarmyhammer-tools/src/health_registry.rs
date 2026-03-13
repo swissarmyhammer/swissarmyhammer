@@ -10,8 +10,8 @@ use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
-    register_file_tools, register_git_tools, register_kanban_tools,
-    register_questions_tools, register_shell_tools, register_web_tools,
+    register_file_tools, register_git_tools, register_kanban_tools, register_questions_tools,
+    register_shell_tools, register_web_tools,
 };
 
 /// Health checker for prompt directories and YAML front matter
