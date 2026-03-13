@@ -1,0 +1,20 @@
+# Project detection configuration — builtin defaults
+#
+# Configurable symbols for detected project types.
+# These match Starship's defaults (Nerd Font glyphs).
+# https://starship.rs/config/
+#
+# Override at:
+#   ~/.config/sah/project-detection.yaml   (user-level)
+#   .sah/project-detection.yaml            (project-level)
+
+symbols:
+  rust: "󱘗 "
+  nodejs: " "
+  python: " "
+  go: " "
+  java: " "
+  csharp: "󰌛 "
+  c_cpp: " "
+  dart: " "
+  php: " "

@@ -12,5 +12,6 @@ mod types;
 
 pub use detect::detect_projects;
 pub use types::{
-    should_skip_directory, DetectedProject, ProjectType, WorkspaceInfo, SKIP_DIRECTORIES,
+    should_skip_directory, DetectedProject, ProjectDetectionConfig, ProjectSymbols, ProjectType,
+    WorkspaceInfo, BUILTIN_CONFIG_YAML, SKIP_DIRECTORIES,
 };
