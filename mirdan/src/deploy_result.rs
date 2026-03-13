@@ -25,12 +25,12 @@ pub enum DeployAction {
 }
 
 /// Structured result of a single deploy/uninstall operation.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DeployResult {
     /// What action was taken.
     pub action: DeployAction,
-    /// The path affected (file, directory, or symlink).
-    pub path: PathBuf,
+    /// The path affected (file, directory, or symlink), if applicable.
+    pub path: Option<PathBuf>,
     /// Human-readable description of what happened.
     pub message: String,
 }
@@ -40,7 +40,7 @@ impl DeployResult {
     pub fn created(path: impl Into<PathBuf>, message: impl Into<String>) -> Self {
         Self {
             action: DeployAction::Created,
-            path: path.into(),
+            path: Some(path.into()),
             message: message.into(),
         }
     }
@@ -49,7 +49,7 @@ impl DeployResult {
     pub fn updated(path: impl Into<PathBuf>, message: impl Into<String>) -> Self {
         Self {
             action: DeployAction::Updated,
-            path: path.into(),
+            path: Some(path.into()),
             message: message.into(),
         }
     }
@@ -58,7 +58,7 @@ impl DeployResult {
     pub fn removed(path: impl Into<PathBuf>, message: impl Into<String>) -> Self {
         Self {
             action: DeployAction::Removed,
-            path: path.into(),
+            path: Some(path.into()),
             message: message.into(),
         }
     }
@@ -67,7 +67,7 @@ impl DeployResult {
     pub fn linked(path: impl Into<PathBuf>, message: impl Into<String>) -> Self {
         Self {
             action: DeployAction::Linked,
-            path: path.into(),
+            path: Some(path.into()),
             message: message.into(),
         }
     }
@@ -76,7 +76,7 @@ impl DeployResult {
     pub fn skipped(path: impl Into<PathBuf>, message: impl Into<String>) -> Self {
         Self {
             action: DeployAction::Skipped,
-            path: path.into(),
+            path: Some(path.into()),
             message: message.into(),
         }
     }
@@ -85,7 +85,16 @@ impl DeployResult {
     pub fn warning(path: impl Into<PathBuf>, message: impl Into<String>) -> Self {
         Self {
             action: DeployAction::Warning,
-            path: path.into(),
+            path: Some(path.into()),
+            message: message.into(),
+        }
+    }
+
+    /// Create a result with no specific path affected.
+    pub fn message(action: DeployAction, message: impl Into<String>) -> Self {
+        Self {
+            action,
+            path: None,
             message: message.into(),
         }
     }
@@ -99,7 +108,7 @@ mod tests {
     fn test_deploy_result_created() {
         let r = DeployResult::created("/tmp/foo", "Stored in /tmp/foo");
         assert_eq!(r.action, DeployAction::Created);
-        assert_eq!(r.path, PathBuf::from("/tmp/foo"));
+        assert_eq!(r.path, Some(PathBuf::from("/tmp/foo")));
         assert_eq!(r.message, "Stored in /tmp/foo");
     }
 
@@ -139,5 +148,23 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"action\":\"Created\""));
         assert!(json.contains("\"message\":\"test\""));
+    }
+
+    #[test]
+    fn test_deploy_result_message_has_no_path() {
+        let r = DeployResult::message(DeployAction::Created, "Installed from registry");
+        assert_eq!(r.action, DeployAction::Created);
+        assert_eq!(r.path, None);
+        assert_eq!(r.message, "Installed from registry");
+    }
+
+    #[test]
+    fn test_deploy_result_equality() {
+        let a = DeployResult::created("/tmp/foo", "test");
+        let b = DeployResult::created("/tmp/foo", "test");
+        assert_eq!(a, b);
+
+        let c = DeployResult::message(DeployAction::Created, "test");
+        assert_ne!(a, c);
     }
 }

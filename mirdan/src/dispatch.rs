@@ -49,7 +49,7 @@ fn handle_deploy_result(result: Result<Vec<DeployResult>, RegistryError>) -> i32
 /// Each result's `message` field contains the same text that was previously
 /// passed directly to `println!`. This function simply prints them with the
 /// original indentation already baked into the message strings.
-fn format_deploy_results(results: &[DeployResult]) {
+pub fn format_deploy_results(results: &[DeployResult]) {
     for r in results {
         match r.action {
             DeployAction::Created

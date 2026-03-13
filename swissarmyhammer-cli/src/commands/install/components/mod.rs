@@ -206,9 +206,9 @@ fn install_project_legacy(reporter: &dyn InitReporter) -> Result<(), String> {
             message: format!("MCP server to {}", path.display()),
         });
     } else {
-        reporter.emit(&InitEvent::Action {
-            verb: "Unchanged".to_string(),
-            message: format!("MCP server already configured in {}", path.display()),
+        reporter.emit(&InitEvent::Skipped {
+            component: "MCP".to_string(),
+            reason: format!("MCP server already configured in {}", path.display()),
         });
     }
     Ok(())
@@ -307,9 +307,9 @@ impl Initializable for ClaudeLocalScope {
                 ),
             });
         } else {
-            reporter.emit(&InitEvent::Action {
-                verb: "Unchanged".to_string(),
-                message: format!(
+            reporter.emit(&InitEvent::Skipped {
+                component: "MCP".to_string(),
+                reason: format!(
                     "MCP server already configured in {} (local scope, project: {})",
                     path.display(),
                     key
@@ -671,7 +671,7 @@ impl Initializable for SkillDeployment {
 
             // Render instructions through the prompt library's Liquid engine
             let rendered_skill =
-                render_skill_instructions(skill, &prompt_library, &template_context);
+                render_skill_instructions(skill, &prompt_library, &template_context, reporter);
 
             let skill_md_path = skill_dir.join("SKILL.md");
             let content = format_skill_md(&rendered_skill);
@@ -828,16 +828,18 @@ fn render_skill_instructions(
     skill: &swissarmyhammer_skills::Skill,
     prompt_library: &PromptLibrary,
     template_context: &TemplateContext,
+    reporter: &dyn InitReporter,
 ) -> swissarmyhammer_skills::Skill {
     let rendered_instructions =
         match prompt_library.render_text(&skill.instructions, template_context) {
             Ok(rendered) => rendered,
             Err(e) => {
-                // render_skill_instructions does not have reporter access; leave as eprintln
-                eprintln!(
-                    "Warning: failed to render partials for skill '{}': {}",
-                    skill.name, e
-                );
+                reporter.emit(&InitEvent::Warning {
+                    message: format!(
+                        "Failed to render partials for skill '{}': {}",
+                        skill.name, e
+                    ),
+                });
                 skill.instructions.clone()
             }
         };
@@ -1229,46 +1231,6 @@ impl Initializable for LockfileCleanup {
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────
-
-/// Map mirdan `DeployResult` entries to reporter events.
-///
-/// Each `DeployResult` is translated to an `InitEvent::Action` or `InitEvent::Warning`
-/// depending on the action type. `Skipped` results are silently ignored.
-///
-/// This bridges the mirdan deploy layer (which returns structured results) with the
-/// sah lifecycle reporter (which formats output for the user).
-///
-/// Currently unused because `deploy_skill_to_agents` and `deploy_agent_to_agents`
-/// still return `Vec<String>` (agent IDs). Once those functions are updated to
-/// return `Vec<DeployResult>`, the call sites should switch from per-target
-/// emissions to calling this function instead.
-#[allow(dead_code)]
-fn map_deploy_results(results: &[mirdan::DeployResult], reporter: &dyn InitReporter) {
-    for r in results {
-        match r.action {
-            mirdan::DeployAction::Created => reporter.emit(&InitEvent::Action {
-                verb: "Created".to_string(),
-                message: r.message.clone(),
-            }),
-            mirdan::DeployAction::Updated => reporter.emit(&InitEvent::Action {
-                verb: "Updated".to_string(),
-                message: r.message.clone(),
-            }),
-            mirdan::DeployAction::Removed => reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: r.message.clone(),
-            }),
-            mirdan::DeployAction::Linked => reporter.emit(&InitEvent::Action {
-                verb: "Linked".to_string(),
-                message: r.message.clone(),
-            }),
-            mirdan::DeployAction::Skipped => {}
-            mirdan::DeployAction::Warning => reporter.emit(&InitEvent::Warning {
-                message: r.message.clone(),
-            }),
-        }
-    }
-}
 
 /// Remove named entries from a store directory and their symlinks from link directories.
 ///

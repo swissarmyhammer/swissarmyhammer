@@ -48,15 +48,15 @@ pub async fn run_install(
     match git_source::classify_source(package_spec, git) {
         InstallSource::LocalPath(path) => {
             run_install_local(&path, agent_filter, global).await?;
-            Ok(vec![crate::DeployResult::created("", format!("Installed from local path: {}", path))])
+            Ok(vec![crate::DeployResult::message(crate::DeployAction::Created, format!("Installed from local path: {}", path))])
         }
         InstallSource::GitRepo(source) => {
             run_install_git(&source, agent_filter, global, skill_select).await?;
-            Ok(vec![crate::DeployResult::created("", format!("Installed from git: {}", source.display_name))])
+            Ok(vec![crate::DeployResult::message(crate::DeployAction::Created, format!("Installed from git: {}", source.display_name))])
         }
         InstallSource::Registry(spec) => {
             match run_install_registry(&spec, agent_filter, global).await {
-                Ok(()) => Ok(vec![crate::DeployResult::created("", "Installed from registry".to_string())]),
+                Ok(()) => Ok(vec![crate::DeployResult::message(crate::DeployAction::Created, "Installed from registry")]),
                 Err(RegistryError::NotFound(_)) => {
                     // Registry miss — try as git source before giving up
                     match git_source::parse_git_source(package_spec, skill_select) {
@@ -64,8 +64,8 @@ pub async fn run_install(
                             tracing::debug!("  Not found in registry, trying as git repository...");
                             run_install_git(&source, agent_filter, global, skill_select).await?;
                             Ok(vec![
-                                crate::DeployResult::warning("", "Not found in registry, trying as git repository...".to_string()),
-                                crate::DeployResult::created("", format!("Installed from git: {}", source.display_name)),
+                                crate::DeployResult::message(crate::DeployAction::Warning, "Not found in registry, trying as git repository..."),
+                                crate::DeployResult::message(crate::DeployAction::Created, format!("Installed from git: {}", source.display_name)),
                             ])
                         }
                         Err(_) => {
@@ -814,7 +814,7 @@ pub async fn run_uninstall(
                 source = name,
                 "uninstalled packages"
             );
-            return Ok(vec![crate::DeployResult::removed("", format!("Uninstalled {} package(s) from {}", matching.len(), name))]);
+            return Ok(vec![crate::DeployResult::message(crate::DeployAction::Removed, format!("Uninstalled {} package(s) from {}", matching.len(), name))]);
         }
         None
     };
@@ -844,7 +844,7 @@ pub async fn run_uninstall(
     lf.save(save_dir)?;
     tracing::debug!(key, "uninstalled");
 
-    Ok(vec![crate::DeployResult::removed("", format!("Uninstalled {}", key))])
+    Ok(vec![crate::DeployResult::message(crate::DeployAction::Removed, format!("Uninstalled {}", key))])
 }
 
 fn uninstall_skill(
@@ -1023,7 +1023,7 @@ pub async fn run_install_mcp(
 
     if installed.is_empty() {
         tracing::debug!("No agents with MCP support found.");
-        return Ok(vec![crate::DeployResult::skipped("", "No agents with MCP support found.".to_string())]);
+        return Ok(vec![crate::DeployResult::message(crate::DeployAction::Skipped, "No agents with MCP support found.")]);
     }
 
     // Update lockfile
@@ -1048,7 +1048,7 @@ pub async fn run_install_mcp(
         name,
         installed.len()
     );
-    Ok(vec![crate::DeployResult::created("", format!("Installed MCP server '{}' for {} agent(s)", name, installed.len()))])
+    Ok(vec![crate::DeployResult::message(crate::DeployAction::Created, format!("Installed MCP server '{}' for {} agent(s)", name, installed.len()))])
 }
 
 /// Uninstall an MCP server from all detected (or filtered) agents.
@@ -1096,8 +1096,8 @@ pub async fn run_uninstall_mcp(
         "Updated mirdan-lock.json".to_string(),
     ));
 
-    results.push(crate::DeployResult::removed(
-        "",
+    results.push(crate::DeployResult::message(
+        crate::DeployAction::Removed,
         format!(
             "Uninstalled MCP server '{}' from {} agent(s)",
             name, removed

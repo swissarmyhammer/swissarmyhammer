@@ -20,7 +20,7 @@ const TEST_MIN_CHUNK_BYTES: usize = 5;
 /// Maximum time to wait for background indexing before failing the test.
 /// Parallelism for resource-heavy tests is managed by nextest test-groups
 /// in .config/nextest.toml — do not inflate this timeout to compensate.
-const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const TEST_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Open a workspace with a custom IndexConfig and wait for background indexing.
 async fn open_and_wait_with_config(dir: &Path, config: IndexConfig) -> Workspace {

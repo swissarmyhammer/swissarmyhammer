@@ -17,7 +17,7 @@ pub use cli::{Cli, Commands, NewKind};
 pub mod deploy_result;
 pub use deploy_result::{DeployAction, DeployResult};
 mod dispatch;
-pub use dispatch::dispatch;
+pub use dispatch::{dispatch, format_deploy_results};
 pub mod doctor;
 pub mod git_source;
 pub mod info;
