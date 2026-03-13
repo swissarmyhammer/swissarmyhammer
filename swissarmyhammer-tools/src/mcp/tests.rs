@@ -17,11 +17,26 @@ impl Drop for DirGuard {
     }
 }
 
+/// Get the current working directory, falling back to a known safe directory.
+///
+/// When tests run in parallel across crate boundaries, another test binary may
+/// have changed the process CWD to a temp directory that was already cleaned up,
+/// causing `std::env::current_dir()` to fail with ENOENT. This helper falls back
+/// to the project root (CARGO_MANIFEST_DIR's parent) to keep things working.
+fn safe_current_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    })
+}
+
 #[tokio::test]
 #[serial(cwd)]
 async fn test_mcp_server_creation() {
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -64,7 +79,7 @@ async fn test_mcp_server_exposes_shell_tools() {
 #[serial(cwd)]
 async fn test_mcp_server_list_prompts() {
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -86,7 +101,7 @@ async fn test_mcp_server_list_prompts() {
 #[serial(cwd)]
 async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -155,7 +170,7 @@ async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
 #[serial(cwd)]
 async fn test_mcp_server_get_prompt() {
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -253,7 +268,7 @@ async fn test_mcp_server_file_watching_integration() {
 #[serial(cwd)]
 async fn test_mcp_server_uses_same_directory_discovery() {
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -341,7 +356,7 @@ async fn test_mcp_server_exposes_prompts_tools_capability() {
 #[serial(cwd)]
 async fn test_mcp_server_does_not_expose_partial_templates() {
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -403,7 +418,7 @@ async fn test_reload_prompts_detects_no_changes() {
     use std::io::Write;
 
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -459,7 +474,7 @@ async fn test_reload_prompts_detects_content_changes() {
     use std::io::Write;
 
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -511,7 +526,7 @@ async fn test_reload_prompts_detects_new_prompts() {
     use std::io::Write;
 
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -564,7 +579,7 @@ async fn test_reload_prompts_detects_deleted_prompts() {
     use std::io::Write;
 
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
@@ -617,7 +632,7 @@ async fn test_reload_prompts_detects_deleted_prompts() {
 async fn test_builtin_partials_not_exposed_in_mcp() {
     // Test that actual builtin partials with partial: true metadata are filtered correctly
     let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    let original_dir = safe_current_dir();
 
     // We need to be in the project root to load builtin prompts
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

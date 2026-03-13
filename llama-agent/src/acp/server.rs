@@ -2277,7 +2277,7 @@ mod tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapability::new()
+                .fs(agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(true))
                 .terminal(true),
@@ -2603,7 +2603,7 @@ mod tests {
         let server = Arc::new(create_test_server().await);
 
         // Create initialize request with specific capabilities
-        let fs_caps = agent_client_protocol::FileSystemCapability::new()
+        let fs_caps = agent_client_protocol::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(false);
 

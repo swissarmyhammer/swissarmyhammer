@@ -57,8 +57,7 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
             continue;
         }
 
-        let has_lsp =
-            swissarmyhammer_code_context::find_executable(&spec.command).is_some();
+        let has_lsp = swissarmyhammer_code_context::find_executable(&spec.command).is_some();
 
         if has_lsp {
             icons.push(icon.to_string());

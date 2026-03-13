@@ -10,15 +10,12 @@ use crate::style::Style;
 /// Renders a progress bar showing context window usage percentage,
 /// with color thresholds for low/medium/high usage.
 pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
-    let pct = match ctx
+    let pct = ctx
         .input
         .context_window
         .as_ref()
         .and_then(|c| c.used_percentage)
-    {
-        Some(p) => p,
-        None => return ModuleOutput::hidden(),
-    };
+        .unwrap_or(0.0);
 
     let cfg = &ctx.config.context_bar;
     let width = cfg.bar_width;

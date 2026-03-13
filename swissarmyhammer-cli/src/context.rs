@@ -273,7 +273,7 @@ impl CliContext {
         T: serde::Serialize,
     {
         let yaml =
-            serde_yaml::to_string(&items).map_err(map_error("Failed to serialize to YAML"))?;
+            serde_yaml_ng::to_string(&items).map_err(map_error("Failed to serialize to YAML"))?;
         println!("{}", yaml);
         Ok(())
     }

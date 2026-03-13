@@ -79,7 +79,7 @@ fn test_all_doc_example_prompts_are_valid() {
 
         // Extract and parse YAML
         let yaml_content = lines[1..end_line.unwrap()].join("\n");
-        match serde_yaml::from_str::<serde_yaml::Value>(&yaml_content) {
+        match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&yaml_content) {
             Ok(yaml) => {
                 // Check for required fields
                 let yaml_map = yaml.as_mapping();

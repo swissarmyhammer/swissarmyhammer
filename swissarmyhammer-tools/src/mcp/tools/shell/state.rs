@@ -101,17 +101,14 @@ impl ShellState {
     pub fn new() -> anyhow::Result<Self> {
         let base = std::env::current_dir()
             .map(|cwd| cwd.join(".shell"))
-            .unwrap_or_else(|_| {
-                std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new()))
-            });
+            .unwrap_or_else(|_| std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new())));
         Self::new_in_dir(base)
     }
 
     /// Create a new ShellState with an explicit base directory for the .shell/ data.
     /// This avoids relying on the process-wide CWD, which is important for tests.
-    pub fn new_in_dir(_shell_dir: PathBuf) -> anyhow::Result<Self> {
-        let dir = std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new()));
-        Self::with_dir(dir)
+    pub fn new_in_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
+        Self::with_dir(shell_dir)
     }
 
     /// Create a new ShellState rooted at the given directory.
@@ -497,10 +494,10 @@ pub async fn search(
     let cmd_id_filter = command_id;
     let mut scored: Vec<SearchResult> = stmt
         .query_map(rusqlite::params![session_id], |row| {
-            let cmd_id: usize = row.get(0)?;
-            let _chunk_index: usize = row.get(1)?;
-            let start_line: usize = row.get(2)?;
-            let end_line: usize = row.get(3)?;
+            let cmd_id: usize = row.get::<_, i64>(0)? as usize;
+            let _chunk_index: usize = row.get::<_, i64>(1)? as usize;
+            let start_line: usize = row.get::<_, i64>(2)? as usize;
+            let end_line: usize = row.get::<_, i64>(3)? as usize;
             let text: String = row.get(4)?;
             let embedding_blob: Vec<u8> = row.get(5)?;
             Ok((cmd_id, start_line, end_line, text, embedding_blob))
@@ -559,7 +556,7 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
             let conn = db.lock().await;
             if let Err(e) = conn.execute(
                 "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![job.session_id, job.command_id, job.chunk_index, job.start_line, job.end_line, job.text],
+                rusqlite::params![job.session_id, job.command_id as i64, job.chunk_index as i64, job.start_line as i64, job.end_line as i64, job.text],
             ) {
                 tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", job.command_id, job.chunk_index, e);
             }
@@ -600,7 +597,7 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
                     let conn = db.lock().await;
                     if let Err(e) = conn.execute(
                         "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",
-                        rusqlite::params![embedding_bytes, job.session_id, job.command_id, job.chunk_index],
+                        rusqlite::params![embedding_bytes, job.session_id, job.command_id as i64, job.chunk_index as i64],
                     ) {
                         tracing::warn!("Failed to store embedding in DB (cmd {}, chunk {}): {}", job.command_id, job.chunk_index, e);
                     }
@@ -620,7 +617,7 @@ async fn drain_inserts_only(rx: &mut mpsc::Receiver<ChunkJob>, db: &Arc<Mutex<Co
         let conn = db.lock().await;
         if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![job.session_id, job.command_id, job.chunk_index, job.start_line, job.end_line, job.text],
+            rusqlite::params![job.session_id, job.command_id as i64, job.chunk_index as i64, job.start_line as i64, job.end_line as i64, job.text],
         ) {
             tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", job.command_id, job.chunk_index, e);
         }

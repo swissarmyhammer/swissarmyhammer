@@ -149,7 +149,7 @@ pub enum SwissArmyHammerError {
 
     /// Serialization/deserialization error
     #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_yaml::Error),
+    Serialization(#[from] serde_yaml_ng::Error),
 
     /// Workflow not found
     #[error("Workflow not found: {0}")]

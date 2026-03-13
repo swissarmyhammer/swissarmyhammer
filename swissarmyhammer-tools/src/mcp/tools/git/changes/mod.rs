@@ -28,6 +28,9 @@ use crate::mcp::tool_registry::{McpTool, ToolContext};
 pub struct GitChangesRequest {
     /// Branch name to analyze (optional, defaults to current branch)
     pub branch: Option<String>,
+    /// Git revision range to diff, e.g. "HEAD~1..HEAD" or "HEAD~3"
+    /// When provided, takes precedence over parent-branch detection.
+    pub range: Option<String>,
 }
 
 /// Response structure containing changed files
@@ -37,6 +40,9 @@ pub struct GitChangesResponse {
     pub branch: String,
     /// Parent branch (if determined), null for root branches
     pub parent_branch: Option<String>,
+    /// The revision range used, if any (e.g. "HEAD~1..HEAD")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
     /// List of file paths that have changed
     pub files: Vec<String>,
 }
@@ -77,9 +83,16 @@ pub fn get_uncommitted_changes(git_ops: &GitOperations) -> GitResult<Vec<String>
 #[derive(Debug, Default)]
 pub struct GetChanges;
 
-static GET_CHANGES_PARAMS: &[ParamMeta] = &[ParamMeta::new("branch")
-    .description("Branch name to analyze (optional, defaults to current branch)")
-    .param_type(ParamType::String)];
+static GET_CHANGES_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("branch")
+        .description("Branch name to analyze (optional, defaults to current branch)")
+        .param_type(ParamType::String),
+    ParamMeta::new("range")
+        .description(
+            "Git revision range to diff, e.g. \"HEAD~1..HEAD\" or \"HEAD~3\". Takes precedence over parent-branch detection.",
+        )
+        .param_type(ParamType::String),
+];
 
 impl Operation for GetChanges {
     fn verb(&self) -> &'static str {
@@ -193,18 +206,9 @@ impl GitChangesTool {
                 .map_err(|e| rmcp::ErrorData::internal_error(e, None))?
         };
 
-        Ok(CallToolResult {
-            content: vec![rmcp::model::Annotated::new(
-                rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                    text: response_json,
-                    meta: None,
-                }),
-                None,
-            )],
-            is_error: Some(false),
-            structured_content: None,
-            meta: None,
-        })
+        Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+            response_json,
+        )]))
     }
 
     /// Resolves the working directory from the tool context.
@@ -336,34 +340,68 @@ impl McpTool for GitChangesTool {
             }
         };
 
-        // Get changed files based on whether we have a parent branch
-        let mut files = if let Some(ref parent) = parent_branch {
-            // Feature/issue branch: get files changed from parent
-            git_ops
-                .get_changed_files_from_parent(&branch, parent)
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to get changed files: {}", e),
-                        None,
-                    )
-                })?
-        } else {
-            // Main/trunk branch: get only uncommitted changes
-            get_uncommitted_changes(git_ops).map_err(|e| {
-                rmcp::ErrorData::internal_error(
-                    format!("Failed to get uncommitted changes: {}", e),
-                    None,
-                )
-            })?
-        };
-
-        // Merge in uncommitted changes
+        // Fetch uncommitted changes once and reuse across all branches below
         let uncommitted = get_uncommitted_changes(git_ops).map_err(|e| {
             rmcp::ErrorData::internal_error(
                 format!("Failed to get uncommitted changes: {}", e),
                 None,
             )
         })?;
+
+        // Determine the effective range to use:
+        // 1. Explicit range from request takes top precedence
+        // 2. On main with clean tree and no parent, default to HEAD~1..HEAD
+        // 3. Otherwise, None (use parent-branch or uncommitted logic)
+        let effective_range = if request.range.is_some() {
+            request.range.clone()
+        } else if parent_branch.is_none() {
+            // On a root/main branch with no parent -- check if tree is clean
+            if uncommitted.is_empty() {
+                // Clean main -- default to last commit
+                Some("HEAD~1..HEAD".to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Get changed files based on range, parent branch, or uncommitted
+        let (mut files, effective_range) = if let Some(range) = effective_range {
+            // Range mode: diff the specified range
+            // If this is an auto-default range (not user-specified), tolerate failure
+            // (e.g. single-commit repo where HEAD~1 doesn't exist)
+            let is_user_range = request.range.is_some();
+            match git_ops.get_changed_files_from_range(&range) {
+                Ok(f) => (f, Some(range)),
+                Err(_) if !is_user_range => {
+                    // Auto-default range failed (e.g. initial commit), fall back to empty
+                    (Vec::new(), None)
+                }
+                Err(e) => {
+                    return Err(rmcp::ErrorData::internal_error(
+                        format!("Failed to get changed files from range: {}", e),
+                        None,
+                    ));
+                }
+            }
+        } else if let Some(ref parent) = parent_branch {
+            // Feature/issue branch: get files changed from parent
+            let f = git_ops
+                .get_changed_files_from_parent(&branch, parent)
+                .map_err(|e| {
+                    rmcp::ErrorData::internal_error(
+                        format!("Failed to get changed files: {}", e),
+                        None,
+                    )
+                })?;
+            (f, None)
+        } else {
+            // Main/trunk branch with uncommitted changes: use cached uncommitted
+            (uncommitted.clone(), None)
+        };
+
+        // Merge in uncommitted changes (cached from above)
         files.extend(uncommitted);
 
         // Deduplicate and sort for consistent output
@@ -374,6 +412,7 @@ impl McpTool for GitChangesTool {
         let response = GitChangesResponse {
             branch,
             parent_branch,
+            range: effective_range,
             files,
         };
 
@@ -382,18 +421,9 @@ impl McpTool for GitChangesTool {
             rmcp::ErrorData::internal_error(format!("Failed to serialize response: {}", e), None)
         })?;
 
-        Ok(CallToolResult {
-            content: vec![rmcp::model::Annotated::new(
-                rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                    text: response_json,
-                    meta: None,
-                }),
-                None,
-            )],
-            is_error: Some(false),
-            structured_content: None,
-            meta: None,
-        })
+        Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+            response_json,
+        )]))
     }
 }
 
@@ -563,7 +593,9 @@ mod tests {
         let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
         assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.parent_branch, None);
-        // Main branch with no uncommitted changes should return empty list
+        // Single-commit repo: HEAD~1 doesn't exist, so auto-default range fails gracefully
+        // and falls back to empty (no range, no uncommitted changes)
+        assert_eq!(parsed.range, None);
         assert_eq!(parsed.files.len(), 0);
     }
 
@@ -668,6 +700,7 @@ mod tests {
     fn test_git_changes_request_serialization() {
         let request = GitChangesRequest {
             branch: Some("main".to_string()),
+            range: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -686,6 +719,7 @@ mod tests {
         let response = GitChangesResponse {
             branch: "test-branch".to_string(),
             parent_branch: Some("main".to_string()),
+            range: None,
             files: vec!["src/main.rs".to_string(), "README.md".to_string()],
         };
 
@@ -882,6 +916,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_git_changes_range_takes_precedence() {
+        let repo = TestGitRepo::new();
+        repo.commit_file("base.txt", "base content", "Initial commit");
+
+        // Create feature branch with a committed file
+        repo.create_and_checkout_branch("feature/test");
+        repo.commit_file("feature.txt", "feature content", "Feature commit");
+
+        // Create test context with git ops
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        // Execute tool with range -- should use range instead of parent branch detection
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("op".to_string(), serde_json::json!("get changes"));
+        arguments.insert("range".to_string(), serde_json::json!("HEAD~1..HEAD"));
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.is_error, Some(false));
+
+        let response_text = match &response.content[0].raw {
+            rmcp::model::RawContent::Text(text) => &text.text,
+            _ => panic!("Expected text content"),
+        };
+        let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
+
+        // Range should take precedence: only feature.txt from the last commit
+        assert!(parsed.files.contains(&"feature.txt".to_string()));
+        // The range field should reflect the range used
+        assert_eq!(parsed.range, Some("HEAD~1..HEAD".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_git_changes_clean_main_defaults_to_last_commit() {
+        let repo = TestGitRepo::new();
+        repo.commit_file("base.txt", "base content", "Initial commit");
+        repo.commit_file("recent.txt", "recent content", "Recent commit");
+
+        // Create test context with git ops (on main, clean tree)
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        // Execute tool with no range on clean main
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("op".to_string(), serde_json::json!("get changes"));
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.is_error, Some(false));
+
+        let response_text = match &response.content[0].raw {
+            rmcp::model::RawContent::Text(text) => &text.text,
+            _ => panic!("Expected text content"),
+        };
+        let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
+
+        // Clean main with no range should default to HEAD~1..HEAD
+        assert_eq!(parsed.branch, "main");
+        assert_eq!(parsed.parent_branch, None);
+        assert_eq!(parsed.range, Some("HEAD~1..HEAD".to_string()));
+        // Should contain the file from the last commit
+        assert!(parsed.files.contains(&"recent.txt".to_string()));
+        // Should NOT contain the file from the first commit
+        assert!(!parsed.files.contains(&"base.txt".to_string()));
     }
 
     // Note: Orphan branch test requires shell commands for git checkout --orphan

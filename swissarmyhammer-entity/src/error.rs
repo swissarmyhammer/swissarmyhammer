@@ -21,7 +21,7 @@ pub enum EntityError {
     #[error("YAML error in {path}: {source}")]
     Yaml {
         path: PathBuf,
-        source: serde_yaml::Error,
+        source: serde_yaml_ng::Error,
     },
 
     /// Unknown entity type (not defined in FieldsContext).

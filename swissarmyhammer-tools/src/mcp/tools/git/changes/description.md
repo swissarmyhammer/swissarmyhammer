@@ -14,7 +14,30 @@ List files that have changed on a branch relative to its parent branch, includin
 {"op": "get changes", "branch": "issue/feature-123"}
 ```
 
-Returns branch name, parent branch (if detected), and array of changed file paths.
+Use `range` to diff an explicit revision range. This takes precedence over parent-branch detection:
+
+```json
+{"op": "get changes", "range": "HEAD~1..HEAD"}
+```
+
+```json
+{"op": "get changes", "range": "HEAD~3..HEAD"}
+```
+
+A single ref is treated as `ref..HEAD`:
+
+```json
+{"op": "get changes", "range": "HEAD~2"}
+```
+
+**Behavior summary:**
+
+- Feature branch (has parent): diff from parent + uncommitted changes
+- Main + uncommitted changes: uncommitted changes only
+- Main + clean + no `range`: defaults to `HEAD~1..HEAD` (last commit)
+- Any branch + `range` specified: range takes precedence
+
+Returns branch name, parent branch (if detected), range used (if any), and array of changed file paths.
 
 ### get diff
 

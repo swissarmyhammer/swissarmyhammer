@@ -1,8 +1,13 @@
 //! File-lock based leader election
 //!
-//! Uses file locking to ensure only one process becomes the leader for a given workspace.
-//! The first process to acquire the lock becomes the leader.
+//! Uses file locking (`flock`) to coordinate leader election across multiple processes.
+//! The first process to acquire the lock becomes the leader; others become followers.
+//! Followers can re-contest the election at any time via `try_promote()`.
+//!
+//! The OS automatically releases `flock` when a process exits or crashes, so a
+//! follower calling `try_promote()` will win the election once the old leader is gone.
 
+use std::fmt;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -52,7 +57,31 @@ impl ElectionConfig {
 
     /// Get the base directory (uses system temp dir if not set)
     fn base_dir(&self) -> PathBuf {
-        self.base_dir.clone().unwrap_or_else(std::env::temp_dir)
+        self.base_dir
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+    }
+}
+
+/// The outcome of a leader election attempt.
+///
+/// Callers match on this to determine whether they won (Leader) or lost
+/// (Follower). A `FollowerGuard` can re-contest the election later via
+/// `try_promote()`.
+pub enum ElectionOutcome {
+    /// This process won the election and holds the leader lock.
+    Leader(LeaderGuard),
+    /// Another process holds the lock. The follower can retry later.
+    Follower(FollowerGuard),
+}
+
+impl fmt::Debug for ElectionOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Leader(_) => f.write_str("ElectionOutcome::Leader"),
+            Self::Follower(_) => f.write_str("ElectionOutcome::Follower"),
+        }
     }
 }
 
@@ -64,19 +93,19 @@ impl ElectionConfig {
 /// # Example
 ///
 /// ```ignore
-/// use swissarmyhammer_leader_election::{LeaderElection, ElectionConfig};
+/// use swissarmyhammer_leader_election::LeaderElection;
 ///
 /// let election = LeaderElection::new("/workspace/path");
 ///
-/// match election.try_become_leader() {
-///     Ok(guard) => {
-///         // We are the leader - guard holds the lock
-///         println!("Became leader, socket at: {:?}", election.socket_path());
+/// match election.elect() {
+///     Ok(ElectionOutcome::Leader(guard)) => {
+///         // We are the leader — guard holds the lock
 ///     }
-///     Err(ElectionError::LockHeld) => {
-///         // Another process is the leader
-///         println!("Another process is the leader");
+///     Ok(ElectionOutcome::Follower(follower)) => {
+///         // Another process is leader — try again later
+///         // if let Some(guard) = follower.try_promote()? { ... }
 ///     }
+///     Err(e) => eprintln!("Election failed: {}", e),
 /// }
 /// ```
 pub struct LeaderElection {
@@ -110,19 +139,42 @@ impl LeaderElection {
         }
     }
 
-    /// Compute a short hash of a path for unique identification
+    /// Compute a hash of a path for unique identification.
+    ///
+    /// Uses the full 32-character MD5 hex digest to avoid collision risk
+    /// when two different workspace paths share a lock file.
     fn hash_path(path: &Path) -> String {
         let path_str = path.to_string_lossy();
         let digest = md5::compute(path_str.as_bytes());
-        format!("{:x}", digest)[..12].to_string()
+        format!("{:x}", digest)
     }
 
-    /// Try to become the leader
+    /// Run the election. Returns `Leader` or `Follower` outcome.
+    ///
+    /// This is the primary entry point. Use this instead of `try_become_leader()`
+    /// for new code — it returns a typed outcome so followers can re-contest later.
+    pub fn elect(&self) -> Result<ElectionOutcome> {
+        match self.try_acquire_lock() {
+            Ok(guard) => Ok(ElectionOutcome::Leader(guard)),
+            Err(ElectionError::LockHeld) => Ok(ElectionOutcome::Follower(FollowerGuard {
+                lock_path: self.lock_path.clone(),
+                socket_path: self.socket_path.clone(),
+            })),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Try to become the leader (legacy API, prefer `elect()`).
     ///
     /// Attempts to acquire an exclusive lock on the lock file.
     /// Returns a `LeaderGuard` if successful, or `ElectionError::LockHeld` if another
     /// process already holds the lock.
     pub fn try_become_leader(&self) -> Result<LeaderGuard> {
+        self.try_acquire_lock()
+    }
+
+    /// Internal: attempt to acquire the flock.
+    fn try_acquire_lock(&self) -> Result<LeaderGuard> {
         // Ensure parent directory exists
         if let Some(parent) = self.lock_path.parent() {
             fs::create_dir_all(parent).map_err(ElectionError::LockFileCreation)?;
@@ -139,6 +191,7 @@ impl LeaderElection {
 
                 Ok(LeaderGuard {
                     _lock_file: lock_file,
+                    lock_path: self.lock_path.clone(),
                     socket_path: self.socket_path.clone(),
                 })
             }
@@ -191,15 +244,25 @@ impl LeaderElection {
     }
 }
 
-/// Guard that holds the leader lock
+/// Guard that holds the leader lock.
 ///
-/// When dropped, releases the lock and cleans up the socket file.
-/// The lock is held as long as this guard exists.
+/// When dropped, releases the flock, cleans up the socket file, and removes
+/// the lock file from disk.
 pub struct LeaderGuard {
-    /// The lock file handle (lock released on drop)
+    /// The lock file handle (flock released on drop via fs2/OS)
     _lock_file: File,
+    /// Path to lock file (cleaned up on drop)
+    lock_path: PathBuf,
     /// Path to socket file (cleaned up on drop)
     socket_path: PathBuf,
+}
+
+impl fmt::Debug for LeaderGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LeaderGuard")
+            .field("lock_path", &self.lock_path)
+            .finish()
+    }
 }
 
 impl LeaderGuard {
@@ -211,8 +274,68 @@ impl LeaderGuard {
 
 impl Drop for LeaderGuard {
     fn drop(&mut self) {
-        // Clean up socket file when leader exits
+        // Clean up socket and lock files when leader exits.
+        // The flock is released automatically when _lock_file is dropped,
+        // but the 0-byte files linger on disk unless we remove them.
         let _ = fs::remove_file(&self.socket_path);
+        let _ = fs::remove_file(&self.lock_path);
+    }
+}
+
+/// Guard held by a process that lost the election.
+///
+/// Call `try_promote()` to re-contest the election. If the previous leader
+/// has exited (releasing its flock), this process wins and gets a `LeaderGuard`.
+pub struct FollowerGuard {
+    /// Path to the lock file (same as the leader's)
+    lock_path: PathBuf,
+    /// Path to the Unix socket
+    socket_path: PathBuf,
+}
+
+impl fmt::Debug for FollowerGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FollowerGuard")
+            .field("lock_path", &self.lock_path)
+            .finish()
+    }
+}
+
+impl FollowerGuard {
+    /// Re-contest the election.
+    ///
+    /// If the leader's flock has been released (process exited or crashed),
+    /// acquires the lock and returns `Ok(Some(LeaderGuard))`.
+    /// If another process still holds the lock, returns `Ok(None)`.
+    pub fn try_promote(&self) -> Result<Option<LeaderGuard>> {
+        // Create-or-open the lock file. The previous leader's drop may have
+        // deleted it, so we must use create() to ensure it exists for flock.
+        let lock_file = File::create(&self.lock_path).map_err(ElectionError::LockFileCreation)?;
+
+        match lock_file.try_lock_exclusive() {
+            Ok(()) => {
+                // Won the re-election — clean up stale socket from dead leader
+                let _ = fs::remove_file(&self.socket_path);
+
+                Ok(Some(LeaderGuard {
+                    _lock_file: lock_file,
+                    lock_path: self.lock_path.clone(),
+                    socket_path: self.socket_path.clone(),
+                }))
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(ElectionError::LockAcquisition(e)),
+        }
+    }
+
+    /// Get the path to the lock file
+    pub fn lock_path(&self) -> &Path {
+        &self.lock_path
+    }
+
+    /// Get the path to the socket file
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
     }
 }
 
@@ -316,6 +439,8 @@ mod tests {
 
         // After guard is dropped, socket should still be cleaned up
         assert!(!election.socket_path().exists());
+        // Lock file should also be cleaned up
+        assert!(!election.lock_path().exists());
     }
 
     #[test]
@@ -348,4 +473,117 @@ mod tests {
         assert!(election.lock_path().starts_with(dir.path()));
         assert!(election.socket_path().starts_with(dir.path()));
     }
+
+    // --- New tests for elect() and FollowerGuard ---
+
+    #[test]
+    fn test_elect_returns_leader() {
+        let dir = TempDir::new().unwrap();
+        let election = LeaderElection::new(dir.path());
+
+        let outcome = election.elect().unwrap();
+        assert!(matches!(outcome, ElectionOutcome::Leader(_)));
+    }
+
+    #[test]
+    fn test_elect_returns_follower_when_lock_held() {
+        let dir = TempDir::new().unwrap();
+        let election = LeaderElection::new(dir.path());
+
+        // First caller wins
+        let _leader = election.try_become_leader().unwrap();
+
+        // Second caller gets follower
+        let outcome = election.elect().unwrap();
+        assert!(matches!(outcome, ElectionOutcome::Follower(_)));
+    }
+
+    #[test]
+    fn test_follower_try_promote_fails_while_leader_alive() {
+        let dir = TempDir::new().unwrap();
+        let election = LeaderElection::new(dir.path());
+
+        let _leader = election.try_become_leader().unwrap();
+
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+
+        // Leader still alive — promotion should fail
+        let promoted = follower.try_promote().unwrap();
+        assert!(promoted.is_none());
+    }
+
+    #[test]
+    fn test_follower_try_promote_succeeds_after_leader_drops() {
+        let dir = TempDir::new().unwrap();
+        let election = LeaderElection::new(dir.path());
+
+        // Leader wins, then dies
+        let leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+
+        // Leader exits — flock released
+        drop(leader);
+
+        // Follower promotes
+        let promoted = follower.try_promote().unwrap();
+        assert!(promoted.is_some());
+    }
+
+    #[test]
+    fn test_leader_drop_cleans_up_lock_file() {
+        let dir = TempDir::new().unwrap();
+        let election = LeaderElection::new(dir.path());
+
+        let guard = election.try_become_leader().unwrap();
+        assert!(election.lock_path().exists());
+
+        drop(guard);
+        assert!(!election.lock_path().exists());
+    }
+
+    #[test]
+    fn test_promoted_leader_behaves_like_original() {
+        let dir = TempDir::new().unwrap();
+        let election = LeaderElection::new(dir.path());
+
+        // First leader wins and dies
+        let leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+        drop(leader);
+
+        // Follower promotes to leader
+        let new_leader = follower.try_promote().unwrap().unwrap();
+
+        // A third process should see the lock as held
+        let outcome2 = election.elect().unwrap();
+        assert!(matches!(outcome2, ElectionOutcome::Follower(_)));
+
+        // New leader drops — lock file cleaned up
+        drop(new_leader);
+        assert!(!election.lock_path().exists());
+    }
 }
+
+// Compile-time assertions: these types are held in Arc<Mutex<>> and sent
+// across tokio::spawn boundaries. Catch regressions if a non-Send field
+// is ever added.
+const _: () = {
+    fn _assert_send<T: Send>() {}
+    fn _checks() {
+        _assert_send::<LeaderElection>();
+        _assert_send::<LeaderGuard>();
+        _assert_send::<FollowerGuard>();
+    }
+};

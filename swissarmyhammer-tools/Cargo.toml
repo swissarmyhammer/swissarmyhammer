@@ -40,7 +40,7 @@ swissarmyhammer-mcp-proxy = { path = "../swissarmyhammer-mcp-proxy" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 anyhow = { workspace = true }
 
 once_cell = { workspace = true }
@@ -104,7 +104,7 @@ swissarmyhammer-lsp = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 
 # Semantic diffing
-sem-core = { workspace = true }
+swissarmyhammer-sem = { workspace = true }
 
 # HTTP server dependencies
 axum = { workspace = true }

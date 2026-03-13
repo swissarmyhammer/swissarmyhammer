@@ -165,7 +165,7 @@ impl StorageBackend for FileStorage {
         }
 
         // Serialize the prompt to YAML front matter + content
-        let yaml_front_matter = serde_yaml::to_string(&serde_json::json!({
+        let yaml_front_matter = serde_yaml_ng::to_string(&serde_json::json!({
             "name": prompt.name,
             "description": prompt.description,
             "category": prompt.category,

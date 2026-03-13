@@ -350,8 +350,7 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
                         });
                     }
                     Ok(output) => {
-                        let stderr =
-                            String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                         let reason = if stderr.is_empty() {
                             format!("exited with status {}", output.status)
                         } else {
@@ -360,11 +359,7 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
                         checks.push(Check {
                             name: check_name,
                             status: CheckStatus::Error,
-                            message: format!(
-                                "Found at {} but broken: {}",
-                                path.display(),
-                                reason
-                            ),
+                            message: format!("Found at {} but broken: {}", path.display(), reason),
                             fix: Some(spec.install_hint.clone()),
                         });
                     }

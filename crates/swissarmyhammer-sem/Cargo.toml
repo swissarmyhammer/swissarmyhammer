@@ -1,0 +1,42 @@
+[package]
+name = "swissarmyhammer-sem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Semantic diff engine — entity-level code diffing via tree-sitter"
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-c.workspace = true
+tree-sitter-cpp.workspace = true
+tree-sitter-ruby.workspace = true
+tree-sitter-c-sharp.workspace = true
+tree-sitter-php.workspace = true
+tree-sitter-fortran.workspace = true
+tree-sitter-swift.workspace = true
+tree-sitter-elixir.workspace = true
+tree-sitter-bash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+toml.workspace = true
+xxhash-rust.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

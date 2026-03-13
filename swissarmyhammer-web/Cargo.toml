@@ -30,14 +30,10 @@ dashmap = { workspace = true }
 markdowndown = { workspace = true }
 
 # Web search
-chromiumoxide = { workspace = true }
-futures = { workspace = true }
 html2md = { workspace = true }
 html-escape = { workspace = true }
 scraper = { workspace = true }
 urlencoding = { workspace = true }
-tempfile = { workspace = true }
-which = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

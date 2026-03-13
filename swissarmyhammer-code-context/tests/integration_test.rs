@@ -1874,14 +1874,41 @@ fn test_end_to_end_real_project_validation() {
 // Real LSP integration test (requires rust-analyzer installed)
 // ---------------------------------------------------------------------------
 
+/// Polls rust-analyzer via `collect_file_symbols` until it returns at least
+/// `min_symbols` results or the timeout is exceeded. Returns the symbol count
+/// on success.
+///
+/// rust-analyzer needs time after initialization to analyze a project before
+/// it can respond to `textDocument/documentSymbol` requests. A fixed sleep is
+/// unreliable -- this retry loop handles both fast machines and cold-cache CI.
+fn wait_for_lsp_symbols(
+    client: &mut swissarmyhammer_code_context::LspJsonRpcClient,
+    file_path: &Path,
+    min_symbols: usize,
+    timeout: std::time::Duration,
+) -> usize {
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_millis(500);
+    let mut last_count = 0;
+    while start.elapsed() < timeout {
+        if let Ok(result) = client.collect_file_symbols(file_path) {
+            last_count = result.symbol_count;
+            if last_count >= min_symbols {
+                return last_count;
+            }
+        }
+        std::thread::sleep(poll_interval);
+    }
+    last_count
+}
+
 /// End-to-end test that spawns a real rust-analyzer process, sends LSP
 /// requests for document symbols, and verifies that symbols are correctly
 /// parsed and persisted to the database.
 ///
-/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
-/// Run with: `cargo test -p swissarmyhammer-code-context -- test_real_lsp_document_symbols --ignored --nocapture`
+/// Requires rust-analyzer to be installed.
+/// Run with: `cargo test -p swissarmyhammer-code-context -- test_real_lsp_document_symbols --nocapture`
 #[test]
-#[ignore]
 fn test_real_lsp_document_symbols() {
     use std::process::{Command, Stdio};
     use swissarmyhammer_code_context::db;
@@ -1963,27 +1990,19 @@ pub fn greet(config: &Config) -> String {
         .expect("didOpen failed");
     println!("Sent textDocument/didOpen for src/lib.rs");
 
-    // Give rust-analyzer a moment to process the file. It needs to parse
-    // the project before it can respond to documentSymbol requests.
-    std::thread::sleep(std::time::Duration::from_secs(5));
-
-    // -- Step 6: Send textDocument/documentSymbol ---------------------------
-    let result = client
-        .collect_file_symbols(&lib_rs_path)
-        .expect("collect_file_symbols failed");
-
-    println!(
-        "documentSymbol result: {} symbols, error: {:?}",
-        result.symbol_count, result.error
+    // Poll rust-analyzer until it returns symbols (it needs time to analyze
+    // the project, especially on cold cache).
+    let symbol_count = wait_for_lsp_symbols(
+        &mut client,
+        &lib_rs_path,
+        1,
+        std::time::Duration::from_secs(30),
     );
 
+    println!("documentSymbol result: {} symbols", symbol_count);
+
     assert!(
-        result.error.is_none(),
-        "documentSymbol should not error: {:?}",
-        result.error
-    );
-    assert!(
-        result.symbol_count > 0,
+        symbol_count > 0,
         "Should have found at least 1 symbol, got 0"
     );
 
@@ -2220,11 +2239,10 @@ fn test_ts_call_edges_known_graph() {
 /// Verify that LSP-sourced call edges work for a known call graph using
 /// a real rust-analyzer process.
 ///
-/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Requires rust-analyzer to be installed.
 /// Run with:
-///   cargo test -p swissarmyhammer-code-context -- test_lsp_call_edges_known_graph --ignored --nocapture
+///   cargo test -p swissarmyhammer-code-context -- test_lsp_call_edges_known_graph --nocapture
 #[test]
-#[ignore]
 fn test_lsp_call_edges_known_graph() {
     use std::process::{Command, Stdio};
     use swissarmyhammer_code_context::{detect_rust_analyzer, LspJsonRpcClient};
@@ -2279,8 +2297,18 @@ edition = "2021"
         .expect("didOpen failed");
     println!("Sent textDocument/didOpen for src/main.rs");
 
-    // Give rust-analyzer time to parse the project.
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    // Poll rust-analyzer until it returns symbols.
+    let symbol_count = wait_for_lsp_symbols(
+        &mut client,
+        &main_rs_path,
+        4,
+        std::time::Duration::from_secs(30),
+    );
+    assert!(
+        symbol_count >= 4,
+        "Expected at least 4 symbols (main, foo, bar, helper), got {}",
+        symbol_count
+    );
 
     // Step 5: Collect and persist LSP symbols.
     let rel_path = "src/main.rs";
@@ -2407,11 +2435,10 @@ edition = "2021"
 /// `get_symbol`, `search_symbol`, and `list_symbols` operations return
 /// correct results with non-empty source text.
 ///
-/// Marked `#[ignore]` because it requires rust-analyzer to be installed.
+/// Requires rust-analyzer to be installed.
 /// Run with:
-///   cargo test --test integration_test -- test_lsp_symbol_lookup_end_to_end --ignored --nocapture
+///   cargo test --test integration_test -- test_lsp_symbol_lookup_end_to_end --nocapture
 #[test]
-#[ignore]
 fn test_lsp_symbol_lookup_end_to_end() {
     use std::process::{Command, Stdio};
     use swissarmyhammer_code_context::{detect_rust_analyzer, ensure_ts_symbols, LspJsonRpcClient};
@@ -2507,8 +2534,18 @@ pub fn greet(name: &str) -> String {
         .expect("didOpen failed");
     println!("Sent textDocument/didOpen for src/lib.rs");
 
-    // Give rust-analyzer time to parse.
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    // Poll rust-analyzer until it returns symbols.
+    let symbol_count = wait_for_lsp_symbols(
+        &mut client,
+        &lib_rs_path,
+        4,
+        std::time::Duration::from_secs(30),
+    );
+    assert!(
+        symbol_count >= 4,
+        "Expected at least 4 symbols (Config, new, display_name, greet), got {}",
+        symbol_count
+    );
 
     // -- Step 6: Persist LSP symbols ----------------------------------------
     let persist_result = client

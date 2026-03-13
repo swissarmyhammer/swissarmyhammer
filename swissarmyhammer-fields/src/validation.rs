@@ -482,8 +482,8 @@ mod tests {
             mention_prefix: None,
             mention_display_field: None,
         };
-        let yaml = serde_yaml::to_string(&entity).unwrap();
-        let parsed: EntityDef = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&entity).unwrap();
+        let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(entity, parsed);
     }
 

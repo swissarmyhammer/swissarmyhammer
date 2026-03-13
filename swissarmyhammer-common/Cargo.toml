@@ -18,7 +18,7 @@ tempfile.workspace = true
 # Core serialization and error handling
 tokio.workspace = true
 serde.workspace = true
-serde_yaml.workspace = true
+serde_yaml_ng.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true

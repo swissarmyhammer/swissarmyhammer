@@ -43,7 +43,7 @@ pub enum FieldsError {
 
     /// YAML serialization error
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(#[from] serde_yaml_ng::Error),
 }
 
 #[cfg(test)]

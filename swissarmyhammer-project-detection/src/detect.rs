@@ -48,15 +48,16 @@ fn detect_projects_recursive(
         return Ok(());
     }
 
-    // Check if this directory contains any project markers
-    if let Some(project) = detect_project_at_path(current)? {
-        projects.push(project);
+    // Check if this directory contains any project markers.
+    // A single directory can match multiple project types (e.g. Cargo.toml + package.json).
+    let detected = detect_project_at_path(current)?;
+    let should_stop = detected
+        .iter()
+        .any(|p| should_stop_after_project(&p.project_type));
+    projects.extend(detected);
 
-        // For some project types, we don't need to descend further
-        // (e.g., if we found a Rust workspace root, we already know about members)
-        if should_stop_after_project(&projects.last().unwrap().project_type) {
-            return Ok(());
-        }
+    if should_stop {
+        return Ok(());
     }
 
     // Read directory contents
@@ -93,9 +94,12 @@ fn detect_projects_recursive(
     Ok(())
 }
 
-/// Detect a project at a specific path
-fn detect_project_at_path(path: &Path) -> Result<Option<DetectedProject>, String> {
-    // Try each project type in priority order
+/// Detect all project types present at a specific path.
+///
+/// A single directory can contain markers for multiple project types
+/// (e.g. both `Cargo.toml` and `package.json`). Returns all matches
+/// in priority order.
+fn detect_project_at_path(path: &Path) -> Result<Vec<DetectedProject>, String> {
     let project_types = [
         ProjectType::Rust,
         ProjectType::NodeJs,
@@ -110,13 +114,14 @@ fn detect_project_at_path(path: &Path) -> Result<Option<DetectedProject>, String
         ProjectType::Php,
     ];
 
+    let mut detected = Vec::new();
     for project_type in &project_types {
         if let Some(project) = check_project_type(path, *project_type)? {
-            return Ok(Some(project));
+            detected.push(project);
         }
     }
 
-    Ok(None)
+    Ok(detected)
 }
 
 /// Check if a path contains a specific project type

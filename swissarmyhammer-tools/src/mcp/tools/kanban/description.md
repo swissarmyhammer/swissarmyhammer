@@ -395,29 +395,25 @@ The blocked task won't appear in ready tasks until the blocker is completed:
 
 ## Complete Workflow Example
 
+Your actor is automatically created when you connect via MCP. Tasks you create are auto-assigned to you.
+
 ```json
 // 1. Initialize board
 {"op": "init board", "name": "Sprint 1"}
 
-// 2. Register yourself
-{"op": "add actor", "id": "assistant", "name": "AI Assistant", "type": "agent", "ensure": true}
-
-// 3. Add a tag
+// 2. Add a tag
 {"op": "add tag", "id": "feature", "color": "00ff00"}
 
-// 4. Create a task
+// 3. Create a task (auto-assigned to you)
 {"op": "add task", "title": "Implement login", "tags": ["feature"]}
 
-// 5. Assign to yourself
-{"op": "assign task", "id": "<task-id>", "assignee": "assistant"}
-
-// 6. Move to doing
+// 4. Move to doing
 {"op": "move task", "id": "<task-id>", "column": "doing"}
 
-// 7. Add a comment
-{"op": "add comment", "task_id": "<task-id>", "body": "Implementation complete", "author": "assistant"}
+// 5. Add a comment
+{"op": "add comment", "task_id": "<task-id>", "body": "Implementation complete"}
 
-// 8. Complete the task
+// 6. Complete the task
 {"op": "complete task", "id": "<task-id>"}
 ```
 

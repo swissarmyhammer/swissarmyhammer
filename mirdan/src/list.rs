@@ -408,13 +408,13 @@ fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackag
 }
 
 /// Parse YAML frontmatter from a markdown file, returning the parsed YAML value.
-fn parse_frontmatter(path: &Path) -> Option<serde_yaml::Value> {
+fn parse_frontmatter(path: &Path) -> Option<serde_yaml_ng::Value> {
     let content = std::fs::read_to_string(path).ok()?;
     let content = content.trim();
     let rest = content.strip_prefix("---")?;
     let end = rest.find("---")?;
     let frontmatter = &rest[..end];
-    serde_yaml::from_str(frontmatter).ok()
+    serde_yaml_ng::from_str(frontmatter).ok()
 }
 
 /// Read name from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.

@@ -1,6 +1,6 @@
 //! Semantic diff operation for the git tool
 //!
-//! Provides entity-level semantic diffing using sem-core. Compares code at the
+//! Provides entity-level semantic diffing using swissarmyhammer-sem. Compares code at the
 //! level of functions, classes, and other semantic entities rather than raw lines.
 //!
 //! ## Modes
@@ -12,14 +12,13 @@
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
-use sem_core::git::bridge::GitBridge;
-use sem_core::git::types::{FileChange, FileStatus};
-use sem_core::model::change::SemanticChange;
-use sem_core::model::identity::match_entities;
-use sem_core::parser::differ::{compute_semantic_diff, DiffResult};
-use sem_core::parser::plugins::create_default_registry;
+use swissarmyhammer_sem::git_types::{FileChange, FileStatus};
+use swissarmyhammer_sem::model::change::SemanticChange;
+use swissarmyhammer_sem::model::identity::match_entities;
+use swissarmyhammer_sem::parser::differ::{compute_semantic_diff, DiffResult};
+use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
-/// Maps a language name to a file extension for sem-core plugin lookup.
+/// Maps a language name to a file extension for swissarmyhammer-sem plugin lookup.
 ///
 /// The registry dispatches by file extension, so we need to construct a
 /// synthetic file path with the right extension when doing inline text diffs.
@@ -127,7 +126,7 @@ pub struct ChangeEntry {
     pub after_content: Option<String>,
 }
 
-/// Converts a `SemanticChange` from sem-core into our output `ChangeEntry`.
+/// Converts a `SemanticChange` from swissarmyhammer-sem into our output `ChangeEntry`.
 fn to_change_entry(sc: &SemanticChange) -> ChangeEntry {
     ChangeEntry {
         change_type: sc.change_type.to_string(),
@@ -142,7 +141,7 @@ fn to_change_entry(sc: &SemanticChange) -> ChangeEntry {
     }
 }
 
-/// Converts a `DiffResult` from sem-core into our `DiffResponse`.
+/// Converts a `DiffResult` from swissarmyhammer-sem into our `DiffResponse`.
 fn diff_result_to_response(result: &DiffResult) -> DiffResponse {
     DiffResponse {
         summary: DiffSummary {
@@ -225,8 +224,8 @@ pub fn execute_inline_diff(
     let before_entities = plugin.extract_entities(left_text, &synthetic_path);
     let after_entities = plugin.extract_entities(right_text, &synthetic_path);
 
-    let sim_fn = |a: &sem_core::model::entity::SemanticEntity,
-                  b: &sem_core::model::entity::SemanticEntity|
+    let sim_fn = |a: &swissarmyhammer_sem::model::entity::SemanticEntity,
+                  b: &swissarmyhammer_sem::model::entity::SemanticEntity|
      -> f64 { plugin.compute_similarity(a, b) };
 
     let match_result = match_entities(
@@ -246,11 +245,11 @@ pub fn execute_inline_diff(
     let mut renamed = 0;
     for c in &match_result.changes {
         match c.change_type {
-            sem_core::model::change::ChangeType::Added => added += 1,
-            sem_core::model::change::ChangeType::Modified => modified += 1,
-            sem_core::model::change::ChangeType::Deleted => deleted += 1,
-            sem_core::model::change::ChangeType::Moved => moved += 1,
-            sem_core::model::change::ChangeType::Renamed => renamed += 1,
+            swissarmyhammer_sem::model::change::ChangeType::Added => added += 1,
+            swissarmyhammer_sem::model::change::ChangeType::Modified => modified += 1,
+            swissarmyhammer_sem::model::change::ChangeType::Deleted => deleted += 1,
+            swissarmyhammer_sem::model::change::ChangeType::Moved => moved += 1,
+            swissarmyhammer_sem::model::change::ChangeType::Renamed => renamed += 1,
         }
     }
 
@@ -321,8 +320,10 @@ pub fn execute_file_diff(
 
 /// Executes the auto-detect diff mode.
 ///
-/// Uses `GitBridge` to detect dirty/staged files in the repository and runs
-/// semantic diff on them.
+/// Detects dirty/staged files in the repository using shell git commands and
+/// runs semantic diff on them. Checks staged changes first, then working tree
+/// changes (including untracked files), then falls back to diffing the HEAD
+/// commit against its parent.
 ///
 /// # Arguments
 ///
@@ -332,26 +333,313 @@ pub fn execute_file_diff(
 ///
 /// A JSON string containing the diff response, or an error message
 pub fn execute_auto_diff(working_dir: &std::path::Path) -> Result<String, String> {
+    // Verify this is a git repository
+    let check = std::process::Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !check.status.success() {
+        return Err("Failed to open git repository: not a git repository".to_string());
+    }
+
     let registry = create_default_registry();
 
-    let bridge =
-        GitBridge::open(working_dir).map_err(|e| format!("Failed to open git repository: {e}"))?;
+    // Check for staged changes first
+    let staged = detect_staged_changes(working_dir)?;
+    if !staged.is_empty() {
+        let file_changes = populate_staged_contents(working_dir, staged)?;
+        let diff_result = compute_semantic_diff(&file_changes, &registry, None, None);
+        let response = diff_result_to_response(&diff_result);
+        return serde_json::to_string_pretty(&response)
+            .map_err(|e| format!("Failed to serialize diff response: {e}"));
+    }
 
-    let (_scope, file_changes) = bridge
-        .detect_and_get_files()
-        .map_err(|e| format!("Failed to detect changed files: {e}"))?;
+    // Check for working tree changes + untracked files
+    let mut working = detect_working_changes(working_dir)?;
+    let untracked = detect_untracked_files(working_dir)?;
+    working.extend(untracked);
 
+    if !working.is_empty() {
+        let file_changes = populate_working_contents(working_dir, working)?;
+        let diff_result = compute_semantic_diff(&file_changes, &registry, None, None);
+        let response = diff_result_to_response(&diff_result);
+        return serde_json::to_string_pretty(&response)
+            .map_err(|e| format!("Failed to serialize diff response: {e}"));
+    }
+
+    // Fall back to HEAD commit diff (HEAD vs HEAD~1)
+    let head_changes = detect_head_commit_changes(working_dir)?;
+    let file_changes = populate_commit_contents(working_dir, head_changes, "HEAD")?;
     let diff_result = compute_semantic_diff(&file_changes, &registry, None, None);
     let response = diff_result_to_response(&diff_result);
-
     serde_json::to_string_pretty(&response)
         .map_err(|e| format!("Failed to serialize diff response: {e}"))
+}
+
+/// Detects files with staged changes using `git diff --cached --name-status`.
+///
+/// # Returns
+///
+/// A vector of `FileChange` with file paths and statuses (no content yet).
+fn detect_staged_changes(working_dir: &std::path::Path) -> Result<Vec<FileChange>, String> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--cached", "--name-status"])
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git diff --cached: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_name_status(&stdout))
+}
+
+/// Detects files with working tree changes using `git diff --name-status`.
+///
+/// # Returns
+///
+/// A vector of `FileChange` with file paths and statuses (no content yet).
+fn detect_working_changes(working_dir: &std::path::Path) -> Result<Vec<FileChange>, String> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--name-status"])
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git diff: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_name_status(&stdout))
+}
+
+/// Detects untracked files using `git ls-files --others --exclude-standard`.
+///
+/// # Returns
+///
+/// A vector of `FileChange` entries with `FileStatus::Added` and no content.
+fn detect_untracked_files(working_dir: &std::path::Path) -> Result<Vec<FileChange>, String> {
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git ls-files: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut files = Vec::new();
+    for line in stdout.lines() {
+        let path = line.trim();
+        if !path.is_empty() && !path.starts_with(".sem/") {
+            files.push(FileChange {
+                file_path: path.to_string(),
+                status: FileStatus::Added,
+                old_file_path: None,
+                before_content: None,
+                after_content: None,
+            });
+        }
+    }
+    Ok(files)
+}
+
+/// Detects changes in the HEAD commit vs its parent using
+/// `git diff --name-status HEAD~1 HEAD`.
+///
+/// For an initial commit with no parent, uses `git diff-tree` to list all files.
+///
+/// # Returns
+///
+/// A vector of `FileChange` with file paths and statuses (no content yet).
+fn detect_head_commit_changes(working_dir: &std::path::Path) -> Result<Vec<FileChange>, String> {
+    // Try HEAD~1..HEAD first
+    let output = std::process::Command::new("git")
+        .args(["diff", "--name-status", "HEAD~1", "HEAD"])
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git diff HEAD: {e}"))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Ok(parse_name_status(&stdout));
+    }
+
+    // No parent (initial commit) -- list all files in HEAD as Added
+    let output = std::process::Command::new("git")
+        .args([
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            "HEAD",
+        ])
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git diff-tree: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut files = Vec::new();
+    for line in stdout.lines() {
+        let path = line.trim();
+        if !path.is_empty() && !path.starts_with(".sem/") {
+            files.push(FileChange {
+                file_path: path.to_string(),
+                status: FileStatus::Added,
+                old_file_path: None,
+                before_content: None,
+                after_content: None,
+            });
+        }
+    }
+    Ok(files)
+}
+
+/// Parses `git diff --name-status` output into `FileChange` entries.
+///
+/// Each line has the format `STATUS\tFILE_PATH` or `STATUS\tOLD_PATH\tNEW_PATH`
+/// for renames.
+fn parse_name_status(output: &str) -> Vec<FileChange> {
+    let mut files = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+
+        let status_char = parts[0].chars().next().unwrap_or('M');
+        let (status, file_path, old_file_path) = match status_char {
+            'A' => (FileStatus::Added, parts[1].to_string(), None),
+            'D' => (FileStatus::Deleted, parts[1].to_string(), None),
+            'M' => (FileStatus::Modified, parts[1].to_string(), None),
+            'R' => {
+                if parts.len() >= 3 {
+                    (
+                        FileStatus::Renamed,
+                        parts[2].to_string(),
+                        Some(parts[1].to_string()),
+                    )
+                } else {
+                    (FileStatus::Modified, parts[1].to_string(), None)
+                }
+            }
+            _ => (FileStatus::Modified, parts[1].to_string(), None),
+        };
+
+        if !file_path.starts_with(".sem/") {
+            files.push(FileChange {
+                file_path,
+                status,
+                old_file_path,
+                before_content: None,
+                after_content: None,
+            });
+        }
+    }
+    files
+}
+
+/// Populates before/after content for staged file changes.
+///
+/// Before content comes from `git show HEAD:<path>`.
+/// After content comes from `git show :<path>` (index) or falls back to disk.
+fn populate_staged_contents(
+    working_dir: &std::path::Path,
+    mut files: Vec<FileChange>,
+) -> Result<Vec<FileChange>, String> {
+    for file in files.iter_mut() {
+        if file.status != FileStatus::Deleted {
+            // Read from index first, fall back to working tree
+            file.after_content = git_show_content(working_dir, &format!(":{}", file.file_path))
+                .or_else(|| std::fs::read_to_string(working_dir.join(&file.file_path)).ok());
+        }
+        if file.status != FileStatus::Added {
+            file.before_content =
+                git_show_content(working_dir, &format!("HEAD:{}", file.file_path));
+        }
+    }
+    Ok(files)
+}
+
+/// Populates before/after content for working tree file changes.
+///
+/// Before content comes from `git show HEAD:<path>`.
+/// After content comes from disk via `fs::read_to_string`.
+fn populate_working_contents(
+    working_dir: &std::path::Path,
+    mut files: Vec<FileChange>,
+) -> Result<Vec<FileChange>, String> {
+    for file in files.iter_mut() {
+        if file.status != FileStatus::Deleted {
+            file.after_content = std::fs::read_to_string(working_dir.join(&file.file_path)).ok();
+        }
+        if file.status != FileStatus::Added {
+            file.before_content =
+                git_show_content(working_dir, &format!("HEAD:{}", file.file_path));
+        }
+    }
+    Ok(files)
+}
+
+/// Populates before/after content for a commit's file changes.
+///
+/// After content comes from `git show <ref>:<path>`.
+/// Before content comes from `git show <ref>~1:<path>`.
+fn populate_commit_contents(
+    working_dir: &std::path::Path,
+    mut files: Vec<FileChange>,
+    commit_ref: &str,
+) -> Result<Vec<FileChange>, String> {
+    for file in files.iter_mut() {
+        if file.status != FileStatus::Deleted {
+            file.after_content =
+                git_show_content(working_dir, &format!("{commit_ref}:{}", file.file_path));
+        }
+        if file.status != FileStatus::Added {
+            file.before_content =
+                git_show_content(working_dir, &format!("{commit_ref}~1:{}", file.file_path));
+        }
+    }
+    Ok(files)
+}
+
+/// Reads file content at a git ref using `git show <spec>`.
+///
+/// Returns `None` if the command fails (e.g., file doesn't exist at that ref).
+fn git_show_content(working_dir: &std::path::Path, spec: &str) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["show", spec])
+        .current_dir(working_dir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout).ok()
 }
 
 /// Reads file content either from disk or from a git ref.
 ///
 /// When `git_ref` is `None`, reads the file from disk relative to `working_dir`.
-/// When `git_ref` is `Some`, uses `git show ref:path` via the GitBridge.
+/// When `git_ref` is `Some`, uses `git show ref:path` via a shell command.
 ///
 /// # Arguments
 ///
@@ -370,8 +658,6 @@ fn read_file_content(
     match git_ref {
         Some(refspec) => {
             // Read file content at a specific git ref via `git show ref:path`.
-            // GitBridge doesn't expose read_blob_from_tree publicly, so we
-            // shell out to git for this operation.
             let output = std::process::Command::new("git")
                 .args(["show", &format!("{refspec}:{file_path}")])
                 .current_dir(working_dir)

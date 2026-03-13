@@ -172,7 +172,7 @@ fn read_frontmatter_field(path: &Path, field: &str) -> String {
     };
 
     let frontmatter = &rest[..end];
-    if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
+    if let Ok(yaml) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(frontmatter) {
         if let Some(value) = yaml
             .get("metadata")
             .and_then(|m| m.get(field))

@@ -33,10 +33,10 @@ pub struct StatuslineConfig {
 impl Default for StatuslineConfig {
     /// Provides hardcoded defaults for each field.
     ///
-    /// This must NOT call `serde_yaml::from_str` because `StatuslineConfig` has
+    /// This must NOT call `serde_yaml_ng::from_str` because `StatuslineConfig` has
     /// `#[serde(default)]` on the struct, which means serde calls `Self::default()`
     /// during deserialization for any missing fields. If `default()` itself called
-    /// `serde_yaml::from_str`, that would trigger infinite recursion and a stack
+    /// `serde_yaml_ng::from_str`, that would trigger infinite recursion and a stack
     /// overflow.
     fn default() -> Self {
         Self {
@@ -108,6 +108,8 @@ impl Default for GitBranchModuleConfig {
 pub struct GitStatusModuleConfig {
     pub style: String,
     pub format: String,
+    /// When true, append file counts after each symbol (e.g. "!2" instead of "!").
+    pub show_counts: bool,
     pub modified: String,
     pub staged: String,
     pub untracked: String,
@@ -124,6 +126,7 @@ impl Default for GitStatusModuleConfig {
         Self {
             style: "red bold".into(),
             format: "[$all_status$ahead_behind]".into(),
+            show_counts: false,
             modified: "!".into(),
             staged: "+".into(),
             untracked: "?".into(),
@@ -342,7 +345,7 @@ pub struct KanbanModuleConfig {
 impl Default for KanbanModuleConfig {
     fn default() -> Self {
         Self {
-            style: "yellow".into(),
+            style: "blue".into(),
             bar_width: 6,
             format: "\u{1f4cb} [$bar] $done/$total".into(),
             thresholds: KanbanThresholdConfig::default(),
@@ -422,11 +425,13 @@ impl Default for LanguagesModuleConfig {
 
 /// Load the statusline config with 3-layer stacking:
 /// builtin -> user (~/.swissarmyhammer/statusline/config.yaml) -> project (.swissarmyhammer/statusline/config.yaml)
+///
+/// Overlay files are deep-merged into the base so that a user or project config
+/// only needs to specify the fields they want to override. Unspecified fields
+/// retain their values from the previous layer.
 pub fn load_config() -> StatuslineConfig {
-    // Parse from the builtin YAML rather than using Default::default() directly.
-    // This is safe from recursion because Default::default() no longer calls serde.
-    let mut config: StatuslineConfig =
-        serde_yaml::from_str(BUILTIN_CONFIG_YAML).expect("builtin config.yaml must parse");
+    let mut base: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).expect("builtin config.yaml must parse");
 
     // User layer
     if let Some(home) = dirs::home_dir() {
@@ -434,8 +439,8 @@ pub fn load_config() -> StatuslineConfig {
             .join(".swissarmyhammer")
             .join("statusline")
             .join("config.yaml");
-        if let Some(overlay) = load_yaml_file(&user_path) {
-            config = overlay;
+        if let Some(overlay) = load_yaml_value(&user_path) {
+            deep_merge(&mut base, overlay);
         }
     }
 
@@ -443,21 +448,113 @@ pub fn load_config() -> StatuslineConfig {
     let project_path = Path::new(".swissarmyhammer")
         .join("statusline")
         .join("config.yaml");
-    if let Some(overlay) = load_yaml_file(&project_path) {
-        config = overlay;
+    if let Some(overlay) = load_yaml_value(&project_path) {
+        deep_merge(&mut base, overlay);
     }
 
-    config
+    serde_yaml_ng::from_value(base).expect("merged config must deserialize")
 }
 
-/// Load and parse a YAML config file, returning None if not found or invalid.
-fn load_yaml_file(path: &Path) -> Option<StatuslineConfig> {
+/// Load a YAML file as a raw Value for merging. Returns None if not found or invalid.
+fn load_yaml_value(path: &Path) -> Option<serde_yaml_ng::Value> {
     let content = std::fs::read_to_string(path).ok()?;
-    match serde_yaml::from_str(&content) {
-        Ok(cfg) => Some(cfg),
+    match serde_yaml_ng::from_str(&content) {
+        Ok(val) => Some(val),
         Err(e) => {
             tracing::warn!("Failed to parse {}: {}", path.display(), e);
             None
         }
+    }
+}
+
+/// Recursively merge `overlay` into `base`. Only mapping keys present in the
+/// overlay are overwritten; all other keys in `base` are preserved.
+fn deep_merge(base: &mut serde_yaml_ng::Value, overlay: serde_yaml_ng::Value) {
+    match (base, overlay) {
+        (serde_yaml_ng::Value::Mapping(base_map), serde_yaml_ng::Value::Mapping(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                if let Some(base_val) = base_map.get_mut(&key) {
+                    deep_merge(base_val, overlay_val);
+                } else {
+                    base_map.insert(key, overlay_val);
+                }
+            }
+        }
+        (base, overlay) => {
+            // Scalar or sequence: overlay replaces entirely
+            *base = overlay;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deep_merge_overwrites_scalar() {
+        let mut base: serde_yaml_ng::Value = serde_yaml_ng::from_str("format: old").unwrap();
+        let overlay: serde_yaml_ng::Value = serde_yaml_ng::from_str("format: new").unwrap();
+        deep_merge(&mut base, overlay);
+        let result: StatuslineConfig = serde_yaml_ng::from_value(base).unwrap();
+        assert_eq!(result.format, "new");
+    }
+
+    #[test]
+    fn test_deep_merge_preserves_unspecified_fields() {
+        let mut base: serde_yaml_ng::Value = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+
+        // Overlay only changes directory style
+        let overlay: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("directory:\n  style: \"red bold\"").unwrap();
+        deep_merge(&mut base, overlay);
+        let result: StatuslineConfig = serde_yaml_ng::from_value(base).unwrap();
+
+        // Changed field
+        assert_eq!(result.directory.style, "red bold");
+        // Preserved fields from builtin
+        assert_eq!(
+            result.directory.truncation_length,
+            builtin.directory.truncation_length
+        );
+        assert_eq!(result.directory.format, builtin.directory.format);
+        assert_eq!(result.format, builtin.format);
+        assert_eq!(result.git_branch.style, builtin.git_branch.style);
+    }
+
+    #[test]
+    fn test_deep_merge_nested_preserves_siblings() {
+        let mut base: serde_yaml_ng::Value = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+
+        // Override only git_status.show_counts
+        let overlay: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("git_status:\n  show_counts: true").unwrap();
+        deep_merge(&mut base, overlay);
+        let result: StatuslineConfig = serde_yaml_ng::from_value(base).unwrap();
+
+        assert!(result.git_status.show_counts);
+        // Sibling fields preserved
+        assert_eq!(result.git_status.style, builtin.git_status.style);
+        assert_eq!(result.git_status.modified, builtin.git_status.modified);
+    }
+
+    #[test]
+    fn test_deep_merge_adds_new_keys() {
+        let mut base: serde_yaml_ng::Value = serde_yaml_ng::from_str("a: 1").unwrap();
+        let overlay: serde_yaml_ng::Value = serde_yaml_ng::from_str("b: 2").unwrap();
+        deep_merge(&mut base, overlay);
+        assert_eq!(base["a"], serde_yaml_ng::Value::Number(1.into()));
+        assert_eq!(base["b"], serde_yaml_ng::Value::Number(2.into()));
+    }
+
+    #[test]
+    fn test_load_config_returns_builtin_without_overrides() {
+        // When no override files exist, load_config should return builtin values
+        let config = load_config();
+        let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(config.format, builtin.format);
+        assert_eq!(config.directory.style, builtin.directory.style);
     }
 }

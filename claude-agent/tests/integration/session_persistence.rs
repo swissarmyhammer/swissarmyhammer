@@ -182,7 +182,7 @@ fn test_session_with_client_capabilities_persisted() {
     let (manager, _temp_dir) = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
-    let fs_cap = agent_client_protocol::FileSystemCapability::new()
+    let fs_cap = agent_client_protocol::FileSystemCapabilities::new()
         .read_text_file(true)
         .write_text_file(true);
 

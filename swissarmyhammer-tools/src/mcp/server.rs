@@ -22,8 +22,8 @@ use tokio::sync::{Mutex, RwLock};
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_code_context_tools, register_file_tools, register_git_tools, register_js_tools,
-    register_kanban_tools, register_questions_tools, register_shell_tools, register_web_tools,
-    ToolContext, ToolRegistry,
+    register_kanban_tools, register_questions_tools, register_ralph_tools, register_shell_tools,
+    register_web_tools, ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -32,7 +32,7 @@ use swissarmyhammer_skills::SkillLibrary;
 
 /// Server instructions displayed to MCP clients
 const SERVER_INSTRUCTIONS: &str =
-    "The only coding assistant you'll ever need. Write specs, not code.";
+    "The only coding assistant you'll ever need. Agent-driven engineering.";
 
 /// Build server instructions, optionally appending LSP health status.
 ///
@@ -48,11 +48,7 @@ pub(crate) fn build_instructions_with_health(work_dir: Option<&Path>) -> String 
 
     let report = crate::mcp::tools::code_context::doctor::run_doctor(path);
 
-    let missing: Vec<_> = report
-        .lsp_servers
-        .iter()
-        .filter(|s| !s.installed)
-        .collect();
+    let missing: Vec<_> = report.lsp_servers.iter().filter(|s| !s.installed).collect();
 
     if missing.is_empty() {
         return SERVER_INSTRUCTIONS.to_string();
@@ -61,10 +57,7 @@ pub(crate) fn build_instructions_with_health(work_dir: Option<&Path>) -> String 
     let mut instructions = SERVER_INSTRUCTIONS.to_string();
     instructions.push_str("\n\nsetupStatus: This workspace could benefit from additional tooling.");
     for server in &missing {
-        let hint = server
-            .install_hint
-            .as_deref()
-            .unwrap_or("see project docs");
+        let hint = server.install_hint.as_deref().unwrap_or("see project docs");
         instructions.push_str(&format!("\n  {}: NOT INSTALLED — {}", server.name, hint));
     }
 
@@ -129,7 +122,7 @@ fn log_retry_attempt(
     error: &SwissArmyHammerError,
 ) {
     tracing::warn!(
-        "⚠️ {} attempt {} failed, retrying in {}ms: {}",
+        "{} attempt {} failed, retrying in {}ms: {}",
         operation_name,
         attempt,
         backoff_ms,
@@ -164,7 +157,7 @@ where
         match operation().await {
             Ok(result) => {
                 if attempt > 1 {
-                    tracing::info!("✓ {} succeeded on attempt {}", operation_name, attempt);
+                    tracing::info!("{} succeeded on attempt {}", operation_name, attempt);
                 }
                 return Ok(result);
             }
@@ -186,32 +179,21 @@ where
 
 /// Create ServerCapabilities for MCP protocol
 fn create_server_capabilities() -> ServerCapabilities {
-    ServerCapabilities {
-        prompts: Some(PromptsCapability {
-            list_changed: Some(true),
-        }),
-        tools: Some(ToolsCapability {
-            list_changed: Some(true),
-        }),
-        resources: None,
-        logging: None,
-        completions: None,
-        experimental: None,
-        extensions: None,
-        tasks: None,
-    }
+    let mut caps = ServerCapabilities::default();
+    caps.prompts = Some(PromptsCapability {
+        list_changed: Some(true),
+    });
+    caps.tools = Some(ToolsCapability {
+        list_changed: Some(true),
+    });
+    caps
 }
 
 /// Create Implementation information for the MCP server
 fn create_server_implementation() -> Implementation {
-    Implementation {
-        name: "SwissArmyHammer".into(),
-        version: crate::VERSION.into(),
-        icons: None,
-        title: Some("SwissArmyHammer MCP Server".into()),
-        description: None,
-        website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
-    }
+    Implementation::new("SwissArmyHammer", crate::VERSION)
+        .with_title("SwissArmyHammer MCP Server")
+        .with_website_url("https://github.com/swissarmyhammer/swissarmyhammer")
 }
 
 impl McpServer {
@@ -312,6 +294,10 @@ impl McpServer {
     ///
     /// Uses `std::sync::Once` to ensure this runs exactly once, even when
     /// multiple MCP connections call it concurrently (Claude Code opens ~3).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a Tokio runtime (internally uses `tokio::spawn`).
     fn initialize_code_context(work_dir: &std::path::Path) {
         static INIT: std::sync::Once = std::sync::Once::new();
         let work_dir = work_dir.to_path_buf();
@@ -386,8 +372,7 @@ impl McpServer {
             clients
         });
 
-        // Open the workspace as leader. This creates the single write connection
-        // and holds the flock via LeaderGuard. ALL writers share this one connection.
+        // Open the workspace — may become leader or follower depending on election.
         use swissarmyhammer_code_context::CodeContextWorkspace;
 
         tracing::info!(
@@ -398,7 +383,7 @@ impl McpServer {
             Ok(ws) => {
                 tracing::info!(
                     "code-context: workspace opened as {}",
-                    if ws.is_leader() { "leader" } else { "reader" }
+                    if ws.is_leader() { "leader" } else { "follower" }
                 );
                 ws
             }
@@ -408,34 +393,134 @@ impl McpServer {
             }
         };
 
-        // Extract the shared write connection. Only the leader has one.
-        let shared_db = ws.shared_db();
+        // Wrap workspace in Arc<Mutex> so the re-election loop can access it.
+        // The workspace (and its LeaderGuard/FollowerGuard) lives as long as
+        // this Arc — dropping it releases leadership.
+        let ws = Arc::new(std::sync::Mutex::new(ws));
 
-        // Keep the workspace (and its LeaderGuard) alive forever.
-        // The guard holds the flock — dropping it releases leadership.
+        // If we're already leader, start TS indexing + file watcher immediately.
+        // If follower, the re-election loop below will start workers on promotion.
+        {
+            let ws_lock = ws.lock().expect("workspace mutex poisoned");
+            if let Some(shared_db) = ws_lock.shared_db() {
+                Self::start_indexing_workers(workspace_root.clone(), shared_db);
+            }
+        }
+
+        // Re-election loop: followers poll every 5s trying to become leader.
+        // Once promoted (or if already leader), exits the loop permanently.
+        //
+        // NOTE: This is a one-shot promotion — once we become leader, the loop
+        // exits and never re-runs. If leadership is lost after promotion (e.g.
+        // the LeaderGuard is dropped), there is no automatic recovery. This is
+        // acceptable today because the guard is held for the process lifetime
+        // via the Arc below, but a future improvement could keep the loop alive
+        // to handle unexpected demotion.
+        //
+        // The Arc keeps the workspace (and its LeaderGuard) alive for the
+        // lifetime of this process via the LSP task below.
+        let reelection_ws = Arc::clone(&ws);
+        let reelection_root = workspace_root.clone();
         tokio::spawn(async move {
-            let _ws = ws;
-            std::future::pending::<()>().await;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                let promoted = {
+                    let mut ws_lock = reelection_ws
+                        .lock()
+                        .expect("workspace mutex poisoned");
+                    if ws_lock.is_leader() {
+                        break;
+                    }
+                    ws_lock.try_promote()
+                };
+
+                match promoted {
+                    Ok(Some(shared_db)) => {
+                        tracing::info!(
+                            "code-context: promoted to leader for {}, starting indexing workers",
+                            reelection_root.display()
+                        );
+                        Self::start_indexing_workers_after_promotion(
+                            reelection_root.clone(),
+                            shared_db,
+                        );
+                        break;
+                    }
+                    Ok(None) => {
+                        // Lock still held by another process — try again next cycle
+                    }
+                    Err(e) => {
+                        tracing::warn!("code-context: re-election error: {}", e);
+                    }
+                }
+            }
         });
 
-        // All workers below share the single write connection.
-        // If we're not leader (shared_db is None), skip write-side work.
-        let shared_db = match shared_db {
-            Some(db) => db,
-            None => {
-                tracing::info!("code-context: reader mode — skipping indexing workers");
-                return;
+        // LSP health check loop (runs independently of leader/follower status)
+        tokio::spawn(async move {
+            // Wait for LSP supervisor to finish starting
+            match lsp_handle.await {
+                Ok(clients) if !clients.is_empty() => {
+                    // If we're already leader, start LSP workers now
+                    let ws_lock = ws.lock().expect("workspace mutex poisoned");
+                    if let Some(shared_db) = ws_lock.shared_db() {
+                        use swissarmyhammer_code_context::{
+                            new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
+                        };
+                        for (server_name, shared_client) in &clients {
+                            let worker_db = std::sync::Arc::clone(&shared_db);
+                            spawn_lsp_indexing_worker(
+                                workspace_root.clone(),
+                                worker_db,
+                                std::sync::Arc::clone(shared_client),
+                                LspWorkerConfig::default(),
+                                server_name.clone(),
+                                new_shutdown_flag(),
+                            );
+                            tracing::info!(
+                                "code-context: LSP indexing worker started for {} (server: {})",
+                                workspace_root.display(),
+                                server_name,
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    tracing::info!("code-context: no LSP clients available, skipping LSP indexing");
+                }
             }
-        };
 
+            // Periodic health check
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                use super::tools::code_context::LSP_SUPERVISOR;
+                if let Some(sup) = LSP_SUPERVISOR.get() {
+                    sup.lock().await.health_check_all().await;
+                }
+            }
+        });
+    }
+
+    /// Spawn the tree-sitter indexing task and the file-watcher task.
+    ///
+    /// `log_suffix` is appended to the "starting" log message so callers can
+    /// distinguish normal startup from post-promotion startup (e.g. pass
+    /// `" (after promotion)"` or `""`).
+    fn spawn_ts_and_watcher_workers(
+        workspace_root: std::path::PathBuf,
+        shared_db: swissarmyhammer_code_context::SharedDb,
+        log_suffix: &'static str,
+    ) {
         // Start tree-sitter indexing
         let ts_root = workspace_root.clone();
         let ts_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
             use super::tools::code_context::index_discovered_files_async;
             tracing::info!(
-                "code-context: starting tree-sitter indexing for {}",
-                ts_root.display()
+                "code-context: starting tree-sitter indexing for {}{}",
+                ts_root.display(),
+                log_suffix,
             );
             index_discovered_files_async(&ts_root, ts_db).await;
             tracing::info!(
@@ -444,23 +529,85 @@ impl McpServer {
             );
         });
 
-        // Start file watcher — marks files dirty and re-indexes via shared connection
-        let watcher_root = workspace_root.clone();
+        // Start file watcher
+        let watcher_root = workspace_root;
         let watcher_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
             use super::tools::code_context::watcher::start_code_context_watcher;
             let _watcher_handle = start_code_context_watcher(watcher_root, watcher_db);
-            // Keep this task alive so the watcher handle isn't dropped
             std::future::pending::<()>().await;
         });
+    }
 
-        // Once the LSP supervisor is ready, start one LSP indexing worker per client.
+    /// Start tree-sitter indexing and file watcher workers with an existing shared DB.
+    /// LSP workers are started separately by the LSP task.
+    fn start_indexing_workers(
+        workspace_root: std::path::PathBuf,
+        shared_db: swissarmyhammer_code_context::SharedDb,
+    ) {
+        Self::spawn_ts_and_watcher_workers(workspace_root, shared_db, "");
+    }
+
+    /// Start indexing workers after a follower-to-leader promotion.
+    /// LSP workers are started separately once the LSP supervisor is ready.
+    fn start_indexing_workers_after_promotion(
+        workspace_root: std::path::PathBuf,
+        shared_db: swissarmyhammer_code_context::SharedDb,
+    ) {
+        Self::spawn_ts_and_watcher_workers(
+            workspace_root.clone(),
+            std::sync::Arc::clone(&shared_db),
+            " (after promotion)",
+        );
+
+        // LSP workers: wait for the supervisor to become available, then start them.
+        // After promotion, the OnceCell may not be set yet — poll briefly.
         let lsp_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
-            match lsp_handle.await {
-                Ok(clients) if !clients.is_empty() => {
+            use super::tools::code_context::LSP_SUPERVISOR;
+
+            // Wait up to 30 seconds for the LSP supervisor to initialize
+            let sup = {
+                let mut attempt = 0;
+                loop {
+                    if let Some(s) = LSP_SUPERVISOR.get() {
+                        break Some(s);
+                    }
+                    attempt += 1;
+                    if attempt > 60 {
+                        tracing::warn!(
+                            "code-context: LSP supervisor not available after 30s post-promotion for {}; \
+                             LSP indexing will not run until next restart",
+                            workspace_root.display(),
+                        );
+                        break None;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            };
+
+            if let Some(sup) = sup {
+                let supervisor = sup.lock().await;
+                let clients: Vec<(String, swissarmyhammer_code_context::SharedLspClient)> =
+                    supervisor
+                        .daemon_names()
+                        .into_iter()
+                        .filter_map(|name| {
+                            let daemon = supervisor.get_daemon(&name)?;
+                            if matches!(
+                                daemon.state(),
+                                swissarmyhammer_lsp::LspDaemonState::Running { .. }
+                            ) {
+                                Some((name, daemon.shared_client()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                if !clients.is_empty() {
                     use swissarmyhammer_code_context::{
-                        spawn_lsp_indexing_worker, LspWorkerConfig,
+                        new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
                     };
                     for (server_name, shared_client) in &clients {
                         let worker_db = std::sync::Arc::clone(&lsp_db);
@@ -470,25 +617,14 @@ impl McpServer {
                             std::sync::Arc::clone(shared_client),
                             LspWorkerConfig::default(),
                             server_name.clone(),
+                            new_shutdown_flag(),
                         );
                         tracing::info!(
-                            "code-context: LSP indexing worker started for {} (server: {})",
+                            "code-context: LSP indexing worker started for {} (after promotion, server: {})",
                             workspace_root.display(),
                             server_name,
                         );
                     }
-                }
-                _ => {
-                    tracing::info!("code-context: no LSP clients available, skipping LSP indexing");
-                }
-            }
-
-            // LSP health check loop (runs forever)
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                use super::tools::code_context::LSP_SUPERVISOR;
-                if let Some(sup) = LSP_SUPERVISOR.get() {
-                    sup.lock().await.health_check_all().await;
                 }
             }
         });
@@ -631,6 +767,7 @@ impl McpServer {
         register_code_context_tools(tool_registry);
         register_js_tools(tool_registry);
         register_shell_tools(tool_registry);
+        register_ralph_tools(tool_registry);
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
         register_file_tools(tool_registry).await;
         register_skill_tools(tool_registry, skill_library, prompt_library);
@@ -1268,12 +1405,9 @@ impl ServerHandler for McpServer {
             }
         }
 
-        Ok(InitializeResult {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: create_server_capabilities(),
-            instructions: Some(build_instructions_with_health(self.work_dir.as_deref())),
-            server_info: create_server_implementation(),
-        })
+        Ok(InitializeResult::new(create_server_capabilities())
+            .with_server_info(create_server_implementation())
+            .with_instructions(build_instructions_with_health(self.work_dir.as_deref())))
     }
 
     async fn list_prompts(
@@ -1299,24 +1433,17 @@ impl ServerHandler for McpServer {
                             Some(
                                 p.parameters
                                     .iter()
-                                    .map(|param| PromptArgument {
-                                        name: param.name.clone(),
-                                        title: None, // Could use param.name here if we want to display it
-                                        description: Some(param.description.clone()),
-                                        required: Some(param.required),
+                                    .map(|param| {
+                                        PromptArgument::new(param.name.clone())
+                                            .with_description(param.description.clone())
+                                            .with_required(param.required)
                                     })
                                     .collect(),
                             )
                         };
 
-                        Prompt {
-                            name: p.name.clone(),
-                            description: p.description.clone(),
-                            arguments,
-                            icons: None,
-                            title: Some(p.name.clone()),
-                            meta: None,
-                        }
+                        Prompt::new(p.name.clone(), p.description.clone(), arguments)
+                            .with_title(p.name.clone())
                     })
                     .collect();
 
@@ -1355,13 +1482,14 @@ impl ServerHandler for McpServer {
         let content =
             Self::render_prompt_with_args(&library, &request.name, &prompt, &request.arguments)?;
 
-        Ok(GetPromptResult {
-            description: prompt.description.clone(),
-            messages: vec![PromptMessage {
-                role: PromptMessageRole::User,
-                content: PromptMessageContent::Text { text: content },
-            }],
-        })
+        let mut result = GetPromptResult::new(vec![PromptMessage::new(
+            PromptMessageRole::User,
+            PromptMessageContent::text(content),
+        )]);
+        if let Some(desc) = prompt.description.clone() {
+            result = result.with_description(desc);
+        }
+        Ok(result)
     }
 
     async fn list_tools(
@@ -1401,12 +1529,9 @@ impl ServerHandler for McpServer {
     }
 
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: create_server_capabilities(),
-            server_info: create_server_implementation(),
-            instructions: Some(build_instructions_with_health(self.work_dir.as_deref())),
-        }
+        ServerInfo::new(create_server_capabilities())
+            .with_server_info(create_server_implementation())
+            .with_instructions(build_instructions_with_health(self.work_dir.as_deref()))
     }
 }
 

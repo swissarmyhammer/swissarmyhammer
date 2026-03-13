@@ -6,7 +6,7 @@
 use chrono::{DateTime, Utc};
 use markdowndown::frontmatter::FrontmatterBuilder;
 use markdowndown::types::{Frontmatter, Markdown, Url};
-use serde_yaml;
+use serde_yaml_ng;
 
 mod helpers {
     use super::*;
@@ -110,15 +110,15 @@ document_type: "Google Docs"
     }
 
     /// Parse frontmatter YAML to typed Frontmatter struct
-    pub fn parse_frontmatter_yaml(yaml_content: &str) -> Result<Frontmatter, serde_yaml::Error> {
+    pub fn parse_frontmatter_yaml(yaml_content: &str) -> Result<Frontmatter, serde_yaml_ng::Error> {
         let yaml_only = strip_yaml_delimiters(yaml_content);
-        serde_yaml::from_str(yaml_only)
+        serde_yaml_ng::from_str(yaml_only)
     }
 
     /// Parse YAML content by stripping delimiters to untyped Value
-    pub fn parse_yaml_from_delimited(yaml_content: &str) -> serde_yaml::Value {
+    pub fn parse_yaml_from_delimited(yaml_content: &str) -> serde_yaml_ng::Value {
         let yaml_only = strip_yaml_delimiters(yaml_content);
-        serde_yaml::from_str(yaml_only).unwrap()
+        serde_yaml_ng::from_str(yaml_only).unwrap()
     }
 
     /// Create a FrontmatterBuilder with URL and exporter
@@ -149,7 +149,7 @@ document_type: "Google Docs"
     }
 
     /// Build frontmatter and parse YAML for testing
-    pub fn build_and_parse_yaml(builder: FrontmatterBuilder) -> serde_yaml::Value {
+    pub fn build_and_parse_yaml(builder: FrontmatterBuilder) -> serde_yaml_ng::Value {
         let yaml_result = builder.build();
         assert!(yaml_result.is_ok());
         parse_yaml_from_delimited(&yaml_result.unwrap())
@@ -191,8 +191,8 @@ document_type: "Google Docs"
         let mut previous: Option<Frontmatter> = None;
         
         for _ in 0..iterations {
-            let yaml = serde_yaml::to_string(frontmatter).unwrap();
-            let deserialized: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+            let yaml = serde_yaml_ng::to_string(frontmatter).unwrap();
+            let deserialized: Frontmatter = serde_yaml_ng::from_str(&yaml).unwrap();
             
             if let Some(prev) = previous {
                 assert_eq!(prev, deserialized);
@@ -203,11 +203,11 @@ document_type: "Google Docs"
 
     /// Serialize and verify frontmatter fields through roundtrip
     pub fn serialize_and_verify_fields(frontmatter: &Frontmatter, expected_url_prefix: &str) {
-        let yaml_result = serde_yaml::to_string(frontmatter);
+        let yaml_result = serde_yaml_ng::to_string(frontmatter);
         assert!(yaml_result.is_ok());
         let yaml = yaml_result.unwrap();
         
-        let deserialized: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+        let deserialized: Frontmatter = serde_yaml_ng::from_str(&yaml).unwrap();
         
         assert!(deserialized.source_url.as_str().starts_with(expected_url_prefix));
         assert_eq!(deserialized.exporter, frontmatter.exporter);
@@ -240,7 +240,7 @@ document_type: "Google Docs"
         let fm_content = extracted_fm.unwrap();
         
         let yaml_only = strip_yaml_delimiters(&fm_content);
-        let parsed: serde_yaml::Value = serde_yaml::from_str(yaml_only).unwrap();
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml_only).unwrap();
         assert!(parsed.get(expected_fm_field).is_some(), 
                 "Frontmatter should contain field: {}", expected_fm_field);
         
@@ -259,7 +259,7 @@ document_type: "Google Docs"
 
         let extracted_frontmatter = document.frontmatter().unwrap();
         let yaml_only = strip_yaml_delimiters(&extracted_frontmatter);
-        let parsed: serde_yaml::Value = serde_yaml::from_str(yaml_only).unwrap();
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml_only).unwrap();
         assert_eq!(parsed["exporter"].as_str().unwrap(), expected_converter,
                    "Converter field should match expected value");
 
@@ -280,7 +280,7 @@ document_type: "Google Docs"
 
     /// Assert YAML deserialization fails with descriptive message
     pub fn assert_yaml_deserialization_fails(yaml: &str, description: &str) {
-        let result: Result<Frontmatter, _> = serde_yaml::from_str(yaml);
+        let result: Result<Frontmatter, _> = serde_yaml_ng::from_str(yaml);
         assert!(result.is_err(), "Expected error for case: {}", description);
     }
 }
@@ -411,10 +411,10 @@ mod yaml_serialization_tests {
     #[test]
     fn test_yaml_field_order() {
         let frontmatter = helpers::create_test_frontmatter();
-        let yaml = serde_yaml::to_string(&frontmatter).unwrap();
+        let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap();
 
         // Deserialize to verify all fields are present and correctly serialized
-        let deserialized: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+        let deserialized: Frontmatter = serde_yaml_ng::from_str(&yaml).unwrap();
         
         // Verify all fields are preserved through serialization/deserialization
         assert_eq!(deserialized.source_url, frontmatter.source_url);
@@ -425,10 +425,10 @@ mod yaml_serialization_tests {
     #[test]
     fn test_yaml_formatting() {
         let frontmatter = helpers::create_test_frontmatter();
-        let yaml = serde_yaml::to_string(&frontmatter).unwrap();
+        let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap();
 
         // Verify the YAML is valid by deserializing it
-        let deserialized: Result<Frontmatter, _> = serde_yaml::from_str(&yaml);
+        let deserialized: Result<Frontmatter, _> = serde_yaml_ng::from_str(&yaml);
         assert!(deserialized.is_ok(), "YAML should be valid and deserializable");
         
         let deserialized = deserialized.unwrap();
@@ -452,7 +452,7 @@ exporter: "markdowndown-test"
 date_downloaded: "2024-01-15T10:30:00Z"
 "#;
 
-        let frontmatter_result: Result<Frontmatter, _> = serde_yaml::from_str(yaml);
+        let frontmatter_result: Result<Frontmatter, _> = serde_yaml_ng::from_str(yaml);
         assert!(frontmatter_result.is_ok());
 
         let frontmatter = frontmatter_result.unwrap();
@@ -472,10 +472,10 @@ date_downloaded: "2024-01-15T10:30:00Z"
         let original = helpers::create_test_frontmatter();
 
         // Serialize to YAML
-        let yaml = serde_yaml::to_string(&original).unwrap();
+        let yaml = serde_yaml_ng::to_string(&original).unwrap();
 
         // Deserialize back
-        let deserialized: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+        let deserialized: Frontmatter = serde_yaml_ng::from_str(&yaml).unwrap();
 
         // Should be identical
         assert_eq!(original.source_url, deserialized.source_url);
@@ -493,7 +493,7 @@ extra_field: "should be ignored"
 another_field: 123
 "#;
 
-        let frontmatter_result: Result<Frontmatter, _> = serde_yaml::from_str(yaml);
+        let frontmatter_result: Result<Frontmatter, _> = serde_yaml_ng::from_str(yaml);
         assert!(frontmatter_result.is_ok());
 
         let frontmatter = frontmatter_result.unwrap();
@@ -509,7 +509,7 @@ source_url: "https://example.com"
 date_downloaded: "2024-01-15T10:30:00Z"
 "#;
 
-        let result: Result<Frontmatter, _> = serde_yaml::from_str(yaml_missing_exporter);
+        let result: Result<Frontmatter, _> = serde_yaml_ng::from_str(yaml_missing_exporter);
         assert!(result.is_err());
 
         let yaml_missing_date = r#"
@@ -517,7 +517,7 @@ source_url: "https://example.com"
 exporter: "test"
 "#;
 
-        let result: Result<Frontmatter, _> = serde_yaml::from_str(yaml_missing_date);
+        let result: Result<Frontmatter, _> = serde_yaml_ng::from_str(yaml_missing_date);
         assert!(result.is_err());
     }
 
@@ -529,7 +529,7 @@ exporter: "test"
 date_downloaded: "not-a-date"
 "#;
 
-        let result: Result<Frontmatter, _> = serde_yaml::from_str(yaml);
+        let result: Result<Frontmatter, _> = serde_yaml_ng::from_str(yaml);
         assert!(result.is_err());
     }
 
@@ -541,7 +541,7 @@ exporter: "test"
 date_downloaded: "2024-01-15T10:30:00Z"
 "#;
 
-        let result: Result<Frontmatter, _> = serde_yaml::from_str(yaml);
+        let result: Result<Frontmatter, _> = serde_yaml_ng::from_str(yaml);
         // This should fail during URL validation if the Url type validates on deserialization
         // If not, it will succeed but be caught during usage
         match result {

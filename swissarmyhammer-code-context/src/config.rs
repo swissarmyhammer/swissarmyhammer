@@ -66,8 +66,10 @@ pub struct CodeContextConfigYaml {
 pub const BUILTIN_CONFIG_YAML: &str = include_str!("../../builtin/code-context/config.yaml");
 
 /// Parse a YAML string into a [`CodeContextConfigYaml`].
-pub fn parse_code_context_config(yaml: &str) -> Result<CodeContextConfigYaml, serde_yaml::Error> {
-    serde_yaml::from_str(yaml)
+pub fn parse_code_context_config(
+    yaml: &str,
+) -> Result<CodeContextConfigYaml, serde_yaml_ng::Error> {
+    serde_yaml_ng::from_str(yaml)
 }
 
 impl CodeContextConfigYaml {

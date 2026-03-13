@@ -53,17 +53,17 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
 
     // Test a tool call to verify full functionality
     let tool_result = client
-        .call_tool(CallToolRequestParams {
-            name: "files".into(),
-            arguments: serde_json::json!({
-                "op": "grep files",
-                "pattern": "test"
-            })
-            .as_object()
-            .cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(
+            CallToolRequestParams::new("files").with_arguments(
+                serde_json::json!({
+                    "op": "grep files",
+                    "pattern": "test"
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
+        )
         .await
         .expect("Tool call should work");
 

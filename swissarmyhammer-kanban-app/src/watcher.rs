@@ -509,7 +509,7 @@ fn cache_file(path: &Path) -> Option<CachedEntity> {
 
 /// Parse an entity file into a flat field map.
 ///
-/// Uses a two-step YAML → JSON conversion to avoid serde_yaml/serde_json
+/// Uses a two-step YAML → JSON conversion to avoid serde_yaml_ng/serde_json
 /// deserialization mismatches.
 fn parse_entity_file(path: &Path, content: &str) -> Option<HashMap<String, serde_json::Value>> {
     let ext = path.extension()?.to_str()?;
@@ -520,8 +520,8 @@ fn parse_entity_file(path: &Path, content: &str) -> Option<HashMap<String, serde
     }
 }
 
-/// Convert a serde_yaml::Value to serde_json::Value via re-serialization.
-fn yaml_to_json(yaml: serde_yaml::Value) -> Option<serde_json::Value> {
+/// Convert a serde_yaml_ng::Value to serde_json::Value via re-serialization.
+fn yaml_to_json(yaml: serde_yaml_ng::Value) -> Option<serde_json::Value> {
     // Serialize yaml to JSON string, then parse back as serde_json::Value.
     // This correctly handles all type conversions.
     let json_str = serde_json::to_string(&yaml).ok()?;
@@ -537,7 +537,7 @@ fn parse_frontmatter_body(content: &str) -> Option<HashMap<String, serde_json::V
     let frontmatter = parts[1].trim();
     let body = parts[2].strip_prefix('\n').unwrap_or(parts[2]);
 
-    let yaml_val: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    let yaml_val: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).ok()?;
     let json_val = yaml_to_json(yaml_val)?;
 
     let mut fields = json_to_field_map(json_val)?;
@@ -551,7 +551,7 @@ fn parse_frontmatter_body(content: &str) -> Option<HashMap<String, serde_json::V
 
 /// Parse plain YAML into a flat field map.
 fn parse_plain_yaml(content: &str) -> Option<HashMap<String, serde_json::Value>> {
-    let yaml_val: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
+    let yaml_val: serde_yaml_ng::Value = serde_yaml_ng::from_str(content).ok()?;
     let json_val = yaml_to_json(yaml_val)?;
     json_to_field_map(json_val)
 }

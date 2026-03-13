@@ -106,7 +106,7 @@ mod acp_tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapability::new()
+                .fs(agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(true))
                 .terminal(true),
@@ -500,7 +500,7 @@ mod acp_tests {
     #[tokio::test]
     async fn test_file_read_requires_capability() {
         use agent_client_protocol::{
-            ClientCapabilities, FileSystemCapability, ReadTextFileRequest,
+            ClientCapabilities, FileSystemCapabilities, ReadTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
         use llama_agent::acp::filesystem::FilesystemOperations;
@@ -516,7 +516,7 @@ mod acp_tests {
         // Create session state WITHOUT read_text_file capability
         let session = AcpSessionState::with_capabilities(
             SessionId::new(),
-            ClientCapabilities::new().fs(FileSystemCapability::new()
+            ClientCapabilities::new().fs(FileSystemCapabilities::new()
                 .read_text_file(false) // Capability explicitly disabled
                 .write_text_file(true)),
         );
@@ -557,7 +557,7 @@ mod acp_tests {
     #[tokio::test]
     async fn test_file_read_with_capability() {
         use agent_client_protocol::{
-            ClientCapabilities, FileSystemCapability, ReadTextFileRequest,
+            ClientCapabilities, FileSystemCapabilities, ReadTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
         use llama_agent::acp::filesystem::FilesystemOperations;
@@ -574,7 +574,7 @@ mod acp_tests {
         // Create session state WITH read_text_file capability
         let session = AcpSessionState::with_capabilities(
             SessionId::new(),
-            ClientCapabilities::new().fs(FileSystemCapability::new()
+            ClientCapabilities::new().fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)),
         );
@@ -610,7 +610,7 @@ mod acp_tests {
     #[tokio::test]
     async fn test_file_write_requires_capability() {
         use agent_client_protocol::{
-            ClientCapabilities, FileSystemCapability, WriteTextFileRequest,
+            ClientCapabilities, FileSystemCapabilities, WriteTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
         use llama_agent::acp::filesystem::FilesystemOperations;
@@ -626,7 +626,7 @@ mod acp_tests {
         let session = AcpSessionState::with_capabilities(
             SessionId::new(),
             ClientCapabilities::new().fs(
-                FileSystemCapability::new()
+                FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(false), // Capability explicitly disabled
             ),
@@ -671,7 +671,7 @@ mod acp_tests {
     #[tokio::test]
     async fn test_file_write_with_capability() {
         use agent_client_protocol::{
-            ClientCapabilities, FileSystemCapability, WriteTextFileRequest,
+            ClientCapabilities, FileSystemCapabilities, WriteTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
         use llama_agent::acp::filesystem::FilesystemOperations;
@@ -686,7 +686,7 @@ mod acp_tests {
         // Create session state WITH write_text_file capability
         let session = AcpSessionState::with_capabilities(
             SessionId::new(),
-            ClientCapabilities::new().fs(FileSystemCapability::new()
+            ClientCapabilities::new().fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)),
         );
@@ -726,7 +726,7 @@ mod acp_tests {
     /// terminal capability before allowing terminal creation.
     #[tokio::test]
     async fn test_terminal_create_requires_capability() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
         use llama_agent::acp::session::AcpSessionState;
         use llama_agent::acp::terminal::{CreateTerminalRequest, TerminalManager};
         use llama_agent::types::ids::SessionId;
@@ -735,7 +735,7 @@ mod acp_tests {
         let session = AcpSessionState::with_capabilities(
             SessionId::new(),
             ClientCapabilities::new()
-                .fs(FileSystemCapability::new()
+                .fs(FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(true))
                 .terminal(false), // Capability explicitly disabled
@@ -773,7 +773,7 @@ mod acp_tests {
     /// the client has the required capability.
     #[tokio::test]
     async fn test_terminal_create_with_capability() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
         use llama_agent::acp::session::AcpSessionState;
         use llama_agent::acp::terminal::{CreateTerminalRequest, TerminalManager};
         use llama_agent::types::ids::SessionId;
@@ -782,7 +782,7 @@ mod acp_tests {
         let session = AcpSessionState::with_capabilities(
             SessionId::new(),
             ClientCapabilities::new()
-                .fs(FileSystemCapability::new()
+                .fs(FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(true))
                 .terminal(true), // Capability enabled
@@ -819,7 +819,7 @@ mod acp_tests {
     #[tokio::test]
     async fn test_no_capabilities_fails_all_operations() {
         use agent_client_protocol::{
-            ClientCapabilities, FileSystemCapability, ReadTextFileRequest, WriteTextFileRequest,
+            ClientCapabilities, FileSystemCapabilities, ReadTextFileRequest, WriteTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
         use llama_agent::acp::filesystem::FilesystemOperations;
@@ -837,7 +837,7 @@ mod acp_tests {
         let session = AcpSessionState::with_capabilities(
             SessionId::new(),
             ClientCapabilities::new()
-                .fs(FileSystemCapability::new()
+                .fs(FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(false))
                 .terminal(false),

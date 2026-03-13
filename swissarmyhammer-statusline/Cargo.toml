@@ -15,7 +15,7 @@ description = "Starship-like statusline for Claude Code integration"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 tracing = { workspace = true }
 git2 = { workspace = true }
 dirs = { workspace = true }

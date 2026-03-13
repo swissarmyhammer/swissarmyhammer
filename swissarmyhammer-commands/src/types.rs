@@ -103,8 +103,8 @@ mod tests {
             undoable: true,
             context_menu: false,
         };
-        let yaml = serde_yaml::to_string(&def).unwrap();
-        let parsed: CommandDef = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(def, parsed);
     }
 
@@ -114,7 +114,7 @@ mod tests {
 id: app.quit
 name: Quit
 "#;
-        let def: CommandDef = serde_yaml::from_str(yaml).unwrap();
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.id, "app.quit");
         assert_eq!(def.name, "Quit");
         assert!(def.scope.is_none());
@@ -145,7 +145,7 @@ params:
     from: scope_chain
     entity_type: task
 "#;
-        let def: CommandDef = serde_yaml::from_str(yaml).unwrap();
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.id, "task.untag");
         assert_eq!(def.scope.as_deref(), Some("entity:tag"));
         assert!(def.undoable);

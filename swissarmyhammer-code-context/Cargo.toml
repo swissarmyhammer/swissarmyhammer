@@ -19,7 +19,7 @@ rayon = { workspace = true }
 fuzzy-matcher = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 sha2 = { workspace = true }
 lsp-types = { workspace = true }
 serde_json = { workspace = true }

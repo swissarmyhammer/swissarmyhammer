@@ -6,6 +6,9 @@ metadata:
   version: "1.2"
 ---
 
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+
 # Plan
 
 Use this skill whenever you enter Plan Mode or the user asks you to plan work. The output of planning is a kanban board with cards and subtasks — NOT a markdown plan file.

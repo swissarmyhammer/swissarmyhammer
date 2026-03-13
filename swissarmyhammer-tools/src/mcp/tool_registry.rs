@@ -222,8 +222,8 @@ use super::plan_notifications::PlanSender;
 use super::tool_handlers::ToolHandlers;
 use owo_colors::OwoColorize;
 use rmcp::model::{
-    Annotated, CallToolResult, LoggingLevel, LoggingMessageNotification,
-    LoggingMessageNotificationParam, RawContent, RawTextContent, Tool,
+    CallToolResult, Content, LoggingLevel, LoggingMessageNotification,
+    LoggingMessageNotificationParam, Tool,
 };
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::HashMap;
@@ -341,6 +341,12 @@ pub struct ToolContext {
     /// and makes test isolation more reliable and explicit.
     pub working_dir: Option<PathBuf>,
 
+    /// MCP session identifier
+    ///
+    /// Auto-generated when the context is created. Tools can use this to
+    /// identify the current session without requiring the caller to pass it.
+    pub session_id: String,
+
     /// Optional MCP server instance (for creating filtering proxies)
     ///
     /// Uses interior mutability to allow setting after context creation.
@@ -374,6 +380,7 @@ impl ToolContext {
             peer: None,
             tool_registry: None,
             working_dir: None,
+            session_id: ulid::Ulid::new().to_string(),
             mcp_server: Arc::new(RwLock::new(None)),
         }
     }
@@ -983,17 +990,8 @@ impl ToolRegistry {
                     serde_json::Map::new()
                 };
 
-                Tool {
-                    name: McpTool::name(tool.as_ref()).into(),
-                    description: Some(tool.description().into()),
-                    input_schema: std::sync::Arc::new(schema_map),
-                    annotations: None,
-                    output_schema: None,
-                    icons: None,
-                    title: Some(McpTool::name(tool.as_ref()).into()),
-                    meta: None,
-                    execution: None,
-                }
+                Tool::new(McpTool::name(tool.as_ref()), tool.description(), schema_map)
+                    .with_title(McpTool::name(tool.as_ref()))
             })
             .collect()
     }
@@ -1341,18 +1339,7 @@ impl BaseToolImpl {
     ///
     /// * `CallToolResult` - A success response
     pub fn create_success_response<T: Into<String>>(content: T) -> CallToolResult {
-        CallToolResult {
-            content: vec![Annotated::new(
-                RawContent::Text(RawTextContent {
-                    text: content.into(),
-                    meta: None,
-                }),
-                None,
-            )],
-            structured_content: None,
-            is_error: Some(false),
-            meta: None,
-        }
+        CallToolResult::success(vec![Content::text(content.into())])
     }
 
     /// Create an error response with the given error message
@@ -1374,18 +1361,7 @@ impl BaseToolImpl {
             None => error.into(),
         };
 
-        CallToolResult {
-            content: vec![Annotated::new(
-                RawContent::Text(RawTextContent {
-                    text: error_text,
-                    meta: None,
-                }),
-                None,
-            )],
-            structured_content: None,
-            is_error: Some(true),
-            meta: None,
-        }
+        CallToolResult::error(vec![Content::text(error_text)])
     }
 }
 
@@ -1769,6 +1745,11 @@ register_tool_category!(
     code_context,
     "Register all code context tools with the registry"
 );
+register_tool_category!(
+    register_ralph_tools,
+    ralph,
+    "Register all ralph persistent instruction tools with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -1791,6 +1772,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_kanban_tools(&mut registry);
     register_code_context_tools(&mut registry);
     register_web_tools(&mut registry);
+    register_ralph_tools(&mut registry);
 
     registry
 }
@@ -1798,7 +1780,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::{Annotated, RawContent, RawTextContent};
+    use rmcp::model::RawContent;
 
     /// Mock tool for testing
     struct MockTool {
@@ -1849,18 +1831,10 @@ mod tests {
             _arguments: serde_json::Map<String, serde_json::Value>,
             _context: &ToolContext,
         ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(CallToolResult {
-                content: vec![Annotated::new(
-                    RawContent::Text(RawTextContent {
-                        text: format!("Mock tool {} executed", self.name),
-                        meta: None,
-                    }),
-                    None,
-                )],
-                structured_content: None,
-                is_error: Some(false),
-                meta: None,
-            })
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "Mock tool {} executed",
+                self.name
+            ))]))
         }
     }
 

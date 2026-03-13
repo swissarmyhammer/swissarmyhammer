@@ -478,7 +478,7 @@ fn extract_name_from_frontmatter(content: &str) -> Option<String> {
     let rest = &content[3..];
     let end = rest.find("---")?;
     let frontmatter = &rest[..end];
-    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).ok()?;
     yaml.get("name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -1057,46 +1057,6 @@ mod tests {
             sp.is_some(),
             "Expected plugin named 'superpowers', found: {:?}",
             plugins.iter().map(|p| &p.name).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    #[ignore] // requires network access — flaky on CI runners
-    fn test_clone_obra_superpowers_discovers_mixed_types() {
-        // obra/superpowers has both .claude-plugin/plugin.json AND skills/ with SKILL.md files
-        let source = parse_git_source("obra/superpowers", None).unwrap();
-        let temp_dir = git_clone(&source).unwrap();
-        let packages = discover_packages(temp_dir.path(), None, None).unwrap();
-
-        let types: std::collections::HashSet<_> = packages
-            .iter()
-            .map(|p| format!("{}", p.package_type))
-            .collect();
-
-        assert!(
-            types.contains("plugin"),
-            "Should discover Plugin type, found: {:?}",
-            types
-        );
-        assert!(
-            types.contains("skill"),
-            "Should discover Skill type, found: {:?}",
-            types
-        );
-        assert!(
-            packages.len() >= 2,
-            "Should have at least 2 packages (1 plugin + skills), found {}",
-            packages.len()
-        );
-
-        // Names should all be unique (deduplication works)
-        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
-        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
-        assert_eq!(
-            names.len(),
-            unique.len(),
-            "Package names should be unique: {:?}",
-            names
         );
     }
 

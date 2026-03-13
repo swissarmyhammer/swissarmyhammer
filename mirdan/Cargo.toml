@@ -21,7 +21,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 # CLI
 clap = { workspace = true }

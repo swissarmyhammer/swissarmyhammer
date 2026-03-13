@@ -8,7 +8,15 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout};
+use std::time::{Duration, Instant};
 use tracing::{debug, trace, warn};
+
+/// Timeout for a single LSP request/response round-trip.
+///
+/// If the LSP server does not produce a matching response within this window
+/// (e.g., it silently ignores the request), `send_request` returns an error
+/// instead of blocking the worker forever.
+const LSP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 use crate::error::CodeContextError;
 use crate::lsp_indexer::{flatten_symbols, mark_lsp_indexed, write_edges, write_symbols, CallEdge};
@@ -137,6 +145,10 @@ pub struct LspJsonRpcClient {
     stdin: ChildStdin,
     /// Buffered reader over the LSP server's stdout.
     reader: BufReader<ChildStdout>,
+    /// Raw file descriptor for the stdout pipe, used to poll for readability
+    /// before blocking reads (enables timeout support).
+    #[cfg(unix)]
+    stdout_fd: std::os::unix::io::RawFd,
     /// Current request ID (incremented for each request).
     request_id: u32,
 }
@@ -152,16 +164,27 @@ impl LspJsonRpcClient {
     /// * `stdin` - The child process's stdin pipe (obtained via `child.stdin.take()`)
     /// * `stdout` - The child process's stdout pipe (obtained via `child.stdout.take()`)
     pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
+        #[cfg(unix)]
+        let stdout_fd = {
+            use std::os::unix::io::AsRawFd;
+            stdout.as_raw_fd()
+        };
+
         Self {
             stdin,
             reader: BufReader::new(stdout),
+            #[cfg(unix)]
+            stdout_fd,
             request_id: 1,
         }
     }
 
     /// Send a JSON-RPC request and read the response.
     ///
-    /// Uses Content-Length framing per the LSP specification.
+    /// Uses Content-Length framing per the LSP specification. The response
+    /// read is bounded by [`LSP_REQUEST_TIMEOUT`] — if no matching response
+    /// arrives within that window an `LspError` is returned instead of
+    /// blocking indefinitely.
     fn send_request(&mut self, method: &str, params: Value) -> Result<Value, CodeContextError> {
         // Format JSON-RPC 2.0 request
         let request = json!({
@@ -188,8 +211,22 @@ impl LspJsonRpcClient {
 
         debug!("Sent LSP request: {} (id={})", method, expected_id);
 
-        // Read response — loop to skip notifications (no "id" field)
+        // Read response — loop to skip notifications (no "id" field).
+        // Each iteration polls the fd for readability before attempting a
+        // blocking read, enforcing LSP_REQUEST_TIMEOUT across the entire loop.
+        let deadline = Instant::now() + LSP_REQUEST_TIMEOUT;
+
         loop {
+            // Wait for data to be available, respecting the deadline
+            self.wait_for_readable(deadline).map_err(|_| {
+                CodeContextError::LspError(format!(
+                    "LSP request '{}' (id={}) timed out after {}s",
+                    method,
+                    expected_id,
+                    LSP_REQUEST_TIMEOUT.as_secs()
+                ))
+            })?;
+
             let response = read_jsonrpc_response(&mut self.reader)?;
 
             // Notifications have no "id" field — skip them
@@ -217,6 +254,50 @@ impl LspJsonRpcClient {
 
             return Ok(response);
         }
+    }
+
+    /// Block until the stdout pipe has data available, or the deadline expires.
+    ///
+    /// Uses `poll(2)` on Unix to check readability without consuming any bytes
+    /// from the pipe. Returns `Ok(())` when data is ready, `Err(())` on timeout.
+    ///
+    /// Note: If the BufReader already has buffered data, `poll` on the raw fd
+    /// might not see it. However, in practice each JSON-RPC message is read
+    /// completely by `read_jsonrpc_response`, so the buffer is drained before
+    /// we poll again.
+    #[cfg(unix)]
+    fn wait_for_readable(&self, deadline: Instant) -> Result<(), ()> {
+        // If the BufReader has buffered bytes, data is already available.
+        if !self.reader.buffer().is_empty() {
+            return Ok(());
+        }
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(());
+            }
+
+            // Cap individual poll calls at 1 second so we re-check the deadline
+            // even if the kernel rounds the timeout.
+            let poll_ms = remaining.as_millis().min(1_000) as i32;
+
+            let ready = poll_fd(self.stdout_fd, poll_ms);
+            if ready > 0 {
+                return Ok(());
+            }
+            if ready < 0 {
+                // poll error — treat as timeout to avoid infinite loop
+                return Err(());
+            }
+            // ready == 0 → poll timed out, loop to re-check deadline
+        }
+    }
+
+    /// Non-Unix fallback: no timeout support, returns immediately.
+    #[cfg(not(unix))]
+    fn wait_for_readable(&self, _deadline: Instant) -> Result<(), ()> {
+        Ok(())
     }
 
     /// Collect symbols from the LSP server for a given file.
@@ -631,6 +712,39 @@ fn count_symbols_recursive(symbols: &[DocumentSymbol]) -> usize {
                 .map_or(0, |c| count_symbols_recursive(c))
         })
         .sum()
+}
+
+/// Call `poll(2)` on a single file descriptor, returning the number of
+/// ready descriptors (0 = timeout, negative = error).
+///
+/// This uses an `extern "C"` declaration to avoid a `libc` crate dependency.
+#[cfg(unix)]
+fn poll_fd(fd: std::os::unix::io::RawFd, timeout_ms: i32) -> i32 {
+    /// Minimal `pollfd` struct matching the POSIX definition.
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    /// POLLIN constant — data available for reading.
+    const POLLIN: i16 = 0x0001;
+
+    extern "C" {
+        fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
+    }
+
+    let mut pfd = PollFd {
+        fd,
+        events: POLLIN,
+        revents: 0,
+    };
+
+    // SAFETY: We pass a valid pointer to a single PollFd, nfds=1, and a
+    // non-negative timeout. The fd is owned by ChildStdout which outlives
+    // this call.
+    unsafe { poll(&mut pfd as *mut PollFd, 1, timeout_ms) }
 }
 
 /// Read a single JSON-RPC message from a reader using Content-Length framing.
@@ -1082,5 +1196,79 @@ mod tests {
         // Different root — strips from / (always a common ancestor on unix)
         let rel = uri_to_relative_path("file:///other/project/foo.rs", ref_path);
         assert_eq!(rel, "other/project/foo.rs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_poll_fd_timeout() {
+        // Verify that poll_fd returns 0 (timeout) on a pipe with no data.
+        use std::os::unix::io::AsRawFd;
+
+        let (reader, _writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let fd = reader.as_raw_fd();
+
+        let start = Instant::now();
+        let ret = poll_fd(fd, 50); // 50ms timeout
+        let elapsed = start.elapsed();
+
+        assert_eq!(ret, 0, "poll should return 0 on timeout");
+        assert!(
+            elapsed >= Duration::from_millis(40),
+            "poll should have waited ~50ms, took {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "poll took too long: {:?}",
+            elapsed
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_poll_fd_ready() {
+        // Verify that poll_fd returns > 0 when data is available.
+        use std::os::unix::io::AsRawFd;
+
+        let (reader, mut writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        // Write some data so the read end is immediately ready.
+        std::io::Write::write_all(&mut writer, b"hello").unwrap();
+
+        let fd = reader.as_raw_fd();
+        let ret = poll_fd(fd, 1000);
+        assert!(ret > 0, "poll should return >0 when data is available");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_wait_for_readable_timeout() {
+        // Verify that wait_for_readable returns Err on timeout.
+        use std::process::{Command, Stdio};
+
+        // Spawn a silent process whose stdout never produces data.
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn cat");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let client = LspJsonRpcClient::new(stdin, stdout);
+
+        // Set a deadline 200ms from now
+        let deadline = Instant::now() + Duration::from_millis(200);
+        let result = client.wait_for_readable(deadline);
+
+        assert!(result.is_err(), "should have timed out");
+        // Verify it didn't take too long
+        assert!(
+            Instant::now() < deadline + Duration::from_secs(2),
+            "timeout took far too long"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }

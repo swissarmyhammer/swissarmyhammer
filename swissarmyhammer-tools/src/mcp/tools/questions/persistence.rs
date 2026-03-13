@@ -58,7 +58,8 @@ pub fn save_question_answer(question: &str, answer: &str) -> Result<PathBuf> {
     };
 
     // Serialize to YAML with header comment
-    let yaml_body = serde_yaml::to_string(&entry).context("Failed to serialize entry to YAML")?;
+    let yaml_body =
+        serde_yaml_ng::to_string(&entry).context("Failed to serialize entry to YAML")?;
     let yaml_content = format!(
         "# Saved at {}\n{}",
         now.format("%Y-%m-%d %H:%M:%S UTC"),
@@ -117,7 +118,7 @@ pub fn load_all_questions() -> Result<Vec<QuestionAnswerEntry>> {
 
         // Read and parse file
         match std::fs::read_to_string(&path) {
-            Ok(content) => match serde_yaml::from_str::<QuestionAnswerEntry>(&content) {
+            Ok(content) => match serde_yaml_ng::from_str::<QuestionAnswerEntry>(&content) {
                 Ok(qa_entry) => entries.push(qa_entry),
                 Err(e) => {
                     tracing::warn!("Failed to parse question file {}: {}", path.display(), e);

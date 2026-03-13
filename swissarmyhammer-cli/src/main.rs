@@ -830,6 +830,9 @@ async fn handle_dynamic_tool_command(
         }
     };
 
+    // Merge stdin if piped (not a TTY) — enables `echo '{"session_id":"abc"}' | sah tool ralph ralph check`
+    let arguments = merge_stdin_arguments(arguments);
+
     // Execute the MCP tool
     match cli_tool_context
         .execute_tool(&full_tool_name, arguments)
@@ -853,6 +856,76 @@ async fn handle_dynamic_tool_command(
         }
         Err(e) => report_error_and_exit(format!("Tool execution error: {}", e)),
     }
+}
+
+/// Merge arguments from piped stdin into the CLI argument map.
+///
+/// When stdin is not a TTY (i.e., data is piped in), reads it as JSON or YAML
+/// and merges the fields into the argument map. CLI flags take precedence —
+/// stdin fields are only added if not already present.
+///
+/// This enables generic piping for any tool:
+/// ```sh
+/// echo '{"session_id":"abc123"}' | sah tool ralph ralph check
+/// cat task.yaml | sah tool kanban task add
+/// ```
+fn merge_stdin_arguments(
+    arguments: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    use std::io::IsTerminal;
+
+    // Only read stdin if it's piped (not a TTY)
+    if std::io::stdin().is_terminal() {
+        return arguments;
+    }
+
+    let mut input = String::new();
+    // Cap at 1 MiB to prevent unbounded memory usage from large or infinite pipes
+    let mut limited = std::io::Read::take(std::io::stdin(), 1_048_576);
+    if let Err(e) = std::io::Read::read_to_string(&mut limited, &mut input) {
+        tracing::warn!("Failed to read stdin: {}", e);
+        return arguments;
+    }
+
+    merge_parsed_stdin(arguments, &input)
+}
+
+/// Parse stdin content as JSON or YAML and merge into arguments.
+///
+/// CLI flags take precedence — stdin fields are only added if not already present.
+/// Returns the original arguments unchanged if stdin is empty or unparseable.
+fn merge_parsed_stdin(
+    mut arguments: serde_json::Map<String, serde_json::Value>,
+    input: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let input = input.trim();
+    if input.is_empty() {
+        return arguments;
+    }
+
+    // Try JSON first, then YAML
+    let parsed: Option<serde_json::Value> = serde_json::from_str(input)
+        .ok()
+        .or_else(|| serde_yaml_ng::from_str(input).ok());
+
+    match parsed {
+        Some(serde_json::Value::Object(stdin_map)) => {
+            // Merge: CLI flags take precedence over stdin
+            for (key, value) in stdin_map {
+                if !arguments.contains_key(&key) {
+                    arguments.insert(key, value);
+                }
+            }
+        }
+        Some(_) => {
+            tracing::warn!("Stdin parsed but is not a JSON/YAML object — ignoring");
+        }
+        None => {
+            tracing::warn!("Failed to parse stdin as JSON or YAML — ignoring");
+        }
+    }
+
+    arguments
 }
 
 async fn convert_matches_to_arguments(
@@ -1369,5 +1442,103 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
         }
     } else {
         setup_stderr_logging(log_level);
+    }
+}
+
+#[cfg(test)]
+mod tests_stdin_merge {
+    use super::*;
+
+    fn empty_args() -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::new()
+    }
+
+    fn args_with(
+        pairs: &[(&str, serde_json::Value)],
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = serde_json::Map::new();
+        for (k, v) in pairs {
+            map.insert(k.to_string(), v.clone());
+        }
+        map
+    }
+
+    #[test]
+    fn test_json_stdin_merges_into_arguments() {
+        let args = empty_args();
+        let stdin = r#"{"session_id": "abc123", "stop_hook_active": true}"#;
+        let result = merge_parsed_stdin(args, stdin);
+        assert_eq!(result["session_id"], "abc123");
+        assert_eq!(result["stop_hook_active"], true);
+    }
+
+    #[test]
+    fn test_yaml_stdin_merges_into_arguments() {
+        let args = empty_args();
+        let stdin = "session_id: abc123\nstop_hook_active: true\n";
+        let result = merge_parsed_stdin(args, stdin);
+        assert_eq!(result["session_id"], "abc123");
+        assert_eq!(result["stop_hook_active"], true);
+    }
+
+    #[test]
+    fn test_cli_flag_overrides_stdin_field() {
+        let args = args_with(&[("session_id", serde_json::json!("from-cli"))]);
+        let stdin = r#"{"session_id": "from-stdin", "extra": "value"}"#;
+        let result = merge_parsed_stdin(args, stdin);
+        // CLI wins
+        assert_eq!(result["session_id"], "from-cli");
+        // Stdin-only field still merged
+        assert_eq!(result["extra"], "value");
+    }
+
+    #[test]
+    fn test_empty_stdin_is_graceful() {
+        let args = args_with(&[("op", serde_json::json!("check ralph"))]);
+        let result = merge_parsed_stdin(args.clone(), "");
+        assert_eq!(result, args);
+    }
+
+    #[test]
+    fn test_whitespace_only_stdin_is_graceful() {
+        let args = args_with(&[("op", serde_json::json!("check ralph"))]);
+        let result = merge_parsed_stdin(args.clone(), "   \n\n  ");
+        assert_eq!(result, args);
+    }
+
+    #[test]
+    fn test_invalid_stdin_leaves_args_unchanged() {
+        let args = args_with(&[("op", serde_json::json!("check ralph"))]);
+        let result = merge_parsed_stdin(args.clone(), "not valid json or yaml {{{}}}");
+        assert_eq!(result, args);
+    }
+
+    #[test]
+    fn test_non_object_stdin_leaves_args_unchanged() {
+        let args = args_with(&[("op", serde_json::json!("check ralph"))]);
+        // Valid JSON but not an object
+        let result = merge_parsed_stdin(args.clone(), "[1, 2, 3]");
+        assert_eq!(result, args);
+    }
+
+    #[test]
+    fn test_stop_hook_json_merges_correctly() {
+        // Simulate what Claude Code Stop hook pipes in
+        let args = args_with(&[("op", serde_json::json!("check ralph"))]);
+        let stdin = r#"{"session_id": "sess-abc", "stop_hook_active": true, "last_assistant_message": "Done"}"#;
+        let result = merge_parsed_stdin(args, stdin);
+        assert_eq!(result["op"], "check ralph");
+        assert_eq!(result["session_id"], "sess-abc");
+        assert_eq!(result["stop_hook_active"], true);
+        assert_eq!(result["last_assistant_message"], "Done");
+    }
+
+    #[test]
+    fn test_nested_json_values_preserved() {
+        let args = empty_args();
+        let stdin = r#"{"config": {"timeout": 30, "retries": 3}}"#;
+        let result = merge_parsed_stdin(args, stdin);
+        assert_eq!(result["config"]["timeout"], 30);
+        assert_eq!(result["config"]["retries"], 3);
     }
 }

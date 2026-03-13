@@ -14,10 +14,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ignore::WalkBuilder;
 use rayon::prelude::*;
+use rusqlite::types::Value;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
 use crate::error::CodeContextError;
+use crate::lsp_worker::LSP_CAPABLE_EXTENSIONS;
 
 /// Statistics returned by [`startup_cleanup`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -118,14 +120,26 @@ pub fn startup_cleanup(
 
     for file in &disk_files {
         if !db_paths.contains(file.rel_path.as_str()) {
+            // If no LSP server handles this extension, insert with lsp_indexed=1
+            // so the LSP worker never wastes time on it.
+            let lsp_indexed = if is_lsp_capable(Path::new(&file.rel_path)) {
+                0
+            } else {
+                1
+            };
             conn.execute(
                 "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
-                 VALUES (?1, ?2, ?3, ?4, 0, 0)",
-                rusqlite::params![file.rel_path, file.hash, file.size as i64, now],
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+                rusqlite::params![file.rel_path, file.hash, file.size as i64, now, lsp_indexed],
             )?;
             stats.files_added += 1;
         }
     }
+
+    // 3c. Bulk-mark any existing files with non-LSP-capable extensions as lsp_indexed=1.
+    // This handles files already in the DB from previous runs that were inserted before
+    // this filter existed.
+    mark_non_lsp_capable_files(conn)?;
 
     Ok(stats)
 }
@@ -157,6 +171,47 @@ fn is_parseable(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| PARSEABLE_EXTENSIONS.contains(&ext))
+}
+
+/// Check if a file path has an extension that at least one LSP server can handle.
+fn is_lsp_capable(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| LSP_CAPABLE_EXTENSIONS.contains(&ext))
+}
+
+/// Bulk-mark files as `lsp_indexed = 1` when their extension has no LSP server.
+///
+/// Builds a SQL UPDATE that excludes all LSP-capable extensions. This ensures
+/// the LSP progress percentage reflects only files that could actually be indexed.
+fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextError> {
+    if LSP_CAPABLE_EXTENSIONS.is_empty() {
+        // If no LSP servers are known, mark everything as lsp_indexed=1
+        let count = conn.execute(
+            "UPDATE indexed_files SET lsp_indexed = 1 WHERE lsp_indexed = 0",
+            [],
+        )?;
+        return Ok(count);
+    }
+
+    // Build parameterized: WHERE lsp_indexed = 0 AND NOT (file_path LIKE ?1 OR ?2 ...)
+    let like_clauses: Vec<String> = (1..=LSP_CAPABLE_EXTENSIONS.len())
+        .map(|i| format!("file_path LIKE ?{}", i))
+        .collect();
+    let filter = like_clauses.join(" OR ");
+
+    let sql = format!(
+        "UPDATE indexed_files SET lsp_indexed = 1 WHERE lsp_indexed = 0 AND NOT ({})",
+        filter
+    );
+
+    let params: Vec<Value> = LSP_CAPABLE_EXTENSIONS
+        .iter()
+        .map(|ext| Value::Text(format!("%.{}", ext)))
+        .collect();
+
+    let count = conn.execute(&sql, rusqlite::params_from_iter(params))?;
+    Ok(count)
 }
 
 /// Walk non-ignored files and hash them in parallel.

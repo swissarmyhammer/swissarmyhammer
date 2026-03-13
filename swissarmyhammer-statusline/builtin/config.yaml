@@ -127,19 +127,9 @@ version:
 # Shows kanban board progress as a bar chart.
 # Source: swissarmyhammer-kanban task counts
 kanban:
-  style: "yellow"
+  style: "blue"
   bar_width: 6
   format: "\U0001f4cb [$bar] $done/$total"
-  thresholds:
-    low:
-      below: 25
-      style: "red"
-    medium:
-      below: 75
-      style: "yellow"
-    high:
-      below: 101
-      style: "green"
 
 # ── Index Module ──────────────────────────────────────────────────────
 # Shows code-context indexing progress. Hidden when complete.

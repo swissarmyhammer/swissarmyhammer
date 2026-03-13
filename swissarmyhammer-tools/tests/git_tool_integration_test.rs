@@ -2,7 +2,7 @@
 //!
 //! These tests exercise the higher-level diff functions (`execute_file_diff`,
 //! `execute_auto_diff`) and the MCP tool dispatch layer (`execute_diff` on
-//! `GitChangesTool`) with real git repositories. Complements the sem-core-level
+//! `GitChangesTool`) with real git repositories. Complements the swissarmyhammer-sem-level
 //! tests in `git_diff_integration_test.rs`.
 
 use std::process::Command;
@@ -297,7 +297,7 @@ fn test_auto_diff_new_file_added() {
         "fn brand_new() -> u32 {\n    42\n}\n",
     )
     .unwrap();
-    // Stage it so GitBridge sees it
+    // Stage it so auto-diff detects it
     git_cmd(repo_path, &["add", "src/new_module.rs"]);
 
     let result = execute_auto_diff(repo_path).unwrap();

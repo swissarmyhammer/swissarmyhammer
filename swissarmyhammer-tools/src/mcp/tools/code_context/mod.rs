@@ -11,10 +11,12 @@
 //! - `build status`: Mark files for re-indexing
 //! - `clear status`: Wipe all index data
 //! - `lsp status`: Show detected languages, LSP servers, and install status
+//! - `detect projects`: Detect project types in the workspace and return guidelines
 //!
 //! Uses the `swissarmyhammer-code-context` crate for all operations,
 //! opening a `CodeContextWorkspace` from the `ToolContext` working directory.
 
+pub mod detect;
 pub mod doctor;
 pub mod schema;
 pub mod watcher;
@@ -22,7 +24,7 @@ pub mod watcher;
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
-use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
+use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
 use std::path::Path;
 use swissarmyhammer_code_context::{
@@ -418,6 +420,37 @@ impl Operation for QueryAst {
     }
 }
 
+/// Operation metadata for project detection.
+#[derive(Debug, Default)]
+pub struct DetectProjects;
+
+static DETECT_PROJECTS_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("path")
+        .description("Root path to search for projects (default: current directory)")
+        .param_type(ParamType::String),
+    ParamMeta::new("max_depth")
+        .description("Maximum directory depth to search (default: 3)")
+        .param_type(ParamType::Integer),
+    ParamMeta::new("include_guidelines")
+        .description("Include language-specific guidelines in output (default: true)")
+        .param_type(ParamType::Boolean),
+];
+
+impl Operation for DetectProjects {
+    fn verb(&self) -> &'static str {
+        "detect"
+    }
+    fn noun(&self) -> &'static str {
+        "projects"
+    }
+    fn description(&self) -> &'static str {
+        "Detect project types in the workspace and return language-specific guidelines"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        DETECT_PROJECTS_PARAMS
+    }
+}
+
 // Static operation instances for schema generation
 static GET_SYMBOL_OP: Lazy<GetSymbol> = Lazy::new(GetSymbol::default);
 static SEARCH_SYMBOL_OP: Lazy<SearchSymbol> = Lazy::new(SearchSymbol::default);
@@ -432,6 +465,7 @@ static LSP_STATUS_OP: Lazy<LspStatus> = Lazy::new(LspStatus::default);
 static SEARCH_CODE_OP: Lazy<SearchCode> = Lazy::new(SearchCode::default);
 static FIND_DUPLICATES_OP: Lazy<FindDuplicates> = Lazy::new(FindDuplicates::default);
 static QUERY_AST_OP: Lazy<QueryAst> = Lazy::new(QueryAst::default);
+static DETECT_PROJECTS_OP: Lazy<DetectProjects> = Lazy::new(DetectProjects::default);
 
 static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
@@ -448,6 +482,7 @@ static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(||
         &*BUILD_STATUS_OP as &dyn Operation,
         &*CLEAR_STATUS_OP as &dyn Operation,
         &*LSP_STATUS_OP as &dyn Operation,
+        &*DETECT_PROJECTS_OP as &dyn Operation,
     ]
 });
 
@@ -517,10 +552,7 @@ impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
                         .unwrap_or("Install the LSP server");
                     checks.push(HealthCheck::warning(
                         format!("{} (LSP)", lsp.name),
-                        format!(
-                            "Not found (needed for {} code intelligence)",
-                            types_label
-                        ),
+                        format!("Not found (needed for {} code intelligence)", types_label),
                         Some(hint.to_string()),
                         cat,
                     ));
@@ -689,13 +721,14 @@ impl McpTool for CodeContextTool {
             "build status" => execute_build_status(&arguments, context),
             "clear status" => execute_clear_status(context),
             "lsp status" => execute_lsp_status(context),
+            "detect projects" => detect::execute_detect(&arguments, context).await,
             "" => Err(McpError::invalid_params(
-                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status'.",
+                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects'.",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status'",
+                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects'",
                     other
                 ),
                 None,
@@ -704,7 +737,8 @@ impl McpTool for CodeContextTool {
 
         // Append LSP degradation notice to query operations (not status operations)
         match op_str {
-            "get status" | "build status" | "clear status" | "lsp status" | "" => result,
+            "get status" | "build status" | "clear status" | "lsp status" | "detect projects"
+            | "" => result,
             _ => result.map(|r| maybe_append_lsp_notice(r, context)),
         }
     }
@@ -740,15 +774,7 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpErro
         McpError::internal_error(format!("Failed to serialize result: {}", e), None)
     })?;
 
-    Ok(CallToolResult {
-        content: vec![Annotated::new(
-            RawContent::Text(RawTextContent { text, meta: None }),
-            None,
-        )],
-        is_error: Some(false),
-        structured_content: None,
-        meta: None,
-    })
+    Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
 /// Convert a CodeContextError into an McpError.
@@ -774,18 +800,7 @@ fn check_ts_readiness(ws: &CodeContextWorkspace) -> Result<Option<CallToolResult
                 "Index not ready — {}/{} files indexed ({:.0}% complete). Please retry shortly.",
                 indexed_files, total_files, progress_percent
             );
-            Ok(Some(CallToolResult {
-                content: vec![Annotated::new(
-                    RawContent::Text(RawTextContent {
-                        text: msg,
-                        meta: None,
-                    }),
-                    None,
-                )],
-                is_error: Some(false),
-                structured_content: None,
-                meta: None,
-            }))
+            Ok(Some(CallToolResult::success(vec![Content::text(msg)])))
         }
     }
 }
@@ -824,10 +839,7 @@ fn lsp_degradation_notice(workspace_root: &std::path::Path) -> Option<String> {
                     .find(|s| s.name == daemon.command)
                     .and_then(|s| s.install_hint.as_deref())
                     .unwrap_or("see project documentation");
-                lines.push(format!(
-                    "  {}: NOT INSTALLED — {}",
-                    daemon.command, hint
-                ));
+                lines.push(format!("  {}: NOT INSTALLED — {}", daemon.command, hint));
             }
             return Some(lines.join("\n"));
         }
@@ -866,13 +878,7 @@ fn maybe_append_lsp_notice(mut result: CallToolResult, context: &ToolContext) ->
     let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
 
     if let Some(notice) = lsp_degradation_notice(&workspace_root) {
-        result.content.push(Annotated::new(
-            RawContent::Text(RawTextContent {
-                text: notice,
-                meta: None,
-            }),
-            None,
-        ));
+        result.content.push(Content::text(notice));
     }
     result
 }
@@ -1605,8 +1611,7 @@ fn execute_lsp_status(context: &ToolContext) -> Result<CallToolResult, McpError>
     let conn = ws.db();
 
     // Get distinct file extensions from the index
-    let exts =
-        swissarmyhammer_code_context::distinct_extensions(&conn).map_err(context_err)?;
+    let exts = swissarmyhammer_code_context::distinct_extensions(&conn).map_err(context_err)?;
 
     // Convert to &str slice for the registry lookup
     let ext_refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
@@ -1623,8 +1628,7 @@ fn execute_lsp_status(context: &ToolContext) -> Result<CallToolResult, McpError>
             .map(|e| e.as_str())
             .collect();
 
-        let installed =
-            swissarmyhammer_code_context::find_executable(&spec.command).is_some();
+        let installed = swissarmyhammer_code_context::find_executable(&spec.command).is_some();
 
         languages.push(serde_json::json!({
             "icon": spec.icon,
@@ -1684,7 +1688,7 @@ mod tests {
     fn test_code_context_tool_has_operations() {
         let tool = CodeContextTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 13);
+        assert_eq!(ops.len(), 14);
         assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
@@ -1698,6 +1702,7 @@ mod tests {
         assert!(ops.iter().any(|o| o.op_string() == "build status"));
         assert!(ops.iter().any(|o| o.op_string() == "clear status"));
         assert!(ops.iter().any(|o| o.op_string() == "lsp status"));
+        assert!(ops.iter().any(|o| o.op_string() == "detect projects"));
     }
 
     #[test]
@@ -1722,6 +1727,7 @@ mod tests {
         assert!(op_enum.contains(&serde_json::json!("build status")));
         assert!(op_enum.contains(&serde_json::json!("clear status")));
         assert!(op_enum.contains(&serde_json::json!("lsp status")));
+        assert!(op_enum.contains(&serde_json::json!("detect projects")));
     }
 
     #[test]
@@ -1732,7 +1738,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 13);
+        assert_eq!(op_schemas.len(), 14);
     }
 
     #[tokio::test]

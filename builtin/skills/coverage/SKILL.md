@@ -8,6 +8,9 @@ metadata:
   version: "3.0"
 ---
 
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+
 # Coverage
 
 Identify test coverage gaps in changed code and produce a concrete work list of what needs tests.
@@ -20,11 +23,18 @@ Identify test coverage gaps in changed code and produce a concrete work list of 
 
 - Default: files changed on the current branch vs `main`
 - If the user specified files or a package, scope to that
+- If the user specified a commit range (e.g. "last 3 commits", "since abc123"), pass it as `range`
 
 Use `git` with `op: "get changes"` to get the list of changed files:
 
 ```json
 {"op": "get changes"}
+```
+
+With a range:
+
+```json
+{"op": "get changes", "range": "HEAD~3..HEAD"}
 ```
 
 ### 2. Analyze each changed file

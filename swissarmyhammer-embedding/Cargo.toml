@@ -1,6 +1,6 @@
 [package]
 name = "swissarmyhammer-embedding"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 
 [dependencies]
@@ -14,9 +14,9 @@ model-loader = { workspace = true }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 
 # Fundamentals
-async-trait = "0.1"
-thiserror = "2"
-tracing = "0.1"
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

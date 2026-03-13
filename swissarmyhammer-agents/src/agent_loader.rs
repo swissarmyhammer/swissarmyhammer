@@ -40,7 +40,7 @@ pub fn parse_agent_md_with_path(
 ) -> Result<Agent, String> {
     let (frontmatter_str, body) = split_frontmatter(content)?;
 
-    let fm: AgentFrontmatter = serde_yaml::from_str(&frontmatter_str)
+    let fm: AgentFrontmatter = serde_yaml_ng::from_str(&frontmatter_str)
         .map_err(|e| format!("failed to parse AGENT.md frontmatter: {}", e))?;
 
     validate_frontmatter(&fm.name, &fm.description).map_err(|errors| errors.join("; "))?;

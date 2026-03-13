@@ -53,17 +53,17 @@ async fn test_mcp_server_with_rmcp_client() {
 
     // Test a simple tool call - files with glob op should work
     let tool_result = client
-        .call_tool(CallToolRequestParams {
-            name: "files".into(),
-            arguments: serde_json::json!({
-                "op": "glob files",
-                "pattern": "*.md"
-            })
-            .as_object()
-            .cloned(),
-            meta: None,
-            task: None,
-        })
+        .call_tool(
+            CallToolRequestParams::new("files").with_arguments(
+                serde_json::json!({
+                    "op": "glob files",
+                    "pattern": "*.md"
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
+        )
         .await
         .expect("Tool call should work");
 

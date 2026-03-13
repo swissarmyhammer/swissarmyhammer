@@ -341,12 +341,15 @@ fn test_get_status_reflects_file_counts() {
 
     let status = swissarmyhammer_code_context::get_status(&ws.db()).expect("get_status failed");
 
-    // After startup_cleanup, status should accurately report counts
+    // After startup_cleanup, status should accurately report counts.
+    // Cargo.toml has no LSP server so it is pre-marked lsp_indexed=1.
     assert_eq!(status.total_files, 4);
     assert_eq!(status.ts_indexed_files, 0, "No files indexed yet");
-    assert_eq!(status.lsp_indexed_files, 0, "No files indexed yet");
+    assert_eq!(
+        status.lsp_indexed_files, 1,
+        "Cargo.toml should be pre-marked lsp_indexed=1 (no LSP server for .toml)"
+    );
     assert_eq!(status.ts_indexed_percent, 0.0);
-    assert_eq!(status.lsp_indexed_percent, 0.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -388,11 +391,10 @@ fn test_indexing_worker_marks_files_indexed() {
         "No files should be indexed initially"
     );
 
-    // Explicitly spawn the indexing worker (no longer auto-started by workspace open)
-    let db_path = root.join(".code-context").join("index.db");
+    // Explicitly spawn the indexing worker using the leader's shared DB connection
     swissarmyhammer_code_context::indexing::spawn_indexing_worker(
         root.to_path_buf(),
-        db_path,
+        ws.shared_db().expect("leader must have shared_db"),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
 
@@ -441,11 +443,10 @@ fn test_ts_indexing_produces_chunks_and_leaves_lsp_unindexed() {
     let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
-    // Spawn the indexing worker and wait for it to finish
-    let db_path = root.join(".code-context").join("index.db");
+    // Spawn the indexing worker using the leader's shared DB connection
     swissarmyhammer_code_context::indexing::spawn_indexing_worker(
         root.to_path_buf(),
-        db_path,
+        ws.shared_db().expect("leader must have shared_db"),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
     thread::sleep(Duration::from_secs(2));
@@ -468,11 +469,21 @@ fn test_ts_indexing_produces_chunks_and_leaves_lsp_unindexed() {
     assert!(!rows.is_empty(), "indexed_files should not be empty");
     for (path, ts, lsp) in &rows {
         assert_eq!(*ts, 1, "ts_indexed should be 1 for {}, got {}", path, ts);
-        assert_eq!(
-            *lsp, 0,
-            "lsp_indexed should still be 0 for {}, got {}",
-            path, lsp
-        );
+        // Files with no LSP server (e.g. .toml) are pre-marked lsp_indexed=1
+        // during startup_cleanup. Only LSP-capable files remain at 0.
+        if path.ends_with(".toml") {
+            assert_eq!(
+                *lsp, 1,
+                "lsp_indexed should be 1 for {} (no LSP server), got {}",
+                path, lsp
+            );
+        } else {
+            assert_eq!(
+                *lsp, 0,
+                "lsp_indexed should still be 0 for {}, got {}",
+                path, lsp
+            );
+        }
     }
 
     // ---------------------------------------------------------------
@@ -579,10 +590,10 @@ fn test_file_change_triggers_reindexing() {
     let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
-    let db_path = root.join(".code-context").join("index.db");
+    let shared = ws.shared_db().expect("leader must have shared_db");
     swissarmyhammer_code_context::indexing::spawn_indexing_worker(
         root.to_path_buf(),
-        db_path.clone(),
+        std::sync::Arc::clone(&shared),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
     thread::sleep(Duration::from_secs(2));
@@ -712,7 +723,7 @@ mod tests {
     // -- Phase 4: re-index --
     swissarmyhammer_code_context::indexing::spawn_indexing_worker(
         root.to_path_buf(),
-        db_path,
+        std::sync::Arc::clone(&shared),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
     thread::sleep(Duration::from_secs(2));
@@ -807,10 +818,9 @@ fn test_file_change_resets_both_index_flags() {
     let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
-    let db_path = root.join(".code-context").join("index.db");
     swissarmyhammer_code_context::indexing::spawn_indexing_worker(
         root.to_path_buf(),
-        db_path,
+        ws.shared_db().expect("leader must have shared_db"),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
     thread::sleep(Duration::from_secs(2));
@@ -945,11 +955,10 @@ pub fn subtract(a: i32, b: i32) -> i32 {
 /// 6. Re-run TS indexing, then LSP-index lib.rs again with the same server.
 /// 7. Verify both flags back to 1 and `lsp_symbols` contains `added_later`.
 ///
-/// Marked `#[ignore]` because it requires `rust-analyzer` to be installed.
+/// Requires `rust-analyzer` to be installed.
 /// Run with:
-///   cargo test --test workspace_e2e_test -- test_lsp_reindexing_after_file_change --ignored --nocapture
+///   cargo test --test workspace_e2e_test -- test_lsp_reindexing_after_file_change --nocapture
 #[test]
-#[ignore]
 fn test_lsp_reindexing_after_file_change() {
     use std::process::{Command, Stdio};
     use std::thread;
@@ -972,10 +981,10 @@ fn test_lsp_reindexing_after_file_change() {
     let _stats = swissarmyhammer_code_context::startup_cleanup(&ws.db(), root)
         .expect("startup_cleanup failed");
 
-    let db_path = root.join(".code-context").join("index.db");
+    let shared = ws.shared_db().expect("leader must have shared_db");
     swissarmyhammer_code_context::indexing::spawn_indexing_worker(
         root.to_path_buf(),
-        db_path.clone(),
+        std::sync::Arc::clone(&shared),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
     thread::sleep(Duration::from_secs(2));
@@ -1014,8 +1023,20 @@ fn test_lsp_reindexing_after_file_change() {
         .send_did_open(&lib_rs_abs, "rust", &lib_content)
         .expect("didOpen failed");
 
-    // Give rust-analyzer time to analyze the project
-    thread::sleep(Duration::from_secs(5));
+    // Poll rust-analyzer until it returns symbols (needs time for cold-cache analysis).
+    {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(60);
+        let poll_interval = Duration::from_millis(500);
+        loop {
+            if let Ok(result) = client.collect_file_symbols(&lib_rs_abs) {
+                if result.symbol_count > 0 || start.elapsed() >= timeout {
+                    break;
+                }
+            }
+            thread::sleep(poll_interval);
+        }
+    }
 
     let result = {
         let db = ws.db();
@@ -1126,7 +1147,7 @@ mod tests {
     // -- Phase 6: re-run TS worker, then LSP-index again --
     swissarmyhammer_code_context::indexing::spawn_indexing_worker(
         root.to_path_buf(),
-        db_path,
+        std::sync::Arc::clone(&shared),
         swissarmyhammer_code_context::indexing::IndexingConfig::default(),
     );
     thread::sleep(Duration::from_secs(2));
@@ -1137,8 +1158,20 @@ mod tests {
         .send_did_open(&lib_rs_abs, "rust", &modified_content)
         .expect("didOpen (modified) failed");
 
-    // Give rust-analyzer time to re-analyze
-    thread::sleep(Duration::from_secs(5));
+    // Poll rust-analyzer until it returns symbols for the modified file.
+    {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(60);
+        let poll_interval = Duration::from_millis(500);
+        loop {
+            if let Ok(result) = client.collect_file_symbols(&lib_rs_abs) {
+                if result.symbol_count > 0 || start.elapsed() >= timeout {
+                    break;
+                }
+            }
+            thread::sleep(poll_interval);
+        }
+    }
 
     let result2 = {
         let db = ws.db();

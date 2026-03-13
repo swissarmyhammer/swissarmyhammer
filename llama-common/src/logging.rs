@@ -14,7 +14,7 @@ pub struct Pretty<T>(pub T);
 
 impl<T: Serialize + Debug> std::fmt::Display for Pretty<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_yaml::to_string(&self.0) {
+        match serde_yaml_ng::to_string(&self.0) {
             Ok(yaml) => write!(f, "\n{}", yaml),
             Err(_) => write!(f, "\n{:#?}", self.0),
         }
@@ -23,7 +23,7 @@ impl<T: Serialize + Debug> std::fmt::Display for Pretty<T> {
 
 impl<T: Serialize + Debug> std::fmt::Debug for Pretty<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_yaml::to_string(&self.0) {
+        match serde_yaml_ng::to_string(&self.0) {
             Ok(yaml) => write!(f, "\n{}", yaml),
             Err(_) => write!(f, "\n{:#?}", self.0),
         }

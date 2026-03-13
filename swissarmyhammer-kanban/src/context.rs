@@ -429,7 +429,7 @@ impl KanbanContext {
     async fn seed_builtin_views(views_root: &Path) -> Result<()> {
         for (name, yaml) in builtin_view_definitions() {
             // Parse to get the ID for the filename
-            let def: swissarmyhammer_views::ViewDef = match serde_yaml::from_str(yaml) {
+            let def: swissarmyhammer_views::ViewDef = match serde_yaml_ng::from_str(yaml) {
                 Ok(d) => d,
                 Err(e) => {
                     tracing::warn!(name = %name, %e, "skipping invalid builtin view");

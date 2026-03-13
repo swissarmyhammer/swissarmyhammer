@@ -127,7 +127,7 @@ mod acp_write_file_tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
+                agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(true),
             ),
@@ -189,7 +189,7 @@ mod acp_write_file_tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
+                agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(true),
             ),
@@ -255,7 +255,7 @@ mod acp_write_file_tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
+                agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(true),
             ),
@@ -324,7 +324,7 @@ mod acp_write_file_tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
+                agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(true),
             ),
@@ -393,7 +393,7 @@ mod acp_write_file_tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
+                agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(true),
             ),
@@ -463,7 +463,7 @@ mod acp_write_file_tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
+                agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(true),
             ),
@@ -532,7 +532,7 @@ mod acp_write_file_tests {
         )
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
+                agent_client_protocol::FileSystemCapabilities::new()
                     .read_text_file(false)
                     .write_text_file(true),
             ),

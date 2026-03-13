@@ -52,8 +52,8 @@ mod tests {
     #[test]
     fn serde_transparent_yaml() {
         let name = EntityTypeName::from("task");
-        let yaml = serde_yaml::to_string(&name).unwrap();
-        let parsed: EntityTypeName = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&name).unwrap();
+        let parsed: EntityTypeName = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(parsed, name);
     }
 

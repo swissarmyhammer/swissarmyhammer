@@ -209,7 +209,7 @@ impl CapabilityValidator {
     /// Unknown fs.meta capabilities are logged but don't fail validation.
     fn validate_client_filesystem_capabilities(
         &self,
-        fs_caps: &agent_client_protocol::FileSystemCapability,
+        fs_caps: &agent_client_protocol::FileSystemCapabilities,
     ) -> SessionSetupResult<()> {
         // Validate meta field if present - meta is already a Map so no need to check is_object
         if let Some(_fs_meta) = &fs_caps.meta {
@@ -673,10 +673,10 @@ mod tests {
     }
 
     fn create_test_client_capabilities_with_terminal(terminal_enabled: bool) -> ClientCapabilities {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(terminal_enabled)
@@ -787,11 +787,11 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_valid_meta() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(false))
             .terminal(true)
@@ -811,11 +811,11 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_invalid_meta_type() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true)
@@ -839,11 +839,11 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_invalid_meta_value() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false)
@@ -873,11 +873,11 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_unknown_meta_capability() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true)
@@ -896,11 +896,11 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_fs_meta() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)
                 .meta(
@@ -918,11 +918,11 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_invalid_fs_meta() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(false)
                 .meta(serde_json::json!("not_an_object").as_object().cloned()))
@@ -946,11 +946,11 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_all_optional_fields_populated() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(false)
                 .meta(
@@ -978,12 +978,12 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_empty_meta() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
 
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true)
@@ -995,12 +995,12 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_empty_fs_meta() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
 
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)
                 .meta(serde_json::json!({}).as_object().cloned()))
@@ -1012,12 +1012,12 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_mixed_valid_invalid_meta() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
+        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
 
         let validator = CapabilityValidator::new();
 
         let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapability::new()
+            .fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true)

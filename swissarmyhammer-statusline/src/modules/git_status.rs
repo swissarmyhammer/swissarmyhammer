@@ -65,52 +65,53 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     // Ahead/behind
     let (ahead, behind) = get_ahead_behind(&repo);
 
-    // Build all_status string
+    // Helper: format a symbol with an optional count
+    let fmt = |symbol: &str, count: u32| -> String {
+        if cfg.show_counts {
+            format!("{}{}", symbol, count)
+        } else {
+            symbol.to_string()
+        }
+    };
+
+    // Build all_status string — pack symbols tight when counts are off (like Starship),
+    // space-separate when counts are on for readability.
     let mut all_status = String::new();
+    let mut push_part = |part: String| {
+        if cfg.show_counts && !all_status.is_empty() {
+            all_status.push(' ');
+        }
+        all_status.push_str(&part);
+    };
     if modified > 0 {
-        all_status.push_str(&format!("{}{}", cfg.modified, modified));
+        push_part(fmt(&cfg.modified, modified));
     }
     if staged > 0 {
-        if !all_status.is_empty() {
-            all_status.push(' ');
-        }
-        all_status.push_str(&format!("{}{}", cfg.staged, staged));
+        push_part(fmt(&cfg.staged, staged));
     }
     if untracked > 0 {
-        if !all_status.is_empty() {
-            all_status.push(' ');
-        }
-        all_status.push_str(&format!("{}{}", cfg.untracked, untracked));
+        push_part(fmt(&cfg.untracked, untracked));
     }
     if deleted > 0 {
-        if !all_status.is_empty() {
-            all_status.push(' ');
-        }
-        all_status.push_str(&format!("{}{}", cfg.deleted, deleted));
+        push_part(fmt(&cfg.deleted, deleted));
     }
     if conflicted > 0 {
-        if !all_status.is_empty() {
-            all_status.push(' ');
-        }
-        all_status.push_str(&format!("{}{}", cfg.conflicted, conflicted));
+        push_part(fmt(&cfg.conflicted, conflicted));
     }
     if stashed > 0 {
-        if !all_status.is_empty() {
-            all_status.push(' ');
-        }
-        all_status.push_str(&format!("{}{}", cfg.stashed, stashed));
+        push_part(fmt(&cfg.stashed, stashed));
     }
 
     // Build ahead_behind string
     let mut ahead_behind = String::new();
     if ahead > 0 && behind > 0 {
-        ahead_behind = format!("{}{}", cfg.diverged, ahead);
+        ahead_behind = fmt(&cfg.diverged, ahead as u32);
     } else {
         if ahead > 0 {
-            ahead_behind.push_str(&format!("{}{}", cfg.ahead, ahead));
+            ahead_behind.push_str(&fmt(&cfg.ahead, ahead as u32));
         }
         if behind > 0 {
-            ahead_behind.push_str(&format!("{}{}", cfg.behind, behind));
+            ahead_behind.push_str(&fmt(&cfg.behind, behind as u32));
         }
     }
 

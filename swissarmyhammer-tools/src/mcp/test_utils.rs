@@ -41,19 +41,10 @@ pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleCl
         },
     );
 
-    let client_info = ClientInfo {
-        protocol_version: Default::default(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "test-client".to_string(),
-            title: None,
-            version: "1.0.0".to_string(),
-            description: None,
-            website_url: None,
-            icons: None,
-        },
-        meta: None,
-    };
+    let client_info = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("test-client", "1.0.0"),
+    );
 
     client_info
         .serve(transport)
@@ -131,17 +122,17 @@ mod tests {
         let client = create_test_client(server.url()).await;
 
         let result = client
-            .call_tool(CallToolRequestParams {
-                name: "files".into(),
-                arguments: serde_json::json!({
-                    "op": "glob files",
-                    "pattern": "*.md"
-                })
-                .as_object()
-                .cloned(),
-                meta: None,
-                task: None,
-            })
+            .call_tool(
+                CallToolRequestParams::new("files").with_arguments(
+                    serde_json::json!({
+                        "op": "glob files",
+                        "pattern": "*.md"
+                    })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+                ),
+            )
             .await
             .unwrap();
 

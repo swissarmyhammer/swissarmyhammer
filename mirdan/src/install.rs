@@ -256,7 +256,7 @@ fn read_frontmatter(path: &Path) -> Result<(String, String), RegistryError> {
     })?;
 
     let frontmatter = &rest[..end];
-    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter)
+    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter)
         .map_err(|e| RegistryError::Validation(format!("Invalid YAML frontmatter: {}", e)))?;
 
     let name = yaml
@@ -938,7 +938,7 @@ fn read_skill_frontmatter_name(path: &Path) -> Option<String> {
     let rest = content.strip_prefix("---")?;
     let end = rest.find("---")?;
     let frontmatter = &rest[..end];
-    let yaml: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).ok()?;
     yaml.get("name")?.as_str().map(|s| s.to_string())
 }
 
