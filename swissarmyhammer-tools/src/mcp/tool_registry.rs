@@ -347,6 +347,16 @@ pub struct ToolContext {
     /// identify the current session without requiring the caller to pass it.
     pub session_id: String,
 
+    /// Session actor ID for auto-assigning tasks.
+    ///
+    /// Set when an MCP client connects via `initialize`, storing the slugified
+    /// client name as the actor ID. Kanban tools inject this as the `actor` arg
+    /// when the caller does not supply one explicitly.
+    ///
+    /// Uses interior mutability so it can be set after the context is wrapped in
+    /// `Arc` (the same pattern as `mcp_server_port`).
+    pub session_actor: Arc<RwLock<Option<String>>>,
+
     /// Optional MCP server instance (for creating filtering proxies)
     ///
     /// Uses interior mutability to allow setting after context creation.
@@ -381,6 +391,7 @@ impl ToolContext {
             tool_registry: None,
             working_dir: None,
             session_id: ulid::Ulid::new().to_string(),
+            session_actor: Arc::new(RwLock::new(None)),
             mcp_server: Arc::new(RwLock::new(None)),
         }
     }

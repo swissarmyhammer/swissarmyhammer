@@ -45,6 +45,52 @@ impl BoardHandle {
             .map_err(|e| format!("Failed to open board context: {e}"))?;
         let entity_cache = watcher::new_entity_cache(&kanban_path);
 
+        // Migrate legacy ordinals to FractionalIndex format.
+        // Reads all tasks, groups by column, sorts by existing ordinal string,
+        // then assigns new FractionalIndex ordinals preserving that order.
+        if let Ok(ectx) = ctx.entity_context().await {
+            use swissarmyhammer_kanban::types::Ordinal;
+            use std::collections::HashMap;
+
+            if let Ok(tasks) = ectx.list("task").await {
+                // Check if any task has a legacy (non-FractionalIndex) ordinal
+                let needs_migration = tasks.iter().any(|t| {
+                    let ord = t.get_str("position_ordinal").unwrap_or("");
+                    !ord.is_empty() && !Ordinal::is_valid(ord)
+                });
+
+                if needs_migration {
+                    tracing::info!("migrating legacy ordinals to fractional index format");
+
+                    // Group by column, sort by existing ordinal string
+                    let mut by_column: HashMap<String, Vec<Entity>> = HashMap::new();
+                    for t in tasks {
+                        let col = t.get_str("position_column").unwrap_or("todo").to_string();
+                        by_column.entry(col).or_default().push(t);
+                    }
+
+                    for (_col, tasks) in &mut by_column {
+                        tasks.sort_by(|a, b| {
+                            let oa = a.get_str("position_ordinal").unwrap_or("");
+                            let ob = b.get_str("position_ordinal").unwrap_or("");
+                            oa.cmp(ob)
+                        });
+
+                        // Assign new ordinals: first(), after(first), after(after(first)), ...
+                        let mut ord = Ordinal::first();
+                        for task in tasks.iter_mut() {
+                            task.set("position_ordinal", serde_json::json!(ord.as_str()));
+                            if let Err(e) = ectx.write(task).await {
+                                tracing::warn!(id = %task.id, error = %e, "failed to migrate ordinal");
+                            }
+                            ord = Ordinal::after(&ord);
+                        }
+                    }
+                    tracing::info!("ordinal migration complete");
+                }
+            }
+        }
+
         // Load all entities into search index
         let mut all_entities: Vec<Entity> = Vec::new();
         if let Ok(ectx) = ctx.entity_context().await {

@@ -2400,6 +2400,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fractional_index"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce01fad85c73f947e62a39152c7b0f785af7f44859da36e421c42a3023bcbe3a"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "fs2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8061,6 +8070,7 @@ version = "0.9.1"
 dependencies = [
  "async-trait",
  "chrono",
+ "fractional_index",
  "fs2",
  "include_dir",
  "serde",

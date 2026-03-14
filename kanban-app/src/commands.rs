@@ -230,6 +230,17 @@ pub async fn list_entities(
 
         // Batch-enrich in O(N) using pre-built dependency indexes
         enrich_all_task_entities(&mut entities, &terminal_id);
+
+        // Sort by position so the frontend can trust the order
+        entities.sort_by(|a, b| {
+            let col_a = a.get_str("position_column").unwrap_or("");
+            let col_b = b.get_str("position_column").unwrap_or("");
+            col_a.cmp(col_b).then_with(|| {
+                let ord_a = a.get_str("position_ordinal").unwrap_or("a0");
+                let ord_b = b.get_str("position_ordinal").unwrap_or("a0");
+                ord_a.cmp(ord_b)
+            })
+        });
     }
 
     let json_entities: Vec<Value> = entities.iter().map(|e| e.to_json()).collect();

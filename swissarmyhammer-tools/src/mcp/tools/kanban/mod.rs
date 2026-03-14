@@ -183,10 +183,22 @@ impl McpTool for KanbanTool {
 
     async fn execute(
         &self,
-        arguments: serde_json::Map<String, serde_json::Value>,
+        mut arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let ctx = Self::get_kanban_context(_context)?;
+
+        // Auto-inject the session actor when the caller hasn't provided one.
+        // This enables MCP-initiated tool calls (e.g. "add task") to be
+        // attributed to the connecting client without requiring callers to
+        // pass `actor` explicitly on every request.
+        if !arguments.contains_key("actor") {
+            let actor_guard = _context.session_actor.read().await;
+            if let Some(ref actor_id) = *actor_guard {
+                arguments.insert("actor".to_string(), serde_json::Value::String(actor_id.clone()));
+                tracing::debug!(actor = %actor_id, "auto-injected session actor into kanban call");
+            }
+        }
 
         // Parse the input to get operations
         let input = Value::Object(arguments);
@@ -2042,5 +2054,115 @@ mod tests {
             .expect("assignees should be an array");
         assert_eq!(assignees.len(), 1);
         assert_eq!(assignees[0], "alice");
+    }
+
+    // =========================================================================
+    // Session actor injection tests
+    // =========================================================================
+
+    /// When `context.session_actor` is set (as it would be after an MCP
+    /// `initialize` call) and the caller does not pass `actor` explicitly,
+    /// the tool should auto-inject the session actor so the task is
+    /// auto-assigned.
+    #[tokio::test]
+    async fn test_session_actor_auto_injected_on_add_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Register an agent actor to represent the MCP client session
+        let mut actor_args = serde_json::Map::new();
+        actor_args.insert("op".to_string(), json!("add actor"));
+        actor_args.insert("id".to_string(), json!("claude-code"));
+        actor_args.insert("name".to_string(), json!("Claude Code"));
+        actor_args.insert("type".to_string(), json!("agent"));
+        tool.execute(actor_args, &context).await.unwrap();
+
+        // Simulate what ensure_agent_actor does: store the actor_id in the context
+        *context.session_actor.write().await = Some("claude-code".to_string());
+
+        // Add a task WITHOUT an explicit actor arg
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Session-injected task"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Task should be auto-assigned to the session actor
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert_eq!(assignees.len(), 1, "task should be auto-assigned to session actor");
+        assert_eq!(assignees[0], "claude-code");
+    }
+
+    /// When `context.session_actor` is set but the caller explicitly passes a
+    /// different `actor`, the explicit value must not be overridden.
+    #[tokio::test]
+    async fn test_explicit_actor_not_overridden_by_session_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Register two actors
+        for (id, name) in [("claude-code", "Claude Code"), ("alice", "Alice")] {
+            let mut actor_args = serde_json::Map::new();
+            actor_args.insert("op".to_string(), json!("add actor"));
+            actor_args.insert("id".to_string(), json!(id));
+            actor_args.insert("name".to_string(), json!(name));
+            actor_args.insert("type".to_string(), json!("human"));
+            tool.execute(actor_args, &context).await.unwrap();
+        }
+
+        // Session actor is "claude-code"
+        *context.session_actor.write().await = Some("claude-code".to_string());
+
+        // Caller passes a different explicit actor
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Explicit actor task"));
+        add_args.insert("actor".to_string(), json!("alice"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Should use the explicitly provided actor, not the session one
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert_eq!(assignees.len(), 1, "explicit actor should be used");
+        assert_eq!(assignees[0], "alice");
+    }
+
+    /// When no session actor is set and no actor is passed, tasks should have
+    /// no assignees (existing baseline behaviour is preserved).
+    #[tokio::test]
+    async fn test_no_session_actor_no_assignees() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // session_actor is None (default)
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Unassigned task"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert!(assignees.is_empty(), "should be unassigned when no session actor");
     }
 }
