@@ -3855,6 +3855,7 @@ dependencies = [
  "swissarmyhammer-views",
  "tauri",
  "tauri-build",
+ "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
  "tauri-plugin-window-state",
  "tempfile",
@@ -3864,7 +3865,26 @@ dependencies = [
  "tracing-log",
  "tracing-oslog",
  "tracing-subscriber",
+ "urlencoding",
  "whoami",
+]
+
+[[package]]
+name = "kanban-cli"
+version = "0.9.1"
+dependencies = [
+ "clap",
+ "is-terminal",
+ "once_cell",
+ "open",
+ "serde_json",
+ "swissarmyhammer-kanban",
+ "swissarmyhammer-operations",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
 ]
 
 [[package]]

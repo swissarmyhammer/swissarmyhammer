@@ -4,7 +4,82 @@
 //! including examples and verb aliases tailored to kanban board operations.
 
 use serde_json::{json, Map, Value};
+use std::sync::LazyLock;
 use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
+
+use crate::activity::ListActivity;
+use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
+use crate::attachment::{
+    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
+};
+use crate::board::{GetBoard, InitBoard, UpdateBoard};
+use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
+use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
+use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
+use crate::task::{
+    AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask,
+    UnassignTask, UntagTask, UpdateTask,
+};
+
+/// All kanban operations — the canonical list used for schema generation and CLI.
+static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|| {
+    vec![
+        // Board
+        Box::leak(Box::new(InitBoard::new(""))) as &dyn Operation,
+        Box::leak(Box::new(GetBoard::default())) as &dyn Operation,
+        Box::leak(Box::new(UpdateBoard::new())) as &dyn Operation,
+        // Column
+        Box::leak(Box::new(AddColumn::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetColumn::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateColumn::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteColumn::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListColumns::default())) as &dyn Operation,
+        // Swimlane
+        Box::leak(Box::new(AddSwimlane::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetSwimlane::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateSwimlane::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteSwimlane::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListSwimlanes::default())) as &dyn Operation,
+        // Actor
+        Box::leak(Box::new(AddActor::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetActor::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateActor::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteActor::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListActors::default())) as &dyn Operation,
+        // Task
+        Box::leak(Box::new(AddTask::new(""))) as &dyn Operation,
+        Box::leak(Box::new(GetTask::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateTask::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteTask::new(""))) as &dyn Operation,
+        Box::leak(Box::new(MoveTask::to_column("", ""))) as &dyn Operation,
+        Box::leak(Box::new(CompleteTask::new(""))) as &dyn Operation,
+        Box::leak(Box::new(AssignTask::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(UnassignTask::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(NextTask::new())) as &dyn Operation,
+        Box::leak(Box::new(TagTask::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(UntagTask::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
+        // Tag
+        Box::leak(Box::new(AddTag::new(""))) as &dyn Operation,
+        Box::leak(Box::new(GetTag::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateTag::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteTag::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListTags::default())) as &dyn Operation,
+        // Attachment
+        Box::leak(Box::new(AddAttachment::new("", "", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetAttachment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateAttachment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteAttachment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(ListAttachments::new(""))) as &dyn Operation,
+        // Activity
+        Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
+    ]
+});
+
+/// Get the canonical list of all kanban operations.
+pub fn kanban_operations() -> &'static [&'static dyn Operation] {
+    &KANBAN_OPERATIONS
+}
 
 /// Generate MCP schema for kanban operations
 ///

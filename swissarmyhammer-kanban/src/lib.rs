@@ -65,6 +65,7 @@ pub mod auto_color;
 mod context;
 pub mod defaults;
 pub mod derive_handlers;
+pub mod dispatch;
 mod error;
 pub mod parse;
 mod processor;
