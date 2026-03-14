@@ -53,6 +53,7 @@ members = [
     "mirdan-cli",
     "mirdan-app",
     "kanban-app",
+    "kanban-cli",
     "swissarmyhammer-fields",
     "swissarmyhammer-entity",
     "swissarmyhammer-entity-search",

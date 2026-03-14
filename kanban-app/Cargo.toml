@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Tauri desktop app for SwissArmyHammer Kanban board"
 
 [[bin]]
-name = "kanban"
+name = "kanban-app"
 path = "src/main.rs"
 
 [dependencies]
@@ -32,7 +32,9 @@ tracing-subscriber = { workspace = true }
 notify = { workspace = true }
 sha2 = { workspace = true }
 tracing-oslog = "0.3"
+tauri-plugin-deep-link = "2"
 tauri-plugin-window-state = "2.4.1"
+urlencoding = { workspace = true }
 whoami = "1"
 base64 = { workspace = true }
 

@@ -151,3 +151,10 @@ ane-embedding/convert/output/
 # Claude Code local settings
 .claude/settings.local.json
 .claude/plans/
+
+# Ralph runtime state
+.ralph/
+**/.ralph/
+
+# SAH runtime state
+**/.sah/

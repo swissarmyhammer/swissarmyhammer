@@ -31,5 +31,12 @@
       "entitlements": "./entitlements.plist",
       "signingIdentity": "Developer ID Application: Will Ballard (S675BK92KH)"
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["kanban"]
+      }
+    }
   }
 }
