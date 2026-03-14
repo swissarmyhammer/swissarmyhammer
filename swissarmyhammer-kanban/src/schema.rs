@@ -33,19 +33,19 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(GetColumn::new(""))) as &dyn Operation,
         Box::leak(Box::new(UpdateColumn::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteColumn::new(""))) as &dyn Operation,
-        Box::leak(Box::new(ListColumns::default())) as &dyn Operation,
+        Box::leak(Box::new(ListColumns)) as &dyn Operation,
         // Swimlane
         Box::leak(Box::new(AddSwimlane::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(GetSwimlane::new(""))) as &dyn Operation,
         Box::leak(Box::new(UpdateSwimlane::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteSwimlane::new(""))) as &dyn Operation,
-        Box::leak(Box::new(ListSwimlanes::default())) as &dyn Operation,
+        Box::leak(Box::new(ListSwimlanes)) as &dyn Operation,
         // Actor
         Box::leak(Box::new(AddActor::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(GetActor::new(""))) as &dyn Operation,
         Box::leak(Box::new(UpdateActor::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteActor::new(""))) as &dyn Operation,
-        Box::leak(Box::new(ListActors::default())) as &dyn Operation,
+        Box::leak(Box::new(ListActors)) as &dyn Operation,
         // Task
         Box::leak(Box::new(AddTask::new(""))) as &dyn Operation,
         Box::leak(Box::new(GetTask::new(""))) as &dyn Operation,

@@ -21,9 +21,7 @@ use rmcp::ErrorData as McpError;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use swissarmyhammer_kanban::{
-    parse::parse_input,
-    task::ListTasks,
-    Execute, KanbanContext, KanbanOperation, Noun, Verb,
+    parse::parse_input, task::ListTasks, Execute, KanbanContext, KanbanOperation, Noun, Verb,
 };
 
 // Operations and schema are provided by the kanban crate's single source of truth:
