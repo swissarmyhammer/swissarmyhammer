@@ -54,11 +54,8 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
           echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
-          echo "Certificate file size: $(wc -c < /tmp/certificate.p12) bytes"
 
           # Create and configure build keychain
           security create-keychain -p "" ${{ matrix.app.name }}-build.keychain-db || true
@@ -79,11 +76,6 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" ${{ matrix.app.name }}-build.keychain-db
 
           rm /tmp/certificate.p12 /tmp/DevIDG2.cer /tmp/AppleRoot.cer
-
-          echo "=== Codesigning identities ==="
-          security find-identity -v -p codesigning
-          echo "=== All identities in build keychain ==="
-          security find-identity -v ${{ matrix.app.name }}-build.keychain-db
 
       - name: Build Tauri app (${{ matrix.app.product }})
         env:
