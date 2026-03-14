@@ -745,11 +745,7 @@ impl Initializable for SkillDeployment {
             }
             reporter.emit(&InitEvent::Action {
                 verb: "Installed".to_string(),
-                message: format!(
-                    "{} skills → {}",
-                    installed_count,
-                    agent_names.join(", ")
-                ),
+                message: format!("{} skills → {}", installed_count, agent_names.join(", ")),
             });
         }
 
@@ -963,19 +959,17 @@ impl Initializable for AgentDeployment {
             }
 
             // Render instructions through the prompt library's Liquid engine
-            let rendered_instructions =
-                match prompt_library.render_text(&agent.instructions, &template_context) {
-                    Ok(rendered) => rendered,
-                    Err(e) => {
-                        reporter.emit(&InitEvent::Warning {
-                            message: format!(
-                                "failed to render partials for agent '{}': {}",
-                                name, e
-                            ),
-                        });
-                        agent.instructions.clone()
-                    }
-                };
+            let rendered_instructions = match prompt_library
+                .render_text(&agent.instructions, &template_context)
+            {
+                Ok(rendered) => rendered,
+                Err(e) => {
+                    reporter.emit(&InitEvent::Warning {
+                        message: format!("failed to render partials for agent '{}': {}", name, e),
+                    });
+                    agent.instructions.clone()
+                }
+            };
 
             let agent_md_path = agent_dir.join("AGENT.md");
             let content = format_agent_md(agent, &rendered_instructions);
@@ -1032,11 +1026,7 @@ impl Initializable for AgentDeployment {
             }
             reporter.emit(&InitEvent::Action {
                 verb: "Installed".to_string(),
-                message: format!(
-                    "{} agents → {}",
-                    installed_count,
-                    agent_targets.join(", ")
-                ),
+                message: format!("{} agents → {}", installed_count, agent_targets.join(", ")),
             });
         }
 

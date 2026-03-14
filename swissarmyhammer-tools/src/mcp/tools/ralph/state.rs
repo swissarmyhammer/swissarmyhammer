@@ -96,10 +96,8 @@ fn unescape_yaml_value(s: &str) -> String {
 /// Returns the `.ralph/` directory under the given base directory, using
 /// `ManagedDirectory<RalphConfig>` which auto-creates the dir and seeds `.gitignore`.
 fn ralph_dir(base_dir: &Path) -> anyhow::Result<PathBuf> {
-    let dir =
-        ManagedDirectory::<RalphConfig>::from_custom_root(base_dir.to_path_buf()).map_err(|e| {
-            anyhow::anyhow!("Failed to initialize .ralph directory: {e}")
-        })?;
+    let dir = ManagedDirectory::<RalphConfig>::from_custom_root(base_dir.to_path_buf())
+        .map_err(|e| anyhow::anyhow!("Failed to initialize .ralph directory: {e}"))?;
     Ok(dir.root().to_path_buf())
 }
 

@@ -435,19 +435,14 @@ pub fn load_config() -> StatuslineConfig {
 
     // User layer
     if let Some(home) = dirs::home_dir() {
-        let user_path = home
-            .join(".sah")
-            .join("statusline")
-            .join("config.yaml");
+        let user_path = home.join(".sah").join("statusline").join("config.yaml");
         if let Some(overlay) = load_yaml_value(&user_path) {
             deep_merge(&mut base, overlay);
         }
     }
 
     // Project layer
-    let project_path = Path::new(".sah")
-        .join("statusline")
-        .join("config.yaml");
+    let project_path = Path::new(".sah").join("statusline").join("config.yaml");
     if let Some(overlay) = load_yaml_value(&project_path) {
         deep_merge(&mut base, overlay);
     }

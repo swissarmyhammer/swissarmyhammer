@@ -70,8 +70,8 @@ pub use config::{
     AvpConfig, CodeContextConfig, DirectoryConfig, RalphConfig, ShellConfig, SwissarmyhammerConfig,
 };
 pub use directory::{
-    find_git_repository_root, find_git_repository_root_from, warn_legacy_paths,
-    DirectoryRootType, ManagedDirectory,
+    find_git_repository_root, find_git_repository_root_from, warn_legacy_paths, DirectoryRootType,
+    ManagedDirectory,
 };
 pub use error::{DirectoryError, Result};
 pub use file_loader::{FileEntry, FileSource, SearchPath, VirtualFileSystem};

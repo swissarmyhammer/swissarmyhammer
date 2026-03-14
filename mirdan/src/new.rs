@@ -119,7 +119,9 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
 
     let base_dir = if global {
         ManagedDirectory::<AvpConfig>::xdg_data()
-            .map_err(|e| RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e)))?
+            .map_err(|e| {
+                RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e))
+            })?
             .root()
             .join("validators")
             .join(name)
@@ -241,7 +243,9 @@ pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
 
     let base_dir = if global {
         ManagedDirectory::<AvpConfig>::xdg_data()
-            .map_err(|e| RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e)))?
+            .map_err(|e| {
+                RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e))
+            })?
             .root()
             .join("tools")
             .join(name)

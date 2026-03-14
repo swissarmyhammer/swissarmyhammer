@@ -365,8 +365,14 @@ mod tests {
         let mut reg = InitRegistry::new();
         reg.register(Minimal);
 
-        assert_eq!(reg.run_all_init(&InitScope::Project, &NullReporter).len(), 0);
-        assert_eq!(reg.run_all_deinit(&InitScope::Project, &NullReporter).len(), 0);
+        assert_eq!(
+            reg.run_all_init(&InitScope::Project, &NullReporter).len(),
+            0
+        );
+        assert_eq!(
+            reg.run_all_deinit(&InitScope::Project, &NullReporter).len(),
+            0
+        );
         assert_eq!(reg.run_all_start().len(), 0);
         assert_eq!(reg.run_all_stop().len(), 0);
     }

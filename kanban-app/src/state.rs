@@ -570,7 +570,11 @@ fn config_file_path() -> PathBuf {
 
     ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
         .map(|dir| dir.root().join(CONFIG_APP_SUBDIR).join(CONFIG_FILE_NAME))
-        .unwrap_or_else(|_| PathBuf::from(".").join(CONFIG_APP_SUBDIR).join(CONFIG_FILE_NAME))
+        .unwrap_or_else(|_| {
+            PathBuf::from(".")
+                .join(CONFIG_APP_SUBDIR)
+                .join(CONFIG_FILE_NAME)
+        })
 }
 
 #[cfg(test)]

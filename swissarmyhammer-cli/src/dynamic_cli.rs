@@ -1688,12 +1688,9 @@ impl CliBuilder {
                     "project", "local", "user",
                 ]))
                 .default_value("project".to_string()),
-                ArgSpec::new(
-                    "remove-directory",
-                    "Also remove .sah/ project directory",
-                )
-                .long("remove-directory")
-                .action(ArgSpecAction::SetTrue),
+                ArgSpec::new("remove-directory", "Also remove .sah/ project directory")
+                    .long("remove-directory")
+                    .action(ArgSpecAction::SetTrue),
             ]),
         )
     }

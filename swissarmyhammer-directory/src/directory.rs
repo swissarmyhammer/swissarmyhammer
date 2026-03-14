@@ -154,7 +154,9 @@ impl<C: DirectoryConfig> ManagedDirectory<C> {
     ///
     /// Use `xdg_config()`, `xdg_data()`, or `xdg_cache()` instead for
     /// XDG Base Directory compliant paths.
-    #[deprecated(note = "Use xdg_data() for user data (validators, agents), xdg_config() for settings, or xdg_cache() for derived content")]
+    #[deprecated(
+        note = "Use xdg_data() for user data (validators, agents), xdg_config() for settings, or xdg_cache() for derived content"
+    )]
     pub fn from_user_home() -> Result<Self> {
         let home = dirs::home_dir().ok_or(DirectoryError::NoHomeDirectory)?;
         let root = home.join(C::DIR_NAME);

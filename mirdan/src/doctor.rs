@@ -124,7 +124,10 @@ impl MirdanDoctor {
                     name: "Agents Detected".to_string(),
                     status: CheckStatus::Error,
                     message: format!("Failed to load agents config: {}", e),
-                    fix: Some("Check $XDG_CONFIG_HOME/mirdan/ (or ~/.config/mirdan/) for syntax errors".to_string()),
+                    fix: Some(
+                        "Check $XDG_CONFIG_HOME/mirdan/ (or ~/.config/mirdan/) for syntax errors"
+                            .to_string(),
+                    ),
                 });
             }
         }
