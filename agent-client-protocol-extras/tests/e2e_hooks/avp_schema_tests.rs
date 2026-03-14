@@ -224,3 +224,226 @@ fn avp_schema_notification() {
         ),
     }
 }
+
+/// Elicitation JSON deserializes, `mcp_server_name` correct.
+#[test]
+fn avp_schema_elicitation() {
+    let event = HookEvent::Elicitation {
+        session_id: "sess-avp-e1".into(),
+        mcp_server_name: "sah".into(),
+        message: "Pick an option".into(),
+        mode: "blocking".into(),
+        requested_schema: serde_json::json!({"type": "string"}),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput =
+        serde_json::from_value(json).expect("Elicitation JSON should deserialize as HookInput");
+
+    match input {
+        HookInput::Elicitation(inner) => {
+            assert_eq!(inner.mcp_server_name.as_deref(), Some("sah"));
+            assert_eq!(inner.message.as_deref(), Some("Pick an option"));
+            assert_eq!(inner.mode.as_deref(), Some("blocking"));
+        }
+        other => panic!(
+            "Expected HookInput::Elicitation, got {:?}",
+            other.hook_type()
+        ),
+    }
+}
+
+/// ElicitationResult JSON deserializes correctly.
+#[test]
+fn avp_schema_elicitation_result() {
+    let event = HookEvent::ElicitationResult {
+        session_id: "sess-avp-e2".into(),
+        mcp_server_name: "sah".into(),
+        action: "submit".into(),
+        content: serde_json::json!({"answer": "yes"}),
+        elicitation_id: "e-001".into(),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput = serde_json::from_value(json)
+        .expect("ElicitationResult JSON should deserialize as HookInput");
+
+    match input {
+        HookInput::ElicitationResult(inner) => {
+            assert_eq!(inner.action.as_deref(), Some("submit"));
+            assert_eq!(inner.elicitation_id.as_deref(), Some("e-001"));
+        }
+        other => panic!(
+            "Expected HookInput::ElicitationResult, got {:?}",
+            other.hook_type()
+        ),
+    }
+}
+
+/// InstructionsLoaded JSON deserializes correctly.
+#[test]
+fn avp_schema_instructions_loaded() {
+    let event = HookEvent::InstructionsLoaded {
+        file_path: "/project/CLAUDE.md".into(),
+        load_reason: "startup".into(),
+        cwd: PathBuf::from("/project"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput = serde_json::from_value(json)
+        .expect("InstructionsLoaded JSON should deserialize as HookInput");
+
+    match input {
+        HookInput::InstructionsLoaded(inner) => {
+            assert_eq!(inner.file_path.as_deref(), Some("/project/CLAUDE.md"));
+            assert_eq!(inner.load_reason.as_deref(), Some("startup"));
+        }
+        other => panic!(
+            "Expected HookInput::InstructionsLoaded, got {:?}",
+            other.hook_type()
+        ),
+    }
+}
+
+/// ConfigChange JSON deserializes correctly.
+#[test]
+fn avp_schema_config_change() {
+    let event = HookEvent::ConfigChange {
+        session_id: "sess-cc".into(),
+        source: "user_settings".into(),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput =
+        serde_json::from_value(json).expect("ConfigChange JSON should deserialize as HookInput");
+
+    match input {
+        HookInput::ConfigChange(inner) => {
+            assert_eq!(inner.source.as_deref(), Some("user_settings"));
+        }
+        other => panic!(
+            "Expected HookInput::ConfigChange, got {:?}",
+            other.hook_type()
+        ),
+    }
+}
+
+/// WorktreeCreate JSON deserializes correctly.
+#[test]
+fn avp_schema_worktree_create() {
+    let event = HookEvent::WorktreeCreate {
+        worktree_path: "/tmp/wt-1".into(),
+        branch_name: "feature-x".into(),
+        cwd: PathBuf::from("/project"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput = serde_json::from_value(json)
+        .expect("WorktreeCreate JSON should deserialize as HookInput");
+
+    match input {
+        HookInput::WorktreeCreate(inner) => {
+            assert_eq!(inner.worktree_path.as_deref(), Some("/tmp/wt-1"));
+            assert_eq!(inner.branch_name.as_deref(), Some("feature-x"));
+        }
+        other => panic!(
+            "Expected HookInput::WorktreeCreate, got {:?}",
+            other.hook_type()
+        ),
+    }
+}
+
+/// WorktreeRemove JSON deserializes correctly.
+#[test]
+fn avp_schema_worktree_remove() {
+    let event = HookEvent::WorktreeRemove {
+        worktree_path: "/tmp/wt-1".into(),
+        cwd: PathBuf::from("/project"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput = serde_json::from_value(json)
+        .expect("WorktreeRemove JSON should deserialize as HookInput");
+
+    match input {
+        HookInput::WorktreeRemove(inner) => {
+            assert_eq!(inner.worktree_path.as_deref(), Some("/tmp/wt-1"));
+        }
+        other => panic!(
+            "Expected HookInput::WorktreeRemove, got {:?}",
+            other.hook_type()
+        ),
+    }
+}
+
+/// PostCompact JSON deserializes correctly.
+#[test]
+fn avp_schema_post_compact() {
+    let event = HookEvent::PostCompact {
+        session_id: "sess-pc".into(),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput =
+        serde_json::from_value(json).expect("PostCompact JSON should deserialize as HookInput");
+
+    assert!(
+        matches!(input, HookInput::PostCompact(_)),
+        "Expected HookInput::PostCompact, got {:?}",
+        input.hook_type()
+    );
+}
+
+/// TeammateIdle JSON deserializes correctly.
+#[test]
+fn avp_schema_teammate_idle() {
+    let event = HookEvent::TeammateIdle {
+        session_id: "sess-ti".into(),
+        teammate_id: Some("agent-2".into()),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput =
+        serde_json::from_value(json).expect("TeammateIdle JSON should deserialize as HookInput");
+
+    match input {
+        HookInput::TeammateIdle(inner) => {
+            assert_eq!(inner.teammate_id.as_deref(), Some("agent-2"));
+        }
+        other => panic!(
+            "Expected HookInput::TeammateIdle, got {:?}",
+            other.hook_type()
+        ),
+    }
+}
+
+/// TaskCompleted JSON deserializes correctly.
+#[test]
+fn avp_schema_task_completed() {
+    let event = HookEvent::TaskCompleted {
+        session_id: "sess-tc".into(),
+        task_id: Some("task-1".into()),
+        task_title: Some("Fix bug".into()),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    let json = event.to_command_input_full(&avp_test_context());
+    let input: HookInput =
+        serde_json::from_value(json).expect("TaskCompleted JSON should deserialize as HookInput");
+
+    match input {
+        HookInput::TaskCompleted(inner) => {
+            assert_eq!(inner.task_id.as_deref(), Some("task-1"));
+            assert_eq!(inner.task_title.as_deref(), Some("Fix bug"));
+        }
+        other => panic!(
+            "Expected HookInput::TaskCompleted, got {:?}",
+            other.hook_type()
+        ),
+    }
+}

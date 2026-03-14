@@ -31,6 +31,24 @@ pub enum HookType {
     SessionEnd,
     /// Claude Code sends notifications.
     Notification,
+    /// MCP server requests user input.
+    Elicitation,
+    /// User responds to MCP elicitation.
+    ElicitationResult,
+    /// CLAUDE.md or rules files loaded.
+    InstructionsLoaded,
+    /// Config files change.
+    ConfigChange,
+    /// Worktree created.
+    WorktreeCreate,
+    /// Worktree removed.
+    WorktreeRemove,
+    /// After context compaction.
+    PostCompact,
+    /// Agent teammate goes idle.
+    TeammateIdle,
+    /// Task marked complete.
+    TaskCompleted,
 }
 
 impl std::fmt::Display for HookType {
@@ -49,6 +67,15 @@ impl std::fmt::Display for HookType {
             HookType::Setup => write!(f, "Setup"),
             HookType::SessionEnd => write!(f, "SessionEnd"),
             HookType::Notification => write!(f, "Notification"),
+            HookType::Elicitation => write!(f, "Elicitation"),
+            HookType::ElicitationResult => write!(f, "ElicitationResult"),
+            HookType::InstructionsLoaded => write!(f, "InstructionsLoaded"),
+            HookType::ConfigChange => write!(f, "ConfigChange"),
+            HookType::WorktreeCreate => write!(f, "WorktreeCreate"),
+            HookType::WorktreeRemove => write!(f, "WorktreeRemove"),
+            HookType::PostCompact => write!(f, "PostCompact"),
+            HookType::TeammateIdle => write!(f, "TeammateIdle"),
+            HookType::TaskCompleted => write!(f, "TaskCompleted"),
         }
     }
 }
@@ -61,10 +88,13 @@ fn default_permission_mode() -> String {
 /// Common fields present in all hook inputs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommonInput {
-    /// Unique session identifier.
+    /// Unique session identifier. May be empty for session-less events
+    /// (e.g., InstructionsLoaded, WorktreeCreate, WorktreeRemove).
+    #[serde(default)]
     pub session_id: String,
 
-    /// Path to the transcript file.
+    /// Path to the transcript file. May be empty for session-less events.
+    #[serde(default)]
     pub transcript_path: String,
 
     /// Current working directory.
@@ -109,6 +139,51 @@ mod tests {
         let input: CommonInput = serde_json::from_str(json).unwrap();
         assert_eq!(input.session_id, "abc123");
         assert_eq!(input.hook_event_name, HookType::PreToolUse);
+    }
+
+    #[test]
+    fn test_new_hook_type_serde_round_trip() {
+        let new_variants = vec![
+            (HookType::Elicitation, "\"Elicitation\""),
+            (HookType::ElicitationResult, "\"ElicitationResult\""),
+            (HookType::InstructionsLoaded, "\"InstructionsLoaded\""),
+            (HookType::ConfigChange, "\"ConfigChange\""),
+            (HookType::WorktreeCreate, "\"WorktreeCreate\""),
+            (HookType::WorktreeRemove, "\"WorktreeRemove\""),
+            (HookType::PostCompact, "\"PostCompact\""),
+            (HookType::TeammateIdle, "\"TeammateIdle\""),
+            (HookType::TaskCompleted, "\"TaskCompleted\""),
+        ];
+        for (variant, expected_json) in &new_variants {
+            let json = serde_json::to_string(variant).unwrap();
+            assert_eq!(&json, expected_json, "serialize {:?}", variant);
+            let deserialized: HookType = serde_json::from_str(expected_json).unwrap();
+            assert_eq!(&deserialized, variant, "deserialize {}", expected_json);
+        }
+    }
+
+    #[test]
+    fn test_common_input_with_new_hook_types() {
+        let new_names = [
+            "Elicitation",
+            "ElicitationResult",
+            "InstructionsLoaded",
+            "ConfigChange",
+            "WorktreeCreate",
+            "WorktreeRemove",
+            "PostCompact",
+            "TeammateIdle",
+            "TaskCompleted",
+        ];
+        for name in &new_names {
+            let json = format!(
+                r#"{{"session_id":"abc","transcript_path":"/p","cwd":"/c","permission_mode":"default","hook_event_name":"{}"}}"#,
+                name
+            );
+            let input: CommonInput =
+                serde_json::from_str(&json).unwrap_or_else(|e| panic!("Failed to deserialize CommonInput with hook_event_name={}: {}", name, e));
+            assert_eq!(input.hook_event_name.to_string(), *name);
+        }
     }
 
     #[test]

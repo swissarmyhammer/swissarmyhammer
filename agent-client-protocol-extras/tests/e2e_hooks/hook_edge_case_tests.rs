@@ -317,3 +317,93 @@ async fn unexpected_exit_code_treated_as_allow_on_pre_tool_use() {
         "Unexpected exit code should not produce context"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Forward-compatible hook event config tests
+// ---------------------------------------------------------------------------
+
+/// New event types are accepted in config and registered as hooks, but
+/// since no ACP lifecycle point fires them, they don't trigger during
+/// a normal prompt flow.
+#[tokio::test]
+async fn new_event_hooks_registered_but_not_triggered_by_prompt() {
+    // These event types have dedicated HookEventKind variants and are
+    // properly registered, but HookableAgent's Agent trait impl doesn't
+    // produce them — they can only be fired manually.
+    let new_event_names = [
+        "Elicitation",
+        "ElicitationResult",
+        "InstructionsLoaded",
+        "ConfigChange",
+        "WorktreeCreate",
+        "WorktreeRemove",
+    ];
+
+    for event_name in &new_event_names {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let script = helpers::write_exit_script(tmp.path(), "hook.sh", 0, "");
+        let config =
+            helpers::hook_config_json(event_name, script.to_str().unwrap(), None);
+        let playback = helpers::load_playback_agent("tool_call_session.json");
+        // Config is accepted — hooks are registered (not skipped)
+        let agent = helpers::build_hookable_agent(Arc::new(playback), &config);
+        let session_id = helpers::init_session(&agent).await;
+        // Prompt succeeds — these hooks are registered but no ACP event triggers them
+        let _response = helpers::run_prompt(&agent, &session_id, "test").await;
+        // Hook should NOT have fired (no ACP lifecycle point produces these events)
+        let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
+        assert!(
+            captured.is_none(),
+            "{} hook should not fire during normal prompt flow",
+            event_name
+        );
+    }
+}
+
+/// Mixed config with prompt-triggered and non-triggered events — prompt-path
+/// hooks fire normally, new event hooks are registered but not triggered.
+#[tokio::test]
+async fn mixed_supported_and_forward_compat_config() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // Supported hook that WILL fire
+    let supported_script =
+        helpers::write_exit_script(tmp.path(), "supported.sh", 0, "");
+    // Forward-compat hook that should NOT fire
+    let compat_script =
+        helpers::write_exit_script(tmp.path(), "compat.sh", 0, "");
+
+    let config = format!(
+        r#"{{
+            "hooks": {{
+                "Stop": [{{
+                    "hooks": [{{ "type": "command", "command": "{}" }}]
+                }}],
+                "Elicitation": [{{
+                    "hooks": [{{ "type": "command", "command": "{}" }}]
+                }}]
+            }}
+        }}"#,
+        supported_script.to_str().unwrap(),
+        compat_script.to_str().unwrap()
+    );
+
+    let playback = helpers::load_playback_agent("tool_call_session.json");
+    let agent = helpers::build_hookable_agent(Arc::new(playback), &config);
+    let session_id = helpers::init_session(&agent).await;
+    let _response = helpers::run_prompt(&agent, &session_id, "test").await;
+
+    // Stop hook should have fired
+    let supported_captured =
+        helpers::read_stdin_capture(tmp.path(), "supported.sh");
+    assert!(
+        supported_captured.is_some(),
+        "Supported Stop hook should fire"
+    );
+
+    // Elicitation hook should NOT have fired
+    let compat_captured = helpers::read_stdin_capture(tmp.path(), "compat.sh");
+    assert!(
+        compat_captured.is_none(),
+        "Forward-compat Elicitation hook should not fire"
+    );
+}

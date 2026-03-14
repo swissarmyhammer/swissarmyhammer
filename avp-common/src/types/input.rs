@@ -4,7 +4,10 @@
 //! This module re-exports them for backwards compatibility with existing code.
 
 pub use crate::strategy::claude::input::{
-    HookInput, NotificationInput, PermissionRequestInput, PostToolUseFailureInput,
-    PostToolUseInput, PreCompactInput, PreToolUseInput, SessionEndInput, SessionStartInput,
-    SetupInput, StopInput, SubagentStartInput, SubagentStopInput, UserPromptSubmitInput,
+    ConfigChangeInput, ElicitationInput, ElicitationResultInput, HookInput,
+    InstructionsLoadedInput, NotificationInput, PermissionRequestInput, PostCompactInput,
+    PostToolUseFailureInput, PostToolUseInput, PreCompactInput, PreToolUseInput, SessionEndInput,
+    SessionStartInput, SetupInput, StopInput, SubagentStartInput, SubagentStopInput,
+    TaskCompletedInput, TeammateIdleInput, UserPromptSubmitInput, WorktreeCreateInput,
+    WorktreeRemoveInput,
 };

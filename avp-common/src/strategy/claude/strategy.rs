@@ -12,9 +12,11 @@ use crate::types::HookType;
 
 // Import Claude-specific types from sibling modules
 use super::input::{
-    NotificationInput, PermissionRequestInput, PostToolUseFailureInput, PostToolUseInput,
-    PreCompactInput, PreToolUseInput, SessionEndInput, SessionStartInput, SetupInput, StopInput,
-    SubagentStartInput, SubagentStopInput, UserPromptSubmitInput,
+    ConfigChangeInput, ElicitationInput, ElicitationResultInput, InstructionsLoadedInput,
+    NotificationInput, PermissionRequestInput, PostCompactInput, PostToolUseFailureInput,
+    PostToolUseInput, PreCompactInput, PreToolUseInput, SessionEndInput, SessionStartInput,
+    SetupInput, StopInput, SubagentStartInput, SubagentStopInput, TaskCompletedInput,
+    TeammateIdleInput, UserPromptSubmitInput, WorktreeCreateInput, WorktreeRemoveInput,
 };
 use super::output::{
     HookOutput, HookSpecificOutput, PermissionBehavior, PermissionDecision,
@@ -420,6 +422,78 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
             }
             HookType::Notification => {
                 let typed: NotificationInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::Elicitation => {
+                let typed: ElicitationInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::ElicitationResult => {
+                let typed: ElicitationResultInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::InstructionsLoaded => {
+                let typed: InstructionsLoadedInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::ConfigChange => {
+                let typed: ConfigChangeInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::WorktreeCreate => {
+                let typed: WorktreeCreateInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::WorktreeRemove => {
+                let typed: WorktreeRemoveInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::PostCompact => {
+                let typed: PostCompactInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::TeammateIdle => {
+                let typed: TeammateIdleInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            HookType::TaskCompleted => {
+                let typed: TaskCompletedInput =
                     serde_json::from_value(input).map_err(AvpError::Json)?;
                 Chain::success()
                     .execute(&typed)

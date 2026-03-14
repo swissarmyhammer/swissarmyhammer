@@ -525,6 +525,444 @@ impl AvpPostToolUseFailureOutput {
     }
 }
 
+/// AVP output for Elicitation hook.
+///
+/// Represents the result of validating an MCP elicitation request.
+#[derive(Debug, Clone)]
+pub struct AvpElicitationOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+    /// Whether to allow the elicitation.
+    pub allow: bool,
+    /// Reason for deny (if not allowed).
+    pub deny_reason: Option<String>,
+}
+
+impl Default for AvpElicitationOutput {
+    fn default() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+            allow: true,
+            deny_reason: None,
+        }
+    }
+}
+
+impl AvpElicitationOutput {
+    /// Create an allow output.
+    pub fn allow() -> Self {
+        Self::default()
+    }
+
+    /// Create a deny output.
+    pub fn deny(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                ..Default::default()
+            },
+            allow: false,
+            deny_reason: Some(reason),
+        }
+    }
+
+    /// Create a deny output from a validator block.
+    pub fn deny_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let validator_name = validator_name.into();
+        let message = message.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                validator_block: Some(ValidatorBlock {
+                    validator_name,
+                    message: message.clone(),
+                }),
+                ..Default::default()
+            },
+            allow: false,
+            deny_reason: Some(message),
+        }
+    }
+}
+
+/// AVP output for ElicitationResult hook.
+///
+/// Represents the result of validating a user's elicitation response.
+#[derive(Debug, Clone)]
+pub struct AvpElicitationResultOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+    /// Whether to allow the response.
+    pub allow: bool,
+    /// Reason for blocking (if not allowed).
+    pub block_reason: Option<String>,
+}
+
+impl Default for AvpElicitationResultOutput {
+    fn default() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+            allow: true,
+            block_reason: None,
+        }
+    }
+}
+
+impl AvpElicitationResultOutput {
+    /// Create an allow output.
+    pub fn allow() -> Self {
+        Self::default()
+    }
+
+    /// Create a block output.
+    pub fn block(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                ..Default::default()
+            },
+            allow: false,
+            block_reason: Some(reason),
+        }
+    }
+
+    /// Create a block output from a validator.
+    pub fn block_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let validator_name = validator_name.into();
+        let message = message.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                validator_block: Some(ValidatorBlock {
+                    validator_name,
+                    message: message.clone(),
+                }),
+                ..Default::default()
+            },
+            allow: false,
+            block_reason: Some(message),
+        }
+    }
+}
+
+/// AVP output for InstructionsLoaded hook.
+///
+/// Observe-only — cannot block.
+#[derive(Debug, Clone, Default)]
+pub struct AvpInstructionsLoadedOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+}
+
+impl AvpInstructionsLoadedOutput {
+    /// Create a success output.
+    pub fn success() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+        }
+    }
+}
+
+/// AVP output for ConfigChange hook.
+///
+/// Represents the result of validating a config change.
+#[derive(Debug, Clone)]
+pub struct AvpConfigChangeOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+    /// Whether to allow the config change.
+    pub allow: bool,
+    /// Reason for blocking (if not allowed).
+    pub block_reason: Option<String>,
+}
+
+impl Default for AvpConfigChangeOutput {
+    fn default() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+            allow: true,
+            block_reason: None,
+        }
+    }
+}
+
+impl AvpConfigChangeOutput {
+    /// Create an allow output.
+    pub fn allow() -> Self {
+        Self::default()
+    }
+
+    /// Create a block output.
+    pub fn block(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                ..Default::default()
+            },
+            allow: false,
+            block_reason: Some(reason),
+        }
+    }
+
+    /// Create a block output from a validator.
+    pub fn block_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let validator_name = validator_name.into();
+        let message = message.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                validator_block: Some(ValidatorBlock {
+                    validator_name,
+                    message: message.clone(),
+                }),
+                ..Default::default()
+            },
+            allow: false,
+            block_reason: Some(message),
+        }
+    }
+}
+
+/// AVP output for WorktreeCreate hook.
+///
+/// Represents the result of validating worktree creation.
+#[derive(Debug, Clone)]
+pub struct AvpWorktreeCreateOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+    /// Whether to allow worktree creation.
+    pub allow: bool,
+    /// Reason for deny (if not allowed).
+    pub deny_reason: Option<String>,
+}
+
+impl Default for AvpWorktreeCreateOutput {
+    fn default() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+            allow: true,
+            deny_reason: None,
+        }
+    }
+}
+
+impl AvpWorktreeCreateOutput {
+    /// Create an allow output.
+    pub fn allow() -> Self {
+        Self::default()
+    }
+
+    /// Create a deny output.
+    pub fn deny(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                ..Default::default()
+            },
+            allow: false,
+            deny_reason: Some(reason),
+        }
+    }
+
+    /// Create a deny output from a validator block.
+    pub fn deny_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let validator_name = validator_name.into();
+        let message = message.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                validator_block: Some(ValidatorBlock {
+                    validator_name,
+                    message: message.clone(),
+                }),
+                ..Default::default()
+            },
+            allow: false,
+            deny_reason: Some(message),
+        }
+    }
+}
+
+/// AVP output for WorktreeRemove hook.
+///
+/// Observe-only — cannot block.
+#[derive(Debug, Clone, Default)]
+pub struct AvpWorktreeRemoveOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+}
+
+impl AvpWorktreeRemoveOutput {
+    /// Create a success output.
+    pub fn success() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+        }
+    }
+}
+
+/// AVP output for PostCompact hook.
+///
+/// Observe-only — cannot block.
+#[derive(Debug, Clone, Default)]
+pub struct AvpPostCompactOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+}
+
+impl AvpPostCompactOutput {
+    /// Create a success output.
+    pub fn success() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+        }
+    }
+}
+
+/// AVP output for TeammateIdle hook.
+///
+/// Represents the result of validating a teammate idle event.
+#[derive(Debug, Clone)]
+pub struct AvpTeammateIdleOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+    /// Whether to allow the teammate to go idle.
+    pub allow_idle: bool,
+    /// Reason for blocking idle (if not allowed).
+    pub block_reason: Option<String>,
+}
+
+impl Default for AvpTeammateIdleOutput {
+    fn default() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+            allow_idle: true,
+            block_reason: None,
+        }
+    }
+}
+
+impl AvpTeammateIdleOutput {
+    /// Create an allow output.
+    pub fn allow() -> Self {
+        Self::default()
+    }
+
+    /// Create a block output (prevent idling).
+    pub fn block(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                ..Default::default()
+            },
+            allow_idle: false,
+            block_reason: Some(reason),
+        }
+    }
+
+    /// Create a block output from a validator.
+    pub fn block_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let validator_name = validator_name.into();
+        let message = message.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                validator_block: Some(ValidatorBlock {
+                    validator_name,
+                    message: message.clone(),
+                }),
+                ..Default::default()
+            },
+            allow_idle: false,
+            block_reason: Some(message),
+        }
+    }
+}
+
+/// AVP output for TaskCompleted hook.
+///
+/// Represents the result of validating a task completion.
+#[derive(Debug, Clone)]
+pub struct AvpTaskCompletedOutput {
+    /// Base output fields.
+    pub base: AvpOutputBase,
+    /// Whether to allow the task completion.
+    pub allow: bool,
+    /// Reason for blocking (if not allowed).
+    pub block_reason: Option<String>,
+}
+
+impl Default for AvpTaskCompletedOutput {
+    fn default() -> Self {
+        Self {
+            base: AvpOutputBase::success(),
+            allow: true,
+            block_reason: None,
+        }
+    }
+}
+
+impl AvpTaskCompletedOutput {
+    /// Create an allow output.
+    pub fn allow() -> Self {
+        Self::default()
+    }
+
+    /// Create a block output.
+    pub fn block(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                ..Default::default()
+            },
+            allow: false,
+            block_reason: Some(reason),
+        }
+    }
+
+    /// Create a block output from a validator.
+    pub fn block_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let validator_name = validator_name.into();
+        let message = message.into();
+        Self {
+            base: AvpOutputBase {
+                should_continue: true,
+                validator_block: Some(ValidatorBlock {
+                    validator_name,
+                    message: message.clone(),
+                }),
+                ..Default::default()
+            },
+            allow: false,
+            block_reason: Some(message),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,5 +1023,150 @@ mod tests {
             Some("Must fix tests before stopping")
         );
         assert!(output.base.should_continue); // Force agent to continue
+    }
+
+    // --- New output type tests ---
+
+    #[test]
+    fn test_elicitation_allow() {
+        let output = AvpElicitationOutput::allow();
+        assert!(output.allow);
+        assert!(output.deny_reason.is_none());
+        assert!(output.base.should_continue);
+    }
+
+    #[test]
+    fn test_elicitation_deny() {
+        let output = AvpElicitationOutput::deny("Not allowed");
+        assert!(!output.allow);
+        assert_eq!(output.deny_reason.as_deref(), Some("Not allowed"));
+    }
+
+    #[test]
+    fn test_elicitation_deny_from_validator() {
+        let output = AvpElicitationOutput::deny_from_validator("checker", "blocked");
+        assert!(!output.allow);
+        assert!(output.base.validator_block.is_some());
+        assert_eq!(
+            output.base.validator_block.as_ref().unwrap().validator_name,
+            "checker"
+        );
+    }
+
+    #[test]
+    fn test_elicitation_result_allow() {
+        let output = AvpElicitationResultOutput::allow();
+        assert!(output.allow);
+        assert!(output.block_reason.is_none());
+    }
+
+    #[test]
+    fn test_elicitation_result_block() {
+        let output = AvpElicitationResultOutput::block("invalid response");
+        assert!(!output.allow);
+        assert_eq!(output.block_reason.as_deref(), Some("invalid response"));
+    }
+
+    #[test]
+    fn test_observe_only_outputs() {
+        let il = AvpInstructionsLoadedOutput::success();
+        assert!(il.base.should_continue);
+        let wr = AvpWorktreeRemoveOutput::success();
+        assert!(wr.base.should_continue);
+        let pc = AvpPostCompactOutput::success();
+        assert!(pc.base.should_continue);
+    }
+
+    #[test]
+    fn test_config_change_allow_and_block() {
+        let allow = AvpConfigChangeOutput::allow();
+        assert!(allow.allow);
+        let block = AvpConfigChangeOutput::block("dangerous setting");
+        assert!(!block.allow);
+        assert_eq!(block.block_reason.as_deref(), Some("dangerous setting"));
+    }
+
+    #[test]
+    fn test_worktree_create_allow_and_deny() {
+        let allow = AvpWorktreeCreateOutput::allow();
+        assert!(allow.allow);
+        let deny = AvpWorktreeCreateOutput::deny("too many worktrees");
+        assert!(!deny.allow);
+        assert_eq!(deny.deny_reason.as_deref(), Some("too many worktrees"));
+    }
+
+    #[test]
+    fn test_worktree_create_deny_from_validator() {
+        let output =
+            AvpWorktreeCreateOutput::deny_from_validator("branch-policy", "invalid branch name");
+        assert!(!output.allow);
+        assert!(output.base.validator_block.is_some());
+        assert_eq!(
+            output.base.validator_block.as_ref().unwrap().validator_name,
+            "branch-policy"
+        );
+    }
+
+    #[test]
+    fn test_teammate_idle_allow_and_block() {
+        let allow = AvpTeammateIdleOutput::allow();
+        assert!(allow.allow_idle);
+        let block = AvpTeammateIdleOutput::block("work remains");
+        assert!(!block.allow_idle);
+        assert_eq!(block.block_reason.as_deref(), Some("work remains"));
+    }
+
+    #[test]
+    fn test_elicitation_result_block_from_validator() {
+        let output =
+            AvpElicitationResultOutput::block_from_validator("checker", "response blocked");
+        assert!(!output.allow);
+        assert!(output.base.validator_block.is_some());
+        let block = output.base.validator_block.as_ref().unwrap();
+        assert_eq!(block.validator_name, "checker");
+        assert_eq!(block.message, "response blocked");
+    }
+
+    #[test]
+    fn test_config_change_block_from_validator() {
+        let output = AvpConfigChangeOutput::block_from_validator("policy", "disallowed setting");
+        assert!(!output.allow);
+        assert!(output.base.validator_block.is_some());
+        assert_eq!(
+            output.base.validator_block.as_ref().unwrap().validator_name,
+            "policy"
+        );
+    }
+
+    #[test]
+    fn test_teammate_idle_block_from_validator() {
+        let output = AvpTeammateIdleOutput::block_from_validator("ralph", "work remains");
+        assert!(!output.allow_idle);
+        assert!(output.base.validator_block.is_some());
+        assert_eq!(
+            output.base.validator_block.as_ref().unwrap().validator_name,
+            "ralph"
+        );
+    }
+
+    #[test]
+    fn test_task_completed_block_from_validator() {
+        let output =
+            AvpTaskCompletedOutput::block_from_validator("qa-check", "tests not passing");
+        assert!(!output.allow);
+        assert!(output.base.validator_block.is_some());
+        assert_eq!(
+            output.base.validator_block.as_ref().unwrap().validator_name,
+            "qa-check"
+        );
+    }
+
+    #[test]
+    fn test_task_completed_allow_and_block() {
+        let allow = AvpTaskCompletedOutput::allow();
+        assert!(allow.allow);
+        let block = AvpTaskCompletedOutput::block("tests not passing");
+        assert!(!block.allow);
+        assert_eq!(block.block_reason.as_deref(), Some("tests not passing"));
     }
 }

@@ -199,6 +199,154 @@ pub struct NotificationInput {
     pub notification_type: Option<String>,
 }
 
+/// Elicitation hook input - fired when MCP server requests user input.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElicitationInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+
+    /// The MCP server name requesting elicitation.
+    #[serde(default)]
+    pub mcp_server_name: Option<String>,
+
+    /// The message to display to the user.
+    #[serde(default)]
+    pub message: Option<String>,
+
+    /// The elicitation mode (e.g., "blocking").
+    #[serde(default)]
+    pub mode: Option<String>,
+
+    /// The requested input schema.
+    #[serde(default)]
+    pub requested_schema: Option<serde_json::Value>,
+}
+
+/// ElicitationResult hook input - fired when user responds to MCP elicitation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElicitationResultInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+
+    /// The MCP server name that requested elicitation.
+    #[serde(default)]
+    pub mcp_server_name: Option<String>,
+
+    /// The user's action (e.g., "submit", "cancel").
+    #[serde(default)]
+    pub action: Option<String>,
+
+    /// The user's response content.
+    #[serde(default)]
+    pub content: Option<serde_json::Value>,
+
+    /// Identifier for the elicitation request.
+    #[serde(default)]
+    pub elicitation_id: Option<String>,
+}
+
+/// InstructionsLoaded hook input - fired when CLAUDE.md or rules files are loaded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstructionsLoadedInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+
+    /// Path to the loaded file.
+    #[serde(default)]
+    pub file_path: Option<String>,
+
+    /// Reason the file was loaded.
+    #[serde(default)]
+    pub load_reason: Option<String>,
+
+    /// Glob patterns used for discovery.
+    #[serde(default)]
+    pub glob_patterns: Option<Vec<String>>,
+
+    /// Type of memory/instruction file.
+    #[serde(default)]
+    pub memory_type: Option<String>,
+}
+
+/// ConfigChange hook input - fired when config files change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigChangeInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+
+    /// Source of the config change (e.g., "user_settings", "project_settings").
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// WorktreeCreate hook input - fired when a worktree is created.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeCreateInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+
+    /// Path to the worktree.
+    #[serde(default)]
+    pub worktree_path: Option<String>,
+
+    /// Branch name for the worktree.
+    #[serde(default)]
+    pub branch_name: Option<String>,
+}
+
+/// WorktreeRemove hook input - fired when a worktree is removed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeRemoveInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+
+    /// Path to the worktree being removed.
+    #[serde(default)]
+    pub worktree_path: Option<String>,
+}
+
+/// PostCompact hook input - fired after context compaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostCompactInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+}
+
+/// TeammateIdle hook input - fired when an agent teammate goes idle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeammateIdleInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+
+    /// Identifier of the idle teammate.
+    #[serde(default)]
+    pub teammate_id: Option<String>,
+}
+
+/// TaskCompleted hook input - fired when a task is marked complete.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCompletedInput {
+    /// Common input fields.
+    #[serde(flatten)]
+    pub common: CommonInput,
+
+    /// Identifier of the completed task.
+    #[serde(default)]
+    pub task_id: Option<String>,
+
+    /// Title of the completed task.
+    #[serde(default)]
+    pub task_title: Option<String>,
+}
+
 // Implement HookInputType for all input types
 impl HookInputType for SessionStartInput {}
 impl HookInputType for UserPromptSubmitInput {}
@@ -213,6 +361,15 @@ impl HookInputType for PreCompactInput {}
 impl HookInputType for SetupInput {}
 impl HookInputType for SessionEndInput {}
 impl HookInputType for NotificationInput {}
+impl HookInputType for ElicitationInput {}
+impl HookInputType for ElicitationResultInput {}
+impl HookInputType for InstructionsLoadedInput {}
+impl HookInputType for ConfigChangeInput {}
+impl HookInputType for WorktreeCreateInput {}
+impl HookInputType for WorktreeRemoveInput {}
+impl HookInputType for PostCompactInput {}
+impl HookInputType for TeammateIdleInput {}
+impl HookInputType for TaskCompletedInput {}
 
 /// Enum wrapper for all possible hook inputs, enabling type-safe dispatch.
 #[derive(Debug, Clone, Serialize)]
@@ -243,6 +400,24 @@ pub enum HookInput {
     SessionEnd(SessionEndInput),
     /// Notification hook input.
     Notification(NotificationInput),
+    /// Elicitation hook input.
+    Elicitation(ElicitationInput),
+    /// ElicitationResult hook input.
+    ElicitationResult(ElicitationResultInput),
+    /// InstructionsLoaded hook input.
+    InstructionsLoaded(InstructionsLoadedInput),
+    /// ConfigChange hook input.
+    ConfigChange(ConfigChangeInput),
+    /// WorktreeCreate hook input.
+    WorktreeCreate(WorktreeCreateInput),
+    /// WorktreeRemove hook input.
+    WorktreeRemove(WorktreeRemoveInput),
+    /// PostCompact hook input.
+    PostCompact(PostCompactInput),
+    /// TeammateIdle hook input.
+    TeammateIdle(TeammateIdleInput),
+    /// TaskCompleted hook input.
+    TaskCompleted(TaskCompletedInput),
 }
 
 impl<'de> Deserialize<'de> for HookInput {
@@ -326,6 +501,51 @@ impl<'de> Deserialize<'de> for HookInput {
                     serde_json::from_value(value).map_err(D::Error::custom)?;
                 Ok(HookInput::Notification(input))
             }
+            "Elicitation" => {
+                let input: ElicitationInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::Elicitation(input))
+            }
+            "ElicitationResult" => {
+                let input: ElicitationResultInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::ElicitationResult(input))
+            }
+            "InstructionsLoaded" => {
+                let input: InstructionsLoadedInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::InstructionsLoaded(input))
+            }
+            "ConfigChange" => {
+                let input: ConfigChangeInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::ConfigChange(input))
+            }
+            "WorktreeCreate" => {
+                let input: WorktreeCreateInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::WorktreeCreate(input))
+            }
+            "WorktreeRemove" => {
+                let input: WorktreeRemoveInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::WorktreeRemove(input))
+            }
+            "PostCompact" => {
+                let input: PostCompactInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::PostCompact(input))
+            }
+            "TeammateIdle" => {
+                let input: TeammateIdleInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::TeammateIdle(input))
+            }
+            "TaskCompleted" => {
+                let input: TaskCompletedInput =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(HookInput::TaskCompleted(input))
+            }
             other => Err(D::Error::unknown_variant(
                 other,
                 &[
@@ -342,6 +562,15 @@ impl<'de> Deserialize<'de> for HookInput {
                     "Setup",
                     "SessionEnd",
                     "Notification",
+                    "Elicitation",
+                    "ElicitationResult",
+                    "InstructionsLoaded",
+                    "ConfigChange",
+                    "WorktreeCreate",
+                    "WorktreeRemove",
+                    "PostCompact",
+                    "TeammateIdle",
+                    "TaskCompleted",
                 ],
             )),
         }
@@ -365,6 +594,15 @@ impl HookInput {
             HookInput::Setup(_) => HookType::Setup,
             HookInput::SessionEnd(_) => HookType::SessionEnd,
             HookInput::Notification(_) => HookType::Notification,
+            HookInput::Elicitation(_) => HookType::Elicitation,
+            HookInput::ElicitationResult(_) => HookType::ElicitationResult,
+            HookInput::InstructionsLoaded(_) => HookType::InstructionsLoaded,
+            HookInput::ConfigChange(_) => HookType::ConfigChange,
+            HookInput::WorktreeCreate(_) => HookType::WorktreeCreate,
+            HookInput::WorktreeRemove(_) => HookType::WorktreeRemove,
+            HookInput::PostCompact(_) => HookType::PostCompact,
+            HookInput::TeammateIdle(_) => HookType::TeammateIdle,
+            HookInput::TaskCompleted(_) => HookType::TaskCompleted,
         }
     }
 
@@ -384,6 +622,15 @@ impl HookInput {
             HookInput::Setup(i) => &i.common,
             HookInput::SessionEnd(i) => &i.common,
             HookInput::Notification(i) => &i.common,
+            HookInput::Elicitation(i) => &i.common,
+            HookInput::ElicitationResult(i) => &i.common,
+            HookInput::InstructionsLoaded(i) => &i.common,
+            HookInput::ConfigChange(i) => &i.common,
+            HookInput::WorktreeCreate(i) => &i.common,
+            HookInput::WorktreeRemove(i) => &i.common,
+            HookInput::PostCompact(i) => &i.common,
+            HookInput::TeammateIdle(i) => &i.common,
+            HookInput::TaskCompleted(i) => &i.common,
         }
     }
 }
@@ -421,6 +668,89 @@ mod tests {
         }"#;
         let input: UserPromptSubmitInput = serde_json::from_str(json).unwrap();
         assert_eq!(input.prompt, "Write a function");
+    }
+
+    #[test]
+    fn test_elicitation_input_deserialization() {
+        let json = r#"{
+            "session_id": "abc123",
+            "transcript_path": "/path/to/transcript.jsonl",
+            "cwd": "/home/user/project",
+            "permission_mode": "default",
+            "hook_event_name": "Elicitation",
+            "mcp_server_name": "sah",
+            "message": "Pick one",
+            "mode": "blocking",
+            "requested_schema": {"type": "string"}
+        }"#;
+        let input: ElicitationInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.mcp_server_name.as_deref(), Some("sah"));
+        assert_eq!(input.message.as_deref(), Some("Pick one"));
+        assert_eq!(input.mode.as_deref(), Some("blocking"));
+        assert_eq!(input.common.hook_event_name, HookType::Elicitation);
+    }
+
+    #[test]
+    fn test_elicitation_result_input_deserialization() {
+        let json = r#"{
+            "session_id": "abc123",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "ElicitationResult",
+            "mcp_server_name": "sah",
+            "action": "submit",
+            "content": {"answer": "yes"},
+            "elicitation_id": "e-001"
+        }"#;
+        let input: ElicitationResultInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.mcp_server_name.as_deref(), Some("sah"));
+        assert_eq!(input.action.as_deref(), Some("submit"));
+        assert_eq!(input.elicitation_id.as_deref(), Some("e-001"));
+    }
+
+    #[test]
+    fn test_new_hook_input_enum_dispatch() {
+        let test_cases = vec![
+            ("Elicitation", HookType::Elicitation),
+            ("ElicitationResult", HookType::ElicitationResult),
+            ("InstructionsLoaded", HookType::InstructionsLoaded),
+            ("ConfigChange", HookType::ConfigChange),
+            ("WorktreeCreate", HookType::WorktreeCreate),
+            ("WorktreeRemove", HookType::WorktreeRemove),
+            ("PostCompact", HookType::PostCompact),
+            ("TeammateIdle", HookType::TeammateIdle),
+            ("TaskCompleted", HookType::TaskCompleted),
+        ];
+        for (name, expected_type) in test_cases {
+            let json = format!(
+                r#"{{"session_id":"abc","transcript_path":"/p","cwd":"/c","permission_mode":"default","hook_event_name":"{}"}}"#,
+                name
+            );
+            let input: HookInput = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("Failed to deserialize HookInput for {}: {}", name, e));
+            assert_eq!(input.hook_type(), expected_type, "hook_type() mismatch for {}", name);
+            assert_eq!(input.common().session_id, "abc", "common() mismatch for {}", name);
+        }
+    }
+
+    #[test]
+    fn test_new_inputs_optional_fields_default() {
+        // All event-specific fields are optional — deserialize with only common fields
+        let names = [
+            "Elicitation", "ElicitationResult", "InstructionsLoaded",
+            "ConfigChange", "WorktreeCreate", "WorktreeRemove",
+            "PostCompact", "TeammateIdle", "TaskCompleted",
+        ];
+        for name in &names {
+            let json = format!(
+                r#"{{"session_id":"s","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"{}"}}"#,
+                name
+            );
+            let input: HookInput = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("Failed with minimal fields for {}: {}", name, e));
+            assert_eq!(input.hook_type().to_string(), *name);
+        }
     }
 
     #[test]
