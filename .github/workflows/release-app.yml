@@ -96,7 +96,6 @@ jobs:
 
       - name: Find DMG
         id: find-dmg
-        working-directory: ${{ matrix.app.dir }}
         run: |
           DMG=$(find target/aarch64-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
           echo "dmg_path=$DMG" >> "$GITHUB_OUTPUT"
@@ -117,16 +116,16 @@ jobs:
             sleep 10
           done
           # Upload versioned DMG (original filename includes version)
-          gh release upload "$TAG" "${{ matrix.app.dir }}/${{ steps.find-dmg.outputs.dmg_path }}" --clobber
+          gh release upload "$TAG" "${{ steps.find-dmg.outputs.dmg_path }}" --clobber
           # Upload stable-name DMG for permanent download URLs
-          cp "${{ matrix.app.dir }}/${{ steps.find-dmg.outputs.dmg_path }}" "${{ matrix.app.product }}-latest.dmg"
+          cp "${{ steps.find-dmg.outputs.dmg_path }}" "${{ matrix.app.product }}-latest.dmg"
           gh release upload "$TAG" "${{ matrix.app.product }}-latest.dmg" --clobber
 
       - name: Upload DMG as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.app.name }}-app-dmg
-          path: ${{ matrix.app.dir }}/${{ steps.find-dmg.outputs.dmg_path }}
+          path: ${{ steps.find-dmg.outputs.dmg_path }}
 
       - name: Cleanup keychain
         if: always()
