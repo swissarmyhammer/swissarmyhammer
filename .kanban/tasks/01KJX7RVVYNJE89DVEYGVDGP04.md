@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: f8
+position_ordinal: eb80
 title: TypeScript check and fix any errors
 ---

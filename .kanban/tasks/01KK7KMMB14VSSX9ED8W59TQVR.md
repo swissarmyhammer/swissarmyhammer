@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: w7
+position_ordinal: ffff9480
 title: Fix avatar to show data:image and use round shape
 ---
 Avatar component should:

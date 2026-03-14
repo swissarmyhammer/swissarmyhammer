@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: b5
+position_ordinal: bb80
 title: Keybinding layer — key sequences to command IDs with scope resolution
 ---
 Phase 1 deliverable from app-architecture.md.

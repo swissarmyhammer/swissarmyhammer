@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: t0
+position_ordinal: ffee80
 title: Integrate TanStack Table for sorting and grouping
 ---
 Replace hand-rolled sorting in DataTable with TanStack Table (`@tanstack/react-table`). Add grouping support.

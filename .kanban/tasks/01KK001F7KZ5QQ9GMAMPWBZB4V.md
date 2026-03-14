@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: m0
+position_ordinal: ffa880
 title: Implement kanban domain commands with Command trait
 ---
 Migrate existing `Execute` trait implementations in `swissarmyhammer-kanban` to the new `Command` trait from `swissarmyhammer-commands`. Each command gets both `available()` and `execute()`.

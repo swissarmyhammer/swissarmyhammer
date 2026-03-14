@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: e3
+position_ordinal: dc80
 title: Verify TypeScript compilation
 ---
