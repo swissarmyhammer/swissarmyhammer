@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, ChevronDown, Info } from "lucide-react";
+import { Check, ChevronDown, Info, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { useFieldUpdate } from "@/lib/field-update-context";
+import { useExecuteCommand } from "@/lib/command-scope";
 import type { BoardData, OpenBoard } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -28,6 +29,7 @@ export function NavBar({
   onBoardInspect,
 }: NavBarProps) {
   const { updateField } = useFieldUpdate();
+  const executeCommand = useExecuteCommand();
 
   const handleSwitchBoard = async (path: string) => {
     try {
@@ -91,6 +93,14 @@ export function NavBar({
           <Info className="h-4 w-4" />
         </button>
       )}
+      <button
+        type="button"
+        className="ml-auto p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+        onClick={() => executeCommand("app.search")}
+        title="Search"
+      >
+        <Search className="h-4 w-4" />
+      </button>
     </header>
   );
 }

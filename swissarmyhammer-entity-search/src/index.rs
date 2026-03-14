@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use model_embedding::TextEmbedder;
 use swissarmyhammer_entity::Entity;
@@ -15,6 +15,7 @@ use crate::semantic::{self, EntityEmbedding};
 pub struct EntitySearchIndex {
     entities: HashMap<String, Entity>,
     embeddings: Vec<EntityEmbedding>,
+    stale_ids: HashSet<String>,
 }
 
 impl EntitySearchIndex {
@@ -22,13 +23,24 @@ impl EntitySearchIndex {
         Self {
             entities: HashMap::new(),
             embeddings: Vec::new(),
+            stale_ids: HashSet::new(),
         }
+    }
+
+    /// Bulk-load entities into a new index.
+    pub fn from_entities(entities: Vec<Entity>) -> Self {
+        let mut index = Self::new();
+        for entity in entities {
+            index.add(entity);
+        }
+        index
     }
 
     /// Add an entity to the index. Replaces any existing entity with the same id.
     pub fn add(&mut self, entity: Entity) {
         let id = entity.id.to_string();
         self.embeddings.retain(|e| e.entity_id != id);
+        self.stale_ids.insert(id.clone());
         self.entities.insert(id, entity);
     }
 
@@ -36,11 +48,38 @@ impl EntitySearchIndex {
     pub fn remove(&mut self, id: &str) {
         self.entities.remove(id);
         self.embeddings.retain(|e| e.entity_id != id);
+        self.stale_ids.remove(id);
     }
 
     /// Update an entity (convenience wrapper around add).
     pub fn update(&mut self, entity: Entity) {
         self.add(entity);
+    }
+
+    /// Merge fields into an existing entity without replacing it entirely.
+    ///
+    /// If the entity exists, each field in `fields` is inserted/overwritten
+    /// on the existing entity and its embedding is marked stale. If the entity
+    /// does not exist, creates a new one from the provided type, id, and fields.
+    pub fn merge_fields(
+        &mut self,
+        entity_type: &str,
+        id: &str,
+        fields: &std::collections::HashMap<String, serde_json::Value>,
+    ) {
+        if let Some(existing) = self.entities.get_mut(id) {
+            for (k, v) in fields {
+                existing.set(k, v.clone());
+            }
+            self.embeddings.retain(|e| e.entity_id != id);
+            self.stale_ids.insert(id.to_string());
+        } else {
+            let mut entity = Entity::new(entity_type, id);
+            for (k, v) in fields {
+                entity.set(k, v.clone());
+            }
+            self.add(entity);
+        }
     }
 
     /// Build or rebuild embeddings for all indexed entities.
@@ -51,7 +90,45 @@ impl EntitySearchIndex {
             .map(|(id, e)| (id.clone(), e))
             .collect();
         self.embeddings = semantic::build_embeddings(&entity_refs, embedder).await?;
+        self.stale_ids.clear();
         Ok(())
+    }
+
+    /// Re-embed only entities whose embeddings are stale.
+    ///
+    /// After a successful rebuild, the stale set is cleared.
+    pub async fn rebuild_stale_embeddings(&mut self, embedder: &impl TextEmbedder) -> Result<()> {
+        if self.stale_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Collect stale entities
+        let stale_refs: Vec<(String, &Entity)> = self
+            .stale_ids
+            .iter()
+            .filter_map(|id| self.entities.get(id).map(|e| (id.clone(), e)))
+            .collect();
+
+        if stale_refs.is_empty() {
+            self.stale_ids.clear();
+            return Ok(());
+        }
+
+        // Build new embeddings for stale entities
+        let new_embeddings = semantic::build_embeddings(&stale_refs, embedder).await?;
+
+        // Remove old embeddings for stale entities, add new ones
+        let stale_set: HashSet<&str> = self.stale_ids.iter().map(|s| s.as_str()).collect();
+        self.embeddings.retain(|e| !stale_set.contains(e.entity_id.as_str()));
+        self.embeddings.extend(new_embeddings);
+
+        self.stale_ids.clear();
+        Ok(())
+    }
+
+    /// Number of entities with stale embeddings.
+    pub fn stale_count(&self) -> usize {
+        self.stale_ids.len()
     }
 
     /// Fuzzy search over entity fields.
@@ -130,6 +207,11 @@ impl EntitySearchIndex {
     pub fn has_embeddings(&self) -> bool {
         !self.embeddings.is_empty()
     }
+
+    /// Look up an entity by id.
+    pub fn get(&self, id: &str) -> Option<&Entity> {
+        self.entities.get(id)
+    }
 }
 
 impl Default for EntitySearchIndex {
@@ -196,5 +278,34 @@ mod tests {
     fn has_embeddings_initially_false() {
         let idx = EntitySearchIndex::new();
         assert!(!idx.has_embeddings());
+    }
+
+    #[test]
+    fn from_entities_bulk_load() {
+        let entities = vec![task("t1", "Fix login"), task("t2", "Dashboard widgets")];
+        let idx = EntitySearchIndex::from_entities(entities);
+        assert_eq!(idx.len(), 2);
+        assert!(!idx.search("login", 10).is_empty());
+    }
+
+    #[test]
+    fn update_marks_stale() {
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Old title"));
+        assert_eq!(idx.stale_count(), 1);
+        // Stale count stays the same for the same id
+        idx.update(task("t1", "New title"));
+        assert_eq!(idx.stale_count(), 1);
+        idx.add(task("t2", "Another"));
+        assert_eq!(idx.stale_count(), 2);
+    }
+
+    #[test]
+    fn remove_clears_stale() {
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+        assert_eq!(idx.stale_count(), 1);
+        idx.remove("t1");
+        assert_eq!(idx.stale_count(), 0);
     }
 }

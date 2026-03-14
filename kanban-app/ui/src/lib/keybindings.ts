@@ -27,6 +27,7 @@ type SequenceTable = Record<string, Record<string, string>>;
 export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
   vim: {
     ":": "app.command",
+    "/": "app.search",
     "Mod+Shift+P": "app.palette",
     "u": "app.undo",
     "Mod+r": "app.redo",
@@ -34,12 +35,14 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
   },
   cua: {
     "Mod+Shift+P": "app.palette",
+    "Mod+f": "app.search",
     "Mod+z": "app.undo",
     "Mod+Shift+Z": "app.redo",
     "Escape": "app.dismiss",
   },
   emacs: {
     "Mod+Shift+P": "app.palette",
+    "Mod+f": "app.search",
     "Escape": "app.dismiss",
   },
 };

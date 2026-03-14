@@ -481,6 +481,7 @@ mod tests {
             validate: Some("if (!ctx.fields.title) throw new Error('title required');".into()),
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -497,6 +498,7 @@ mod tests {
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Hello"));
@@ -523,6 +525,7 @@ mod tests {
             ),
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("My Task"));
@@ -542,6 +545,7 @@ mod tests {
             validate: Some(r#"throw new Error("entity validation failed");"#.to_string()),
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Test"));
@@ -618,6 +622,7 @@ mod tests {
             validate: Some("return ctx.fields;".to_string()),
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
 
         let adversarial = r#"}})(); globalThis.__pwned3 = true; (function(){"#;

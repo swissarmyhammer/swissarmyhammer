@@ -111,3 +111,16 @@ export function useSchema() {
   if (!ctx) throw new Error("useSchema must be used within a SchemaProvider");
   return ctx;
 }
+
+/**
+ * Returns schema context if available, or a stub that always returns undefined.
+ * Use in components optionally rendered outside a SchemaProvider.
+ */
+export function useSchemaOptional(): Pick<SchemaContextValue, "getSchema" | "getFieldDef"> {
+  const ctx = useContext(SchemaContext);
+  if (ctx) return ctx;
+  return {
+    getSchema: () => undefined,
+    getFieldDef: () => undefined,
+  };
+}

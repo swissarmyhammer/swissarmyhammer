@@ -55,6 +55,15 @@ export function useInspect(): InspectFn {
 }
 
 /**
+ * Returns the inspect function if an InspectProvider is present, or a no-op otherwise.
+ * Use this in components that are optionally rendered inside an InspectProvider.
+ */
+export function useInspectOptional(): InspectFn | null {
+  const ctx = useContext(InspectContext);
+  return ctx?.inspect ?? null;
+}
+
+/**
  * Returns a dismiss function that closes the topmost inspector panel.
  * Returns true if a panel was actually closed, false if stack was empty.
  */
