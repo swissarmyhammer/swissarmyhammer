@@ -94,10 +94,6 @@ cc.json
 
 .acp
 
-# Tree-sitter index database files
-.treesitter-index.db
-.treesitter-index.db-shm
-.treesitter-index.db-wal
 
 # Generated man pages (built at compile time, included in release archives)
 docs/*.1
@@ -114,8 +110,6 @@ mirdan-lock.json
 **/ui/dist/
 **/.vite/
 
-.kanban.zip
-.kanban
 
 .github/copilot/
 

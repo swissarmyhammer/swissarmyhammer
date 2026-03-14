@@ -241,6 +241,8 @@ use the skill tool to load the full instructions, then follow them.
 
 - **deduplicate**: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files. Automatically delegates to an implementer subagent. (local)
 
+- **double-check**: Double check your work by reviewing changes, asking clarifying questions, and verifying correctness before proceeding. Use when the user says "double check", "verify", "sanity check", or wants validation of recent work. (local)
+
 - **implement**: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent. (local)
 
 - **implement-all**: Implement all planned kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards. (local)
