@@ -1,0 +1,20 @@
+[package]
+name = "swissarmyhammer-entity-search"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Hybrid fuzzy + embedding search over Entity objects"
+
+[dependencies]
+swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
+model-embedding = { path = "../model-embedding" }
+fuzzy-matcher = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

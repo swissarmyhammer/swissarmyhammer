@@ -276,22 +276,7 @@ impl SemanticChunk {
     }
 }
 
-/// SIMD-accelerated cosine similarity between two vectors
-///
-/// Returns similarity in range [-1.0, 1.0] where 1.0 = identical.
-/// Returns 0.0 for mismatched lengths or empty vectors.
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    use simsimd::SpatialSimilarity;
-
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-
-    match f32::cosine(a, b) {
-        Some(distance) => 1.0 - distance as f32,
-        None => 0.0,
-    }
-}
+pub use model_embedding::cosine_similarity;
 
 /// A similarity match result containing the chunk and its similarity score
 #[derive(Debug, Clone)]

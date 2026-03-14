@@ -4615,6 +4615,7 @@ dependencies = [
  "async-trait",
  "md5",
  "serde",
+ "simsimd",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -7825,6 +7826,7 @@ dependencies = [
  "fuzzy-matcher",
  "ignore",
  "lsp-types",
+ "model-embedding",
  "rayon",
  "regex",
  "rusqlite",
@@ -7966,6 +7968,19 @@ dependencies = [
  "tokio-test",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "swissarmyhammer-entity-search"
+version = "0.9.1"
+dependencies = [
+ "fuzzy-matcher",
+ "model-embedding",
+ "serde_json",
+ "swissarmyhammer-entity",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8314,6 +8329,7 @@ dependencies = [
  "libc",
  "llama-agent",
  "md5",
+ "model-embedding",
  "notify 6.1.1",
  "once_cell",
  "owo-colors",
@@ -8368,13 +8384,13 @@ dependencies = [
  "async-watcher",
  "ignore",
  "md5",
+ "model-embedding",
  "notify 6.1.1",
  "once_cell",
  "rusqlite",
  "serde",
  "serde_json",
  "serial_test",
- "simsimd",
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-embedding",

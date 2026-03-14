@@ -42,12 +42,14 @@ pub mod error;
 pub mod private {
     pub trait Sealed {}
 }
+pub mod similarity;
 pub mod types;
 
 pub use batch::{
     BatchConfig, BatchFailure, BatchProcessor, BatchStats, ProgressCallback, ProgressInfo,
 };
 pub use error::EmbeddingError;
+pub use similarity::cosine_similarity;
 pub use types::EmbeddingResult;
 
 use async_trait::async_trait;
