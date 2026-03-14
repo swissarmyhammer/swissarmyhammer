@@ -94,7 +94,11 @@ jobs:
             echo "Waiting for release $TAG to be created... ($i/30)"
             sleep 10
           done
+          # Upload versioned DMG (original filename includes version)
           gh release upload "$TAG" "${{ matrix.app.dir }}/${{ steps.find-dmg.outputs.dmg_path }}" --clobber
+          # Upload stable-name DMG for permanent download URLs
+          cp "${{ matrix.app.dir }}/${{ steps.find-dmg.outputs.dmg_path }}" "${{ matrix.app.product }}-latest.dmg"
+          gh release upload "$TAG" "${{ matrix.app.product }}-latest.dmg" --clobber
 
       - name: Upload DMG as workflow artifact
         uses: actions/upload-artifact@v4
