@@ -164,7 +164,7 @@ describe("EntityInspector", () => {
     const bodyRow = container.querySelector('[data-testid="field-row-body"]');
     expect(bodyRow).toBeTruthy();
     const pill = Array.from(bodyRow!.querySelectorAll("span")).find(
-      (s) => s.textContent === "#ui" && s.classList.contains("rounded-full"),
+      (s: Element) => s.textContent === "#ui" && s.classList.contains("rounded-full"),
     );
     expect(pill, `Expected #ui pill. HTML: ${bodyRow!.innerHTML}`).toBeTruthy();
   });
@@ -177,7 +177,7 @@ describe("EntityInspector", () => {
 
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
     const pill = Array.from(titleRow!.querySelectorAll("span")).find(
-      (s) => s.textContent === "#ui" && s.classList.contains("rounded-full"),
+      (s: Element) => s.textContent === "#ui" && s.classList.contains("rounded-full"),
     );
     expect(pill, "Title should NOT have tag pills").toBeFalsy();
   });

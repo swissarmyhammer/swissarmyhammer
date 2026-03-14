@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: e2
+title: 'SEM-0: Create swissarmyhammer-sem crate scaffold'
+---
+## What\nCreate `crates/swissarmyhammer-sem/` with Cargo.toml and lib.rs. Add it to the workspace members list in the root Cargo.toml. The crate re-exports the semantic diff engine without the git2 dependency.\n\nDeps: tree-sitter (0.26), tree-sitter-* language grammars (0.23), serde (1, derive), serde_json (1), serde_yaml_ng (0.9), toml (1.0), xxhash-rust (0.8, xxh3), regex (1), thiserror (2), rayon (1.10)\n\nNO git2 dependency.\n\nFiles:\n- `crates/swissarmyhammer-sem/Cargo.toml` (new)\n- `crates/swissarmyhammer-sem/src/lib.rs` (new)\n- `Cargo.toml` (add to workspace members + dependencies)\n\n## Acceptance Criteria\n- [ ] `cargo check -p swissarmyhammer-sem` succeeds\n- [ ] Crate is listed in workspace members\n- [ ] No git2 in dependency tree\n\n## Tests\n- [ ] `cargo check -p swissarmyhammer-sem` passes\n- [ ] `cargo tree -p swissarmyhammer-sem | grep git2` returns nothing

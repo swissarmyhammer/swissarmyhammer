@@ -1,0 +1,8 @@
+---
+depends_on:
+- 01KKHF73XHVRCD8B2QRY9CKKPE
+position_column: done
+position_ordinal: e4
+title: 'SEM-2: Harvest parser/ module (plugins, differ, registry)'
+---
+## What\nCopy the `parser/` module from `vendor/sem/crates/sem-core/src/parser/` into `crates/swissarmyhammer-sem/src/parser/`. Also copy `utils/` (hash helpers). This is the bulk of the code (~3,800 lines) including tree-sitter entity extraction for 12+ languages.\n\nFiles to copy:\n- `parser/mod.rs`\n- `parser/plugin.rs` (SemanticParserPlugin trait)\n- `parser/registry.rs` (ParserRegistry)\n- `parser/differ.rs` (compute_semantic_diff, DiffResult)\n- `parser/graph.rs` (EntityGraph — may not be used but is referenced internally)\n- `parser/plugins/mod.rs` (create_default_registry)\n- `parser/plugins/code/mod.rs` (CodeParserPlugin with thread-local TS cache)\n- `parser/plugins/code/entity_extractor.rs`\n- `parser/plugins/code/languages.rs`\n- `parser/plugins/json.rs`, `yaml.rs`, `toml_plugin.rs`, `csv_plugin.rs`, `markdown.rs`, `vue.rs`, `fallback.rs`\n- `utils/mod.rs`, `utils/hash.rs`\n\nRemove any `use git2` references from differ.rs (it only uses FileChange which is a plain struct in git::types — we'll re-export FileChange from a git_types module instead).\n\n## Acceptance Criteria\n- [ ] `swissarmyhammer_sem::parser::differ::compute_semantic_diff` compiles\n- [ ] `swissarmyhammer_sem::parser::plugins::create_default_registry` compiles\n- [ ] All language plugins register correctly\n- [ ] No git2 imports anywhere in the crate\n\n## Tests\n- [ ] `cargo check -p swissarmyhammer-sem` passes\n- [ ] Existing parser unit tests from sem-core pass

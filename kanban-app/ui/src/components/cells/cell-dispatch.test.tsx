@@ -137,7 +137,7 @@ describe("CellDispatch", () => {
       // Second avatar should have -ml-1.5 for overlap
       const avatars = container.querySelectorAll(".rounded-full");
       // The FocusScope wraps each avatar, so look for -ml-1.5 on the avatar element itself
-      const hasOverlap = Array.from(avatars).some((a) => a.className.includes("-ml-1.5"));
+      const hasOverlap = Array.from(avatars).some((a: Element) => a.className.includes("-ml-1.5"));
       expect(hasOverlap).toBe(true);
     });
 

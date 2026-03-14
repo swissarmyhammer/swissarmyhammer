@@ -1,0 +1,10 @@
+---
+depends_on:
+- 01KKEZBH4FK62AN2Z3BT0MCMY8
+position_column: done
+position_ordinal: c2
+title: Create /lsp skill
+---
+## What
+
+Create a new `/lsp` skill that agents use to diagnose and fix LSP server issues. When a user types `/lsp` (or the statusline says \"/lsp to fix\"), the agent:\n\n1. Calls `code_context` with `op: \"lsp status\"` to get current state\n2. Shows the user which languages are detected and which LSPs are missing\n3. For each missing LSP with an `install_hint`, offers to run the install command\n4. After installation, re-checks status to confirm the fix\n\n### Files to create:\n- `builtin/skills/lsp/SKILL.md` — skill definition with frontmatter and instructions\n\n### SKILL.md should instruct the agent to:\n- Always start by calling `code_context` with `op: \"lsp status\"`\n- Present a clear table: language icon, server name, status (installed/missing), install command\n- Ask the user before running install commands (they may involve npm/pip/brew)\n- After installing, re-run `lsp status` to confirm\n- If all healthy, report success\n\n### Skill frontmatter:\n```yaml\n---\nname: lsp\ndescription: Diagnose and install missing LSP servers for your project\nmetadata:\n  author: swissarmyhammer\n  version: \"1.0\"\n---\n```\n\n## Acceptance Criteria\n- [ ] `builtin/skills/lsp/SKILL.md` exists with valid frontmatter\n- [ ] Skill is deployable via `sah init` (skill deployment picks up new builtin skills automatically)\n- [ ] Agent can invoke `/lsp` and get actionable LSP status\n- [ ] Agent runs install commands via shell skill when user approves\n- [ ] Agent re-checks status after install to confirm fix\n\n## Tests\n- [ ] `sah init --scope project` deploys the lsp skill\n- [ ] Manual: invoke `/lsp` in Claude Code, verify it calls `lsp status` and presents findings
