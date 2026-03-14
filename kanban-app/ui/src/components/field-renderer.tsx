@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { FieldPlaceholder } from "@/components/fields/field-placeholder";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 interface FieldRendererProps {
@@ -66,12 +67,16 @@ export function FieldRenderer({
   }
 
   return (
-    <section className={className} data-testid={`field-renderer-${field.name}`}>
-      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <section className={className} data-testid={`field-renderer-${field.name}`}>
+          {content}
+        </section>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="start">
         {fieldLabel(field)}
-      </h3>
-      {content}
-    </section>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

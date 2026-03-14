@@ -94,7 +94,9 @@ pub use swissarmyhammer_operations::{
 };
 
 pub use context::{KanbanContext, KanbanLock};
-pub use defaults::{builtin_view_definitions, kanban_compute_engine, KanbanLookup};
+pub use defaults::{
+    builtin_actor_entities, builtin_view_definitions, kanban_compute_engine, KanbanLookup,
+};
 pub use derive_handlers::kanban_derive_registry;
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;

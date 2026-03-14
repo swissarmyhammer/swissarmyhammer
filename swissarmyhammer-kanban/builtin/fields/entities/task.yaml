@@ -6,7 +6,6 @@ fields:
   - tags
   - progress
   - assignees
-  - due
   - depends_on
   - body
   - position_column

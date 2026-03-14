@@ -27,6 +27,7 @@ interface FieldPlaceholderProps {
  * - Edit: CodeMirror 6 with vim/emacs/CUA keymaps
  */
 export function FieldPlaceholder({
+  field,
   value,
   editing,
   onEdit,
@@ -55,7 +56,7 @@ export function FieldPlaceholder({
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
         </div>
       ) : (
-        <span className="text-muted-foreground italic">Empty</span>
+        <span className="text-muted-foreground/50 italic">{field.name.replace(/_/g, " ")}</span>
       )}
     </div>
   );

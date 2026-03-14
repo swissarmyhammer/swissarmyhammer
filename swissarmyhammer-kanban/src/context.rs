@@ -4,8 +4,8 @@
 //! just data access primitives. Commands do all the work.
 
 use crate::defaults::{
-    builtin_entity_definitions, builtin_field_definitions, builtin_view_definitions,
-    kanban_compute_engine, KanbanLookup,
+    builtin_actor_entities, builtin_entity_definitions, builtin_field_definitions,
+    builtin_view_definitions, kanban_compute_engine, KanbanLookup,
 };
 use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, ColumnId, LogEntry, SwimlaneId, TagId, TaskId};
@@ -72,6 +72,7 @@ impl KanbanContext {
         let views_root = root.join("views");
         fs::create_dir_all(&views_root).await?;
         Self::seed_builtin_views(&views_root).await?;
+        Self::seed_builtin_actors(&root).await?;
         let views = Self::build_views_context(&views_root)?;
         let views_changelog = ViewsChangelog::new(root.join("views.jsonl"));
 
@@ -444,6 +445,19 @@ impl KanbanContext {
         Ok(())
     }
 
+    /// Seed builtin actor entities to disk (write only if not already present).
+    async fn seed_builtin_actors(root: &Path) -> Result<()> {
+        let actors_dir = root.join("actors");
+        fs::create_dir_all(&actors_dir).await?;
+        for (id, yaml) in builtin_actor_entities() {
+            let path = actors_dir.join(format!("{}.yaml", id));
+            if !path.exists() {
+                fs::write(&path, yaml).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Build a ViewsContext from builtin + local view definitions.
     fn build_views_context(views_root: &Path) -> Result<ViewsContext> {
         let builtin_views = builtin_view_definitions();
@@ -757,8 +771,8 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 21 built-in fields
-        assert_eq!(fields.all_fields().len(), 21);
+        // Should have all 20 built-in fields
+        assert_eq!(fields.all_fields().len(), 20);
 
         // Should have all 7 entity templates
         assert_eq!(fields.all_entities().len(), 7);
@@ -786,10 +800,10 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 22 built-in + 1 custom = 23
+        // Open — should have 21 built-in + 1 custom = 22
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 22);
+        assert_eq!(fields.all_fields().len(), 21);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();
@@ -823,7 +837,7 @@ type:
 
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
-        assert_eq!(task_fields.len(), 11); // title, tags, progress, assignees, due, depends_on, body, position_column, position_swimlane, position_ordinal, attachments
+        assert_eq!(task_fields.len(), 10); // title, tags, progress, assignees, depends_on, body, position_column, position_swimlane, position_ordinal, attachments
     }
 
     // =========================================================================
