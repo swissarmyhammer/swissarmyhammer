@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: o9
+title: Fix entity.update_field YAML scope vs Rust available() mismatch
+---
+**Files:** `swissarmyhammer-commands/builtin/commands/entity.yaml:58`, `swissarmyhammer-kanban/src/commands/entity_commands.rs:24`\n\n**What:** The YAML defines `scope: \"entity:task\"` for `entity.update_field`, but the Rust `available()` returns `true` unconditionally. The YAML scope pre-filter means this command won't appear in `list_available_commands` unless a task is in scope, even though the command works for any entity type (tag, column, board, etc.).\n\n**Why:** Users editing a column name or tag color through the inspector won't see this command as available in the palette, even though the field update would succeed.\n\n**Fix:** Remove the `scope` from the YAML definition since `entity.update_field` takes `entity_type` as an explicit arg and should be available everywhere.\n\n- [ ] Remove `scope: \"entity:task\"` from entity.yaml for entity.update_field\n- [ ] Verify `list_available_commands` returns entity.update_field without task in scope\n- [ ] Verify tests pass"

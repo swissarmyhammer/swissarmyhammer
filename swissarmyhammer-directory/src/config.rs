@@ -131,11 +131,12 @@ pub struct ShellConfig;
 impl DirectoryConfig for ShellConfig {
     const DIR_NAME: &'static str = ".shell";
     const XDG_NAME: &'static str = "shell";
-    const GITIGNORE_CONTENT: &'static str = r#"# Shell security configuration
+    const GITIGNORE_CONTENT: &'static str = r#"# Shell runtime data
 # This file is automatically created by swissarmyhammer-directory
 
-# Log files
-*.log
+# Ignore everything except this gitignore
+*
+!.gitignore
 "#;
 
     fn init_subdirs() -> &'static [&'static str] {
@@ -213,7 +214,7 @@ mod tests {
     fn test_shell_config() {
         assert_eq!(ShellConfig::DIR_NAME, ".shell");
         assert_eq!(ShellConfig::XDG_NAME, "shell");
-        assert!(ShellConfig::GITIGNORE_CONTENT.contains("*.log"));
+        assert!(ShellConfig::GITIGNORE_CONTENT.contains("!.gitignore"));
         assert!(ShellConfig::init_subdirs().is_empty());
     }
 

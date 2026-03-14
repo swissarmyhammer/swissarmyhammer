@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: x3
+title: DeriveHandler trait in swissarmyhammer-fields
+---
+Define the `DeriveHandler` trait that computed fields implement to support both read (compute) and write (apply) operations.\n\n## Trait definition\n\n```rust\npub trait DeriveHandler: Send + Sync {\n    /// Compute the field value from the entity (read path)\n    fn compute(&self, entity: &Entity, schema: &EntityDef) -> Value;\n    /// Apply a desired value by mutating the entity (write path)\n    fn apply(&self, entity: &mut Entity, schema: &EntityDef, desired: &Value) -> Result<()>;\n    /// Whether this computed field is writable (default: true)\n    fn writable(&self) -> bool { true }\n}\n```\n\nAdd a `DeriveRegistry` that maps derive rule strings (e.g. `\"parse-body-tags\"`) to `Box<dyn DeriveHandler>` instances.\n\n## Files\n- New: `swissarmyhammer-fields/src/derive.rs` — trait + registry\n- Edit: `swissarmyhammer-fields/src/lib.rs` — export module\n\n## Checklist\n- [ ] Define `DeriveHandler` trait with `compute`, `apply`, `writable`\n- [ ] Define `DeriveRegistry` struct with `register()` and `get()` methods\n- [ ] Unit tests: registry lookup, missing handler returns None\n- [ ] `cargo test -p swissarmyhammer-fields` passes
