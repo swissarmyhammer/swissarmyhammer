@@ -62,6 +62,13 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
           rm /tmp/certificate.p12
 
+      - name: Debug codesigning identities
+        run: |
+          echo "=== Available signing identities ==="
+          security find-identity -v -p codesigning build.keychain
+          echo "=== All identities ==="
+          security find-identity -v build.keychain
+
       - name: Build Tauri app (${{ matrix.app.product }})
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
