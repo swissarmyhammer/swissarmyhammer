@@ -1,0 +1,25 @@
+# SAH temporary files and logs
+# This file is automatically created by swissarmyhammer-directory
+
+# Temporary files
+tmp/
+*.tmp
+
+# Todo tracking (ephemeral development session tracking)
+todo/
+
+# Logs
+*.log
+mcp.log
+
+# Workflow execution state
+workflow-runs/
+
+# Transcripts (conversation history)
+transcripts/
+
+# Question/Answer cache
+questions/
+
+# Keep these directories (they should be committed):
+# - docs/       Project documentation
