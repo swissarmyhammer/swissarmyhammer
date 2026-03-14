@@ -1,11 +1,19 @@
 # SwissArmyHammer Documentation
 
-[Introduction](01-getting-started/introduction.md)
+[Introduction](introduction.md)
+
+# Concepts
+
+- [The Integrated SDLC](concepts/integrated-sdlc.md)
+- [Skills](concepts/skills.md)
+- [Agents](concepts/agents.md)
+- [Tools](concepts/tools.md)
+- [Validators](concepts/validators.md)
 
 # Getting Started
 
-- [Installation](01-getting-started/installation.md)
-- [Quick Start](01-getting-started/quick-start.md)
+- [Installation](getting-started/installation.md)
+- [Quick Start](getting-started/quick-start.md)
 
 # Reference
 

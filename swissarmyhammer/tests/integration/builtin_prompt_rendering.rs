@@ -3,7 +3,6 @@
 //! These tests ensure that all builtin prompts render successfully without template errors.
 //! This prevents issues like missing partials or invalid liquid syntax from making it into production.
 
-use rstest::rstest;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
@@ -15,49 +14,6 @@ fn setup_prompt_library() -> PromptLibrary {
         .load_all_prompts(&mut library)
         .expect("Failed to load builtin prompts");
     library
-}
-
-/// Helper function to assert that a rendered prompt is valid
-fn assert_valid_render(rendered: &str) {
-    assert!(!rendered.is_empty(), "Rendered prompt should not be empty");
-    assert!(
-        !rendered.contains("Unknown partial-template"),
-        "Should not contain partial resolution errors"
-    );
-    assert!(
-        !rendered.contains("liquid:"),
-        "Should not contain liquid syntax errors"
-    );
-}
-
-/// Test cases for builtin prompts that should render successfully
-/// because it requires specific parameters
-#[rstest]
-#[case("double_check")]
-fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
-    let library = setup_prompt_library();
-
-    // Create a minimal template context
-    let template_context = TemplateContext::new();
-
-    // Attempt to render the prompt
-    match library.render(prompt_name, &template_context) {
-        Ok(rendered) => {
-            assert_valid_render(&rendered);
-
-            println!(
-                "✓ Successfully rendered {}: {} chars",
-                prompt_name,
-                rendered.len()
-            );
-
-            // The main goal is to ensure no rendering errors - content will change
-            // so we don't make specific assertions about what should be in each prompt
-        }
-        Err(e) => {
-            panic!("Failed to render builtin prompt '{}': {}", prompt_name, e);
-        }
-    }
 }
 
 #[test]
@@ -144,6 +100,20 @@ fn test_check_prompt_renders_with_parameters() {
     assert!(
         rendered.contains("PASS") || rendered.contains("VIOLATION"),
         "Should contain instructions about PASS/VIOLATION format"
+    );
+
+    // Negative assertions: verify no template errors are present in the rendered output.
+    // "Unknown partial-template" indicates a missing partial that Liquid could not resolve.
+    // "liquid:" indicates a Liquid syntax or runtime error surfaced in the output.
+    assert!(
+        !rendered.contains("Unknown partial-template"),
+        "Rendered output must not contain partial resolution errors ('Unknown partial-template'): {}",
+        rendered
+    );
+    assert!(
+        !rendered.contains("liquid:"),
+        "Rendered output must not contain Liquid errors ('liquid:'): {}",
+        rendered
     );
 
     println!("✓ .check prompt rendered successfully with all parameters");

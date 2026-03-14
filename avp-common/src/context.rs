@@ -9,7 +9,7 @@
 //! to `.avp/avp.log` at info level so all tracing output from every crate
 //! (agents, validators, hooks) flows into the log automatically.
 //!
-//! User-level validators can be placed in `~/<AVP_DIR>/validators/`.
+//! User-level validators can be placed in `$XDG_DATA_HOME/avp/validators/ (defaults to ~/.local/share/avp/validators/)`.
 //!
 //! The context also provides access to an ACP Agent for validator execution.
 //! In production, this is a ClaudeAgent created lazily. In tests, a PlaybackAgent
@@ -101,7 +101,7 @@ struct AgentHandle {
 ///
 /// The context tracks both project-level and user-level directories:
 /// - Project: `./<AVP_DIR>/` at git root
-/// - User: `~/<AVP_DIR>/` in home directory
+/// - User: XDG data directory (e.g., `$XDG_DATA_HOME/avp/` or `~/.local/share/avp/`)
 ///
 /// The context also provides:
 /// - Access to an ACP Agent for validator execution (lazy or injected)
@@ -111,7 +111,7 @@ pub struct AvpContext {
     /// Managed directory at git root (<AVP_DIR>)
     project_dir: ManagedDirectory<AvpConfig>,
 
-    /// Managed directory at user home (~/<AVP_DIR>), if available
+    /// Managed directory at the XDG data directory (e.g., `$XDG_DATA_HOME/avp/`), if available
     home_dir: Option<ManagedDirectory<AvpConfig>>,
 
     /// Resolved model configuration (defaults to claude-code)
@@ -284,7 +284,7 @@ impl AvpContext {
                 e
             ))
         })?;
-        let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
+        let home_dir = ManagedDirectory::<AvpConfig>::xdg_data().ok();
         Ok((project_dir, home_dir))
     }
 
@@ -391,9 +391,9 @@ impl AvpContext {
         self.project_dir.subdir("validators")
     }
 
-    /// Get the user validators directory path (~/<AVP_DIR>/validators).
+    /// Get the XDG data validators directory path (e.g., `$XDG_DATA_HOME/avp/validators`).
     ///
-    /// Returns None if user directory is not available.
+    /// Returns None if the XDG data directory is not available.
     pub fn home_validators_dir(&self) -> Option<PathBuf> {
         self.home_dir.as_ref().map(|d| d.subdir("validators"))
     }
@@ -407,10 +407,10 @@ impl AvpContext {
             .map_err(|e| AvpError::Context(format!("failed to create validators directory: {}", e)))
     }
 
-    /// Ensure the user validators directory exists.
+    /// Ensure the XDG data validators directory exists.
     ///
     /// Creates the directory if it doesn't exist.
-    /// Returns None if user directory is not available.
+    /// Returns None if the XDG data directory is not available.
     pub fn ensure_home_validators_dir(&self) -> Option<Result<PathBuf, AvpError>> {
         self.home_dir.as_ref().map(|d| {
             d.ensure_subdir("validators").map_err(|e| {

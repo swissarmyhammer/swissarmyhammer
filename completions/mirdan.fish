@@ -68,12 +68,12 @@ complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subco
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from skill" -s y -l yes -d 'Skip confirmation prompts (useful for CI/CD)'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from skill" -s h -l help -d 'Print help'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from validator" -l agent -d 'Limit operations to a single agent (e.g. claude-code, cursor)' -r
-complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from validator" -l global -d 'Create in ~/.avp/validators/ instead of .avp/validators/'
+complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from validator" -l global -d 'Create in $XDG_DATA_HOME/avp/validators/ instead of .avp/validators/'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from validator" -s d -l debug -d 'Enable debug output to stderr'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from validator" -s y -l yes -d 'Skip confirmation prompts (useful for CI/CD)'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from validator" -s h -l help -d 'Print help'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from tool" -l agent -d 'Limit operations to a single agent (e.g. claude-code, cursor)' -r
-complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from tool" -l global -d 'Create in ~/.tools/ instead of .tools/'
+complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from tool" -l global -d 'Create in $XDG_DATA_HOME/avp/tools/ instead of current directory'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from tool" -s d -l debug -d 'Enable debug output to stderr'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from tool" -s y -l yes -d 'Skip confirmation prompts (useful for CI/CD)'
 complete -c mirdan -n "__fish_mirdan_using_subcommand new; and __fish_seen_subcommand_from tool" -s h -l help -d 'Print help'

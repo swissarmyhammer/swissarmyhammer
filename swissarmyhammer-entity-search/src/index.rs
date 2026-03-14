@@ -119,7 +119,8 @@ impl EntitySearchIndex {
 
         // Remove old embeddings for stale entities, add new ones
         let stale_set: HashSet<&str> = self.stale_ids.iter().map(|s| s.as_str()).collect();
-        self.embeddings.retain(|e| !stale_set.contains(e.entity_id.as_str()));
+        self.embeddings
+            .retain(|e| !stale_set.contains(e.entity_id.as_str()));
         self.embeddings.extend(new_embeddings);
 
         self.stale_ids.clear();

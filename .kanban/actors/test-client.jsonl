@@ -1,0 +1,1 @@
+{"id":"01KKH3JE1G9W8KPADHKKD4A600","timestamp":"2026-03-12T13:25:26.704590Z","entity_type":"actor","entity_id":"test-client","op":"create","changes":[["color",{"kind":"set","value":"2c7a7b"}],["name",{"kind":"set","value":"test-client"}]]}

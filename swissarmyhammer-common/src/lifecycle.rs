@@ -12,7 +12,7 @@ use crate::reporter::InitReporter;
 /// Scope for init/deinit operations — mirrors CLI install targets without coupling to clap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitScope {
-    /// Project-level: `.swissarmyhammer/`, `.skills/`, `.agents/`, etc.
+    /// Project-level: `.sah/`, `.skills/`, `.agents/`, etc.
     Project,
     /// Local user scope: `~/.claude.json` MCP registration
     Local,
@@ -365,8 +365,14 @@ mod tests {
         let mut reg = InitRegistry::new();
         reg.register(Minimal);
 
-        assert_eq!(reg.run_all_init(&InitScope::Project, &NullReporter).len(), 0);
-        assert_eq!(reg.run_all_deinit(&InitScope::Project, &NullReporter).len(), 0);
+        assert_eq!(
+            reg.run_all_init(&InitScope::Project, &NullReporter).len(),
+            0
+        );
+        assert_eq!(
+            reg.run_all_deinit(&InitScope::Project, &NullReporter).len(),
+            0
+        );
         assert_eq!(reg.run_all_start().len(), 0);
         assert_eq!(reg.run_all_stop().len(), 0);
     }

@@ -57,8 +57,7 @@ pub enum ProjectType {
 
 /// Builtin config yaml, embedded at compile time.
 /// Edit `builtin/project-detection/config.yaml` to change defaults.
-pub const BUILTIN_CONFIG_YAML: &str =
-    include_str!("../../builtin/project-detection/config.yaml");
+pub const BUILTIN_CONFIG_YAML: &str = include_str!("../../builtin/project-detection/config.yaml");
 
 /// Top-level config wrapper for the yaml file.
 #[derive(Debug, Clone, Serialize, Deserialize)]

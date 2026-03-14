@@ -1,0 +1,34 @@
+id: 01JMVIEW0000000000TGGRD0
+name: Tags
+icon: tag
+kind: grid
+entity_type: tag
+card_fields:
+  - tag_name
+  - color
+  - description
+commands:
+  - id: grid.edit
+    name: Edit Cell
+    keys:
+      vim: i
+      cua: Enter
+  - id: grid.escape
+    name: Exit Edit
+    keys:
+      vim: Escape
+      cua: Escape
+  - id: grid.deleteRow
+    name: Delete Row
+    keys:
+      vim: dd
+  - id: grid.newBelow
+    name: New Row Below
+    keys:
+      vim: o
+      cua: Mod+Enter
+  - id: grid.newAbove
+    name: New Row Above
+    keys:
+      vim: O
+      cua: Mod+Shift+Enter

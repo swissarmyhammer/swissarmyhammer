@@ -8,15 +8,15 @@
 //! The VirtualFileSystem supports two modes for resolving directories:
 //!
 //! - **Managed directory mode** (default): Uses `ManagedDirectory<C>` to resolve
-//!   paths like `~/.swissarmyhammer/{subdirectory}` and `{git_root}/.swissarmyhammer/{subdirectory}`.
+//!   XDG data paths (e.g., `$XDG_DATA_HOME/sah/{subdirectory}`) for user-level files
+//!   and `{git_root}/.sah/{subdirectory}` for project-local files.
 //!
 //! - **Custom search paths mode**: When search paths are configured via
 //!   [`VirtualFileSystem::add_search_path`] or [`VirtualFileSystem::use_dot_directory_paths`],
 //!   the VFS loads directly from those paths, bypassing `ManagedDirectory`.
-//!   This enables patterns like `~/.prompts` and `{git_root}/.prompts`.
 
 use crate::config::DirectoryConfig;
-use crate::directory::{find_git_repository_root, ManagedDirectory};
+use crate::directory::{find_git_repository_root, xdg_base_dir, ManagedDirectory};
 use crate::error::Result;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -31,9 +31,9 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 pub enum FileSource {
     /// Builtin files embedded in the binary.
     Builtin,
-    /// User files from home directory (e.g., ~/.swissarmyhammer).
+    /// User files from XDG data directory (e.g., $XDG_DATA_HOME/sah/).
     User,
-    /// Local files from project directory (e.g., ./.swissarmyhammer).
+    /// Local files from project directory (e.g., ./.sah).
     Local,
     /// Dynamically generated files.
     Dynamic,
@@ -161,7 +161,7 @@ impl FileEntry {
         let mut found_subdirectory = false;
 
         // Known subdirectory names that mark the start of the logical name.
-        // Includes both bare names (for managed directory paths like .swissarmyhammer/prompts)
+        // Includes both bare names (for managed directory paths like .sah/prompts)
         // and dot-prefixed names (for dot-directory paths like .prompts).
         let known_subdirs = [
             "prompts",
@@ -326,15 +326,14 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
         self.search_paths.push(SearchPath { path, source });
     }
 
-    /// Configure dot-directory resolution: `~/.{subdirectory}` and `{git_root}/.{subdirectory}`.
+    /// Configure dot-directory resolution for user (XDG) and project (git root) paths.
     ///
     /// This is a convenience method that tells [`load_all`](Self::load_all) to use
-    /// top-level dot-directories instead of subdirectories under a managed directory.
-    /// Paths are resolved lazily at load time, so the git root and current directory
-    /// are determined when `load_all` is called, not when this method is called.
+    /// XDG data paths for user-level files and dot-directories for project-local files.
+    /// Paths are resolved lazily at load time.
     ///
-    /// For example, with subdirectory "prompts", `load_all` will search:
-    /// 1. `~/.prompts` (User source)
+    /// For example, with subdirectory "prompts" and `SwissarmyhammerConfig`, `load_all` will search:
+    /// 1. `$XDG_DATA_HOME/sah/prompts` (User source)
     /// 2. `{git_root}/.prompts` (Local source) — falls back to current directory if not in a git repo
     pub fn use_dot_directory_paths(&mut self) {
         self.use_dot_dirs = true;
@@ -433,7 +432,7 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
     ///    Loads from the explicitly configured paths in order.
     ///
     /// 3. **Managed directory mode** (default):
-    ///    Loads from `ManagedDirectory<C>` paths (e.g., `~/.swissarmyhammer/{subdirectory}`).
+    ///    Loads from XDG data directory for user-level and `ManagedDirectory<C>` for project-local.
     pub fn load_all(&mut self) -> Result<()> {
         if self.use_dot_dirs {
             // Resolve dot-directory paths lazily
@@ -445,8 +444,8 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
                 self.load_files_from_dir(&sp.path, sp.source.clone())?;
             }
         } else {
-            // Default: use ManagedDirectory-based loading
-            if let Ok(dir) = ManagedDirectory::<C>::from_user_home() {
+            // Default: use ManagedDirectory-based loading with XDG data directory
+            if let Ok(dir) = ManagedDirectory::<C>::xdg_data() {
                 self.load_directory(dir.root(), FileSource::User)?;
             }
             self.load_local_files_managed()?;
@@ -456,15 +455,18 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
     }
 
     /// Load files from dot-directory paths, resolved lazily.
+    ///
+    /// Uses the XDG data directory for the user-level path:
+    /// `$XDG_DATA_HOME/{XDG_NAME}/{subdirectory}` (or `~/.local/share/{XDG_NAME}/{subdirectory}`).
     fn load_dot_directory_files(&mut self) -> Result<()> {
-        let dot_name = format!(".{}", self.subdirectory);
-
-        // User home directory
-        if let Some(home) = dirs::home_dir() {
-            self.load_files_from_dir(&home.join(&dot_name), FileSource::User)?;
+        // User XDG data directory
+        if let Ok(base) = xdg_base_dir("XDG_DATA_HOME", ".local/share") {
+            let user_dir = base.join(C::XDG_NAME).join(&self.subdirectory);
+            self.load_files_from_dir(&user_dir, FileSource::User)?;
         }
 
-        // Git root or current directory fallback
+        // Git root or current directory fallback (dot-directory style)
+        let dot_name = format!(".{}", self.subdirectory);
         if let Some(git_root) = find_git_repository_root() {
             self.load_files_from_dir(&git_root.join(&dot_name), FileSource::Local)?;
         } else if let Ok(current_dir) = std::env::current_dir() {
@@ -498,17 +500,18 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
     /// Get all directories that are being monitored.
     pub fn get_directories(&self) -> Result<Vec<PathBuf>> {
         if self.use_dot_dirs {
-            // Resolve dot-directory paths lazily
             let dot_name = format!(".{}", self.subdirectory);
             let mut directories = Vec::new();
 
-            if let Some(home) = dirs::home_dir() {
-                let user_dir = home.join(&dot_name);
+            // User XDG data directory
+            if let Ok(base) = xdg_base_dir("XDG_DATA_HOME", ".local/share") {
+                let user_dir = base.join(C::XDG_NAME).join(&self.subdirectory);
                 if user_dir.exists() && user_dir.is_dir() {
                     directories.push(user_dir);
                 }
             }
 
+            // Git root or current directory fallback (dot-directory style)
             if let Some(git_root) = find_git_repository_root() {
                 let local_dir = git_root.join(&dot_name);
                 if local_dir.exists() && local_dir.is_dir() {
@@ -534,11 +537,11 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
                 .collect());
         }
 
-        // Default: use ManagedDirectory-based resolution
+        // Default: use ManagedDirectory-based resolution with XDG data directory
         let mut directories = Vec::new();
 
-        // User directory
-        if let Ok(dir) = ManagedDirectory::<C>::from_user_home() {
+        // User XDG data directory
+        if let Ok(dir) = ManagedDirectory::<C>::xdg_data() {
             let user_dir = dir.subdir(&self.subdirectory);
             if user_dir.exists() {
                 directories.push(user_dir);
@@ -658,7 +661,7 @@ mod tests {
         // Add user version (should override)
         let entry = FileEntry::new(
             "test",
-            PathBuf::from("/home/user/.swissarmyhammer/prompts/test.md"),
+            PathBuf::from("/home/user/.sah/prompts/test.md"),
             "user content".to_string(),
             FileSource::User,
         );

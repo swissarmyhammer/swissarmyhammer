@@ -44,10 +44,6 @@ TEST_RESULTS_SUMMARY.md
 DOCUMENTATION_REVIEW.md
 scratch/
 
-# Project documentation and status files in .swissarmyhammer/
-.swissarmyhammer/*.md
-
-
 
 # Test issue files
 swissarmyhammer/issues/
@@ -60,29 +56,18 @@ swissarmyhammer-tools/*path*
 swissarmyhammer-tools/*.test
 
 
-swissarmyhammer/.swissarmyhammer
-swissarmyhammer-agent-executor/.swissarmyhammer
-swissarmyhammer-cli/.swissarmyhammer
-swissarmyhammer-workflow/.swissarmyhammer
-swissarmyhammer-tools/.swissarmyhammer
-kanban-app/.swissarmyhammer
-claude-agent/.swissarmyhammer/sessions
-acp-conformance/.swissarmyhammer/sessions
+# Per-subcrate tool dirs (tools self-manage their own .gitignore inside)
+swissarmyhammer/.sah
+swissarmyhammer-agent-executor/.sah
+swissarmyhammer-cli/.sah
+swissarmyhammer-workflow/.sah
+swissarmyhammer-tools/.sah
+kanban-app/.sah
+claude-agent/.sah
+acp-conformance/.sah
 
 .work
 
-# SwissArmyHammer temporary files
-.swissarmyhammer/tmp/
-
-# SwissArmyHammer temporary todo files
-.swissarmyhammer/todo/
-
-# SwissArmyHammer session and plan files
-.swissarmyhammer/plans/
-.swissarmyhammer/sessions/
-
-# SwissArmyHammer config symlinks
-.swissarmyhammer/sah.yaml
 
 doc/book
 **/doc/book
@@ -103,29 +88,17 @@ output_*.txt
 
 test_validation
 
-**/.swissarmyhammer/transcripts/
-
 # Claude Code usage tracking files
 cc.json
-.swissarmyhammer/workflow-runs
-.swissarmyhammer/workflow-runs/
 .llama-sessions
-acp-conformance/.swissarmyhammer/
 
 .acp
 
-# Tree-sitter index database files
-.treesitter-index.db
-.treesitter-index.db-shm
-.treesitter-index.db-wal
 
 # Generated man pages (built at compile time, included in release archives)
 docs/*.1
 
-# AVP local state (logs, locks) but NOT validators
-.avp/*
-!.avp/validators/
-!.avp/.gitignore
+# AVP and shell tool dirs self-manage their own .gitignore
 
 # Lockfiles (generated during install, project-specific)
 avp-lock.json
@@ -137,10 +110,6 @@ mirdan-lock.json
 **/ui/dist/
 **/.vite/
 
-# Shell tool runtime data (SQLite DB, WAL files, logs)
-.shell/
-.kanban.zip
-.kanban
 
 .github/copilot/
 

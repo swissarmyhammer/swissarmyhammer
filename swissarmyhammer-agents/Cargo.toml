@@ -16,11 +16,11 @@ async-trait = { workspace = true }
 once_cell = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-dirs = { workspace = true }
 tokio = { workspace = true }
 
 # Local workspace dependencies
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-operations = { workspace = true }
 
 [build-dependencies]

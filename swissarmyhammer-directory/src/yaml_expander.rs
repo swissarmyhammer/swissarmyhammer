@@ -45,8 +45,8 @@ use crate::file_loader::VirtualFileSystem;
 ///
 /// Files are loaded with standard precedence (later overrides earlier):
 /// 1. Builtin files (added via `add_builtin`)
-/// 2. User files (~/.swissarmyhammer/ or ~/.avp/)
-/// 3. Local files (./.swissarmyhammer/ or ./.avp/)
+/// 2. User files (~/.sah/ or ~/.avp/)
+/// 3. Local files (./.sah/ or ./.avp/)
 #[derive(Debug)]
 pub struct YamlExpander<C: DirectoryConfig> {
     /// Loaded YAML files indexed by their relative path (without extension).

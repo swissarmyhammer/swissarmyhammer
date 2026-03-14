@@ -255,7 +255,7 @@ async fn test_root_validate_help() -> Result<()> {
 async fn test_root_validate_invalid_yaml() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(".prompts");
+    let prompts_dir = temp_dir.path().join("sah").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     std::fs::write(
@@ -272,7 +272,7 @@ parameters:
 Test content"#,
     )?;
 
-    std::env::set_var("HOME", temp_dir.path());
+    std::env::set_var("XDG_DATA_HOME", temp_dir.path());
     let result = run_sah_command_in_process(&["validate", "--quiet"]).await?;
 
     assert_ne!(
@@ -288,7 +288,7 @@ Test content"#,
 async fn test_root_validate_missing_fields() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(".prompts");
+    let prompts_dir = temp_dir.path().join("sah").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     std::fs::write(
@@ -311,7 +311,7 @@ We need more than 5 lines of content to avoid being detected as a partial templa
 This is line 6 of content."#,
     )?;
 
-    std::env::set_var("HOME", temp_dir.path());
+    std::env::set_var("XDG_DATA_HOME", temp_dir.path());
     let result = run_sah_command_in_process(&["validate", "--format", "json"]).await?;
 
     assert_eq!(
@@ -332,7 +332,7 @@ This is line 6 of content."#,
 async fn test_root_validate_undefined_variables() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(".prompts");
+    let prompts_dir = temp_dir.path().join("sah").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     std::fs::write(
@@ -350,7 +350,7 @@ But this uses {{ undefined_var }} which should error.
 And this uses {{ another_undefined }} too."#,
     )?;
 
-    std::env::set_var("HOME", temp_dir.path());
+    std::env::set_var("XDG_DATA_HOME", temp_dir.path());
     let result = run_sah_command_in_process(&["validate"]).await?;
 
     assert_eq!(
@@ -397,7 +397,7 @@ async fn test_root_validate_default_behavior() -> Result<()> {
 async fn test_root_validate_mixed_valid_invalid_prompts() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(".prompts");
+    let prompts_dir = temp_dir.path().join("sah").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     std::fs::write(
@@ -433,7 +433,7 @@ description: Uses undefined variables
 This uses {{ undefined }} variable."#,
     )?;
 
-    std::env::set_var("HOME", temp_dir.path());
+    std::env::set_var("XDG_DATA_HOME", temp_dir.path());
     let result = run_sah_command_in_process(&["validate", "--format", "json"]).await?;
 
     assert_eq!(
@@ -460,7 +460,7 @@ This uses {{ undefined }} variable."#,
 async fn test_root_validate_quiet_mode_warnings_behavior() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(".prompts");
+    let prompts_dir = temp_dir.path().join("sah").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     std::fs::write(
@@ -480,7 +480,7 @@ parameters:
 This prompt uses {{ used_var | default: "default_value" }} but not unused_var, creating a warning."#,
     )?;
 
-    std::env::set_var("HOME", temp_dir.path());
+    std::env::set_var("XDG_DATA_HOME", temp_dir.path());
     let quiet_result = run_sah_command_in_process(&["validate", "--quiet"]).await?;
 
     assert_eq!(
@@ -526,7 +526,7 @@ This prompt uses {{ used_var | default: "default_value" }} but not unused_var, c
 async fn test_root_validate_quiet_mode_with_errors_and_warnings() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(".prompts");
+    let prompts_dir = temp_dir.path().join("sah").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     std::fs::write(
@@ -561,7 +561,7 @@ But this uses {{ undefined_var }} which should error.
 And this uses {{ another_undefined }} too."#,
     )?;
 
-    std::env::set_var("HOME", temp_dir.path());
+    std::env::set_var("XDG_DATA_HOME", temp_dir.path());
     let quiet_result = run_sah_command_in_process(&["validate", "--quiet"]).await?;
 
     assert_eq!(

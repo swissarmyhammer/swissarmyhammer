@@ -56,8 +56,8 @@ use tracing::debug;
 /// The context loads configuration from these sources in precedence order:
 ///
 /// 1. **Default values** - Application defaults (lowest precedence)
-/// 2. **Global config** - `~/.swissarmyhammer/sah.*` (user-wide settings)
-/// 3. **Project config** - `./.swissarmyhammer/sah.*` (project-specific)
+/// 2. **Global config** - `~/.sah/sah.*` (user-wide settings)
+/// 3. **Project config** - `./.sah/sah.*` (project-specific)
 /// 4. **Environment variables** - `SAH_*` and `SWISSARMYHAMMER_*` prefixes
 /// 5. **CLI arguments** - Command-line overrides (highest precedence)
 /// 6. **Template variables** - Runtime template variables (override all)
@@ -132,8 +132,8 @@ impl TemplateContext {
     /// Configuration sources are merged with later sources overriding earlier ones:
     ///
     /// 1. **Default values** (lowest precedence) - Built-in application defaults
-    /// 2. **Global config files** - `~/.swissarmyhammer/sah.{toml,yaml,yml,json}`
-    /// 3. **Project config files** - `./.swissarmyhammer/sah.{toml,yaml,yml,json}`
+    /// 2. **Global config files** - `~/.sah/sah.{toml,yaml,yml,json}`
+    /// 3. **Project config files** - `./.sah/sah.{toml,yaml,yml,json}`
     /// 4. **Environment variables** - `SAH_*` and `SWISSARMYHAMMER_*` prefixes
     /// 5. **CLI arguments** - Command-line overrides (if provided via other methods)
     ///
@@ -165,7 +165,7 @@ impl TemplateContext {
     /// ```
     ///
     /// ## With Configuration File
-    /// Given a configuration file `~/.swissarmyhammer/sah.toml`:
+    /// Given a configuration file `~/.sah/sah.toml`:
     /// ```toml
     /// [app]
     /// name = "MyApp"

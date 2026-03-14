@@ -105,13 +105,10 @@ pub async fn search_registry(query: String) -> Result<Vec<SearchResult>, String>
         debug!("registry auth failed, falling back to unauthenticated: {e}");
         RegistryClient::default()
     });
-    let response = client
-        .fuzzy_search(&query, Some(20))
-        .await
-        .map_err(|e| {
-            error!(query = %query, error = %e, "search_registry failed");
-            e.to_string()
-        })?;
+    let response = client.fuzzy_search(&query, Some(20)).await.map_err(|e| {
+        error!(query = %query, error = %e, "search_registry failed");
+        e.to_string()
+    })?;
 
     info!(
         query = %query,

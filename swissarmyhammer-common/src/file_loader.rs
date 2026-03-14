@@ -10,8 +10,8 @@
 //!
 //! The VirtualFileSystem supports two modes:
 //!
-//! - **Managed directory mode** (default): Loads from `~/.swissarmyhammer/{subdirectory}`
-//!   and `{git_root}/.swissarmyhammer/{subdirectory}`.
+//! - **Managed directory mode** (default): Loads from `~/.sah/{subdirectory}`
+//!   and `{git_root}/.sah/{subdirectory}`.
 //!
 //! - **Dot-directory mode**: When configured via `use_dot_directory_paths()`, loads
 //!   from `~/.{subdirectory}` and `{git_root}/.{subdirectory}` (e.g., `~/.prompts`).
@@ -52,7 +52,7 @@ pub use swissarmyhammer_directory::{FileEntry, FileSource, SearchPath, Swissarmy
 ///
 /// let mut vfs = VirtualFileSystem::new("prompts");
 /// vfs.add_builtin("example", "This is a builtin prompt");
-/// // Loads from ~/.swissarmyhammer/prompts and ./.swissarmyhammer/prompts (subdirectory mode)
+/// // Loads from ~/.sah/prompts and ./.sah/prompts (subdirectory mode)
 /// vfs.load_all().unwrap();
 /// ```
 ///
@@ -190,7 +190,7 @@ mod tests {
         // Add user version (should override)
         let entry = FileEntry::new(
             "test",
-            PathBuf::from("/home/user/.swissarmyhammer/prompts/test.md"),
+            PathBuf::from("/home/user/.sah/prompts/test.md"),
             "user content".to_string(),
             FileSource::User,
         );

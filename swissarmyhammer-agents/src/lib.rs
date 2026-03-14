@@ -12,8 +12,8 @@
 //!
 //! Agents are resolved from multiple sources with later sources overriding earlier:
 //! 1. **Builtin** — embedded in the binary from `builtin/agents/`
-//! 2. **Local** — `.agents/` or `.swissarmyhammer/agents/` in the project
-//! 3. **User** — `~/.agents/` or `~/.swissarmyhammer/agents/`
+//! 2. **Local** — `.agents/` or `.sah/agents/` in the project
+//! 3. **User** — `~/.agents/` or `~/.sah/agents/`
 
 pub mod agent;
 pub mod agent_library;

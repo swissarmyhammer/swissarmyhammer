@@ -1,7 +1,7 @@
 //! Ralph MCP tool implementation
 //!
 //! Implements the `McpTool` trait for persistent agent loop instructions.
-//! Stores per-session instructions as markdown files in `.sah/ralph/`.
+//! Stores per-session instructions as markdown files in `.ralph/`.
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
@@ -44,7 +44,7 @@ impl Operation for SetRalph {
         "ralph"
     }
     fn description(&self) -> &'static str {
-        "Store a persistent instruction for a session. Creates .sah/ralph/<session_id>.md"
+        "Store a persistent instruction for a session. Creates .ralph/<session_id>.md"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
         SET_RALPH_PARAMS
@@ -91,7 +91,7 @@ impl Operation for ClearRalph {
         "ralph"
     }
     fn description(&self) -> &'static str {
-        "Remove a session's persistent instruction. Deletes .sah/ralph/<session_id>.md"
+        "Remove a session's persistent instruction. Deletes .ralph/<session_id>.md"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
         CLEAR_RALPH_PARAMS
@@ -141,7 +141,7 @@ pub static RALPH_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
 /// Ralph MCP tool for persistent agent loop instructions
 ///
 /// Stores per-session instructions as markdown files with YAML frontmatter
-/// in `.sah/ralph/<session_id>.md`. Used by Stop hooks to prevent Claude
+/// in `.ralph/<session_id>.md`. Used by Stop hooks to prevent Claude
 /// from stopping while work remains.
 #[derive(Default)]
 pub struct RalphTool;
@@ -189,12 +189,12 @@ impl swissarmyhammer_common::lifecycle::Initializable for RalphTool {
         use super::state::ensure_ralph_dir;
         use swissarmyhammer_common::lifecycle::InitResult;
 
-        // Create .sah/ralph/ eagerly on init rather than lazily on first write
+        // Create .ralph/ eagerly on init rather than lazily on first write
         match ensure_ralph_dir(std::path::Path::new(".")) {
-            Ok(()) => vec![InitResult::ok("ralph", "Created .sah/ralph/ directory")],
+            Ok(()) => vec![InitResult::ok("ralph", "Created .ralph/ directory")],
             Err(e) => vec![InitResult::error(
                 "ralph",
-                format!("Failed to create .sah/ralph/: {e}"),
+                format!("Failed to create .ralph/: {e}"),
             )],
         }
     }
@@ -212,7 +212,7 @@ impl McpTool for RalphTool {
 
     fn schema(&self) -> serde_json::Value {
         let config = SchemaConfig::new(
-            "Persistent agent loop instructions with per-session state. Stores instructions as .sah/ralph/<session_id>.md files for Stop hook integration.",
+            "Persistent agent loop instructions with per-session state. Stores instructions as .ralph/<session_id>.md files for Stop hook integration.",
         );
         generate_mcp_schema(&RALPH_OPERATIONS, config)
     }

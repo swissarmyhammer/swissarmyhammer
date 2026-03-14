@@ -96,14 +96,14 @@ fn format_git_repository_requirement_error() -> String {
 /// Format directory creation error message
 fn format_directory_creation_error(details: &str) -> String {
     format!(
-        "{} Failed to create .swissarmyhammer directory\n\n\
+        "{} Failed to create .sah directory\n\n\
         Error: {details}\n\
         \n\
-        SwissArmyHammer requires a .swissarmyhammer directory to store:\n\
-        • Memos in .swissarmyhammer/memos/\n\
-        • Kanban boards in .swissarmyhammer/kanban/\n\
-        • Search index in .swissarmyhammer/semantic.db\n\
-        • Task runs in .swissarmyhammer/runs/\n\
+        SwissArmyHammer requires a .sah directory to store:\n\
+        • Memos in .sah/memos/\n\
+        • Kanban boards in .sah/kanban/\n\
+        • Search index in .sah/semantic.db\n\
+        • Task runs in .sah/runs/\n\
         \n\
         Solutions:\n\
         • Check directory permissions in current location\n\
@@ -116,14 +116,14 @@ fn format_directory_creation_error(details: &str) -> String {
 /// Format directory access error message
 fn format_directory_access_error(details: &str) -> String {
     format!(
-        "{} Git repository found but .swissarmyhammer directory is not accessible\n\n\
+        "{} Git repository found but .sah directory is not accessible\n\n\
         Error: {details}\n\
         \n\
-        The .swissarmyhammer directory exists but cannot be accessed.\n\
+        The .sah directory exists but cannot be accessed.\n\
         \n\
         Solutions:\n\
-        • Check directory permissions: ls -la .swissarmyhammer/\n\
-        • Ensure read/write access: chmod 755 .swissarmyhammer/\n\
+        • Check directory permissions: ls -la .sah/\n\
+        • Ensure read/write access: chmod 755 .sah/\n\
         • Verify the directory is not corrupted or locked\n\
         • Try running with appropriate permissions",
         "✗".red()

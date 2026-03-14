@@ -412,7 +412,7 @@ Similar to skills, agents load in order:
 
 1. **Builtin agents** (embedded at compile time)
 2. **Project agents** (`.agents/*/AGENT.md`)
-3. **User agents** (`~/.swissarmyhammer/agents/*/AGENT.md`)
+3. **User agents** (`~/.sah/agents/*/AGENT.md`)
 4. **Extra search paths** (via environment variable)
 
 ---

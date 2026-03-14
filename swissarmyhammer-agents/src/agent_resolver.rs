@@ -6,6 +6,7 @@ use crate::agent::{Agent, AgentSource};
 use crate::agent_loader::{load_agent_from_builtin, load_agent_from_dir};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
 
 // Include the generated builtin agents
 include!(concat!(env!("OUT_DIR"), "/builtin_agents.rs"));
@@ -99,18 +100,17 @@ impl AgentResolver {
         let dot_agents = cwd.join(".agents");
         self.load_from_directory(&dot_agents, AgentSource::Local, agents);
 
-        let sah_agents = cwd.join(".swissarmyhammer").join("agents");
+        let sah_agents = cwd.join(".sah").join("agents");
         self.load_from_directory(&sah_agents, AgentSource::Local, agents);
     }
 
-    /// Load agents from user-level paths
+    /// Load agents from user-level paths via XDG base directories.
+    ///
+    /// Looks in `$XDG_DATA_HOME/sah/agents` (defaults to `~/.local/share/sah/agents`).
     fn load_from_user_paths(&self, agents: &mut HashMap<String, Agent>) {
-        if let Some(home) = dirs::home_dir() {
-            let user_agents = home.join(".agents");
+        if let Ok(dir) = ManagedDirectory::<SwissarmyhammerConfig>::xdg_data() {
+            let user_agents = dir.root().join("agents");
             self.load_from_directory(&user_agents, AgentSource::User, agents);
-
-            let user_sah_agents = home.join(".swissarmyhammer").join("agents");
-            self.load_from_directory(&user_sah_agents, AgentSource::User, agents);
         }
     }
 

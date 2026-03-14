@@ -1,7 +1,7 @@
 //! Directory utilities for SwissArmyHammer operations
 //!
 //! This module provides utilities for finding Git repositories and managing
-//! the .swissarmyhammer directory structure.
+//! the .sah directory structure.
 
 use crate::directory::DIR_NAME;
 use crate::error::{Result, SwissArmyHammerError};
@@ -25,13 +25,13 @@ pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
 
 /// Find the SwissArmyHammer directory for the current Git repository
 ///
-/// Returns None if not in a Git repository or if no .swissarmyhammer directory exists.
+/// Returns None if not in a Git repository or if no .sah directory exists.
 /// This function enforces the new Git-centric directory resolution approach where
-/// .swissarmyhammer directories should only exist at Git repository roots.
+/// .sah directories should only exist at Git repository roots.
 ///
 /// # Returns
 ///
-/// * `Option<PathBuf>` - Some(path) if Git repository found with .swissarmyhammer directory, None otherwise
+/// * `Option<PathBuf>` - Some(path) if Git repository found with .sah directory, None otherwise
 pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
     find_swissarmyhammer_directory_from(&std::env::current_dir().ok()?)
 }
@@ -39,7 +39,7 @@ pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
 /// Find the SwissArmyHammer directory starting from a specific directory
 ///
 /// Searches for a Git repository root starting from the given directory
-/// and checks if a .swissarmyhammer directory exists within that root.
+/// and checks if a .sah directory exists within that root.
 ///
 /// # Arguments
 ///
@@ -47,7 +47,7 @@ pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
 ///
 /// # Returns
 ///
-/// * `Option<PathBuf>` - Some(path) if .swissarmyhammer directory found, None otherwise
+/// * `Option<PathBuf>` - Some(path) if .sah directory found, None otherwise
 pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> {
     let git_root = find_git_repository_root_from(start_dir)?;
     let swissarmyhammer_dir = git_root.join(DIR_NAME);
@@ -59,10 +59,10 @@ pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> 
     }
 }
 
-/// Get or create the .swissarmyhammer directory for the current working directory
+/// Get or create the .sah directory for the current working directory
 ///
 /// This function searches for a Git repository root starting from the current
-/// directory and creates the .swissarmyhammer directory within that root.
+/// directory and creates the .sah directory within that root.
 ///
 /// # Deprecated
 ///
@@ -70,12 +70,12 @@ pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> 
 ///
 /// # Returns
 ///
-/// * `Result<PathBuf>` - Path to the .swissarmyhammer directory on success
+/// * `Result<PathBuf>` - Path to the .sah directory on success
 ///
 /// # Errors
 ///
 /// * `NotInGitRepository` - If not currently in a Git repository
-/// * `DirectoryCreation` - If .swissarmyhammer directory cannot be created
+/// * `DirectoryCreation` - If .sah directory cannot be created
 #[deprecated(
     since = "0.3.0",
     note = "Use SwissarmyhammerDirectory::from_git_root() instead"
@@ -87,10 +87,10 @@ pub fn get_or_create_swissarmyhammer_directory() -> Result<PathBuf> {
     )
 }
 
-/// Get or create the .swissarmyhammer directory starting from a specific directory
+/// Get or create the .sah directory starting from a specific directory
 ///
 /// This function searches for a Git repository root starting from the given directory
-/// and creates the .swissarmyhammer directory within that root.
+/// and creates the .sah directory within that root.
 ///
 /// # Deprecated
 ///
@@ -102,7 +102,7 @@ pub fn get_or_create_swissarmyhammer_directory() -> Result<PathBuf> {
 ///
 /// # Returns
 ///
-/// * `Result<PathBuf>` - Path to the .swissarmyhammer directory on success
+/// * `Result<PathBuf>` - Path to the .sah directory on success
 #[deprecated(
     since = "0.3.0",
     note = "Use SwissarmyhammerDirectory::from_custom_root() instead"
@@ -205,7 +205,7 @@ mod tests {
 
         // Create a .git directory to make it a Git repo
         fs::create_dir_all(base.join(".git")).unwrap();
-        // Pre-create the .swissarmyhammer directory
+        // Pre-create the .sah directory
         fs::create_dir_all(base.join(DIR_NAME)).unwrap();
 
         let result = get_or_create_swissarmyhammer_directory_from(base);
@@ -237,7 +237,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base = temp_dir.path();
 
-        // Create Git repository with .swissarmyhammer directory
+        // Create Git repository with .sah directory
         fs::create_dir_all(base.join(".git")).unwrap();
         fs::create_dir_all(base.join(DIR_NAME)).unwrap();
 
@@ -251,7 +251,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base = temp_dir.path();
 
-        // Create Git repository without .swissarmyhammer directory
+        // Create Git repository without .sah directory
         fs::create_dir_all(base.join(".git")).unwrap();
 
         let result = find_swissarmyhammer_directory_from(base);
@@ -263,7 +263,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base = temp_dir.path();
 
-        // Create .swissarmyhammer directory but no Git repository
+        // Create .sah directory but no Git repository
         fs::create_dir_all(base.join(DIR_NAME)).unwrap();
 
         let result = find_swissarmyhammer_directory_from(base);
@@ -276,7 +276,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base = temp_dir.path();
 
-        // Create nested structure with Git repository and .swissarmyhammer at root
+        // Create nested structure with Git repository and .sah at root
         let subdir1 = base.join("src");
         let subdir2 = subdir1.join("lib");
         fs::create_dir_all(&subdir2).unwrap();

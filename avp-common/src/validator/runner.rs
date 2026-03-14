@@ -8,7 +8,7 @@
 //!
 //! Validator partials can come from any of the standard validator directories:
 //! - builtin/validators/_partials/
-//! - ~/<AVP_DIR>/validators/_partials/
+//! - $XDG_DATA_HOME/avp/validators/_partials/
 //! - <AVP_DIR>/validators/_partials/
 //!
 //! This follows the same unified pattern as prompts and rules, using
@@ -532,7 +532,7 @@ impl ValidatorRunner {
     /// This follows the same pattern as prompts and rules - partials are loaded
     /// from all validator directories with the standard precedence:
     /// 1. Builtin validators (lowest precedence)
-    /// 2. User validators (~/<AVP_DIR>/validators)
+    /// 2. User validators ($XDG_DATA_HOME/avp/validators)
     /// 3. Project validators (<AVP_DIR>/validators) (highest precedence)
     fn load_validator_partials() -> HashMapPartialLoader {
         // Create a loader and load all validators (including partials)

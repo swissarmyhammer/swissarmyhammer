@@ -4,7 +4,7 @@ Ask the user a question via MCP elicitation and persist the answer.
 
 ## Description
 
-This tool sends an elicitation request to the MCP client, prompting the user for input through the client's UI. The tool blocks until the user responds, then saves the question/answer pair to a YAML file in `.swissarmyhammer/questions/` for future reference.
+This tool sends an elicitation request to the MCP client, prompting the user for input through the client's UI. The tool blocks until the user responds, then saves the question/answer pair to a YAML file in `.sah/questions/` for future reference.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ Returns a JSON object containing:
 ## Persistence Format
 
 Each question/answer is saved to a separate YAML file:
-- **Directory**: `.swissarmyhammer/questions/`
+- **Directory**: `.sah/questions/`
 - **Filename Pattern**: `YYYYMMDD_HHMMSS_question.yaml`
 - **Content**:
   ```yaml
@@ -57,7 +57,7 @@ Response:
 ```json
 {
   "answer": "staging",
-  "saved_to": ".swissarmyhammer/questions/20250605_133045_question.yaml"
+  "saved_to": ".sah/questions/20250605_133045_question.yaml"
 }
 ```
 
@@ -73,7 +73,7 @@ Response:
 ```json
 {
   "answer": "PostgreSQL",
-  "saved_to": ".swissarmyhammer/questions/20250605_140012_question.yaml"
+  "saved_to": ".sah/questions/20250605_140012_question.yaml"
 }
 ```
 

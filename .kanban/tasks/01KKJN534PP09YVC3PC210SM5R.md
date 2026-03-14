@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: z00
+title: '[warning] `CodeContextWorkspace::db()` calls `unwrap_or_else(|p| p.into_inner())` on a poisoned mutex — silently ignores panic in a write thread'
+---
+**File:** `swissarmyhammer-code-context/src/workspace.rs` line 160\n**Severity:** warning\n\n```rust\nDbRef::Shared(db.lock().unwrap_or_else(|p| p.into_inner()))\n```\n\nIf the mutex is poisoned (because a writer panicked mid-operation), this recovers the poisoned guard and hands the caller a potentially-corrupt database connection. The correct action is to propagate the poison as an error so the caller can decide whether to abandon the workspace. The same pattern appears in `do_initialize_code_context` (server.rs lines 400, 418) where `ws.lock().unwrap_or_else(|p| p.into_inner())` silently recovers.\n\n**Fix:** Change `db()` to return `Result<DbRef<'_>, CodeContextError>` and propagate the `PoisonError` as a new `CodeContextError::Poisoned` variant, or at minimum call `.expect(\"workspace db mutex poisoned\")` so the process fails loudly rather than continuing with bad state." #review-finding

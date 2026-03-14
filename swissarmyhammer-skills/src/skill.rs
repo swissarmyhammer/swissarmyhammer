@@ -45,9 +45,9 @@ impl std::fmt::Display for SkillName {
 pub enum SkillSource {
     /// Embedded in the binary
     Builtin,
-    /// From project-level .skills/ or .swissarmyhammer/skills/
+    /// From project-level .skills/ or .sah/skills/
     Local,
-    /// From user-level ~/.skills/ or ~/.swissarmyhammer/skills/
+    /// From user-level ~/.skills/ or ~/.sah/skills/
     User,
 }
 

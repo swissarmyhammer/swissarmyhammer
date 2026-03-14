@@ -26,7 +26,7 @@ The model system provides two main commands:
 • list - Display all available models from all sources with descriptions
 • use - Apply a model configuration to the current project
 
-When you 'use' a model, it creates or updates .swissarmyhammer/sah.yaml in your
+When you 'use' a model, it creates or updates .sah/sah.yaml in your
 project with the model's configuration. This configures how SwissArmyHammer 
 executes AI workflows in your project.
 

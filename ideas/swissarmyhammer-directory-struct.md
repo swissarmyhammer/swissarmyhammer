@@ -7,7 +7,7 @@
 
 ## Problem
 
-Currently, .swissarmyhammer directory initialization is scattered across multiple crates with inconsistent approaches:
+Currently, .sah directory initialization is scattered across multiple crates with inconsistent approaches:
 - Multiple utility functions (`get_or_create_swissarmyhammer_directory`, `get_swissarmyhammer_dir`)
 - Each crate creates its own subdirectories
 - No central representation of the directory structure
@@ -17,7 +17,7 @@ Currently, .swissarmyhammer directory initialization is scattered across multipl
 ## Proposed Solution
 
 Create a `SwissarmyhammerDirectory` struct that:
-1. Represents the .swissarmyhammer directory and its standard subdirectories
+1. Represents the .sah directory and its standard subdirectories
 2. Can be created from different roots (home, git root, or custom path)
 3. Lives on the ToolContext (available to all MCP tools)
 4. Provides consistent access patterns for all subdirectories
@@ -25,9 +25,9 @@ Create a `SwissarmyhammerDirectory` struct that:
 ## Struct Design
 
 ```rust
-/// Represents the .swissarmyhammer directory structure
+/// Represents the .sah directory structure
 pub struct SwissarmyhammerDirectory {
-    /// Root path of the .swissarmyhammer directory
+    /// Root path of the .sah directory
     root: PathBuf,
 
     /// The root location type (for debugging/logging)
@@ -35,10 +35,10 @@ pub struct SwissarmyhammerDirectory {
 }
 
 pub enum DirectoryRootType {
-    /// In user's home directory (~/.swissarmyhammer)
+    /// In user's home directory (~/.sah)
     UserHome,
 
-    /// At Git repository root (./.swissarmyhammer)
+    /// At Git repository root (./.sah)
     GitRoot,
 
     /// Custom path (for testing or special cases)
@@ -50,7 +50,7 @@ impl SwissarmyhammerDirectory {
     pub fn from_git_root() -> Result<Self> {
         let git_root = find_git_repository_root()
             .ok_or(SwissArmyHammerError::NotInGitRepository)?;
-        let root = git_root.join(".swissarmyhammer");
+        let root = git_root.join(".sah");
         fs::create_dir_all(&root)?;
 
         Ok(Self {
@@ -63,7 +63,7 @@ impl SwissarmyhammerDirectory {
     pub fn from_user_home() -> Result<Self> {
         let home = dirs::home_dir()
             .ok_or(SwissArmyHammerError::other("Cannot determine home directory"))?;
-        let root = home.join(".swissarmyhammer");
+        let root = home.join(".sah");
         fs::create_dir_all(&root)?;
 
         Ok(Self {
@@ -74,7 +74,7 @@ impl SwissarmyhammerDirectory {
 
     /// Create from custom path (for testing)
     pub fn from_custom_root(custom_root: PathBuf) -> Result<Self> {
-        let root = custom_root.join(".swissarmyhammer");
+        let root = custom_root.join(".sah");
         fs::create_dir_all(&root)?;
 
         Ok(Self {
@@ -83,7 +83,7 @@ impl SwissarmyhammerDirectory {
         })
     }
 
-    /// Get the root .swissarmyhammer directory path
+    /// Get the root .sah directory path
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -160,7 +160,7 @@ fs::create_dir_all(&todo_dir)?;
 
 **swissarmyhammer-issues:**
 ```rust
-let swissarmyhammer_dir = work_dir.join(".swissarmyhammer");
+let swissarmyhammer_dir = work_dir.join(".sah");
 let issues_dir = swissarmyhammer_dir.join("issues");
 fs::create_dir_all(&issues_dir).map_err(Error::Io)?;
 ```
@@ -204,7 +204,7 @@ let todo_dir = context.sah_dir.subdir("todo");
 - Easy to see complete directory layout
 
 ### 2. Consistent Root Resolution
-- All operations use same logic to find .swissarmyhammer
+- All operations use same logic to find .sah
 - Git-aware by default
 - Explicit choice for user-home vs git-root
 
@@ -267,7 +267,7 @@ Errors can say "Failed to create todo directory in git repository root" vs "Fail
 
 ### Phase 4: Cleanup
 1. Remove `get_swissarmyhammer_dir()` from paths.rs
-2. Update all direct .swissarmyhammer creation to use the struct
+2. Update all direct .sah creation to use the struct
 3. Update documentation
 
 ## Standard Directory Structure
@@ -275,7 +275,7 @@ Errors can say "Failed to create todo directory in git repository root" vs "Fail
 Once we have SwissarmyhammerDirectory, we can document the canonical structure:
 
 ```
-.swissarmyhammer/
+.sah/
 ├── rules/              # Project-specific rules (git-tracked)
 │   ├── code-quality/
 │   ├── security/
@@ -301,12 +301,12 @@ Once we have SwissarmyhammerDirectory, we can document the canonical structure:
 
 ## Current Duplicate Directory Creation Points TO REMOVE
 
-### Domain Crates Creating .swissarmyhammer Directly
+### Domain Crates Creating .sah Directly
 
 1. **swissarmyhammer-issues/src/storage.rs:91-96**
    ```rust
    pub fn default_directory_in(work_dir: &Path) -> Result<PathBuf> {
-       let swissarmyhammer_dir = work_dir.join(".swissarmyhammer");
+       let swissarmyhammer_dir = work_dir.join(".sah");
        let issues_dir = swissarmyhammer_dir.join("issues");
        fs::create_dir_all(&issues_dir).map_err(Error::Io)?;
        Ok(issues_dir)
@@ -332,7 +332,7 @@ Once we have SwissarmyhammerDirectory, we can document the canonical structure:
 
 4. **swissarmyhammer-workflow/src/executor/core.rs:172**
    ```rust
-   if let Err(e) = std::fs::create_dir_all(".swissarmyhammer") {
+   if let Err(e) = std::fs::create_dir_all(".sah") {
    ```
    **Replace with**: Use `context.sah_dir.root()` or `ensure_subdir()`
 
@@ -350,7 +350,7 @@ Once we have SwissarmyhammerDirectory, we can document the canonical structure:
    ```rust
    pub fn get_swissarmyhammer_dir() -> Result<PathBuf, std::io::Error> {
        let current_dir = std::env::current_dir()?;
-       let swissarmyhammer_dir = current_dir.join(".swissarmyhammer");
+       let swissarmyhammer_dir = current_dir.join(".sah");
        if !swissarmyhammer_dir.exists() {
            std::fs::create_dir_all(&swissarmyhammer_dir)?;
        }

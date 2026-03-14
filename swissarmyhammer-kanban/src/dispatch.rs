@@ -391,7 +391,7 @@ pub async fn execute_operation(
             processor.process(&cmd, ctx).await
         }
 
-        _ => Err(KanbanError::parse(&format!(
+        _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
         ))),

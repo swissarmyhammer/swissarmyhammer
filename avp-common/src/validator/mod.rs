@@ -27,7 +27,7 @@
 //!
 //! Validators are loaded from multiple directories with precedence:
 //! 1. Builtin validators (embedded in the binary) - lowest precedence
-//! 2. User validators (~/<AVP_DIR>/validators)
+//! 2. User validators ($XDG_DATA_HOME/avp/validators)
 //! 3. Project validators (./<AVP_DIR>/validators) - highest precedence
 //!
 //! Later sources override earlier ones with the same name.

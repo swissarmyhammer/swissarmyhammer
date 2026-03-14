@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: z00
+title: 'warning: xdg_base_dir is public but has no test for missing home directory'
+---
+`swissarmyhammer-directory/src/directory.rs:279` and `src/lib.rs:72`\n\n`xdg_base_dir` is re-exported as a public API (`pub use directory::xdg_base_dir`). The fallback branch returns `NoHomeDirectory` when `dirs::home_dir()` returns `None`, but this error path has no test coverage. Any caller that wraps the error (e.g., `mirdan/src/new.rs` maps it to a `RegistryError::Validation`) will silently never exercise this path.\n\nAdditionally, exposing `xdg_base_dir` as a free function in the crate's public API surface is a wider-than-needed exposure. The three `xdg_config()`, `xdg_data()`, and `xdg_cache()` constructors on `ManagedDirectory` are the intended public API. Callers that reach past them to `xdg_base_dir` directly (like `agent_resolver.rs` line 111 and `mirdan/src/new.rs`) bypass the directory creation and `.gitignore` seeding that `ManagedDirectory::new` provides.\n\nSuggestion: Make `xdg_base_dir` `pub(crate)` and expose only the `ManagedDirectory` constructors. Callers that need a raw path (e.g., `mirdan/src/new.rs` building scaffold paths) can call `ManagedDirectory::xdg_data()` and then navigate relative to `dir.root()`. #review-finding

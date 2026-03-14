@@ -460,7 +460,7 @@ impl Initializable for DenyBash {
 
 // ── ProjectStructure (priority 20) ───────────────────────────────────
 
-/// Creates/removes the `.swissarmyhammer/` and `.prompts/` project directories.
+/// Creates/removes the `.sah/` and `.prompts/` project directories.
 pub struct ProjectStructure {
     remove_directory: bool,
 }
@@ -488,7 +488,7 @@ impl Initializable for ProjectStructure {
         matches!(scope, InitScope::Project | InitScope::Local)
     }
 
-    /// Create the project directory structure with .prompts, .swissarmyhammer, and workflows.
+    /// Create the project directory structure with .prompts, .sah, and workflows.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         use swissarmyhammer_common::SwissarmyhammerDirectory;
 
@@ -496,19 +496,19 @@ impl Initializable for ProjectStructure {
             let cwd = std::env::current_dir()
                 .map_err(|e| format!("Failed to get current directory: {}", e))?;
             SwissarmyhammerDirectory::from_custom_root(cwd)
-                .map_err(|e| format!("Failed to create .swissarmyhammer directory: {}", e))
+                .map_err(|e| format!("Failed to create .sah directory: {}", e))
         }) {
             Ok(d) => d,
             Err(e) => return vec![InitResult::error(self.name(), e)],
         };
 
-        // Create .prompts/ as a sibling to .swissarmyhammer/ (dot-directory path for PromptResolver)
+        // Create .prompts/ as a sibling to .sah/ (dot-directory path for PromptResolver)
         let project_root = match sah_dir.root().parent() {
             Some(p) => p,
             None => {
                 return vec![InitResult::error(
                     self.name(),
-                    "Failed to determine project root from .swissarmyhammer directory".to_string(),
+                    "Failed to determine project root from .sah directory".to_string(),
                 )];
             }
         };
@@ -535,7 +535,7 @@ impl Initializable for ProjectStructure {
         vec![InitResult::ok(self.name(), "Project structure initialized")]
     }
 
-    /// Remove `.swissarmyhammer/` and `.prompts/` directories if `remove_directory` is true.
+    /// Remove `.sah/` and `.prompts/` directories if `remove_directory` is true.
     fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         if !self.remove_directory {
             return vec![InitResult::skipped(
@@ -554,7 +554,7 @@ impl Initializable for ProjectStructure {
             }
         };
 
-        let sah_dir = cwd.join(".swissarmyhammer");
+        let sah_dir = cwd.join(".sah");
         if sah_dir.exists() {
             if let Err(e) = fs::remove_dir_all(&sah_dir) {
                 return vec![InitResult::error(
@@ -745,11 +745,7 @@ impl Initializable for SkillDeployment {
             }
             reporter.emit(&InitEvent::Action {
                 verb: "Installed".to_string(),
-                message: format!(
-                    "{} skills → {}",
-                    installed_count,
-                    agent_names.join(", ")
-                ),
+                message: format!("{} skills → {}", installed_count, agent_names.join(", ")),
             });
         }
 
@@ -963,19 +959,17 @@ impl Initializable for AgentDeployment {
             }
 
             // Render instructions through the prompt library's Liquid engine
-            let rendered_instructions =
-                match prompt_library.render_text(&agent.instructions, &template_context) {
-                    Ok(rendered) => rendered,
-                    Err(e) => {
-                        reporter.emit(&InitEvent::Warning {
-                            message: format!(
-                                "failed to render partials for agent '{}': {}",
-                                name, e
-                            ),
-                        });
-                        agent.instructions.clone()
-                    }
-                };
+            let rendered_instructions = match prompt_library
+                .render_text(&agent.instructions, &template_context)
+            {
+                Ok(rendered) => rendered,
+                Err(e) => {
+                    reporter.emit(&InitEvent::Warning {
+                        message: format!("failed to render partials for agent '{}': {}", name, e),
+                    });
+                    agent.instructions.clone()
+                }
+            };
 
             let agent_md_path = agent_dir.join("AGENT.md");
             let content = format_agent_md(agent, &rendered_instructions);
@@ -1032,11 +1026,7 @@ impl Initializable for AgentDeployment {
             }
             reporter.emit(&InitEvent::Action {
                 verb: "Installed".to_string(),
-                message: format!(
-                    "{} agents → {}",
-                    installed_count,
-                    agent_targets.join(", ")
-                ),
+                message: format!("{} agents → {}", installed_count, agent_targets.join(", ")),
             });
         }
 

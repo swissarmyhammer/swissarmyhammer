@@ -20,6 +20,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 use model_embedding::cosine_similarity;
+use swissarmyhammer_directory::{DirectoryConfig, ShellConfig};
 use swissarmyhammer_embedding::{Embedder, TextEmbedder};
 
 const CHUNK_SIZE: usize = 15; // lines per embedding chunk
@@ -116,6 +117,12 @@ impl ShellState {
     pub fn with_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
         let session_id = ulid::Ulid::new().to_string();
         fs::create_dir_all(&shell_dir)?;
+
+        // Write .gitignore if it doesn't exist yet
+        let gitignore_path = shell_dir.join(".gitignore");
+        if !gitignore_path.exists() {
+            fs::write(&gitignore_path, ShellConfig::GITIGNORE_CONTENT)?;
+        }
 
         let log_path = shell_dir.join("log");
         // Touch the log file

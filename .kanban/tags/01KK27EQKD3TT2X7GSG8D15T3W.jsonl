@@ -1,0 +1,1 @@
+{"id":"01KK27EQKF896MXGNXB6S44ZJK","timestamp":"2026-03-06T18:44:43.247142Z","entity_type":"tag","entity_id":"01KK27EQKD3TT2X7GSG8D15T3W","op":"create","changes":[["color",{"kind":"set","value":"0088ff"}],["description",{"kind":"set","value":"Manual UI verification"}],["tag_name",{"kind":"set","value":"smoke-test"}]],"transaction_id":"01KK27EQK6YNQVNJ9MJYFDYS6P"}

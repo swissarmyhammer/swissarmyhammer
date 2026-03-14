@@ -103,18 +103,10 @@ fn emit_styled(event: &InitEvent) {
             );
         }
         InitEvent::Warning { message } => {
-            eprintln!(
-                "  {}  {}",
-                "⚠".yellow().bold(),
-                message.yellow()
-            );
+            eprintln!("  {}  {}", "⚠".yellow().bold(), message.yellow());
         }
         InitEvent::Error { message } => {
-            eprintln!(
-                "  {}  {}",
-                "✗".red().bold(),
-                message.red()
-            );
+            eprintln!("  {}  {}", "✗".red().bold(), message.red());
         }
         InitEvent::Skipped { .. } => {
             // Silent for skipped

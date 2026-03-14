@@ -2,7 +2,7 @@
 
 Persistent agent loop instructions with per-session state.
 
-Ralph stores instructions as markdown files in `.sah/ralph/<session_id>.md`. Used by Stop hooks to prevent Claude from stopping while work remains.
+Ralph stores instructions as markdown files in `.ralph/<session_id>.md`. Used by Stop hooks to prevent Claude from stopping while work remains.
 
 ## Overview
 

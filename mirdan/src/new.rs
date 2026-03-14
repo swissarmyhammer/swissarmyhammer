@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::agents;
 use crate::package_type::is_valid_package_name;
 use crate::registry::RegistryError;
+use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 
 /// Run the `mirdan new skill` command.
 ///
@@ -117,9 +118,11 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
     }
 
     let base_dir = if global {
-        dirs::home_dir()
-            .ok_or_else(|| RegistryError::Validation("Could not find home directory".to_string()))?
-            .join(".avp")
+        ManagedDirectory::<AvpConfig>::xdg_data()
+            .map_err(|e| {
+                RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e))
+            })?
+            .root()
             .join("validators")
             .join(name)
     } else {
@@ -239,9 +242,12 @@ pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
     }
 
     let base_dir = if global {
-        dirs::home_dir()
-            .ok_or_else(|| RegistryError::Validation("Could not find home directory".to_string()))?
-            .join(".tools")
+        ManagedDirectory::<AvpConfig>::xdg_data()
+            .map_err(|e| {
+                RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e))
+            })?
+            .root()
+            .join("tools")
             .join(name)
     } else {
         PathBuf::from(name)

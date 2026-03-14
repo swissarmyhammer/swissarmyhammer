@@ -224,14 +224,14 @@ async fn display_verbose_validation_report(
     eprintln!(); // Add blank line
 }
 
-/// Ensure the .swissarmyhammer directory exists
+/// Ensure the .sah directory exists
 ///
-/// This function creates the .swissarmyhammer directory if it doesn't exist,
+/// This function creates the .sah directory if it doesn't exist,
 /// providing a consistent way to handle directory creation across the CLI.
 /// It also ensures a .gitignore file is created to exclude temporary files.
 ///
 /// # Returns
-/// The path to the .swissarmyhammer directory or an error if creation fails
+/// The path to the .sah directory or an error if creation fails
 fn ensure_swissarmyhammer_dir() -> Result<PathBuf, std::io::Error> {
     use swissarmyhammer_common::SwissarmyhammerDirectory;
 
@@ -1376,7 +1376,7 @@ fn setup_mcp_logging(
     // Set flag to prevent unified server from also configuring logging
     std::env::set_var("SAH_CLI_MODE", "1");
 
-    // In MCP mode, write logs to .swissarmyhammer/mcp.log for debugging
+    // In MCP mode, write logs to .sah/mcp.log for debugging
     let log_dir = ensure_swissarmyhammer_dir()?;
 
     let log_file_name =

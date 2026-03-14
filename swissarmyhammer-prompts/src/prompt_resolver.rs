@@ -19,8 +19,8 @@ pub struct PromptResolver {
 impl PromptResolver {
     /// Create a new PromptResolver
     ///
-    /// Configures the VFS to load prompts from dot-directory paths:
-    /// - `~/.prompts` (user prompts)
+    /// Configures the VFS to load prompts from:
+    /// - `$XDG_DATA_HOME/sah/prompts` (user prompts)
     /// - `{git_root}/.prompts` (local/project prompts)
     pub fn new() -> Self {
         let mut vfs = VirtualFileSystem::new("prompts");
@@ -39,7 +39,7 @@ impl PromptResolver {
 
     /// Load all prompts following the correct precedence:
     /// 1. Builtin prompts (least specific, embedded in binary)
-    /// 2. User prompts from ~/.prompts
+    /// 2. User prompts from $XDG_DATA_HOME/sah/prompts
     /// 3. Local prompts from .prompts in the project root (most specific)
     ///
     /// Also loads partials into the library's storage for template rendering.
@@ -158,27 +158,33 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
     #[serial]
     fn test_prompt_resolver_loads_user_prompts() {
-        let home_dir = std::env::var("HOME").unwrap();
-        let user_prompts_dir = PathBuf::from(&home_dir).join(".prompts");
+        let temp_dir = TempDir::new().unwrap();
+        // VFS dot-directory mode now uses $XDG_DATA_HOME/{xdg_name}/prompts for user-level
+        let user_prompts_dir = temp_dir.path().join("sah").join("prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
 
         // Create a test prompt file
         let prompt_file = user_prompts_dir.join("test_prompt.md");
         fs::write(&prompt_file, "This is a test prompt").unwrap();
 
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();
 
         let result = resolver.load_all_prompts(&mut library);
 
-        // Clean up before asserting so the file is removed even on failure
-        let _ = fs::remove_file(&prompt_file);
+        // Restore XDG_DATA_HOME before asserting
+        match &original_xdg {
+            Some(val) => std::env::set_var("XDG_DATA_HOME", val),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
 
         result.unwrap();
 
@@ -277,7 +283,8 @@ mod tests {
     #[serial]
     fn test_user_prompt_overrides_builtin_source_tracking() {
         let temp_dir = TempDir::new().unwrap();
-        let user_prompts_dir = temp_dir.path().join(".prompts");
+        // VFS dot-directory mode now uses $XDG_DATA_HOME/{xdg_name}/prompts for user-level
+        let user_prompts_dir = temp_dir.path().join("sah").join("prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
 
         // Create a user prompt with the same name as a builtin prompt
@@ -295,11 +302,11 @@ This is a user-defined debug/error prompt that should override the builtin one.
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();
 
-        // Store original HOME value to restore later
-        let original_home = std::env::var("HOME").ok();
+        // Store original XDG_DATA_HOME to restore later
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
 
-        // Temporarily change home directory for test
-        std::env::set_var("HOME", temp_dir.path());
+        // Temporarily set XDG_DATA_HOME for test
+        std::env::set_var("XDG_DATA_HOME", temp_dir.path());
 
         // Load builtin prompts first
         resolver.load_all_prompts(&mut library).unwrap();
@@ -310,9 +317,10 @@ This is a user-defined debug/error prompt that should override the builtin one.
         // Load user prompts (should override the builtin if it exists, or just add it if not)
         resolver.load_all_prompts(&mut library).unwrap();
 
-        // Restore HOME before assertions so it's restored even on panic
-        if let Some(home) = &original_home {
-            std::env::set_var("HOME", home);
+        // Restore XDG_DATA_HOME before assertions so it's restored even on panic
+        match &original_xdg {
+            Some(val) => std::env::set_var("XDG_DATA_HOME", val),
+            None => std::env::remove_var("XDG_DATA_HOME"),
         }
 
         // Now it should be tracked as a user prompt

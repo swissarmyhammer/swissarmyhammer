@@ -12,8 +12,8 @@
 //!
 //! Skills are resolved from multiple sources with later sources overriding earlier:
 //! 1. **Builtin** — embedded in the binary from `builtin/skills/`
-//! 2. **Local** — `.skills/` or `.swissarmyhammer/skills/` in the project
-//! 3. **User** — `~/.skills/` or `~/.swissarmyhammer/skills/`
+//! 2. **Local** — `.skills/` or `.sah/skills/` in the project
+//! 3. **User** — `~/.skills/` or `~/.sah/skills/`
 
 pub mod context;
 pub mod error;
