@@ -47,8 +47,12 @@
 //! let election = LeaderElection::with_config("/workspace", config);
 //! ```
 
+mod bus;
+pub mod discovery;
 mod election;
 mod error;
+pub mod proxy;
 
+pub use bus::{BusMessage, NullMessage, Publisher, Subscriber};
 pub use election::{ElectionConfig, ElectionOutcome, FollowerGuard, LeaderElection, LeaderGuard};
 pub use error::{ElectionError, Result};

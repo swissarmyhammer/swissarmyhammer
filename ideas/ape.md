@@ -30,8 +30,9 @@ The leader election process — which already exists in `swissarmyhammer-leader-
                     └─────────────────────────────────┘
 ```
 
-**Every process also writes to SQLite.** The ZMQ proxy is the live delivery
-path. SQLite is the durable log. Both always happen.
+**Every publisher writes to SQLite independently.** The ZMQ proxy is the live
+delivery path. SQLite is the durable log. Both happen on every `publish()` call,
+in every process. No single point of failure for persistence.
 
 ### How It Works
 
@@ -208,11 +209,7 @@ And `HebContext::open()` just configures and runs the election:
 impl HebContext {
     pub fn open(workspace_root: &Path) -> Result<Self> {
         let config = ElectionConfig::new()
-            .with_prefix("heb")
-            .on_message(|event: &HebEvent| {
-                // persist every event that flows through the bus
-                let _ = log_event(&db_path, &event.header, &event.body);
-            });
+            .with_prefix("heb");
 
         let outcome = LeaderElection::<HebEvent>::with_config(workspace_root, config).elect()?;
         // ...
@@ -220,10 +217,11 @@ impl HebContext {
 }
 ```
 
-Note: the `on_message` callback on the **leader** sees every message — including
-its own. This is how heb gets SQLite persistence for free: register a callback
-that writes to the WAL. Every message on the bus gets logged, regardless of
-who published it.
+**Persistence is not a callback concern.** Every publisher writes to SQLite
+independently as part of `publish()` — open/write/close. The bus (ZMQ) is
+for live delivery. SQLite is for durability. Both happen on every publish,
+in every process. Callbacks are for reactions: triggering side effects,
+updating UI, notifying other subsystems.
 
 ### The Proxy Thread
 
@@ -311,8 +309,9 @@ for everything.
 
 ## Durable Log: SQLite WAL, Open/Write/Close
 
-Every process writes to SQLite on every publish. This is independent of
-whether the ZMQ proxy is running.
+Every publisher writes to SQLite on every `publish()` — open, write, close.
+This happens before the ZMQ send. If ZMQ fails, the event is still persisted.
+If the leader is down, the event is still persisted. Most reliable path wins.
 
 ```rust
 pub fn log_event(db_path: &Path, header: &EventHeader, body: &[u8]) -> Result<u64> {
@@ -367,8 +366,8 @@ Single file, all projects. Scoped by `cwd` and `session_id`.
 
 ## HEB Context
 
-The context object is the entry point. It owns XDG path resolution,
-discovery file management, and provides the publish/subscribe API.
+The context object is heb's entry point. It wraps the generic leader
+election bus with XDG path resolution and SQLite persistence.
 
 ```rust
 pub struct HebContext {
@@ -378,65 +377,45 @@ pub struct HebContext {
     runtime_dir: PathBuf,
     /// Hash of the workspace root — scopes discovery + IPC paths
     context_hash: String,
-    /// Our role — leader (owns proxy) or follower (connected to proxy)
-    role: HebRole,
-}
-
-enum HebRole {
-    Leader {
-        guard: LeaderGuard,
-        proxy_handle: JoinHandle<()>,
-    },
-    Follower {
-        guard: FollowerGuard,
-    },
+    /// The election outcome — leader or follower, both can publish
+    election: ElectionOutcome<HebEvent>,
 }
 
 impl HebContext {
     /// Open a HEB context for the given workspace.
     ///
     /// This is not passive — it participates in leader election.
-    /// If no discovery file exists (no leader), this process contests
-    /// the election. The winner starts the proxy and writes the
-    /// discovery file. The loser reads it and connects.
-    ///
+    /// No discovery file = no leader = contest the election.
     /// Every process that touches heb is a potential leader.
     pub fn open(workspace_root: &Path) -> Result<Self> {
-        let ctx = Self::resolve_paths(workspace_root);
+        let paths = Self::resolve_paths(workspace_root);
 
         let config = ElectionConfig::new().with_prefix("heb");
-        let outcome = LeaderElection::with_config(workspace_root, config).elect()?;
+        let election = LeaderElection::<HebEvent>::with_config(workspace_root, config).elect()?;
 
-        match outcome {
-            ElectionOutcome::Leader(guard) => {
-                // We're the leader — start proxy, write discovery file
-                let proxy_handle = start_proxy(&ctx.front_addr(), &ctx.back_addr())?;
-                write_discovery_file(&ctx.discovery_path(), &ctx.front_addr(), &ctx.back_addr())?;
-                // ...
-            }
-            ElectionOutcome::Follower(guard) => {
-                // Someone else is leader — discovery file should exist (or appear shortly)
-                // Connect PUB/SUB sockets using addresses from discovery file
-                // ...
-            }
-        }
-
-        Ok(ctx)
+        Ok(HebContext { election, ..paths })
     }
 
-    pub fn db_path(&self) -> PathBuf { self.data_dir.join("events.db") }
-    pub fn discovery_path(&self) -> PathBuf { self.runtime_dir.join(format!("{}.addr", self.context_hash)) }
-    pub fn front_addr(&self) -> String { format!("ipc://{}/{}-front.sock", self.runtime_dir.display(), self.context_hash) }
-    pub fn back_addr(&self) -> String { format!("ipc://{}/{}-back.sock", self.runtime_dir.display(), self.context_hash) }
+    /// Publish: write to SQLite (open/write/close) + send via ZMQ PUB.
+    /// Every publisher persists independently. Most reliable.
+    pub fn publish(&self, header: &EventHeader, body: &[u8]) -> Result<u64> {
+        // 1. Always persist — this is the durable path
+        let seq = log_event(&self.db_path(), header, body)?;
 
-    /// Publish: write to SQLite + send via ZMQ
-    pub fn publish(&self, header: &EventHeader, body: &[u8]) -> Result<u64> { ... }
+        // 2. Always send via ZMQ — this is the live path
+        let event = HebEvent { header: header.clone(), body: body.to_vec() };
+        self.election.publish(&event)?;
+
+        Ok(seq)
+    }
 
     /// Subscribe: connect SUB socket to proxy backend
     pub fn subscribe(&self, categories: &[EventCategory]) -> Result<HebSubscriber> { ... }
 
-    /// Replay from SQLite (catch-up after reconnect or leader transition)
+    /// Replay from SQLite (catch-up after leader transition gap)
     pub fn replay(&self, since_seq: u64, filter: Option<&str>) -> Result<Vec<(EventHeader, Vec<u8>)>> { ... }
+
+    pub fn db_path(&self) -> PathBuf { self.data_dir.join("events.db") }
 }
 ```
 

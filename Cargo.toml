@@ -59,6 +59,7 @@ members = [
     "swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
+    "heb",
 ]
 resolver = "2"
 
@@ -214,6 +215,9 @@ model-loader = { path = "model-loader" }
 
 # Leader election
 swissarmyhammer-leader-election = { path = "swissarmyhammer-leader-election" }
+
+# ZMQ for pub/sub bus
+zmq = "0.10"
 
 # LSP
 swissarmyhammer-lsp = { path = "swissarmyhammer-lsp" }

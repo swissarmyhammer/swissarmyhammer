@@ -800,6 +800,15 @@ impl HookableAgent {
             .unwrap_or_else(|| PathBuf::from("."))
     }
 
+    /// Fire an arbitrary hook event and return all decisions.
+    ///
+    /// This is the public entry point for callers (CLI, MCP proxy, etc.) to
+    /// fire hook events that don't correspond to an ACP Agent trait method —
+    /// e.g. `TeammateIdle`, `TaskCompleted`, `PostCompact`, `ConfigChange`.
+    pub async fn fire_event(&self, event: &HookEvent) -> Vec<HookDecision> {
+        self.run_hooks(event).await
+    }
+
     /// Run all matching hooks for an event in parallel, returning collected decisions.
     async fn run_hooks(&self, event: &HookEvent) -> Vec<HookDecision> {
         let futures: Vec<_> = self
@@ -2271,5 +2280,83 @@ mod tests {
         assert!(result.is_err());
         assert!(!called.load(Ordering::SeqCst));
         assert!(result.unwrap_err().message.contains("Cancelled"));
+    }
+
+    #[tokio::test]
+    async fn test_fire_event_runs_matching_hooks() {
+        let fired = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        struct CountHook(Arc<std::sync::atomic::AtomicU32>);
+
+        #[async_trait::async_trait]
+        impl HookHandler for CountHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                HookDecision::Allow
+            }
+        }
+
+        let (mock, _called) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock))
+            .with_hook(
+                &[HookEventKind::TeammateIdle],
+                None,
+                CountHook(fired.clone()),
+            )
+            .with_hook(
+                &[HookEventKind::TaskCompleted],
+                None,
+                CountHook(fired.clone()),
+            );
+
+        // Fire TeammateIdle — only the first hook matches
+        let event = HookEvent::TeammateIdle {
+            session_id: "s1".into(),
+            teammate_id: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let decisions = agent.fire_event(&event).await;
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+
+        // Fire TaskCompleted — only the second hook matches
+        let event = HookEvent::TaskCompleted {
+            session_id: "s1".into(),
+            task_id: None,
+            task_title: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let decisions = agent.fire_event(&event).await;
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(fired.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_fire_event_returns_block_decision() {
+        struct BlockHook;
+
+        #[async_trait::async_trait]
+        impl HookHandler for BlockHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                HookDecision::Block {
+                    reason: "blocked by test".into(),
+                }
+            }
+        }
+
+        let (mock, _called) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+            &[HookEventKind::PostCompact],
+            None,
+            BlockHook,
+        );
+
+        let event = HookEvent::PostCompact {
+            session_id: "s1".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let decisions = agent.fire_event(&event).await;
+        assert_eq!(decisions.len(), 1);
+        assert!(matches!(decisions[0], HookDecision::Block { .. }));
     }
 }

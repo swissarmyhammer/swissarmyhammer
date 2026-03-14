@@ -1,5 +1,5 @@
 [package]
-name = "swissarmyhammer-leader-election"
+name = "heb"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,15 +7,18 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "File-lock based leader election primitives for multi-process coordination"
+description = "Hook Event Bus — real-time event pub/sub with SQLite durability"
 
 [dependencies]
-fs2 = { workspace = true }
-md5 = { workspace = true }
+swissarmyhammer-leader-election = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 thiserror = { workspace = true }
+dirs = { workspace = true }
+md5 = { workspace = true }
 tracing = { workspace = true }
-zmq = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

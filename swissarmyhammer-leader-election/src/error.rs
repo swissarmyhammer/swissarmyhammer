@@ -16,6 +16,22 @@ pub enum ElectionError {
     /// Failed to acquire lock
     #[error("Failed to acquire lock: {0}")]
     LockAcquisition(#[source] io::Error),
+
+    /// Discovery file I/O error
+    #[error("Discovery file error: {0}")]
+    Discovery(#[source] io::Error),
+
+    /// ZMQ bus error
+    #[error("Bus error: {0}")]
+    Bus(#[source] zmq::Error),
+
+    /// Message serialization/deserialization error (preserves source chain)
+    #[error("Serialization error: {0}")]
+    Serialization(#[source] serde_json::Error),
+
+    /// Protocol or channel error (no underlying source)
+    #[error("Message error: {0}")]
+    Message(String),
 }
 
 /// Result type for election operations

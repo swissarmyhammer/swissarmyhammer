@@ -10,11 +10,15 @@
 use std::fmt;
 use std::fs::{self, File};
 use std::io;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 
+use crate::bus::{BusMessage, NullMessage, Publisher, Subscriber};
+use crate::discovery::{self, BusAddresses};
 use crate::error::{ElectionError, Result};
+use crate::proxy::ProxyHandle;
 
 /// Default prefix for lock and socket files
 const DEFAULT_PREFIX: &str = "sah";
@@ -69,14 +73,27 @@ impl ElectionConfig {
 /// Callers match on this to determine whether they won (Leader) or lost
 /// (Follower). A `FollowerGuard` can re-contest the election later via
 /// `try_promote()`.
-pub enum ElectionOutcome {
+///
+/// The default type parameter `NullMessage` means existing consumers that don't
+/// specify a message type continue to work unchanged.
+pub enum ElectionOutcome<M: BusMessage = NullMessage> {
     /// This process won the election and holds the leader lock.
-    Leader(LeaderGuard),
+    Leader(LeaderGuard<M>),
     /// Another process holds the lock. The follower can retry later.
-    Follower(FollowerGuard),
+    Follower(FollowerGuard<M>),
 }
 
-impl fmt::Debug for ElectionOutcome {
+impl<M: BusMessage> ElectionOutcome<M> {
+    /// Publish a message to the bus, regardless of leader/follower role.
+    pub fn publish(&self, msg: &M) -> Result<()> {
+        match self {
+            Self::Leader(guard) => guard.publish(msg),
+            Self::Follower(guard) => guard.publish(msg),
+        }
+    }
+}
+
+impl<M: BusMessage> fmt::Debug for ElectionOutcome<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Leader(_) => f.write_str("ElectionOutcome::Leader"),
@@ -108,16 +125,31 @@ impl fmt::Debug for ElectionOutcome {
 ///     Err(e) => eprintln!("Election failed: {}", e),
 /// }
 /// ```
-pub struct LeaderElection {
+pub struct LeaderElection<M: BusMessage = NullMessage> {
     /// Path to the lock file
     lock_path: PathBuf,
     /// Path to the Unix socket
     socket_path: PathBuf,
     /// Original workspace root
     workspace_root: PathBuf,
+    /// Configuration (stored for bus address computation)
+    config: ElectionConfig,
+    /// Workspace hash (stored for bus address computation)
+    hash: String,
+    _phantom: PhantomData<M>,
 }
 
-impl LeaderElection {
+/// Compute a hash of a path for unique identification.
+///
+/// Uses the full 32-character MD5 hex digest to avoid collision risk
+/// when two different workspace paths share a lock file.
+fn hash_path(path: &Path) -> String {
+    let path_str = path.to_string_lossy();
+    let digest = md5::compute(path_str.as_bytes());
+    format!("{:x}", digest)
+}
+
+impl<M: BusMessage> LeaderElection<M> {
     /// Create a new election coordinator for a workspace with default config
     ///
     /// The lock and socket paths are derived from a hash of the workspace root,
@@ -129,37 +161,54 @@ impl LeaderElection {
     /// Create a new election coordinator with custom configuration
     pub fn with_config(workspace_root: impl AsRef<Path>, config: ElectionConfig) -> Self {
         let workspace_root = workspace_root.as_ref().to_path_buf();
-        let hash = Self::hash_path(&workspace_root);
+        let hash = hash_path(&workspace_root);
         let base = config.base_dir();
 
         Self {
             lock_path: base.join(format!("{}-ts-{}.lock", config.prefix, hash)),
             socket_path: base.join(format!("{}-ts-{}.sock", config.prefix, hash)),
             workspace_root,
+            config: config.clone(),
+            hash,
+            _phantom: PhantomData,
         }
     }
 
-    /// Compute a hash of a path for unique identification.
-    ///
-    /// Uses the full 32-character MD5 hex digest to avoid collision risk
-    /// when two different workspace paths share a lock file.
-    fn hash_path(path: &Path) -> String {
-        let path_str = path.to_string_lossy();
-        let digest = md5::compute(path_str.as_bytes());
-        format!("{:x}", digest)
+    /// Get the bus addresses for this election.
+    fn bus_addresses(&self) -> BusAddresses {
+        discovery::ipc_addresses(&self.config.base_dir(), &self.config.prefix, &self.hash)
+    }
+
+    /// Get the discovery file path for this election.
+    fn discovery_path(&self) -> PathBuf {
+        discovery::discovery_path(&self.config.base_dir(), &self.config.prefix, &self.hash)
     }
 
     /// Run the election. Returns `Leader` or `Follower` outcome.
     ///
     /// This is the primary entry point. Use this instead of `try_become_leader()`
     /// for new code — it returns a typed outcome so followers can re-contest later.
-    pub fn elect(&self) -> Result<ElectionOutcome> {
+    pub fn elect(&self) -> Result<ElectionOutcome<M>> {
         match self.try_acquire_lock() {
             Ok(guard) => Ok(ElectionOutcome::Leader(guard)),
-            Err(ElectionError::LockHeld) => Ok(ElectionOutcome::Follower(FollowerGuard {
-                lock_path: self.lock_path.clone(),
-                socket_path: self.socket_path.clone(),
-            })),
+            Err(ElectionError::LockHeld) => {
+                // Read discovery file to find proxy addresses
+                let disc_path = self.discovery_path();
+                let publisher = match discovery::read_discovery(&disc_path)? {
+                    Some(addrs) => {
+                        let ctx = zmq::Context::new();
+                        Publisher::connected(&ctx, &addrs.frontend)?
+                    }
+                    None => Publisher::noop(),
+                };
+                Ok(ElectionOutcome::Follower(FollowerGuard {
+                    lock_path: self.lock_path.clone(),
+                    socket_path: self.socket_path.clone(),
+                    discovery_path: disc_path,
+                    bus_addresses: self.bus_addresses(),
+                    publisher,
+                }))
+            }
             Err(e) => Err(e),
         }
     }
@@ -169,12 +218,12 @@ impl LeaderElection {
     /// Attempts to acquire an exclusive lock on the lock file.
     /// Returns a `LeaderGuard` if successful, or `ElectionError::LockHeld` if another
     /// process already holds the lock.
-    pub fn try_become_leader(&self) -> Result<LeaderGuard> {
+    pub fn try_become_leader(&self) -> Result<LeaderGuard<M>> {
         self.try_acquire_lock()
     }
 
     /// Internal: attempt to acquire the flock.
-    fn try_acquire_lock(&self) -> Result<LeaderGuard> {
+    fn try_acquire_lock(&self) -> Result<LeaderGuard<M>> {
         // Ensure parent directory exists
         if let Some(parent) = self.lock_path.parent() {
             fs::create_dir_all(parent).map_err(ElectionError::LockFileCreation)?;
@@ -189,10 +238,27 @@ impl LeaderElection {
                 // Clean up any stale socket file from previous run
                 let _ = fs::remove_file(&self.socket_path);
 
+                // Start the bus proxy
+                let addrs = self.bus_addresses();
+                let disc_path = self.discovery_path();
+
+                // Clean up stale IPC sockets before binding
+                discovery::cleanup_discovery(&disc_path, &addrs);
+
+                let proxy = ProxyHandle::start(&addrs)?;
+                discovery::write_discovery(&disc_path, &addrs)?;
+
+                // Create a publisher connected to our own proxy
+                let publisher = Publisher::connected(proxy.zmq_context(), &addrs.frontend)?;
+
                 Ok(LeaderGuard {
                     _lock_file: lock_file,
                     lock_path: self.lock_path.clone(),
                     socket_path: self.socket_path.clone(),
+                    discovery_path: disc_path,
+                    bus_addresses: addrs,
+                    _proxy: proxy,
+                    publisher,
                 })
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(ElectionError::LockHeld),
@@ -248,16 +314,24 @@ impl LeaderElection {
 ///
 /// When dropped, releases the flock, cleans up the socket file, and removes
 /// the lock file from disk.
-pub struct LeaderGuard {
+pub struct LeaderGuard<M: BusMessage = NullMessage> {
     /// The lock file handle (flock released on drop via fs2/OS)
     _lock_file: File,
     /// Path to lock file (cleaned up on drop)
     lock_path: PathBuf,
     /// Path to socket file (cleaned up on drop)
     socket_path: PathBuf,
+    /// Path to discovery file (cleaned up on drop)
+    discovery_path: PathBuf,
+    /// Bus addresses (for cleanup)
+    bus_addresses: BusAddresses,
+    /// Proxy handle (stopped on drop)
+    _proxy: ProxyHandle,
+    /// Publisher for sending messages to the bus
+    publisher: Publisher<M>,
 }
 
-impl fmt::Debug for LeaderGuard {
+impl<M: BusMessage> fmt::Debug for LeaderGuard<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LeaderGuard")
             .field("lock_path", &self.lock_path)
@@ -265,15 +339,35 @@ impl fmt::Debug for LeaderGuard {
     }
 }
 
-impl LeaderGuard {
+impl<M: BusMessage> LeaderGuard<M> {
     /// Get the socket path this guard will clean up on drop
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
+
+    /// Publish a message to the bus.
+    pub fn publish(&self, msg: &M) -> Result<()> {
+        self.publisher.send(msg)
+    }
+
+    /// Subscribe to messages on the bus, optionally filtered by topics.
+    ///
+    /// Pass empty slice to subscribe to all messages.
+    pub fn subscribe(&self, topics: &[&[u8]]) -> Result<Subscriber<M>> {
+        let ctx = zmq::Context::new();
+        Subscriber::connected(&ctx, &self.bus_addresses.backend, topics)
+    }
+
+    /// Get the bus addresses (for external subscribers).
+    pub fn bus_addresses(&self) -> &BusAddresses {
+        &self.bus_addresses
+    }
 }
 
-impl Drop for LeaderGuard {
+impl<M: BusMessage> Drop for LeaderGuard<M> {
     fn drop(&mut self) {
+        // Clean up discovery file and IPC sockets
+        discovery::cleanup_discovery(&self.discovery_path, &self.bus_addresses);
         // Clean up socket and lock files when leader exits.
         // The flock is released automatically when _lock_file is dropped,
         // but the 0-byte files linger on disk unless we remove them.
@@ -286,14 +380,20 @@ impl Drop for LeaderGuard {
 ///
 /// Call `try_promote()` to re-contest the election. If the previous leader
 /// has exited (releasing its flock), this process wins and gets a `LeaderGuard`.
-pub struct FollowerGuard {
+pub struct FollowerGuard<M: BusMessage = NullMessage> {
     /// Path to the lock file (same as the leader's)
     lock_path: PathBuf,
     /// Path to the Unix socket
     socket_path: PathBuf,
+    /// Path to the discovery file
+    discovery_path: PathBuf,
+    /// Bus addresses (for creating proxy on promotion)
+    bus_addresses: BusAddresses,
+    /// Publisher for sending messages to the bus
+    publisher: Publisher<M>,
 }
 
-impl fmt::Debug for FollowerGuard {
+impl<M: BusMessage> fmt::Debug for FollowerGuard<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FollowerGuard")
             .field("lock_path", &self.lock_path)
@@ -301,13 +401,13 @@ impl fmt::Debug for FollowerGuard {
     }
 }
 
-impl FollowerGuard {
+impl<M: BusMessage> FollowerGuard<M> {
     /// Re-contest the election.
     ///
     /// If the leader's flock has been released (process exited or crashed),
     /// acquires the lock and returns `Ok(Some(LeaderGuard))`.
     /// If another process still holds the lock, returns `Ok(None)`.
-    pub fn try_promote(&self) -> Result<Option<LeaderGuard>> {
+    pub fn try_promote(&self) -> Result<Option<LeaderGuard<M>>> {
         // Create-or-open the lock file. The previous leader's drop may have
         // deleted it, so we must use create() to ensure it exists for flock.
         let lock_file = File::create(&self.lock_path).map_err(ElectionError::LockFileCreation)?;
@@ -317,15 +417,39 @@ impl FollowerGuard {
                 // Won the re-election — clean up stale socket from dead leader
                 let _ = fs::remove_file(&self.socket_path);
 
+                // Start a new proxy
+                let addrs = &self.bus_addresses;
+                discovery::cleanup_discovery(&self.discovery_path, addrs);
+
+                let proxy = ProxyHandle::start(addrs)?;
+                discovery::write_discovery(&self.discovery_path, addrs)?;
+
+                let publisher = Publisher::connected(proxy.zmq_context(), &addrs.frontend)?;
+
                 Ok(Some(LeaderGuard {
                     _lock_file: lock_file,
                     lock_path: self.lock_path.clone(),
                     socket_path: self.socket_path.clone(),
+                    discovery_path: self.discovery_path.clone(),
+                    bus_addresses: addrs.clone(),
+                    _proxy: proxy,
+                    publisher,
                 }))
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(ElectionError::LockAcquisition(e)),
         }
+    }
+
+    /// Publish a message to the bus.
+    pub fn publish(&self, msg: &M) -> Result<()> {
+        self.publisher.send(msg)
+    }
+
+    /// Subscribe to messages on the bus, optionally filtered by topics.
+    pub fn subscribe(&self, topics: &[&[u8]]) -> Result<Subscriber<M>> {
+        let ctx = zmq::Context::new();
+        Subscriber::connected(&ctx, &self.bus_addresses.backend, topics)
     }
 
     /// Get the path to the lock file
@@ -363,7 +487,7 @@ mod tests {
 
     #[test]
     fn test_election_new() {
-        let election = LeaderElection::new("/some/workspace");
+        let election: LeaderElection = LeaderElection::new("/some/workspace");
 
         assert!(election.lock_path().to_string_lossy().contains("sah-ts-"));
         assert!(election.socket_path().to_string_lossy().contains("sah-ts-"));
@@ -373,7 +497,7 @@ mod tests {
     #[test]
     fn test_election_with_custom_config() {
         let config = ElectionConfig::new().with_prefix("custom");
-        let election = LeaderElection::with_config("/some/workspace", config);
+        let election: LeaderElection = LeaderElection::with_config("/some/workspace", config);
 
         assert!(election
             .lock_path()
@@ -387,22 +511,22 @@ mod tests {
 
     #[test]
     fn test_hash_path_deterministic() {
-        let hash1 = LeaderElection::hash_path(Path::new("/workspace/project"));
-        let hash2 = LeaderElection::hash_path(Path::new("/workspace/project"));
+        let hash1 = hash_path(Path::new("/workspace/project"));
+        let hash2 = hash_path(Path::new("/workspace/project"));
         assert_eq!(hash1, hash2);
     }
 
     #[test]
     fn test_hash_path_different_for_different_paths() {
-        let hash1 = LeaderElection::hash_path(Path::new("/workspace/a"));
-        let hash2 = LeaderElection::hash_path(Path::new("/workspace/b"));
+        let hash1 = hash_path(Path::new("/workspace/a"));
+        let hash2 = hash_path(Path::new("/workspace/b"));
         assert_ne!(hash1, hash2);
     }
 
     #[test]
     fn test_try_become_leader_success() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         let guard = election.try_become_leader();
         assert!(guard.is_ok());
@@ -411,7 +535,7 @@ mod tests {
     #[test]
     fn test_try_become_leader_lock_held() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         // First process acquires lock
         let _guard1 = election.try_become_leader().unwrap();
@@ -424,7 +548,7 @@ mod tests {
     #[test]
     fn test_leader_guard_cleanup() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         // Create a fake socket file to verify cleanup
         fs::write(election.socket_path(), "test").unwrap();
@@ -446,7 +570,7 @@ mod tests {
     #[test]
     fn test_leader_exists() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         assert!(!election.leader_exists());
 
@@ -458,7 +582,7 @@ mod tests {
     #[test]
     fn test_leader_guard_socket_path() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         let guard = election.try_become_leader().unwrap();
         assert_eq!(guard.socket_path(), election.socket_path());
@@ -468,7 +592,7 @@ mod tests {
     fn test_election_with_custom_base_dir() {
         let dir = TempDir::new().unwrap();
         let config = ElectionConfig::new().with_base_dir(dir.path());
-        let election = LeaderElection::with_config("/workspace", config);
+        let election: LeaderElection = LeaderElection::with_config("/workspace", config);
 
         assert!(election.lock_path().starts_with(dir.path()));
         assert!(election.socket_path().starts_with(dir.path()));
@@ -479,7 +603,7 @@ mod tests {
     #[test]
     fn test_elect_returns_leader() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         let outcome = election.elect().unwrap();
         assert!(matches!(outcome, ElectionOutcome::Leader(_)));
@@ -488,7 +612,7 @@ mod tests {
     #[test]
     fn test_elect_returns_follower_when_lock_held() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         // First caller wins
         let _leader = election.try_become_leader().unwrap();
@@ -501,7 +625,7 @@ mod tests {
     #[test]
     fn test_follower_try_promote_fails_while_leader_alive() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         let _leader = election.try_become_leader().unwrap();
 
@@ -519,7 +643,7 @@ mod tests {
     #[test]
     fn test_follower_try_promote_succeeds_after_leader_drops() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         // Leader wins, then dies
         let leader = election.try_become_leader().unwrap();
@@ -540,7 +664,7 @@ mod tests {
     #[test]
     fn test_leader_drop_cleans_up_lock_file() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         let guard = election.try_become_leader().unwrap();
         assert!(election.lock_path().exists());
@@ -552,7 +676,7 @@ mod tests {
     #[test]
     fn test_promoted_leader_behaves_like_original() {
         let dir = TempDir::new().unwrap();
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection = LeaderElection::new(dir.path());
 
         // First leader wins and dies
         let leader = election.try_become_leader().unwrap();

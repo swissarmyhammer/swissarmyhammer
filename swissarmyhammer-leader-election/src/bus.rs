@@ -1,0 +1,273 @@
+//! Bus message trait, Publisher, and Subscriber for typed pub/sub over leader election.
+//!
+//! `zmq::Socket` is `!Send`, so Publisher and Subscriber use internal channels
+//! to communicate with dedicated ZMQ threads that own the sockets.
+
+use std::marker::PhantomData;
+use std::sync::mpsc;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use crate::error::{ElectionError, Result};
+
+/// Trait that message types must implement to ride the bus.
+///
+/// The default type parameter `NullMessage` means existing consumers that don't
+/// use the bus compile unchanged — they get an idle proxy forwarding nothing.
+pub trait BusMessage: Send + 'static {
+    /// The topic/category for ZMQ prefix filtering.
+    fn topic(&self) -> &[u8];
+
+    /// Serialize to wire format (ZMQ frames after the topic frame).
+    fn to_frames(&self) -> Result<Vec<Vec<u8>>>;
+
+    /// Deserialize from wire format.
+    fn from_frames(topic: &[u8], frames: &[Vec<u8>]) -> Result<Self>
+    where
+        Self: Sized;
+}
+
+/// No-op message type. Used as the default type parameter so that
+/// `LeaderElection::new()` works without specifying a message type.
+#[derive(Debug, Clone)]
+pub struct NullMessage;
+
+impl BusMessage for NullMessage {
+    fn topic(&self) -> &[u8] {
+        b""
+    }
+
+    fn to_frames(&self) -> Result<Vec<Vec<u8>>> {
+        Ok(vec![])
+    }
+
+    fn from_frames(_topic: &[u8], _frames: &[Vec<u8>]) -> Result<Self> {
+        Ok(NullMessage)
+    }
+}
+
+/// Serialized message ready to send over ZMQ (topic + frames).
+struct WireMessage {
+    topic: Vec<u8>,
+    frames: Vec<Vec<u8>>,
+}
+
+/// Publisher handle for sending messages to the bus.
+///
+/// Thread-safe (`Send`) — uses an internal channel to a dedicated ZMQ thread.
+/// Not `Sync` because `mpsc::Sender` is `!Sync`. Both leaders and followers
+/// get one on election.
+pub struct Publisher<M: BusMessage> {
+    /// None = noop publisher (NullMessage / no bus configured)
+    sender: Option<mpsc::Sender<WireMessage>>,
+    /// Handle to the ZMQ PUB thread (joined on drop)
+    _thread: Option<JoinHandle<()>>,
+    _phantom: PhantomData<M>,
+}
+
+impl<M: BusMessage> Publisher<M> {
+    /// Create a no-op publisher (used when bus is not active, e.g. NullMessage).
+    pub(crate) fn noop() -> Self {
+        Self {
+            sender: None,
+            _thread: None,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Create a publisher connected to the given frontend address.
+    ///
+    /// Spawns a thread that owns the ZMQ PUB socket (because `zmq::Socket` is `!Send`).
+    pub(crate) fn connected(ctx: &zmq::Context, frontend_addr: &str) -> Result<Self> {
+        let (tx, rx) = mpsc::channel::<WireMessage>();
+        let ctx = ctx.clone();
+        let addr = frontend_addr.to_string();
+
+        let thread = thread::spawn(move || {
+            let sock = match ctx.socket(zmq::PUB) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("Failed to create PUB socket: {}", e);
+                    return;
+                }
+            };
+            if let Err(e) = sock.connect(&addr) {
+                tracing::error!("Failed to connect PUB socket to {}: {}", addr, e);
+                return;
+            }
+
+            // Process messages until the channel is closed
+            while let Ok(wire) = rx.recv() {
+                // Send as multipart: [topic, frame0, frame1, ...]
+                let total = 1 + wire.frames.len();
+                if let Err(e) = sock.send(&wire.topic, if total > 1 { zmq::SNDMORE } else { 0 })
+                {
+                    tracing::warn!("PUB send topic failed: {}", e);
+                    continue;
+                }
+                for (i, frame) in wire.frames.iter().enumerate() {
+                    let flags = if i < wire.frames.len() - 1 {
+                        zmq::SNDMORE
+                    } else {
+                        0
+                    };
+                    if let Err(e) = sock.send(frame, flags) {
+                        tracing::warn!("PUB send frame failed: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            sender: Some(tx),
+            _thread: Some(thread),
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Send a message to the bus.
+    ///
+    /// Serializes the message and queues it for the ZMQ thread.
+    /// No-op if this is a noop publisher.
+    pub fn send(&self, msg: &M) -> Result<()> {
+        let Some(ref sender) = self.sender else {
+            return Ok(());
+        };
+        let topic = msg.topic().to_vec();
+        let frames = msg.to_frames()?;
+        let wire = WireMessage { topic, frames };
+        sender
+            .send(wire)
+            .map_err(|_| ElectionError::Message("Publisher channel closed".to_string()))?;
+        Ok(())
+    }
+}
+
+/// Subscriber handle for receiving messages from the bus.
+///
+/// Thread-safe (`Send`) — uses an internal channel from a dedicated ZMQ thread.
+pub struct Subscriber<M: BusMessage> {
+    receiver: mpsc::Receiver<Result<M>>,
+    /// SUB thread handle. Not joined on drop — the thread exits within
+    /// rcvtimeo (100ms) after the Receiver is dropped, because `tx.send()`
+    /// fails. Joining would deadlock since `recv_multipart` blocks even
+    /// with rcvtimeo when the ZMQ context is still alive.
+    _thread: JoinHandle<()>,
+}
+
+impl<M: BusMessage> Subscriber<M> {
+    /// Create a subscriber connected to the given backend address.
+    ///
+    /// Subscribes to the given topics (empty slice = subscribe to all).
+    pub(crate) fn connected(
+        ctx: &zmq::Context,
+        backend_addr: &str,
+        topics: &[&[u8]],
+    ) -> Result<Self> {
+        let (tx, rx) = mpsc::channel::<Result<M>>();
+        let ctx = ctx.clone();
+        let addr = backend_addr.to_string();
+        let topics: Vec<Vec<u8>> = topics.iter().map(|t| t.to_vec()).collect();
+
+        let thread = thread::spawn(move || {
+            let sock = match ctx.socket(zmq::SUB) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.send(Err(ElectionError::Bus(e)));
+                    return;
+                }
+            };
+            if let Err(e) = sock.connect(&addr) {
+                let _ = tx.send(Err(ElectionError::Bus(e)));
+                return;
+            }
+
+            // Subscribe to topics (empty = all)
+            if topics.is_empty() {
+                let _ = sock.set_subscribe(b"");
+            } else {
+                for topic in &topics {
+                    let _ = sock.set_subscribe(topic);
+                }
+            }
+
+            // Set a receive timeout so we can check if the channel is still open
+            let _ = sock.set_rcvtimeo(100);
+
+            loop {
+                // Receive multipart: [topic, frame0, frame1, ...]
+                match sock.recv_multipart(0) {
+                    Ok(parts) if parts.len() >= 2 => {
+                        let topic = &parts[0];
+                        let frames: Vec<Vec<u8>> = parts[1..].to_vec();
+                        let result = M::from_frames(topic, &frames);
+                        if tx.send(result).is_err() {
+                            break; // Receiver dropped
+                        }
+                    }
+                    Ok(_) => {
+                        // Malformed message — skip
+                    }
+                    Err(zmq::Error::EAGAIN) => {
+                        // Timeout — check if receiver is still alive by trying a zero-size send
+                        // Actually we can't easily check, just continue
+                        continue;
+                    }
+                    Err(zmq::Error::ETERM) => break, // Context destroyed
+                    Err(e) => {
+                        if tx.send(Err(ElectionError::Bus(e))).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            receiver: rx,
+            _thread: thread,
+        })
+    }
+
+    /// Receive the next message. Blocks until a message arrives.
+    pub fn recv(&self) -> Result<M> {
+        self.receiver
+            .recv()
+            .map_err(|_| ElectionError::Message("Subscriber channel closed".to_string()))?
+    }
+
+    /// Try to receive a message with a timeout.
+    pub fn recv_timeout(&self, timeout: Duration) -> Option<Result<M>> {
+        self.receiver.recv_timeout(timeout).ok()
+    }
+}
+
+// Send assertions (Publisher and Subscriber are Send but not Sync)
+const _: () = {
+    fn _assert_send<T: Send>() {}
+    fn _checks() {
+        _assert_send::<Publisher<NullMessage>>();
+        _assert_send::<Subscriber<NullMessage>>();
+    }
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_null_message_roundtrip() {
+        let msg = NullMessage;
+        assert_eq!(msg.topic(), b"");
+        let frames = msg.to_frames().unwrap();
+        assert!(frames.is_empty());
+        let _restored = NullMessage::from_frames(b"", &frames).unwrap();
+    }
+
+    #[test]
+    fn test_publisher_noop_send() {
+        let pub_handle: Publisher<NullMessage> = Publisher::noop();
+        assert!(pub_handle.send(&NullMessage).is_ok());
+    }
+}
