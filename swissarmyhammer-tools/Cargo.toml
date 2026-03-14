@@ -88,6 +88,7 @@ reqwest = { workspace = true }
 
 # Embedding model for semantic search (platform-aware: ANE on Apple Silicon, llama.cpp elsewhere)
 swissarmyhammer-embedding = { path = "../swissarmyhammer-embedding" }
+model-embedding = { path = "../model-embedding" }
 
 # SQLite for embedding storage
 rusqlite = { workspace = true }

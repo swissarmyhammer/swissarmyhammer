@@ -19,6 +19,7 @@ use rusqlite::Connection;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
+use model_embedding::cosine_similarity;
 use swissarmyhammer_embedding::{Embedder, TextEmbedder};
 
 const CHUNK_SIZE: usize = 15; // lines per embedding chunk
@@ -639,20 +640,6 @@ fn decode_embedding(bytes: &[u8]) -> Vec<f32> {
         .chunks_exact(BYTES_PER_F32)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
-}
-
-/// Compute cosine similarity between two vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if mag_a == 0.0 || mag_b == 0.0 {
-        return 0.0;
-    }
-    dot / (mag_a * mag_b)
 }
 
 #[cfg(test)]
