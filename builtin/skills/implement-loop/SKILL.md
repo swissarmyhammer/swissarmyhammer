@@ -1,16 +1,30 @@
 ---
-name: implement-all
-description: Implement all planned kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards.
+name: implement-loop
+description: Implement all ready kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards.
 metadata:
-  author: "swissarmyhammer"
+  author: swissarmyhammer
   version: "1.0"
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "sah tool ralph ralph check --"
 ---
 
-# Implement All
+# Implement Loop
 
 Autonomously implement every kanban card until the board is clear.
 
 This skill is an **orchestrator**. It does not pick cards, write code, or run tests itself. It delegates to `/implement` and `/test`, and uses `ralph` to stay alive between cards.
+
+## Process
+
+1. **Set ralph**: call `ralph` with `op: "set ralph"` and instruction "Implement all kanban cards until the board is clear".
+2. **Run `/implement`** — it picks the next card, implements it, and marks it complete.
+3. **Run `/test`** — verify all tests pass after the implementation.
+4. **Check for remaining cards**: query `kanban` with `next task`.
+5. **If cards remain**: go back to step 2.
+6. **Stop condition**: only when `kanban` `next task` returns no cards may you call `ralph` with `op: "clear ralph"` and report.
 
 ## Constraints
 
