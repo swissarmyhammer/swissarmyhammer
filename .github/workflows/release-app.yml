@@ -53,21 +53,30 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
+          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
           echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
-          security create-keychain -p "" build.keychain || true
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          security import /tmp/certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
+          echo "Certificate file size: $(wc -c < /tmp/certificate.p12) bytes"
+
+          # Create and configure build keychain
+          security create-keychain -p "" build.keychain-db || true
+          security unlock-keychain -p "" build.keychain-db
+          security set-keychain-settings -lut 21600 build.keychain-db
+
+          # Add build keychain to search list (keep login keychain too)
+          security list-keychains -d user -s build.keychain-db $(security list-keychains -d user | tr -d '"')
+
+          # Import certificate and private key
+          security import /tmp/certificate.p12 -k build.keychain-db -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain-db
+
           rm /tmp/certificate.p12
 
-      - name: Debug codesigning identities
-        run: |
-          echo "=== Available signing identities ==="
-          security find-identity -v -p codesigning build.keychain
-          echo "=== All identities ==="
-          security find-identity -v build.keychain
+          echo "=== Codesigning identities ==="
+          security find-identity -v -p codesigning
+          echo "=== All identities in build keychain ==="
+          security find-identity -v build.keychain-db
 
       - name: Build Tauri app (${{ matrix.app.product }})
         env:
@@ -116,7 +125,7 @@ jobs:
       - name: Cleanup keychain
         if: always()
         run: |
-          security delete-keychain build.keychain || true
+          security delete-keychain build.keychain-db || true
 
   publish-homebrew-cask:
     needs: build-macos
