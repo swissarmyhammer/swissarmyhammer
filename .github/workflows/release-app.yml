@@ -40,6 +40,11 @@ jobs:
         run: |
           rustup target add aarch64-apple-darwin
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install Tauri CLI
         run: |
           cargo install tauri-cli --version "^2" --locked || true
