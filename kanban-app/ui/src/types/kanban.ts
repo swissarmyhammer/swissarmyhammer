@@ -85,6 +85,7 @@ export interface EntityDef {
   fields: string[];
   mention_prefix?: string;
   mention_display_field?: string;
+  search_display_field?: string;
 }
 
 /** Schema response from get_entity_schema IPC command. */

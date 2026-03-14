@@ -17,6 +17,8 @@ swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-views = { path = "../swissarmyhammer-views" }
+swissarmyhammer-entity-search = { path = "../swissarmyhammer-entity-search" }
+swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 clap = { workspace = true }

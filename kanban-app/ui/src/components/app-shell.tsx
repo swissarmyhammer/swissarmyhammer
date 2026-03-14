@@ -98,6 +98,7 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteMode, setPaletteMode] = useState<"command" | "search">("command");
   const paletteOpenRef = useRef(false);
   paletteOpenRef.current = paletteOpen;
   const { mode: keymapMode, setMode: setKeymapMode } = useKeymap();
@@ -112,6 +113,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         name: "Command Palette",
         keys: { vim: ":", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
         execute: () => {
+          setPaletteMode("command");
           setPaletteOpen(true);
           setMode("command");
         },
@@ -121,6 +123,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         name: "Command Palette",
         keys: { vim: "Mod+Shift+P", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
         execute: () => {
+          setPaletteMode("command");
           setPaletteOpen(true);
           setMode("command");
         },
@@ -156,12 +159,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           setMode("normal");
         },
       },
-      // Placeholders for future implementation
       {
         id: "app.search",
         name: "Search",
-        keys: { vim: "/", cua: "Mod+F" },
-        execute: () => {},
+        keys: { vim: "/", cua: "Mod+F", emacs: "Mod+F" },
+        execute: () => {
+          setPaletteMode("search");
+          setPaletteOpen(true);
+          setMode("command");
+        },
       },
       {
         id: "app.help",
@@ -249,7 +255,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <CommandScopeProvider commands={globalCommands}>
       <KeybindingHandler mode={keymapMode} />
       {children}
-      <CommandPalette open={paletteOpen} onClose={closePalette} />
+      <CommandPalette open={paletteOpen} onClose={closePalette} mode={paletteMode} />
     </CommandScopeProvider>
   );
 }

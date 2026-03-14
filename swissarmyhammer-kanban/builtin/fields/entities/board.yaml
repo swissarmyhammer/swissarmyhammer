@@ -1,4 +1,5 @@
 name: board
+search_display_field: name
 fields:
   - name
   - description

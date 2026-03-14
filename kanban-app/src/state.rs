@@ -8,6 +8,8 @@ use std::sync::Arc;
 use swissarmyhammer_commands::{
     builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
 };
+use swissarmyhammer_entity::Entity;
+use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor};
 use tokio::sync::RwLock;
 
@@ -26,6 +28,8 @@ pub struct BoardHandle {
     pub processor: KanbanOperationProcessor,
     /// Entity cache for detecting external file changes with field-level diffing.
     pub entity_cache: EntityCache,
+    /// In-memory search index over all entities.
+    pub search_index: Arc<RwLock<EntitySearchIndex>>,
     /// File watcher — dropped when the handle is dropped.
     _watcher: Option<BoardWatcher>,
 }
@@ -40,10 +44,23 @@ impl BoardHandle {
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
         let entity_cache = watcher::new_entity_cache(&kanban_path);
+
+        // Load all entities into search index
+        let mut all_entities: Vec<Entity> = Vec::new();
+        if let Ok(ectx) = ctx.entity_context().await {
+            for entity_type in &["task", "tag", "column", "actor", "swimlane", "board"] {
+                if let Ok(entities) = ectx.list(entity_type).await {
+                    all_entities.extend(entities);
+                }
+            }
+        }
+        let search_index = Arc::new(RwLock::new(EntitySearchIndex::from_entities(all_entities)));
+
         Ok(Self {
             ctx: Arc::new(ctx),
             processor: KanbanOperationProcessor::new(),
             entity_cache,
+            search_index,
             _watcher: None,
         })
     }
@@ -86,9 +103,16 @@ impl BoardHandle {
     pub fn start_watcher(&mut self, app_handle: tauri::AppHandle) {
         let kanban_root = self.ctx.root().to_path_buf();
         let cache = self.entity_cache.clone();
+        let search_index = self.search_index.clone();
 
         match watcher::start_watching(kanban_root.clone(), cache, move |evt| {
             use tauri::Emitter;
+            // Update search index for external file changes.
+            // Use try_write to avoid blocking the notify thread if the async
+            // dispatch_command path holds the write lock concurrently.
+            if let Ok(mut idx) = search_index.try_write() {
+                watcher::sync_search_index(&mut idx, &evt);
+            }
             let event_name = match &evt {
                 watcher::WatchEvent::EntityCreated { .. } => "entity-created",
                 watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
