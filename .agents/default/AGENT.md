@@ -303,7 +303,9 @@ use the skill tool to load the full instructions, then follow them.
 
 - **implement**: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent. (local)
 
-- **implement-all**: Implement all planned kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards. (local)
+- **implement-loop**: Implement all planned kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards. (local)
+
+- **test-loop**: Continuously run tests, create failure cards, and implement fixes until the suite is fully green. Uses ralph to prevent stopping between iterations. (local)
 
 - **kanban**: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item. (local)
 

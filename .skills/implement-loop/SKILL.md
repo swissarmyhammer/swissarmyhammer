@@ -1,5 +1,5 @@
 ---
-name: implement-all
+name: implement-loop
 description: Implement all planned kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards.
 metadata:
   author: swissarmyhammer
@@ -11,7 +11,7 @@ hooks:
           command: "sah tool ralph ralph check --"
 ---
 
-# Implement All
+# Implement Loop
 
 Autonomously implement every kanban card until the board is clear.
 

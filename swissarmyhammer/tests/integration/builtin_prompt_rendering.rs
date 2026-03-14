@@ -16,19 +16,6 @@ fn setup_prompt_library() -> PromptLibrary {
     library
 }
 
-/// Helper function to assert that a rendered prompt is valid
-fn assert_valid_render(rendered: &str) {
-    assert!(!rendered.is_empty(), "Rendered prompt should not be empty");
-    assert!(
-        !rendered.contains("Unknown partial-template"),
-        "Should not contain partial resolution errors"
-    );
-    assert!(
-        !rendered.contains("liquid:"),
-        "Should not contain liquid syntax errors"
-    );
-}
-
 #[test]
 fn test_partials_are_loaded_and_accessible() {
     // This test specifically verifies that partials are loaded correctly
@@ -113,6 +100,20 @@ fn test_check_prompt_renders_with_parameters() {
     assert!(
         rendered.contains("PASS") || rendered.contains("VIOLATION"),
         "Should contain instructions about PASS/VIOLATION format"
+    );
+
+    // Negative assertions: verify no template errors are present in the rendered output.
+    // "Unknown partial-template" indicates a missing partial that Liquid could not resolve.
+    // "liquid:" indicates a Liquid syntax or runtime error surfaced in the output.
+    assert!(
+        !rendered.contains("Unknown partial-template"),
+        "Rendered output must not contain partial resolution errors ('Unknown partial-template'): {}",
+        rendered
+    );
+    assert!(
+        !rendered.contains("liquid:"),
+        "Rendered output must not contain Liquid errors ('liquid:'): {}",
+        rendered
     );
 
     println!("✓ .check prompt rendered successfully with all parameters");
