@@ -18,6 +18,12 @@ partial: true
 
 **IMPORTANT:** Do NOT glob for test files. Makefiles define test targets. Use `make test` or `make check` to run all tests as configured.
 
+**Formatting:**
+- Check for a `make format` or `make fmt` target
+- **clang-format:** if C/C++ source, check for `.clang-format` config
+- Look at Makefile for custom format targets before committing
+- ALWAYS run the project's formatter before committing if one exists
+
 **Best Practices:**
 - Always run `make clean` before full rebuilds
 - Check `Makefile` or run `make help` to see available targets

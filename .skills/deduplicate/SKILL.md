@@ -22,6 +22,8 @@ This will scan the directory tree and return:
 
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
 
+** Fix the root cause, not the symptoms **
+
 ## Code Quality
 
 - Write clean, readable code that follows existing patterns in the codebase

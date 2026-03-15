@@ -234,6 +234,7 @@ use swissarmyhammer_common::health::Doctorable;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_prompts::PromptLibrary;
 use tokio::sync::{Mutex, RwLock};
 
 /// Context shared by all tools during execution
@@ -372,6 +373,14 @@ pub struct ToolContext {
     /// }
     /// ```
     pub mcp_server: Arc<RwLock<Option<Arc<super::McpServer>>>>,
+
+    /// Optional prompt library for template rendering
+    ///
+    /// When present, tools can render Liquid templates with partial resolution
+    /// (e.g., `{% include "_partials/project-types/rust" %}`). This enables
+    /// tools like `detect projects` to render project-type guidelines through
+    /// the same pipeline used by skills and agents.
+    pub prompt_library: Option<Arc<RwLock<PromptLibrary>>>,
 }
 
 impl ToolContext {
@@ -393,7 +402,22 @@ impl ToolContext {
             session_id: ulid::Ulid::new().to_string(),
             session_actor: Arc::new(RwLock::new(None)),
             mcp_server: Arc::new(RwLock::new(None)),
+            prompt_library: None,
         }
+    }
+
+    /// Set the prompt library for template rendering
+    ///
+    /// # Arguments
+    ///
+    /// * `library` - The prompt library to use for Liquid template rendering
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the prompt library set
+    pub fn with_prompt_library(mut self, library: Arc<RwLock<PromptLibrary>>) -> Self {
+        self.prompt_library = Some(library);
+        self
     }
 
     /// Set the plan sender for plan notifications

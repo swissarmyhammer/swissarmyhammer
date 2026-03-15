@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: c8
+position_ordinal: e380
 title: Add `range` parameter to `get changes` git tool
 ---
 **File**: `swissarmyhammer-tools/src/mcp/tools/git/changes/mod.rs`

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffff9680
+position_ordinal: ffffc680
 title: Fix tag and assignee editors to use CM6
 ---
 Two broken editors in the grid:

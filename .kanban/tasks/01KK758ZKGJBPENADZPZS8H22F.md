@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffff8d80
+position_ordinal: ffffbd80
 title: Hardcoded mention boundary chars may miss Unicode
 ---
 **W2: Mention boundary detection uses hardcoded ASCII set**

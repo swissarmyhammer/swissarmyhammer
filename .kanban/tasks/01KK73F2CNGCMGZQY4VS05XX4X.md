@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: a080
+position_ordinal: a180
 title: New task
 ---

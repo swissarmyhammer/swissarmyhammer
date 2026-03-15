@@ -2,7 +2,7 @@
 depends_on:
 - 01KKF4XH1HH7S14DYTYXSPZ3N5
 position_column: done
-position_ordinal: c9
+position_ordinal: e580
 title: Update review skill to handle main-branch workflow
 ---
 **File**: `builtin/skills/review/SKILL.md`

@@ -28,6 +28,13 @@ partial: true
 
 **IMPORTANT:** Do NOT glob for test files. Use `pytest` or `python -m unittest discover` - these tools automatically find all tests.
 
+**Formatting:**
+- **Black:** `black .` (format) or `black --check .` (verify)
+- **Ruff format:** `ruff format .` (format) or `ruff format --check .` (verify)
+- **isort:** `isort .` (sort imports) or `isort --check .` (verify)
+- Check `pyproject.toml` for configured formatters
+- ALWAYS run the project's formatter before committing
+
 **Best Practices:**
 - Always activate the virtual environment before running commands
 - Use `pytest` for testing when available (more features than unittest)

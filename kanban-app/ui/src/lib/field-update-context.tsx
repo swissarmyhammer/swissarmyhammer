@@ -69,8 +69,11 @@ export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
  * await updateField("task", taskId, "title", newTitle);
  * ```
  */
+const NO_OP_CONTEXT: FieldUpdateContextValue = {
+  updateField: async () => {},
+};
+
 export function useFieldUpdate(): FieldUpdateContextValue {
   const ctx = useContext(FieldUpdateContext);
-  if (!ctx) throw new Error("useFieldUpdate must be used within a FieldUpdateProvider");
-  return ctx;
+  return ctx ?? NO_OP_CONTEXT;
 }

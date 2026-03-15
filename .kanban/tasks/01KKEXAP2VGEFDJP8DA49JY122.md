@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: a4
+position_ordinal: a880
 title: 'CLI doctor: use pluggable LSP registry instead of hardcoded rust-analyzer check'
 ---
 ## What\n\n`swissarmyhammer-cli/src/commands/doctor/checks.rs:299-355` hardcodes a rust-analyzer-only LSP check. The code-context doctor at `swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs` already has `get_lsp_servers_for_type()` mapping project types to LSP servers, and the LSP registry at `swissarmyhammer-lsp/src/registry.rs` has YAML-loaded specs with install hints. The CLI doctor should use one of these instead of its own hardcoded check.\n\n**Affected files:**\n- `swissarmyhammer-cli/src/commands/doctor/checks.rs` — replace `check_lsp_servers()` \n- `swissarmyhammer-cli/src/commands/doctor/mod.rs` — may need to pass detected project types\n\n## Acceptance Criteria\n- [ ] `cargo run -- doctor` reports status of typescript-language-server when a package.json exists in the workspace\n- [ ] `cargo run -- doctor` still reports rust-analyzer status for Rust projects\n- [ ] Missing LSPs show install hints from the registry/YAML config\n- [ ] Multi-project workspaces check all relevant LSPs\n\n## Tests\n- [ ] Update `test_lsp_servers_check` in checks.rs to verify multiple LSP types\n- [ ] `cargo nextest run --package swissarmyhammer-cli`

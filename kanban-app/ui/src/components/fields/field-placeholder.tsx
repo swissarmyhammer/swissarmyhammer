@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { keymap, EditorView } from "@codemirror/view";
+import { EditorView, placeholder as cmPlaceholder } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -9,6 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useKeymap } from "@/lib/keymap-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import type { FieldDef } from "@/types/kanban";
 
 interface FieldPlaceholderProps {
@@ -66,9 +67,15 @@ interface EditorProps {
   value: string;
   onCommit: (value: string) => void;
   onCancel: () => void;
+  /** Semantic submit — fires on Enter (CUA/emacs) or normal-mode Enter (vim). */
+  onSubmit?: (text: string) => void;
+  /** Placeholder text shown when the editor is empty. */
+  placeholder?: string;
+  /** Called on every content change with the current text. */
+  onChange?: (text: string) => void;
 }
 
-export function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProps) {
+export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, placeholder, onChange }: EditorProps) {
   const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
@@ -108,17 +115,59 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProp
   const saveInPlaceRef = useRef(saveInPlace);
   saveInPlaceRef.current = saveInPlace;
 
+  // Semantic submit ref: if onSubmit provided, use it; otherwise commit-and-exit
+  const semanticSubmitRef = useRef<(() => void) | null>(null);
+  semanticSubmitRef.current = onSubmit
+    ? () => {
+        if (committedRef.current) return;
+        const text = editorRef.current?.view
+          ? editorRef.current.view.state.doc.toString()
+          : draft;
+        if (text.length > 0) onSubmit(text);
+      }
+    : () => commitAndExitRef.current();
+
+  // Semantic cancel ref: if onSubmit provided, call onCancel directly
+  // bypassing committedRef (popup MUST dismiss even if blur already fired);
+  // otherwise preserve existing defaults (vim: commit, CUA: cancel)
+  const semanticCancelRef = useRef<(() => void) | null>(null);
+  semanticCancelRef.current = onSubmit
+    ? () => onCancel()
+    : mode === "vim"
+      ? () => commitAndExitRef.current()
+      : () => cancelAndExitRef.current();
+
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
-      if (mode === "vim") {
-        const cm = getCM(view);
-        if (cm?.state?.vim?.insertMode) {
+      if (mode !== "vim") return;
+      const cm = getCM(view);
+      if (!cm) return;
+
+      if (onSubmit) {
+        // Popup/quick-capture mode: auto-enter insert mode so user can type immediately.
+        // Same rAF retry pattern as command-palette.tsx.
+        let cancelled = false;
+        let attempts = 0;
+        const tryEnterInsert = () => {
+          if (cancelled || attempts > 20) return;
+          attempts++;
+          const c = getCM(view);
+          if (!c) { requestAnimationFrame(tryEnterInsert); return; }
+          if (!c.state?.vim?.insertMode) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            Vim.handleKey(c as any, "i", "mapping");
+          }
+        };
+        requestAnimationFrame(tryEnterInsert);
+      } else {
+        // Grid cell editing: ensure we start in normal mode
+        if (cm.state?.vim?.insertMode) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           Vim.exitInsertMode(cm as any);
         }
       }
     },
-    [mode],
+    [mode, onSubmit],
   );
 
   const extensions = useMemo(
@@ -126,37 +175,15 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProp
       keymapCompartment.current.of(keymapExtension(mode)),
       EditorView.lineWrapping,
       markdown({ base: markdownLanguage, codeLanguages: languages }),
-      // Vim mode: Escape in normal mode commits, insert mode → save in place
-      ...(mode === "vim"
-        ? [
-            EditorView.domEventHandlers({
-              keydown(event, view) {
-                if (event.key === "Escape") {
-                  const cm = getCM(view);
-                  if (cm?.state?.vim?.insertMode) {
-                    setTimeout(() => saveInPlaceRef.current(), 0);
-                    return false;
-                  }
-                  commitAndExitRef.current();
-                  return true;
-                }
-                return false;
-              },
-            }),
-          ]
-        : [
-            keymap.of([
-              {
-                key: "Escape",
-                run: () => {
-                  cancelAndExitRef.current();
-                  return true;
-                },
-              },
-            ]),
-          ]),
+      ...buildSubmitCancelExtensions({
+        mode,
+        onSubmitRef: semanticSubmitRef,
+        onCancelRef: semanticCancelRef,
+        saveInPlaceRef,
+      }),
+      ...(placeholder ? [cmPlaceholder(placeholder)] : []),
     ],
-    [mode],
+    [mode, placeholder],
   );
 
   return (
@@ -164,7 +191,7 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel }: EditorProp
       ref={editorRef}
       autoFocus
       value={draft}
-      onChange={(val) => setDraft(val)}
+      onChange={(val) => { setDraft(val); onChange?.(val); }}
       onBlur={() => commitAndExitRef.current()}
       onCreateEditor={handleCreateEditor}
       extensions={extensions}

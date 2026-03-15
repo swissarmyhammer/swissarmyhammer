@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: b480
+position_ordinal: c380
 title: Switch frontend search to use backend search_entities IPC
 ---
 ## What

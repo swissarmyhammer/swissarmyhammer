@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: b0
+position_ordinal: ba80
 title: 'LSP indexing worker: wire up all daemon clients, not just rust-analyzer'
 ---
 ## What\n\n`swissarmyhammer-tools/src/mcp/server.rs:320-324` hardcodes `get_daemon(\"rust-analyzer\")` to grab a single shared client for the LSP indexing worker. Even when the supervisor successfully starts typescript-language-server, its client is never passed to any indexing worker. TS files get tree-sitter indexed but never LSP indexed.\n\nThe fix: after the supervisor starts, iterate all running daemons and spawn an LSP indexing worker per client, or refactor to accept multiple clients and route files by extension/language_id.\n\n**Affected files:**\n- `swissarmyhammer-tools/src/mcp/server.rs` (lines 300-330, 401-420)\n- `swissarmyhammer-code-context/src/lsp_worker.rs` — may need to filter files by language\n\n## Acceptance Criteria\n- [ ] When typescript-language-server is available and started, TS files get LSP-indexed\n- [ ] `mcp.log` shows LSP indexing worker connected to typescript-language-server\n- [ ] Multiple LSP workers can run concurrently without DB conflicts\n- [ ] Existing rust-analyzer indexing unchanged\n\n## Tests\n- [ ] Unit test verifying multiple workers can be spawned with different clients\n- [ ] `cargo nextest run --package swissarmyhammer-tools`\n- [ ] Manual: run sah in mixed workspace, check mcp.log for both LSP workers

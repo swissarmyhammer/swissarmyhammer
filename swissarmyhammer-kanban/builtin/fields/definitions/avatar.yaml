@@ -6,4 +6,4 @@ type:
   single_line: true
 editor: none
 display: avatar
-section: hidden
+section: body

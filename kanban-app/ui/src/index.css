@@ -105,6 +105,12 @@
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
       Roboto, "Helvetica Neue", Arial, sans-serif;
   }
+  /* Quick-capture window needs a fully transparent backdrop so only the
+     card is visible (the Tauri window has transparent: true). */
+  html[data-quick-capture],
+  html[data-quick-capture] body {
+    background: transparent !important;
+  }
 }
 
 /* Entity focus — subtle darkening */

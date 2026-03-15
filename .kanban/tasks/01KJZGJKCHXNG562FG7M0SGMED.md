@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ff9080
+position_ordinal: ffc080
 title: Add scope registry to EntityFocusProvider
 ---
