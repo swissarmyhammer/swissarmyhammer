@@ -10,6 +10,7 @@ import remarkGfm from "remark-gfm";
 import { invoke } from "@tauri-apps/api/core";
 import { useKeymap } from "@/lib/keymap-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
@@ -286,39 +287,22 @@ export function EditableMarkdown({
     return exts;
   }, [multiline, mentionData]);
 
+  // Semantic submit/cancel refs — EditableMarkdown always commits on both
+  const semanticSubmitRef = useRef<(() => void) | null>(null);
+  semanticSubmitRef.current = () => commitAndExitRef.current();
+  const semanticCancelRef = useRef<(() => void) | null>(null);
+  semanticCancelRef.current = () => commitAndExitRef.current();
+
   const extensions = useMemo(
     () => [
       keymapCompartment.current.of(keymapExtension(mode)),
       EditorView.lineWrapping,
-      // Vim mode: intercept Escape at the DOM level to check vim state
-      ...(mode === "vim"
-        ? [
-            EditorView.domEventHandlers({
-              keydown(event, view) {
-                if (event.key === "Escape") {
-                  const cm = getCM(view);
-                  if (cm?.state?.vim?.insertMode) {
-                    setTimeout(() => saveInPlaceRef.current(), 0);
-                    return false;
-                  }
-                  commitAndExitRef.current();
-                  return true;
-                }
-                return false;
-              },
-            }),
-          ]
-        : [
-            keymap.of([
-              {
-                key: "Escape",
-                run: () => {
-                  commitAndExitRef.current();
-                  return true;
-                },
-              },
-            ]),
-          ]),
+      ...buildSubmitCancelExtensions({
+        mode,
+        onSubmitRef: semanticSubmitRef,
+        onCancelRef: semanticCancelRef,
+        saveInPlaceRef,
+      }),
       ...(!multiline
         ? [
             keymap.of([

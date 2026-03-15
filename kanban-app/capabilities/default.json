@@ -1,9 +1,10 @@
 {
   "identifier": "default",
   "description": "Default capability for the kanban app",
-  "windows": ["main"],
+  "windows": ["main", "quick-capture"],
   "permissions": [
     "core:default",
-    "dialog:default"
+    "dialog:default",
+    "global-shortcut:allow-register"
   ]
 }

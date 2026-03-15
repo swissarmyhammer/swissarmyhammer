@@ -19,7 +19,7 @@ swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-views = { path = "../swissarmyhammer-views" }
 swissarmyhammer-entity-search = { path = "../swissarmyhammer-entity-search" }
 swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-dialog = "2"
 clap = { workspace = true }
 serde = { workspace = true }
@@ -36,6 +36,7 @@ notify = { workspace = true }
 sha2 = { workspace = true }
 tracing-oslog = "0.3"
 tauri-plugin-deep-link = "2"
+tauri-plugin-global-shortcut = "2"
 tauri-plugin-window-state = "2.4.1"
 urlencoding = { workspace = true }
 whoami = "1"

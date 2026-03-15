@@ -27,6 +27,11 @@ import type {
   BoardDataResponse, EntityListResponse,
 } from "@/types/kanban";
 import { entityFromBag, parseBoardData, getStr } from "@/types/kanban";
+import { QuickCapture } from "@/components/quick-capture";
+
+/** Detect if this window instance is the quick-capture popup. */
+const IS_QUICK_CAPTURE = new URLSearchParams(window.location.search).has("window") &&
+  new URLSearchParams(window.location.search).get("window") === "quick-capture";
 
 const PANEL_WIDTH = 420;
 
@@ -463,4 +468,24 @@ function InspectorPanel({
   );
 }
 
-export default App;
+/**
+ * Quick-capture window renders a minimal provider tree — just keymap context
+ * (for vim/CUA mode awareness) wrapping the capture form.
+ *
+ * Sets body/html to transparent so the borderless window shows only the
+ * styled card with rounded corners and shadow.
+ */
+function QuickCaptureApp() {
+  useEffect(() => {
+    document.documentElement.style.background = "transparent";
+    document.body.style.background = "transparent";
+  }, []);
+
+  return (
+    <KeymapProvider>
+      <QuickCapture />
+    </KeymapProvider>
+  );
+}
+
+export default IS_QUICK_CAPTURE ? QuickCaptureApp : App;

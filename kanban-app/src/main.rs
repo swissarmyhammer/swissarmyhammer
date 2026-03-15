@@ -47,6 +47,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::all())
@@ -118,6 +119,25 @@ fn main() {
                 let _ = win.restore_state(StateFlags::all());
                 let _ = win.show();
                 let _ = win.set_focus();
+            }
+
+            // Register global hotkey for quick-capture window toggle
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                let handle = app.handle().clone();
+                app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+K", move |_app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if let Some(win) = handle.get_webview_window("quick-capture") {
+                            if win.is_visible().unwrap_or(false) {
+                                let _ = win.hide();
+                            } else {
+                                let _ = win.center();
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
+                        }
+                    }
+                })?;
             }
 
             Ok(())
