@@ -159,9 +159,6 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
           }
         };
         requestAnimationFrame(tryEnterInsert);
-        // Store cleanup on the view for the effect below
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (view as any).__cancelInsert = () => { cancelled = true; };
       } else {
         // Grid cell editing: ensure we start in normal mode
         if (cm.state?.vim?.insertMode) {
