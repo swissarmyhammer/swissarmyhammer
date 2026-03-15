@@ -230,8 +230,8 @@ fn avp_schema_notification() {
 fn avp_schema_elicitation() {
     let event = HookEvent::Elicitation {
         session_id: "sess-avp-e1".into(),
-        mcp_server_name: "sah".into(),
-        message: "Pick an option".into(),
+        mcp_server_name: Some("sah".into()),
+        message: Some("Pick an option".into()),
         mode: "blocking".into(),
         requested_schema: serde_json::json!({"type": "string"}),
         cwd: PathBuf::from("/tmp"),
@@ -260,7 +260,7 @@ fn avp_schema_elicitation_result() {
     let event = HookEvent::ElicitationResult {
         session_id: "sess-avp-e2".into(),
         mcp_server_name: "sah".into(),
-        action: "submit".into(),
+        action: Some("submit".into()),
         content: serde_json::json!({"answer": "yes"}),
         elicitation_id: "e-001".into(),
         cwd: PathBuf::from("/tmp"),
@@ -286,7 +286,7 @@ fn avp_schema_elicitation_result() {
 #[test]
 fn avp_schema_instructions_loaded() {
     let event = HookEvent::InstructionsLoaded {
-        file_path: "/project/CLAUDE.md".into(),
+        file_path: Some("/project/CLAUDE.md".into()),
         load_reason: "startup".into(),
         cwd: PathBuf::from("/project"),
     };
@@ -312,7 +312,7 @@ fn avp_schema_instructions_loaded() {
 fn avp_schema_config_change() {
     let event = HookEvent::ConfigChange {
         session_id: "sess-cc".into(),
-        source: "user_settings".into(),
+        source: Some("user_settings".into()),
         cwd: PathBuf::from("/tmp"),
     };
 
@@ -335,8 +335,8 @@ fn avp_schema_config_change() {
 #[test]
 fn avp_schema_worktree_create() {
     let event = HookEvent::WorktreeCreate {
-        worktree_path: "/tmp/wt-1".into(),
-        branch_name: "feature-x".into(),
+        worktree_path: Some("/tmp/wt-1".into()),
+        branch_name: Some("feature-x".into()),
         cwd: PathBuf::from("/project"),
     };
 

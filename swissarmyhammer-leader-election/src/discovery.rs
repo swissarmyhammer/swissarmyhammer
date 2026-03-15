@@ -32,10 +32,16 @@ pub fn ipc_addresses(base_dir: &Path, prefix: &str, hash: &str) -> BusAddresses 
     let front = base_dir.join(format!("{}-{}-f.sock", prefix, short_hash));
     let back = base_dir.join(format!("{}-{}-b.sock", prefix, short_hash));
 
-    // If path is still too long, use /tmp directly
+    // If path is still too long, fall back to the system temp directory
     let (front, back) = if front.to_string_lossy().len() > 90 {
-        let front = PathBuf::from(format!("/tmp/{}-{}-f.sock", prefix, short_hash));
-        let back = PathBuf::from(format!("/tmp/{}-{}-b.sock", prefix, short_hash));
+        let tmp = std::env::temp_dir();
+        tracing::warn!(
+            base_dir = %base_dir.display(),
+            fallback = %tmp.display(),
+            "IPC socket path exceeds 90 chars, falling back to temp directory"
+        );
+        let front = tmp.join(format!("{}-{}-f.sock", prefix, short_hash));
+        let back = tmp.join(format!("{}-{}-b.sock", prefix, short_hash));
         (front, back)
     } else {
         (front, back)

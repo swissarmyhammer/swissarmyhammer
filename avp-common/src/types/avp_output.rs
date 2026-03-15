@@ -53,6 +53,203 @@ impl AvpOutputBase {
 }
 
 // ============================================================================
+// Macros for DRY impl blocks
+// ============================================================================
+
+/// Implement the allow/deny pattern for output types.
+///
+/// Used by types that have:
+/// - A boolean "allow" field (which may be named differently, e.g. `allow` or `grant`)
+/// - A `deny_reason: Option<String>` field
+/// - `allow()`, `deny()`, and `deny_from_validator()` methods
+///
+/// Parameters:
+/// - `$ty`: the struct type name
+/// - `$allow_field`: the name of the boolean allow field
+/// - `$deny_field`: the name of the deny reason field (`deny_reason`)
+macro_rules! impl_allow_deny {
+    ($ty:ty, $allow_field:ident, $deny_field:ident) => {
+        impl $ty {
+            /// Create an allow output.
+            pub fn allow() -> Self {
+                Self::default()
+            }
+
+            /// Create a deny output.
+            pub fn deny(reason: impl Into<String>) -> Self {
+                let reason = reason.into();
+                Self {
+                    base: AvpOutputBase {
+                        should_continue: true,
+                        ..Default::default()
+                    },
+                    $allow_field: false,
+                    $deny_field: Some(reason),
+                }
+            }
+
+            /// Create a deny output from a validator block.
+            pub fn deny_from_validator(
+                validator_name: impl Into<String>,
+                message: impl Into<String>,
+            ) -> Self {
+                let validator_name = validator_name.into();
+                let message = message.into();
+                Self {
+                    base: AvpOutputBase {
+                        should_continue: true,
+                        validator_block: Some(ValidatorBlock {
+                            validator_name,
+                            message: message.clone(),
+                        }),
+                        ..Default::default()
+                    },
+                    $allow_field: false,
+                    $deny_field: Some(message),
+                }
+            }
+        }
+    };
+}
+
+/// Implement the allow/block pattern for output types.
+///
+/// Used by types that have:
+/// - A boolean "allow" field (which may be named `allow`, `allow_stop`, or `allow_idle`)
+/// - A `block_reason: Option<String>` field
+/// - `allow()`, `block()`, and optionally `block_from_validator()` methods
+///
+/// Parameters:
+/// - `$ty`: the struct type name
+/// - `$allow_field`: the name of the boolean allow field
+/// - `$block_field`: the name of the block reason field (`block_reason`)
+/// - `with_validator` (optional): when present, also generates `block_from_validator()`
+macro_rules! impl_allow_block {
+    ($ty:ty, $allow_field:ident, $block_field:ident) => {
+        impl $ty {
+            /// Create an allow output.
+            pub fn allow() -> Self {
+                Self::default()
+            }
+
+            /// Create a block output.
+            pub fn block(reason: impl Into<String>) -> Self {
+                let reason = reason.into();
+                Self {
+                    base: AvpOutputBase {
+                        should_continue: true,
+                        ..Default::default()
+                    },
+                    $allow_field: false,
+                    $block_field: Some(reason),
+                }
+            }
+        }
+    };
+    ($ty:ty, $allow_field:ident, $block_field:ident, with_validator) => {
+        impl_allow_block!($ty, $allow_field, $block_field);
+
+        impl $ty {
+            /// Create a block output from a validator.
+            pub fn block_from_validator(
+                validator_name: impl Into<String>,
+                message: impl Into<String>,
+            ) -> Self {
+                let validator_name = validator_name.into();
+                let message = message.into();
+                Self {
+                    base: AvpOutputBase {
+                        should_continue: true,
+                        validator_block: Some(ValidatorBlock {
+                            validator_name,
+                            message: message.clone(),
+                        }),
+                        ..Default::default()
+                    },
+                    $allow_field: false,
+                    $block_field: Some(message),
+                }
+            }
+        }
+    };
+}
+
+/// Implement the accept/flag pattern for output types.
+///
+/// Used by types that have:
+/// - A `flagged: bool` field
+/// - A `feedback: Option<String>` field
+/// - `accept()`, `flag()`, and optionally `flag_from_validator()` methods
+///
+/// Parameters:
+/// - `$ty`: the struct type name
+/// - `with_validator` (optional): when present, also generates `flag_from_validator()`
+macro_rules! impl_accept_flag {
+    ($ty:ty) => {
+        impl $ty {
+            /// Create an accept output (no issues).
+            pub fn accept() -> Self {
+                Self::default()
+            }
+
+            /// Create a flagged output (has issues).
+            pub fn flag(feedback: impl Into<String>) -> Self {
+                Self {
+                    base: AvpOutputBase::success(),
+                    flagged: true,
+                    feedback: Some(feedback.into()),
+                }
+            }
+        }
+    };
+    ($ty:ty, with_validator) => {
+        impl_accept_flag!($ty);
+
+        impl $ty {
+            /// Create a flagged output from a validator block.
+            pub fn flag_from_validator(
+                validator_name: impl Into<String>,
+                message: impl Into<String>,
+            ) -> Self {
+                let validator_name = validator_name.into();
+                let message = message.into();
+                Self {
+                    base: AvpOutputBase {
+                        should_continue: true,
+                        validator_block: Some(ValidatorBlock {
+                            validator_name,
+                            message: message.clone(),
+                        }),
+                        ..Default::default()
+                    },
+                    flagged: true,
+                    feedback: Some(message),
+                }
+            }
+        }
+    };
+}
+
+/// Implement the observe-only pattern for output types.
+///
+/// Used by types that have only a `base: AvpOutputBase` field and a `success()` method.
+///
+/// Parameters:
+/// - `$ty`: the struct type name
+macro_rules! impl_observe_only {
+    ($ty:ty) => {
+        impl $ty {
+            /// Create a success output.
+            pub fn success() -> Self {
+                Self {
+                    base: AvpOutputBase::success(),
+                }
+            }
+        }
+    };
+}
+
+// ============================================================================
 // Per-hook AVP output types
 // ============================================================================
 
@@ -79,46 +276,7 @@ impl Default for AvpPreToolUseOutput {
     }
 }
 
-impl AvpPreToolUseOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a deny output.
-    pub fn deny(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true, // Tool denied but agent continues
-                ..Default::default()
-            },
-            allow: false,
-            deny_reason: Some(reason),
-        }
-    }
-
-    /// Create a deny output from a validator block.
-    pub fn deny_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            allow: false,
-            deny_reason: Some(message),
-        }
-    }
-}
+impl_allow_deny!(AvpPreToolUseOutput, allow, deny_reason);
 
 /// AVP output for PermissionRequest hook.
 ///
@@ -143,46 +301,7 @@ impl Default for AvpPermissionRequestOutput {
     }
 }
 
-impl AvpPermissionRequestOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a deny output.
-    pub fn deny(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            grant: false,
-            deny_reason: Some(reason),
-        }
-    }
-
-    /// Create a deny output from a validator block.
-    pub fn deny_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            grant: false,
-            deny_reason: Some(message),
-        }
-    }
-}
+impl_allow_deny!(AvpPermissionRequestOutput, grant, deny_reason);
 
 /// AVP output for PostToolUse hook.
 ///
@@ -207,42 +326,7 @@ impl Default for AvpPostToolUseOutput {
     }
 }
 
-impl AvpPostToolUseOutput {
-    /// Create an accept output (no issues).
-    pub fn accept() -> Self {
-        Self::default()
-    }
-
-    /// Create a flagged output (has issues).
-    pub fn flag(feedback: impl Into<String>) -> Self {
-        Self {
-            base: AvpOutputBase::success(), // Tool already ran, agent continues
-            flagged: true,
-            feedback: Some(feedback.into()),
-        }
-    }
-
-    /// Create a flagged output from a validator block.
-    pub fn flag_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            flagged: true,
-            feedback: Some(message),
-        }
-    }
-}
+impl_accept_flag!(AvpPostToolUseOutput, with_validator);
 
 /// AVP output for Stop hook.
 ///
@@ -267,46 +351,7 @@ impl Default for AvpStopOutput {
     }
 }
 
-impl AvpStopOutput {
-    /// Create an allow output (agent can stop).
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a block output (agent must continue).
-    pub fn block(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true, // Force continuation
-                ..Default::default()
-            },
-            allow_stop: false,
-            block_reason: Some(reason),
-        }
-    }
-
-    /// Create a block output from a validator.
-    pub fn block_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            allow_stop: false,
-            block_reason: Some(message),
-        }
-    }
-}
+impl_allow_block!(AvpStopOutput, allow_stop, block_reason, with_validator);
 
 /// AVP output for UserPromptSubmit hook.
 ///
@@ -331,25 +376,7 @@ impl Default for AvpUserPromptSubmitOutput {
     }
 }
 
-impl AvpUserPromptSubmitOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a block output.
-    pub fn block(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            allow: false,
-            block_reason: Some(reason),
-        }
-    }
-}
+impl_allow_block!(AvpUserPromptSubmitOutput, allow, block_reason);
 
 /// AVP output for SessionStart hook.
 #[derive(Debug, Clone, Default)]
@@ -358,14 +385,7 @@ pub struct AvpSessionStartOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpSessionStartOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpSessionStartOutput);
 
 /// AVP output for SessionEnd hook.
 #[derive(Debug, Clone, Default)]
@@ -374,14 +394,7 @@ pub struct AvpSessionEndOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpSessionEndOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpSessionEndOutput);
 
 /// AVP output for Notification hook.
 #[derive(Debug, Clone, Default)]
@@ -390,14 +403,7 @@ pub struct AvpNotificationOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpNotificationOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpNotificationOutput);
 
 /// AVP output for SubagentStart hook.
 #[derive(Debug, Clone, Default)]
@@ -406,14 +412,7 @@ pub struct AvpSubagentStartOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpSubagentStartOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpSubagentStartOutput);
 
 /// AVP output for SubagentStop hook.
 #[derive(Debug, Clone)]
@@ -436,25 +435,7 @@ impl Default for AvpSubagentStopOutput {
     }
 }
 
-impl AvpSubagentStopOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a block output.
-    pub fn block(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            allow_stop: false,
-            block_reason: Some(reason),
-        }
-    }
-}
+impl_allow_block!(AvpSubagentStopOutput, allow_stop, block_reason);
 
 /// AVP output for PreCompact hook.
 #[derive(Debug, Clone, Default)]
@@ -463,14 +444,7 @@ pub struct AvpPreCompactOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpPreCompactOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpPreCompactOutput);
 
 /// AVP output for Setup hook.
 #[derive(Debug, Clone, Default)]
@@ -479,14 +453,7 @@ pub struct AvpSetupOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpSetupOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpSetupOutput);
 
 /// AVP output for PostToolUseFailure hook.
 #[derive(Debug, Clone)]
@@ -509,21 +476,7 @@ impl Default for AvpPostToolUseFailureOutput {
     }
 }
 
-impl AvpPostToolUseFailureOutput {
-    /// Create an accept output (no additional issues beyond the failure).
-    pub fn accept() -> Self {
-        Self::default()
-    }
-
-    /// Create a flagged output.
-    pub fn flag(feedback: impl Into<String>) -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-            flagged: true,
-            feedback: Some(feedback.into()),
-        }
-    }
-}
+impl_accept_flag!(AvpPostToolUseFailureOutput);
 
 /// AVP output for Elicitation hook.
 ///
@@ -548,46 +501,7 @@ impl Default for AvpElicitationOutput {
     }
 }
 
-impl AvpElicitationOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a deny output.
-    pub fn deny(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            allow: false,
-            deny_reason: Some(reason),
-        }
-    }
-
-    /// Create a deny output from a validator block.
-    pub fn deny_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            allow: false,
-            deny_reason: Some(message),
-        }
-    }
-}
+impl_allow_deny!(AvpElicitationOutput, allow, deny_reason);
 
 /// AVP output for ElicitationResult hook.
 ///
@@ -612,46 +526,7 @@ impl Default for AvpElicitationResultOutput {
     }
 }
 
-impl AvpElicitationResultOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a block output.
-    pub fn block(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            allow: false,
-            block_reason: Some(reason),
-        }
-    }
-
-    /// Create a block output from a validator.
-    pub fn block_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            allow: false,
-            block_reason: Some(message),
-        }
-    }
-}
+impl_allow_block!(AvpElicitationResultOutput, allow, block_reason, with_validator);
 
 /// AVP output for InstructionsLoaded hook.
 ///
@@ -662,14 +537,7 @@ pub struct AvpInstructionsLoadedOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpInstructionsLoadedOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpInstructionsLoadedOutput);
 
 /// AVP output for ConfigChange hook.
 ///
@@ -694,46 +562,7 @@ impl Default for AvpConfigChangeOutput {
     }
 }
 
-impl AvpConfigChangeOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a block output.
-    pub fn block(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            allow: false,
-            block_reason: Some(reason),
-        }
-    }
-
-    /// Create a block output from a validator.
-    pub fn block_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            allow: false,
-            block_reason: Some(message),
-        }
-    }
-}
+impl_allow_block!(AvpConfigChangeOutput, allow, block_reason, with_validator);
 
 /// AVP output for WorktreeCreate hook.
 ///
@@ -758,46 +587,7 @@ impl Default for AvpWorktreeCreateOutput {
     }
 }
 
-impl AvpWorktreeCreateOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a deny output.
-    pub fn deny(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            allow: false,
-            deny_reason: Some(reason),
-        }
-    }
-
-    /// Create a deny output from a validator block.
-    pub fn deny_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            allow: false,
-            deny_reason: Some(message),
-        }
-    }
-}
+impl_allow_deny!(AvpWorktreeCreateOutput, allow, deny_reason);
 
 /// AVP output for WorktreeRemove hook.
 ///
@@ -808,14 +598,7 @@ pub struct AvpWorktreeRemoveOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpWorktreeRemoveOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpWorktreeRemoveOutput);
 
 /// AVP output for PostCompact hook.
 ///
@@ -826,14 +609,7 @@ pub struct AvpPostCompactOutput {
     pub base: AvpOutputBase,
 }
 
-impl AvpPostCompactOutput {
-    /// Create a success output.
-    pub fn success() -> Self {
-        Self {
-            base: AvpOutputBase::success(),
-        }
-    }
-}
+impl_observe_only!(AvpPostCompactOutput);
 
 /// AVP output for TeammateIdle hook.
 ///
@@ -858,46 +634,7 @@ impl Default for AvpTeammateIdleOutput {
     }
 }
 
-impl AvpTeammateIdleOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a block output (prevent idling).
-    pub fn block(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            allow_idle: false,
-            block_reason: Some(reason),
-        }
-    }
-
-    /// Create a block output from a validator.
-    pub fn block_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            allow_idle: false,
-            block_reason: Some(message),
-        }
-    }
-}
+impl_allow_block!(AvpTeammateIdleOutput, allow_idle, block_reason, with_validator);
 
 /// AVP output for TaskCompleted hook.
 ///
@@ -922,46 +659,7 @@ impl Default for AvpTaskCompletedOutput {
     }
 }
 
-impl AvpTaskCompletedOutput {
-    /// Create an allow output.
-    pub fn allow() -> Self {
-        Self::default()
-    }
-
-    /// Create a block output.
-    pub fn block(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                ..Default::default()
-            },
-            allow: false,
-            block_reason: Some(reason),
-        }
-    }
-
-    /// Create a block output from a validator.
-    pub fn block_from_validator(
-        validator_name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let validator_name = validator_name.into();
-        let message = message.into();
-        Self {
-            base: AvpOutputBase {
-                should_continue: true,
-                validator_block: Some(ValidatorBlock {
-                    validator_name,
-                    message: message.clone(),
-                }),
-                ..Default::default()
-            },
-            allow: false,
-            block_reason: Some(message),
-        }
-    }
-}
+impl_allow_block!(AvpTaskCompletedOutput, allow, block_reason, with_validator);
 
 #[cfg(test)]
 mod tests {

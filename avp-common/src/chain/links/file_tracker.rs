@@ -45,10 +45,10 @@ macro_rules! cleanup_chain_link {
             async fn process(&self, input: &$input_type, _ctx: &mut ChainContext) -> ChainResult {
                 tracing::debug!(
                     concat!($link_name, ": ", $log_msg, " {}"),
-                    input.common.session_id
+                    input.common.session_id.as_deref().unwrap_or_default()
                 );
 
-                if let Err(e) = self.turn_state.clear(&input.common.session_id) {
+                if let Err(e) = self.turn_state.clear(input.common.session_id.as_deref().unwrap_or_default()) {
                     tracing::warn!(concat!($link_name, ": Failed to clear turn state: {}"), e);
                 }
 
@@ -108,10 +108,11 @@ impl ChainLink<PreToolUseInput> for PreToolUseFileTracker {
         let hashes = hash_files(&paths);
 
         // Store in turn state
-        match self.turn_state.load(&input.common.session_id) {
+        let session_id = input.common.session_id.as_deref().unwrap_or_default();
+        match self.turn_state.load(session_id) {
             Ok(mut state) => {
                 state.pending.insert(tool_use_id.clone(), hashes);
-                if let Err(e) = self.turn_state.save(&input.common.session_id, &state) {
+                if let Err(e) = self.turn_state.save(session_id, &state) {
                     tracing::warn!("PreToolUseFileTracker: Failed to save turn state: {}", e);
                 }
             }
@@ -147,7 +148,8 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
             return ChainResult::continue_empty();
         };
 
-        let mut state = match self.turn_state.load(&input.common.session_id) {
+        let session_id = input.common.session_id.as_deref().unwrap_or_default();
+        let mut state = match self.turn_state.load(session_id) {
             Ok(state) => state,
             Err(e) => {
                 tracing::warn!("PostToolUseFileTracker: Failed to load turn state: {}", e);
@@ -193,7 +195,7 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
         }
 
         // Save updated state
-        if let Err(e) = self.turn_state.save(&input.common.session_id, &state) {
+        if let Err(e) = self.turn_state.save(session_id, &state) {
             tracing::warn!("PostToolUseFileTracker: Failed to save turn state: {}", e);
         }
 
@@ -274,8 +276,8 @@ mod tests {
     ) -> PreToolUseInput {
         PreToolUseInput {
             common: CommonInput {
-                session_id: session_id.to_string(),
-                transcript_path: "/tmp/transcript.jsonl".to_string(),
+                session_id: Some(session_id.to_string()),
+                transcript_path: Some("/tmp/transcript.jsonl".to_string()),
                 cwd: "/tmp".to_string(),
                 permission_mode: "default".to_string(),
                 hook_event_name: crate::types::HookType::PreToolUse,
@@ -294,8 +296,8 @@ mod tests {
     ) -> PostToolUseInput {
         PostToolUseInput {
             common: CommonInput {
-                session_id: session_id.to_string(),
-                transcript_path: "/tmp/transcript.jsonl".to_string(),
+                session_id: Some(session_id.to_string()),
+                transcript_path: Some("/tmp/transcript.jsonl".to_string()),
                 cwd: "/tmp".to_string(),
                 permission_mode: "default".to_string(),
                 hook_event_name: crate::types::HookType::PostToolUse,
@@ -433,8 +435,8 @@ mod tests {
         let cleanup = SessionStartCleanup::new(turn_state.clone());
         let input = SessionStartInput {
             common: CommonInput {
-                session_id: "session-1".to_string(),
-                transcript_path: "/tmp/transcript.jsonl".to_string(),
+                session_id: Some("session-1".to_string()),
+                transcript_path: Some("/tmp/transcript.jsonl".to_string()),
                 cwd: "/tmp".to_string(),
                 permission_mode: "default".to_string(),
                 hook_event_name: crate::types::HookType::SessionStart,

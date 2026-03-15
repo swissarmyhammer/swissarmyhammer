@@ -19,6 +19,7 @@ thiserror = { workspace = true }
 dirs = { workspace = true }
 md5 = { workspace = true }
 tracing = { workspace = true }
+ulid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

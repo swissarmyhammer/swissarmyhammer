@@ -303,9 +303,7 @@ use the skill tool to load the full instructions, then follow them.
 
 - **implement**: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent. (local)
 
-- **implement-loop**: Implement all planned kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards. (local)
-
-- **test-loop**: Continuously run tests, create failure cards, and implement fixes until the suite is fully green. Uses ralph to prevent stopping between iterations. (local)
+- **implement-loop**: Implement all ready kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards. (local)
 
 - **kanban**: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item. (local)
 
@@ -320,6 +318,8 @@ use the skill tool to load the full instructions, then follow them.
 - **test**: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent. (local)
 
 - **test-driven-development**: Use this skill whenever you are about to write or edit source code. Load it before making any code changes — it defines the required workflow of writing a failing test first, then making it pass, then refactoring. No exceptions. (local)
+
+- **test-loop**: Continuously run tests, create failure cards, and delegate fixes to /implement until the suite is fully green. Uses ralph to prevent stopping between iterations. (local)
 
 
 Use `{"op": "use skill", "name": "<name>"}` to activate a skill.

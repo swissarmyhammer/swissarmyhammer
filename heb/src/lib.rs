@@ -25,10 +25,10 @@
 //!     "pre_tool_use",
 //!     "avp-hook",
 //! );
-//! let seq = ctx.publish(&header, body_bytes)?;
+//! let id = ctx.publish(&header, body_bytes)?;
 //!
 //! // Replay missed events after reconnect
-//! let events = ctx.replay(last_seen_seq, Some("hook"))?;
+//! let events = ctx.replay(&last_seen_id, Some("hook"))?;
 //! ```
 
 mod context;

@@ -19,7 +19,6 @@ pub fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
         );
 
         CREATE TABLE IF NOT EXISTS ts_chunks (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
             file_path    TEXT NOT NULL REFERENCES indexed_files(file_path) ON DELETE CASCADE,
             start_byte   INTEGER NOT NULL,
             end_byte     INTEGER NOT NULL,
@@ -45,7 +44,6 @@ pub fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_lsp_symbols_file ON lsp_symbols(file_path);
 
         CREATE TABLE IF NOT EXISTS lsp_call_edges (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
             caller_id    TEXT NOT NULL REFERENCES lsp_symbols(id) ON DELETE CASCADE,
             callee_id    TEXT NOT NULL REFERENCES lsp_symbols(id) ON DELETE CASCADE,
             caller_file  TEXT NOT NULL,

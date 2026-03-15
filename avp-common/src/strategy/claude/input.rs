@@ -730,7 +730,7 @@ mod tests {
             let input: HookInput = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("Failed to deserialize HookInput for {}: {}", name, e));
             assert_eq!(input.hook_type(), expected_type, "hook_type() mismatch for {}", name);
-            assert_eq!(input.common().session_id, "abc", "common() mismatch for {}", name);
+            assert_eq!(input.common().session_id.as_deref(), Some("abc"), "common() mismatch for {}", name);
         }
     }
 

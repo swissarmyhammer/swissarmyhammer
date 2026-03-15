@@ -15,25 +15,27 @@ use serde::{Deserialize, Serialize};
 /// # Examples
 ///
 /// Basic web fetch:
-/// ```ignore
-/// WebFetchRequest {
+/// ```rust,no_run
+/// # use swissarmyhammer_web::types::WebFetchRequest;
+/// let req = WebFetchRequest {
 ///     url: "https://docs.rust-lang.org/book/ch04-01-what-is-ownership.html".to_string(),
 ///     timeout: None,
 ///     follow_redirects: None,
 ///     max_content_length: None,
 ///     user_agent: None,
-/// }
+/// };
 /// ```
 ///
 /// Advanced web fetch with custom settings:
-/// ```ignore
-/// WebFetchRequest {
+/// ```rust,no_run
+/// # use swissarmyhammer_web::types::WebFetchRequest;
+/// let req = WebFetchRequest {
 ///     url: "https://api.github.com/docs/rest/repos".to_string(),
 ///     timeout: Some(45),
 ///     follow_redirects: Some(true),
 ///     max_content_length: Some(2097152),
 ///     user_agent: Some("SwissArmyHammer-DocProcessor/1.0".to_string()),
-/// }
+/// };
 /// ```
 #[derive(Debug, JsonSchema)]
 pub struct WebFetchRequest {

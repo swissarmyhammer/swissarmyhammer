@@ -88,14 +88,12 @@ fn default_permission_mode() -> String {
 /// Common fields present in all hook inputs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommonInput {
-    /// Unique session identifier. May be empty for session-less events
+    /// Unique session identifier. `None` for session-less events
     /// (e.g., InstructionsLoaded, WorktreeCreate, WorktreeRemove).
-    #[serde(default)]
-    pub session_id: String,
+    pub session_id: Option<String>,
 
-    /// Path to the transcript file. May be empty for session-less events.
-    #[serde(default)]
-    pub transcript_path: String,
+    /// Path to the transcript file. `None` for session-less events.
+    pub transcript_path: Option<String>,
 
     /// Current working directory.
     pub cwd: String,
@@ -137,7 +135,7 @@ mod tests {
             "hook_event_name": "PreToolUse"
         }"#;
         let input: CommonInput = serde_json::from_str(json).unwrap();
-        assert_eq!(input.session_id, "abc123");
+        assert_eq!(input.session_id.as_deref(), Some("abc123"));
         assert_eq!(input.hook_event_name, HookType::PreToolUse);
     }
 
@@ -187,6 +185,20 @@ mod tests {
     }
 
     #[test]
+    fn test_common_input_session_less_event() {
+        // Session-less events (e.g. InstructionsLoaded) omit session_id and transcript_path entirely.
+        let json = r#"{
+            "cwd": "/home/user/project",
+            "permission_mode": "default",
+            "hook_event_name": "InstructionsLoaded"
+        }"#;
+        let input: CommonInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.session_id, None);
+        assert_eq!(input.transcript_path, None);
+        assert_eq!(input.hook_event_name, HookType::InstructionsLoaded);
+    }
+
+    #[test]
     fn test_common_input_without_permission_mode() {
         // Claude Code doesn't always send permission_mode for SessionStart
         let json = r#"{
@@ -196,7 +208,7 @@ mod tests {
             "hook_event_name": "SessionStart"
         }"#;
         let input: CommonInput = serde_json::from_str(json).unwrap();
-        assert_eq!(input.session_id, "abc123");
+        assert_eq!(input.session_id.as_deref(), Some("abc123"));
         assert_eq!(input.permission_mode, "bypassPermissions");
         assert_eq!(input.hook_event_name, HookType::SessionStart);
     }

@@ -75,20 +75,20 @@ impl TestEnv {
     }
 
     /// Publish an event to both SQLite (durable) and ZMQ (live).
-    fn publish_to_db(&self, header: &EventHeader, body: &[u8]) -> u64 {
+    fn publish_to_db(&self, header: &EventHeader, body: &[u8]) -> String {
         heb::store::log_event(&self.db_path(), header, body).unwrap()
     }
 
     fn replay_all(&self) -> Vec<(EventHeader, Vec<u8>)> {
-        heb::store::replay(&self.db_path(), 0, None).unwrap()
+        heb::store::replay(&self.db_path(), "", None).unwrap()
     }
 
-    fn replay_since(&self, seq: u64) -> Vec<(EventHeader, Vec<u8>)> {
-        heb::store::replay(&self.db_path(), seq, None).unwrap()
+    fn replay_since(&self, since_id: &str) -> Vec<(EventHeader, Vec<u8>)> {
+        heb::store::replay(&self.db_path(), since_id, None).unwrap()
     }
 
     fn replay_category(&self, cat: &str) -> Vec<(EventHeader, Vec<u8>)> {
-        heb::store::replay(&self.db_path(), 0, Some(cat)).unwrap()
+        heb::store::replay(&self.db_path(), "", Some(cat)).unwrap()
     }
 }
 
@@ -229,8 +229,8 @@ fn test_sqlite_database_created_and_torn_down() {
 
     // Write an event
     let h = make_header("test", EventCategory::Hook);
-    let seq = env.publish_to_db(&h, b"body");
-    assert_eq!(seq, 1);
+    let id = env.publish_to_db(&h, b"body");
+    assert_eq!(id, h.id);
 
     // Verify it's there
     let events = env.replay_all();
@@ -253,10 +253,11 @@ fn test_leader_and_follower_events_both_persist() {
     let h1 = EventHeader::new("leader-sess", "/ws", EventCategory::Hook, "leader_event", "leader");
     let h2 = EventHeader::new("follower-sess", "/ws", EventCategory::Agent, "follower_event", "follower");
 
-    let seq1 = env.publish_to_db(&h1, b"leader body");
-    let seq2 = env.publish_to_db(&h2, b"follower body");
-    assert_eq!(seq1, 1);
-    assert_eq!(seq2, 2);
+    let id1 = env.publish_to_db(&h1, b"leader body");
+    let id2 = env.publish_to_db(&h2, b"follower body");
+    assert_eq!(id1, h1.id);
+    assert_eq!(id2, h2.id);
+    assert!(id1 < id2, "second ULID should sort after first");
 
     // Also send via ZMQ bus
     let sub = leader.subscribe(&[]).unwrap();
@@ -290,16 +291,18 @@ fn test_leader_and_follower_events_both_persist() {
 }
 
 #[test]
-fn test_replay_since_sequence() {
+fn test_replay_since_id() {
     let env = TestEnv::new();
     env.init_db();
 
-    let h = make_header("test", EventCategory::Hook);
-    env.publish_to_db(&h, b"event-1");
-    env.publish_to_db(&h, b"event-2");
-    env.publish_to_db(&h, b"event-3");
+    let h1 = make_header("test", EventCategory::Hook);
+    let h2 = make_header("test", EventCategory::Hook);
+    let h3 = make_header("test", EventCategory::Hook);
+    env.publish_to_db(&h1, b"event-1");
+    let id2 = env.publish_to_db(&h2, b"event-2");
+    env.publish_to_db(&h3, b"event-3");
 
-    let since_2 = env.replay_since(2);
+    let since_2 = env.replay_since(&id2);
     assert_eq!(since_2.len(), 1);
     assert_eq!(since_2[0].1, b"event-3");
 }

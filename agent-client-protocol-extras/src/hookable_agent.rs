@@ -124,8 +124,8 @@ pub enum HookEvent {
     /// Fires when MCP server requests user input.
     Elicitation {
         session_id: String,
-        mcp_server_name: String,
-        message: String,
+        mcp_server_name: Option<String>,
+        message: Option<String>,
         mode: String,
         requested_schema: serde_json::Value,
         cwd: PathBuf,
@@ -134,27 +134,27 @@ pub enum HookEvent {
     ElicitationResult {
         session_id: String,
         mcp_server_name: String,
-        action: String,
+        action: Option<String>,
         content: serde_json::Value,
         elicitation_id: String,
         cwd: PathBuf,
     },
     /// Fires when CLAUDE.md or rules files are loaded.
     InstructionsLoaded {
-        file_path: String,
+        file_path: Option<String>,
         load_reason: String,
         cwd: PathBuf,
     },
     /// Fires when config files change.
     ConfigChange {
         session_id: String,
-        source: String,
+        source: Option<String>,
         cwd: PathBuf,
     },
     /// Fires when a worktree is created.
     WorktreeCreate {
-        worktree_path: String,
-        branch_name: String,
+        worktree_path: Option<String>,
+        branch_name: Option<String>,
         cwd: PathBuf,
     },
     /// Fires when a worktree is removed.
@@ -240,10 +240,10 @@ impl HookEvent {
             Self::Notification { notification, .. } => {
                 Some(notification_update_name(&notification.update))
             }
-            Self::Elicitation { mcp_server_name, .. } => Some(mcp_server_name.as_str()),
+            Self::Elicitation { mcp_server_name, .. } => mcp_server_name.as_deref(),
             Self::ElicitationResult { mcp_server_name, .. } => Some(mcp_server_name.as_str()),
-            Self::InstructionsLoaded { file_path, .. } => Some(file_path.as_str()),
-            Self::ConfigChange { source, .. } => Some(source.as_str()),
+            Self::InstructionsLoaded { file_path, .. } => file_path.as_deref(),
+            Self::ConfigChange { source, .. } => source.as_deref(),
             Self::WorktreeCreate { .. }
             | Self::WorktreeRemove { .. }
             | Self::PostCompact { .. }
@@ -373,15 +373,22 @@ impl HookEvent {
                 mode,
                 requested_schema,
                 cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "Elicitation",
-                "mcp_server_name": mcp_server_name,
-                "message": message,
-                "mode": mode,
-                "requested_schema": requested_schema,
-            }),
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "Elicitation",
+                    "mode": mode,
+                    "requested_schema": requested_schema,
+                });
+                if let Some(name) = mcp_server_name {
+                    obj["mcp_server_name"] = serde_json::Value::String(name.clone());
+                }
+                if let Some(msg) = message {
+                    obj["message"] = serde_json::Value::String(msg.clone());
+                }
+                obj
+            }
             Self::ElicitationResult {
                 session_id,
                 mcp_server_name,
@@ -389,45 +396,67 @@ impl HookEvent {
                 content,
                 elicitation_id,
                 cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "ElicitationResult",
-                "mcp_server_name": mcp_server_name,
-                "action": action,
-                "content": content,
-                "elicitation_id": elicitation_id,
-            }),
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "ElicitationResult",
+                    "mcp_server_name": mcp_server_name,
+                    "content": content,
+                    "elicitation_id": elicitation_id,
+                });
+                if let Some(a) = action {
+                    obj["action"] = serde_json::Value::String(a.clone());
+                }
+                obj
+            }
             Self::InstructionsLoaded {
                 file_path,
                 load_reason,
                 cwd,
-            } => serde_json::json!({
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "InstructionsLoaded",
-                "file_path": file_path,
-                "load_reason": load_reason,
-            }),
+            } => {
+                let mut obj = serde_json::json!({
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "InstructionsLoaded",
+                    "load_reason": load_reason,
+                });
+                if let Some(fp) = file_path {
+                    obj["file_path"] = serde_json::Value::String(fp.clone());
+                }
+                obj
+            }
             Self::ConfigChange {
                 session_id,
                 source,
                 cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "ConfigChange",
-                "source": source,
-            }),
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "ConfigChange",
+                });
+                if let Some(src) = source {
+                    obj["source"] = serde_json::Value::String(src.clone());
+                }
+                obj
+            }
             Self::WorktreeCreate {
                 worktree_path,
                 branch_name,
                 cwd,
-            } => serde_json::json!({
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "WorktreeCreate",
-                "worktree_path": worktree_path,
-                "branch_name": branch_name,
-            }),
+            } => {
+                let mut obj = serde_json::json!({
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "WorktreeCreate",
+                });
+                if let Some(wp) = worktree_path {
+                    obj["worktree_path"] = serde_json::Value::String(wp.clone());
+                }
+                if let Some(bn) = branch_name {
+                    obj["branch_name"] = serde_json::Value::String(bn.clone());
+                }
+                obj
+            }
             Self::WorktreeRemove {
                 worktree_path,
                 cwd,
@@ -1935,8 +1964,8 @@ mod tests {
     fn test_elicitation_kind_and_matcher() {
         let event = HookEvent::Elicitation {
             session_id: "s1".into(),
-            mcp_server_name: "sah".into(),
-            message: "pick".into(),
+            mcp_server_name: Some("sah".into()),
+            message: Some("pick".into()),
             mode: "blocking".into(),
             requested_schema: serde_json::json!({}),
             cwd: PathBuf::from("/tmp"),
@@ -1946,11 +1975,25 @@ mod tests {
     }
 
     #[test]
+    fn test_elicitation_kind_and_matcher_none() {
+        let event = HookEvent::Elicitation {
+            session_id: "s1".into(),
+            mcp_server_name: None,
+            message: None,
+            mode: "blocking".into(),
+            requested_schema: serde_json::json!({}),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::Elicitation);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
     fn test_elicitation_result_kind_and_matcher() {
         let event = HookEvent::ElicitationResult {
             session_id: "s1".into(),
             mcp_server_name: "sah".into(),
-            action: "submit".into(),
+            action: Some("submit".into()),
             content: serde_json::json!({}),
             elicitation_id: "e1".into(),
             cwd: PathBuf::from("/tmp"),
@@ -1962,7 +2005,7 @@ mod tests {
     #[test]
     fn test_instructions_loaded_kind_and_matcher() {
         let event = HookEvent::InstructionsLoaded {
-            file_path: "/project/CLAUDE.md".into(),
+            file_path: Some("/project/CLAUDE.md".into()),
             load_reason: "startup".into(),
             cwd: PathBuf::from("/project"),
         };
@@ -1971,10 +2014,21 @@ mod tests {
     }
 
     #[test]
+    fn test_instructions_loaded_kind_and_matcher_none() {
+        let event = HookEvent::InstructionsLoaded {
+            file_path: None,
+            load_reason: "startup".into(),
+            cwd: PathBuf::from("/project"),
+        };
+        assert_eq!(event.kind(), HookEventKind::InstructionsLoaded);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
     fn test_config_change_kind_and_matcher() {
         let event = HookEvent::ConfigChange {
             session_id: "s1".into(),
-            source: "user_settings".into(),
+            source: Some("user_settings".into()),
             cwd: PathBuf::from("/tmp"),
         };
         assert_eq!(event.kind(), HookEventKind::ConfigChange);
@@ -1982,10 +2036,21 @@ mod tests {
     }
 
     #[test]
+    fn test_config_change_kind_and_matcher_none() {
+        let event = HookEvent::ConfigChange {
+            session_id: "s1".into(),
+            source: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::ConfigChange);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
     fn test_worktree_create_kind_and_matcher() {
         let event = HookEvent::WorktreeCreate {
-            worktree_path: "/tmp/wt".into(),
-            branch_name: "feat".into(),
+            worktree_path: Some("/tmp/wt".into()),
+            branch_name: Some("feat".into()),
             cwd: PathBuf::from("/tmp"),
         };
         assert_eq!(event.kind(), HookEventKind::WorktreeCreate);
@@ -2045,8 +2110,8 @@ mod tests {
 
         let matching_event = HookEvent::Elicitation {
             session_id: "s1".into(),
-            mcp_server_name: "sah".into(),
-            message: "pick".into(),
+            mcp_server_name: Some("sah".into()),
+            message: Some("pick".into()),
             mode: "blocking".into(),
             requested_schema: serde_json::json!({}),
             cwd: PathBuf::from("/tmp"),
@@ -2055,8 +2120,8 @@ mod tests {
 
         let non_matching_event = HookEvent::Elicitation {
             session_id: "s1".into(),
-            mcp_server_name: "other-server".into(),
-            message: "pick".into(),
+            mcp_server_name: Some("other-server".into()),
+            message: Some("pick".into()),
             mode: "blocking".into(),
             requested_schema: serde_json::json!({}),
             cwd: PathBuf::from("/tmp"),

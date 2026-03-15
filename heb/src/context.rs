@@ -14,8 +14,10 @@ use crate::store;
 
 /// The HEB context — wraps leader election bus with XDG paths and SQLite persistence.
 pub struct HebContext {
-    /// XDG_DATA_HOME/heb/ — database lives here
+    /// XDG_DATA_HOME/heb/<workspace_hash>/ — database lives here, scoped to the workspace
     data_dir: PathBuf,
+    /// Canonical path of the workspace root this context was opened for
+    workspace_root: PathBuf,
     /// The election outcome — leader or follower, both can publish
     election: ElectionOutcome<HebEvent>,
 }
@@ -26,23 +28,42 @@ impl HebContext {
     /// This is not passive — it participates in leader election.
     /// No discovery file = no leader = contest the election.
     pub fn open(workspace_root: &Path) -> Result<Self> {
-        let data_dir = Self::resolve_data_dir();
+        let canonical = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        let data_dir = Self::resolve_data_dir(&canonical);
         let runtime_dir = Self::resolve_runtime_dir();
+        Self::open_with_dirs(workspace_root, &data_dir, &runtime_dir, "heb")
+    }
+
+    /// Open a HEB context with explicit directory paths and election prefix.
+    ///
+    /// Shared by `open()` and tests. Canonicalizes `workspace_root`.
+    fn open_with_dirs(
+        workspace_root: &Path,
+        data_dir: &Path,
+        runtime_dir: &Path,
+        prefix: &str,
+    ) -> Result<Self> {
+        let canonical = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.to_path_buf());
 
         // Ensure data dir exists and schema is initialized
         let db_path = data_dir.join("events.db");
         store::init_schema(&db_path)?;
 
         let config = ElectionConfig::new()
-            .with_prefix("heb")
-            .with_base_dir(&runtime_dir);
+            .with_prefix(prefix)
+            .with_base_dir(runtime_dir);
 
         let election = LeaderElection::<HebEvent>::with_config(workspace_root, config)
             .elect()
             .map_err(HebError::Election)?;
 
         Ok(HebContext {
-            data_dir,
+            data_dir: data_dir.to_path_buf(),
+            workspace_root: canonical,
             election,
         })
     }
@@ -50,27 +71,32 @@ impl HebContext {
     /// Publish: write to SQLite (open/write/close) + send via ZMQ PUB.
     ///
     /// Every publisher persists independently. Most reliable.
-    pub fn publish(&self, header: &EventHeader, body: &[u8]) -> Result<u64> {
+    /// Returns the event's ULID.
+    pub fn publish(&self, header: &EventHeader, body: &[u8]) -> Result<String> {
         // 1. Always persist — this is the durable path
-        let seq = store::log_event(&self.db_path(), header, body)?;
+        let id = store::log_event(&self.db_path(), header, body)?;
 
         // 2. Always send via ZMQ — this is the live path (best-effort)
         let event = HebEvent {
             header: header.clone(),
             body: body.to_vec(),
         };
-        let _ = self.election.publish(&event);
+        if let Err(e) = self.election.publish(&event) {
+            tracing::warn!(id = %id, error = %e, "ZMQ publish failed (event persisted to SQLite)");
+        }
 
-        Ok(seq)
+        Ok(id)
     }
 
     /// Replay from SQLite (catch-up after leader transition gap).
+    ///
+    /// Pass an empty string to replay from the beginning.
     pub fn replay(
         &self,
-        since_seq: u64,
+        since_id: &str,
         category: Option<&str>,
     ) -> Result<Vec<(EventHeader, Vec<u8>)>> {
-        store::replay(&self.db_path(), since_seq, category)
+        store::replay(&self.db_path(), since_id, category)
     }
 
     /// Get the database path.
@@ -78,8 +104,17 @@ impl HebContext {
         self.data_dir.join("events.db")
     }
 
-    /// Resolve XDG_DATA_HOME/heb/ (default: ~/.local/share/heb/)
-    fn resolve_data_dir() -> PathBuf {
+    /// Get the canonical workspace root this context was opened for.
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
+    /// Resolve XDG_DATA_HOME/heb/<workspace_hash>/ (default base: ~/.local/share/heb/)
+    ///
+    /// The workspace hash is the md5 hex digest of the canonical workspace root path,
+    /// ensuring each workspace gets its own isolated SQLite database.
+    fn resolve_data_dir(workspace_root: &Path) -> PathBuf {
+        let hash = format!("{:x}", md5::compute(workspace_root.to_string_lossy().as_bytes()));
         dirs::data_dir()
             .unwrap_or_else(|| {
                 dirs::home_dir()
@@ -88,6 +123,7 @@ impl HebContext {
                     .join("share")
             })
             .join("heb")
+            .join(hash)
     }
 
     /// Resolve XDG_RUNTIME_DIR/heb/ (fallback: temp dir)
@@ -106,22 +142,10 @@ mod tests {
     use tempfile::TempDir;
 
     /// Create a HebContext with test-local paths instead of XDG defaults.
+    ///
+    /// Delegates to `open_with_dirs` so tests exercise the same code path as `open()`.
     fn test_context(workspace: &Path, data_dir: &Path, runtime_dir: &Path) -> Result<HebContext> {
-        let db_path = data_dir.join("events.db");
-        store::init_schema(&db_path)?;
-
-        let config = ElectionConfig::new()
-            .with_prefix("heb-test")
-            .with_base_dir(runtime_dir);
-
-        let election = LeaderElection::<HebEvent>::with_config(workspace, config)
-            .elect()
-            .map_err(HebError::Election)?;
-
-        Ok(HebContext {
-            data_dir: data_dir.to_path_buf(),
-            election,
-        })
+        HebContext::open_with_dirs(workspace, data_dir, runtime_dir, "heb-test")
     }
 
     #[test]
@@ -141,14 +165,36 @@ mod tests {
             "pre_tool_use",
             "avp-hook",
         );
-        let seq = ctx.publish(&header, b"test body").unwrap();
-        assert_eq!(seq, 1);
+        let id = ctx.publish(&header, b"test body").unwrap();
+        assert_eq!(id, header.id);
 
         // Verify it's in SQLite
-        let events = ctx.replay(0, None).unwrap();
+        let events = ctx.replay("", None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0.event_type, "pre_tool_use");
         assert_eq!(events[0].1, b"test body");
+    }
+
+    #[test]
+    fn test_different_workspace_roots_produce_different_db_paths() {
+        let root_a = Path::new("/tmp/workspace_a");
+        let root_b = Path::new("/tmp/workspace_b");
+
+        let data_dir_a = HebContext::resolve_data_dir(root_a);
+        let data_dir_b = HebContext::resolve_data_dir(root_b);
+
+        // Different workspace roots must produce different data directories
+        assert_ne!(
+            data_dir_a, data_dir_b,
+            "Different workspace roots must map to different data directories"
+        );
+
+        // Same workspace root must produce the same data directory (stable hashing)
+        let data_dir_a_again = HebContext::resolve_data_dir(root_a);
+        assert_eq!(
+            data_dir_a, data_dir_a_again,
+            "Same workspace root must always produce the same data directory"
+        );
     }
 
     #[test]
@@ -166,7 +212,7 @@ mod tests {
         ctx.publish(&h1, b"1").unwrap();
         ctx.publish(&h2, b"2").unwrap();
 
-        let hooks = ctx.replay(0, Some("hook")).unwrap();
+        let hooks = ctx.replay("", Some("hook")).unwrap();
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].0.category, EventCategory::Hook);
     }

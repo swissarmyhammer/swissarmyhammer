@@ -194,11 +194,10 @@ impl<M: BusMessage> LeaderElection<M> {
             Err(ElectionError::LockHeld) => {
                 // Read discovery file to find proxy addresses
                 let disc_path = self.discovery_path();
+                // Create context once; reused for both the publisher and all future subscribe() calls
+                let ctx = zmq::Context::new();
                 let publisher = match discovery::read_discovery(&disc_path)? {
-                    Some(addrs) => {
-                        let ctx = zmq::Context::new();
-                        Publisher::connected(&ctx, &addrs.frontend)?
-                    }
+                    Some(addrs) => Publisher::connected(&ctx, &addrs.frontend)?,
                     None => Publisher::noop(),
                 };
                 Ok(ElectionOutcome::Follower(FollowerGuard {
@@ -207,6 +206,7 @@ impl<M: BusMessage> LeaderElection<M> {
                     discovery_path: disc_path,
                     bus_addresses: self.bus_addresses(),
                     publisher,
+                    zmq_ctx: ctx,
                 }))
             }
             Err(e) => Err(e),
@@ -352,10 +352,10 @@ impl<M: BusMessage> LeaderGuard<M> {
 
     /// Subscribe to messages on the bus, optionally filtered by topics.
     ///
-    /// Pass empty slice to subscribe to all messages.
+    /// Pass empty slice to subscribe to all messages. Reuses the ZMQ context
+    /// from the proxy handle rather than allocating a new heavyweight context.
     pub fn subscribe(&self, topics: &[&[u8]]) -> Result<Subscriber<M>> {
-        let ctx = zmq::Context::new();
-        Subscriber::connected(&ctx, &self.bus_addresses.backend, topics)
+        Subscriber::connected(self._proxy.zmq_context(), &self.bus_addresses.backend, topics)
     }
 
     /// Get the bus addresses (for external subscribers).
@@ -391,6 +391,8 @@ pub struct FollowerGuard<M: BusMessage = NullMessage> {
     bus_addresses: BusAddresses,
     /// Publisher for sending messages to the bus
     publisher: Publisher<M>,
+    /// ZMQ context reused for subscribe() calls (created once at election time)
+    zmq_ctx: zmq::Context,
 }
 
 impl<M: BusMessage> fmt::Debug for FollowerGuard<M> {
@@ -447,9 +449,12 @@ impl<M: BusMessage> FollowerGuard<M> {
     }
 
     /// Subscribe to messages on the bus, optionally filtered by topics.
+    ///
+    /// Pass empty slice to subscribe to all messages. Reuses the ZMQ context
+    /// stored on the guard (created once at election time) rather than
+    /// allocating a new heavyweight context on every call.
     pub fn subscribe(&self, topics: &[&[u8]]) -> Result<Subscriber<M>> {
-        let ctx = zmq::Context::new();
-        Subscriber::connected(&ctx, &self.bus_addresses.backend, topics)
+        Subscriber::connected(&self.zmq_ctx, &self.bus_addresses.backend, topics)
     }
 
     /// Get the path to the lock file

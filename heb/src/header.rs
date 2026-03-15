@@ -1,10 +1,26 @@
 //! Event header and category types for HEB events.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use ulid::Generator;
+
+thread_local! {
+    static ULID_GEN: RefCell<Generator> = const { RefCell::new(Generator::new()) };
+}
+
+/// Generate a monotonic ULID. Same-millisecond calls are guaranteed to sort correctly.
+fn next_ulid() -> String {
+    ULID_GEN.with(|gen| {
+        gen.borrow_mut()
+            .generate()
+            .expect("ULID overflow (>2^80 in same millisecond)")
+            .to_string()
+    })
+}
 
 /// Coarse category for topic-based ZMQ filtering.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,9 +63,8 @@ impl fmt::Display for EventCategory {
 /// Event header — metadata envelope for every HEB event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventHeader {
-    /// Monotonic sequence (assigned on persist, 0 on wire before persist)
-    #[serde(default)]
-    pub seq: u64,
+    /// ULID — globally unique, lexicographically sortable by creation time.
+    pub id: String,
     /// When the event was created
     pub timestamp: DateTime<Utc>,
     /// Originating Claude Code session ID
@@ -74,7 +89,7 @@ impl EventHeader {
         source: impl Into<String>,
     ) -> Self {
         Self {
-            seq: 0,
+            id: next_ulid(),
             timestamp: Utc::now(),
             session_id: session_id.into(),
             cwd: cwd.into(),

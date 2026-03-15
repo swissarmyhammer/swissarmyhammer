@@ -147,12 +147,14 @@ impl<M: BusMessage> Publisher<M> {
 /// Subscriber handle for receiving messages from the bus.
 ///
 /// Thread-safe (`Send`) — uses an internal channel from a dedicated ZMQ thread.
+///
+/// **Thread lifecycle**: the ZMQ thread runs a recv loop with `rcvtimeo=100ms`.
+/// When the `Subscriber` is dropped, the channel receiver is dropped first,
+/// causing the next `tx.send()` in the ZMQ thread to fail. The thread then
+/// breaks out of its loop and exits. Worst case latency is one `rcvtimeo`
+/// interval (100ms) after the subscriber is dropped.
 pub struct Subscriber<M: BusMessage> {
     receiver: mpsc::Receiver<Result<M>>,
-    /// SUB thread handle. Not joined on drop — the thread exits within
-    /// rcvtimeo (100ms) after the Receiver is dropped, because `tx.send()`
-    /// fails. Joining would deadlock since `recv_multipart` blocks even
-    /// with rcvtimeo when the ZMQ context is still alive.
     _thread: JoinHandle<()>,
 }
 
@@ -238,8 +240,17 @@ impl<M: BusMessage> Subscriber<M> {
     }
 
     /// Try to receive a message with a timeout.
+    ///
+    /// Returns `None` on timeout, `Some(Ok(msg))` on success,
+    /// or `Some(Err(...))` if the subscriber channel is disconnected.
     pub fn recv_timeout(&self, timeout: Duration) -> Option<Result<M>> {
-        self.receiver.recv_timeout(timeout).ok()
+        match self.receiver.recv_timeout(timeout) {
+            Ok(msg) => Some(msg),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => Some(Err(
+                ElectionError::Message("Subscriber channel disconnected".to_string()),
+            )),
+        }
     }
 }
 
