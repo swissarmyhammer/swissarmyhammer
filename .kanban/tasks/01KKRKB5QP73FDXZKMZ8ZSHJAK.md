@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffff780
+position_ordinal: ffffffaa80
 title: 'Tauri: add global-shortcut plugin and quick-capture window backend'
 ---
 ## What

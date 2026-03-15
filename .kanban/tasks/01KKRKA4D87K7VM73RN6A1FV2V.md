@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffff580
+position_ordinal: ffffffa780
 title: 'CM6 editor: add onSubmit/onCancel semantic callbacks with vim-mode awareness'
 ---
 ## What

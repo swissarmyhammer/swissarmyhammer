@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: ffffaf80
+position_ordinal: ffffdf80
 title: 'Clean up .gitignore: remove per-tool entries, let tools self-manage'
 ---
 ## What

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffff8b80
+position_ordinal: ffffbb80
 title: Document + button restriction to first column only
 ---
 **W6: + button restricted to first column without user-facing indication**

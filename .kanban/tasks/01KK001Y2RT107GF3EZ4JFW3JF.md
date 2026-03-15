@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffaf80
+position_ordinal: ffdf80
 title: Unified dispatch_command Tauri endpoint with scope chain and undoable flag
 ---
 Replace the current `execute_command` Tauri command with the new `dispatch_command` that uses `CommandInvocation` and the `CommandsRegistry`.

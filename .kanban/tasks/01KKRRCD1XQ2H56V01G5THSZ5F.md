@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKRRBR4K3JHZS2WZRD13V06X
 position_column: done
-position_ordinal: fffff880
+position_ordinal: ffffffac80
 title: Update commit skill to run detected formatters
 ---
 ## What

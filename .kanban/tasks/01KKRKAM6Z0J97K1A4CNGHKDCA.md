@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKRKA4D87K7VM73RN6A1FV2V
 position_column: done
-position_ordinal: fffff680
+position_ordinal: ffffffa880
 title: 'Grid cell editing: refactor to use onSubmit/onCancel from CM6 editor'
 ---
 ## What

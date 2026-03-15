@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffe380
+position_ordinal: ffff9480
 title: DataTable renderer — static grid
 ---
 Build the DataTable component that renders entities as a table with columns from field definitions. Connects to useGrid for cursor/selection state. Read-only at this stage.

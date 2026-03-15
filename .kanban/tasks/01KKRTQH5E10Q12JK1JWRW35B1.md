@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffa80
+position_ordinal: ffffffaf80
 title: 'FieldRenderer: self-contained field updates via useFieldUpdate'
 ---
 ## What

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: fff580
+position_ordinal: ffffa680
 title: Auto-create OS user actor on board open
 ---
 Use `whoami` crate to automatically create an actor for the logged-in OS user when a board is opened.

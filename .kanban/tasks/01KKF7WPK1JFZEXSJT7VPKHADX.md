@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: c6
+position_ordinal: df80
 title: Transplant `detect projects` op to code_context MCP tool
 ---
 ## What

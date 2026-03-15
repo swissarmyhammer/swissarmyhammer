@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: fd80
+position_ordinal: ffae80
 title: Missing error context on Rust .map_err(|e| e.to_string()) chains
 ---
 Per the Rust review guidelines, bare `.map_err(|e| e.to_string())` loses error context. In `commands.rs`, nearly every command uses this pattern (e.g. lines 54, 123, 144, 175, etc.). When these errors reach the frontend, the user sees raw error messages like "No such file or directory" with no context about which operation failed.

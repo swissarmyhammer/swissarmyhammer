@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ffae80
+position_ordinal: ffde80
 title: Run tests and fix issues
 ---
