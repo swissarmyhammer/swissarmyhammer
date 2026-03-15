@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: k5
+title: 'Fix shell tool tests: "No such file or directory" in shell state initialization'
+---
+12 tests in swissarmyhammer-tools fail with "Failed to initialize shell state: No such file or directory (os error 2)" or "Failed to get current directory: No such file or directory (os error 2)". All failures are in the shell execute module and test_utils. The tests create a temp dir, set it as CWD, then the temp dir gets cleaned up before the shell state can use it. Affected tests: test_client_call_tool, test_get_lines_nonexistent_command, test_get_lines_retrieves_output, test_get_lines_shows_line_numbers, test_get_lines_with_range, test_grep_history_finds_matching_output, test_grep_history_no_matches, test_grep_history_regex_pattern, test_grep_history_with_command_id_filter, test_grep_history_with_limit, test_list_processes_shows_completed_commands, test_list_processes_table_format. Files: swissarmyhammer-tools/src/mcp/tools/shell/execute/mod.rs and swissarmyhammer-tools/src/mcp/test_utils.rs #test-failure

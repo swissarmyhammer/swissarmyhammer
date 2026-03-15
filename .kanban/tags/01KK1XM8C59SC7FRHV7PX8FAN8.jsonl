@@ -1,0 +1,1 @@
+{"id":"01KK1XM8C8PP2NT0NCWCF1D1HR","timestamp":"2026-03-06T15:52:58.504291Z","entity_type":"tag","entity_id":"01KK1XM8C59SC7FRHV7PX8FAN8","op":"create","changes":[["color",{"kind":"set","value":"0066ff"}],["description",{"kind":"set","value":"Config format and parsing changes"}],["tag_name",{"kind":"set","value":"config"}]],"transaction_id":"01KK1XM8BVDNCJJ08QJCW2H1E8"}

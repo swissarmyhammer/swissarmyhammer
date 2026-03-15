@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: m5
+title: onnxruntime-coreml-sys and model-embedding not in workspace members list
+---
+**File:** Cargo.toml (workspace root)\n\n**What:** The workspace Cargo.toml on the `tools` branch adds `model-embedding` and `onnxruntime-coreml-sys` to the members list, but these directories do not exist on disk in the current working tree. The `llama-embedding/Cargo.toml` depends on `model-embedding = { path = \"../model-embedding\" }`, but the crate directory is missing.\n\n**Why:** This will cause `cargo build` / `cargo check` to fail for anyone checking out this branch. The new crate directories appear to have been committed to the branch but are not present in the working tree, suggesting an incomplete merge or checkout issue.\n\n**Suggestion:** Verify that `model-embedding/` and `onnxruntime-coreml-sys/` directories are properly committed and that checking out the `tools` branch fully materializes them. If they are git submodules or otherwise external, document the setup steps. #review-finding #blocker
