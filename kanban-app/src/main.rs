@@ -126,19 +126,22 @@ fn main() {
             {
                 use tauri_plugin_global_shortcut::GlobalShortcutExt;
                 let handle = app.handle().clone();
-                app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+K", move |_app, _shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if let Some(win) = handle.get_webview_window("quick-capture") {
-                            if win.is_visible().unwrap_or(false) {
-                                let _ = win.hide();
-                            } else {
-                                let _ = win.center();
-                                let _ = win.show();
-                                let _ = win.set_focus();
+                app.global_shortcut().on_shortcut(
+                    "CmdOrCtrl+Shift+K",
+                    move |_app, _shortcut, event| {
+                        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                            if let Some(win) = handle.get_webview_window("quick-capture") {
+                                if win.is_visible().unwrap_or(false) {
+                                    let _ = win.hide();
+                                } else {
+                                    let _ = win.center();
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                }
                             }
                         }
-                    }
-                })?;
+                    },
+                )?;
             }
 
             Ok(())
