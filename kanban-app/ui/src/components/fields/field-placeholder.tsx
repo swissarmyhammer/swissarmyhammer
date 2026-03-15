@@ -127,11 +127,12 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
       }
     : () => commitAndExitRef.current();
 
-  // Semantic cancel ref: if onSubmit provided, use onCancel directly;
+  // Semantic cancel ref: if onSubmit provided, call onCancel directly
+  // bypassing committedRef (popup MUST dismiss even if blur already fired);
   // otherwise preserve existing defaults (vim: commit, CUA: cancel)
   const semanticCancelRef = useRef<(() => void) | null>(null);
   semanticCancelRef.current = onSubmit
-    ? () => cancelAndExitRef.current()
+    ? () => onCancel()
     : mode === "vim"
       ? () => commitAndExitRef.current()
       : () => cancelAndExitRef.current();

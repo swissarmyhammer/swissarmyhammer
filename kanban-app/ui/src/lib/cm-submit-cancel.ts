@@ -1,21 +1,19 @@
 /**
  * Shared CM6 extension factory for vim-mode-aware submit/cancel semantics.
  *
- * Vim mode: EditorView.domEventHandlers checks vim state for Enter/Escape.
- * CUA/emacs mode: keymap.of bindings for Enter/Escape.
- *
  * Vim mode:
  *   - Insert Escape → normal mode (vim handles, we optionally save in place)
- *   - Normal Escape → onCancelRef
- *   - Normal Enter  → onSubmitRef (if singleLine and doc is non-empty)
+ *   - Normal Escape → onCancelRef (via domEventHandlers — vim doesn't consume Esc)
+ *   - Normal Enter  → onSubmitRef (via capture-phase DOM listener on .cm-editor)
+ *   - Insert Enter  → newline (vim handles, we don't intercept)
  *
  * CUA/emacs mode:
  *   - Escape → onCancelRef
  *   - Enter  → onSubmitRef (only when singleLine is true)
  */
 
-import { keymap, EditorView } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import { keymap, EditorView, ViewPlugin } from "@codemirror/view";
+import { Prec, type Extension } from "@codemirror/state";
 import { getCM } from "@replit/codemirror-vim";
 
 /** Generic ref type — avoids importing React in this utility. */
@@ -26,9 +24,9 @@ interface Ref<T> {
 export interface SubmitCancelOptions {
   /** Active keymap mode: "vim", "cua", or "emacs". */
   mode: string;
-  /** Called on semantic submit (Enter in normal mode / CUA). */
+  /** Called on semantic submit (normal-mode Enter / CUA Enter). */
   onSubmitRef: Ref<(() => void) | null>;
-  /** Called on semantic cancel (Escape in normal mode / CUA). */
+  /** Called on semantic cancel (normal-mode Escape / CUA Escape). */
   onCancelRef: Ref<(() => void) | null>;
   /** Called when vim exits insert mode (save-in-place). Optional. */
   saveInPlaceRef?: Ref<(() => void) | null>;
@@ -43,41 +41,60 @@ export interface SubmitCancelOptions {
 /**
  * Build CM6 extensions that route Escape and Enter to semantic callbacks.
  *
- * This is the same pattern that worked in the original FieldPlaceholderEditor
- * before the refactor — EditorView.domEventHandlers for vim, keymap.of for CUA.
+ * Vim Enter uses a capture-phase DOM keydown listener attached directly
+ * to the .cm-editor element. This fires BEFORE CM6/vim's own event
+ * processing. We check vim state and preventDefault+stopPropagation
+ * if we handle it, so vim never sees the event.
+ *
+ * Vim Escape uses CM6 domEventHandlers (vim doesn't consume Esc in
+ * normal mode, so our handler runs fine).
+ *
+ * CUA/emacs uses Prec.highest keymap.of bindings.
  */
 export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extension[] {
   const { mode, onSubmitRef, onCancelRef, saveInPlaceRef, singleLine = true } = opts;
 
   if (mode === "vim") {
     return [
+      // Enter: capture-phase DOM listener beats vim's event processing.
+      ...(singleLine
+        ? [
+            ViewPlugin.define((view) => {
+              const handler = (event: KeyboardEvent) => {
+                if (event.key !== "Enter") return;
+                const cm = getCM(view);
+                if (cm?.state?.vim?.insertMode) return; // let vim insert newline
+                const text = view.state.doc.toString();
+                if (text.length > 0) {
+                  console.log("[cm-submit-cancel] vim Enter capture, submitting");
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onSubmitRef.current?.();
+                }
+              };
+              view.dom.addEventListener("keydown", handler, true);
+              return {
+                destroy() {
+                  view.dom.removeEventListener("keydown", handler, true);
+                },
+              };
+            }),
+          ]
+        : []),
+      // Escape: domEventHandlers (vim doesn't consume Esc in normal mode)
       EditorView.domEventHandlers({
         keydown(event, view) {
           if (event.key === "Escape") {
             const cm = getCM(view);
             if (cm?.state?.vim?.insertMode) {
-              // Insert mode: let vim handle Escape (→ normal mode),
-              // then save in place if provided.
               if (saveInPlaceRef?.current) {
                 setTimeout(() => saveInPlaceRef.current?.(), 0);
               }
               return false;
             }
-            // Normal mode: cancel
+            console.log("[cm-submit-cancel] vim Escape in normal mode, cancelling");
             onCancelRef.current?.();
             return true;
-          }
-          if (event.key === "Enter" && singleLine) {
-            const cm = getCM(view);
-            if (!cm?.state?.vim?.insertMode) {
-              // Normal mode: submit if doc has content
-              const text = view.state.doc.toString();
-              if (text.length > 0) {
-                onSubmitRef.current?.();
-                return true;
-              }
-            }
-            return false;
           }
           return false;
         },
@@ -85,27 +102,29 @@ export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extensio
     ];
   }
 
-  // CUA / emacs
+  // CUA / emacs — Prec.highest to beat markdown extension's Enter
   return [
-    keymap.of([
-      {
-        key: "Escape",
-        run: () => {
-          onCancelRef.current?.();
-          return true;
+    Prec.highest(
+      keymap.of([
+        {
+          key: "Escape",
+          run: () => {
+            onCancelRef.current?.();
+            return true;
+          },
         },
-      },
-      ...(singleLine
-        ? [
-            {
-              key: "Enter",
-              run: () => {
-                onSubmitRef.current?.();
-                return true;
+        ...(singleLine
+          ? [
+              {
+                key: "Enter",
+                run: () => {
+                  onSubmitRef.current?.();
+                  return true;
+                },
               },
-            },
-          ]
-        : []),
-    ]),
+            ]
+          : []),
+      ]),
+    ),
   ];
 }
