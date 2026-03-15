@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { vim, getCM } from "@replit/codemirror-vim";
@@ -227,7 +227,7 @@ describe("buildSubmitCancelExtensions", () => {
       cleanup = c;
 
       // CM6 keymap handlers fire via the view's key dispatch
-      const handled = view.contentDOM.dispatchEvent(
+      view.contentDOM.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
       );
 

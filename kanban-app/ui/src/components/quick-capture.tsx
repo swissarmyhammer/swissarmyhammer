@@ -18,8 +18,7 @@ import { Button } from "@/components/ui/button";
 import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
 import { BoardSelector } from "@/components/board-selector";
 import appIcon from "@/assets/app-icon-32.png";
-import type { OpenBoard, BoardDataResponse, Entity, EntityBag } from "@/types/kanban";
-import { entityFromBag, parseBoardData } from "@/types/kanban";
+import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
 
 const STORAGE_KEY = "quick-capture-last-board";
 
@@ -35,7 +34,6 @@ export function QuickCapture() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [draft, setDraft] = useState("");
-  const [boardEntity, setBoardEntity] = useState<Entity | null>(null);
   // Key to force-remount the editor on each window show
   const [editorKey, setEditorKey] = useState(0);
   const mountedRef = useRef(true);
@@ -56,32 +54,12 @@ export function QuickCapture() {
     }
   }, []);
 
-  /** Load board entity for the selected path so BoardSelector can display/edit the name. */
-  const loadBoardEntity = useCallback(async (path: string | null) => {
-    if (!path) { setBoardEntity(null); return; }
-    try {
-      // Temporarily switch to the selected board, fetch its data, then switch back
-      const currentActive = boards.find((b) => b.is_active);
-      if (currentActive?.path !== path) {
-        await invoke("set_active_board", { path });
-      }
-      const data = await invoke<BoardDataResponse>("get_board_data");
-      if (!mountedRef.current) return;
-      const parsed = parseBoardData(data);
-      setBoardEntity(parsed.board);
-      // Restore original active board
-      if (currentActive && currentActive.path !== path) {
-        await invoke("set_active_board", { path: currentActive.path }).catch(() => {});
-      }
-    } catch {
-      setBoardEntity(null);
-    }
-  }, [boards]);
-
-  // Load board entity when selection changes
-  useEffect(() => {
-    loadBoardEntity(selectedPath);
-  }, [selectedPath, loadBoardEntity]);
+  // Derive a minimal board entity from the selected OpenBoard for BoardSelector.
+  // The board entity always has entity_type "board" and id "board".
+  const selected = boards.find((b) => b.path === selectedPath);
+  const boardEntity: Entity | undefined = selected
+    ? { entity_type: "board", id: "board", fields: { name: selected.name } }
+    : undefined;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -107,19 +85,9 @@ export function QuickCapture() {
   // -------------------------------------------------------------------------
   useEffect(() => {
     const unlisteners = [
-      // Board name or field changes → update local entity
+      // Board name/field changes → reload board list (names come from list_open_boards)
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        const { entity_type, id, fields } = event.payload;
-        if (entity_type === "board" && boardEntity && id === boardEntity.id) {
-          if (fields) {
-            setBoardEntity({ entity_type, id, fields });
-          } else {
-            // External change — re-fetch
-            invoke<EntityBag>("get_entity", { entityType: entity_type, id })
-              .then((bag) => setBoardEntity(entityFromBag(bag)))
-              .catch(() => {});
-          }
-        }
+        if (event.payload.entity_type === "board") loadBoards();
       }),
       // Structural board changes (open/close/switch) → reload board list
       listen("board-changed", () => {
@@ -131,7 +99,7 @@ export function QuickCapture() {
         p.then((fn) => fn());
       }
     };
-  }, [boardEntity, loadBoards]);
+  }, [loadBoards]);
 
   // Window-level Escape fallback for when CM6 doesn't have focus
   useEffect(() => {
@@ -234,7 +202,7 @@ export function QuickCapture() {
             boards={boards}
             selectedPath={selectedPath}
             onSelect={setSelectedPath}
-            boardEntity={boardEntity ?? undefined}
+            boardEntity={boardEntity}
             className="flex-1 text-xs"
           />
         </div>
