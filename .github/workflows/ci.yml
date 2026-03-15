@@ -32,6 +32,26 @@ jobs:
       - name: Run tests
         run: cargo nextest run --no-fail-fast
 
+  frontend:
+    name: Frontend
+    runs-on: self-hosted
+    strategy:
+      matrix:
+        app: [kanban-app, mirdan-app]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        working-directory: ${{ matrix.app }}/ui
+        run: npm install
+      - name: Typecheck
+        working-directory: ${{ matrix.app }}/ui
+        run: npx tsc --noEmit
+      - name: Test
+        working-directory: ${{ matrix.app }}/ui
+        run: npm test --if-present
+
   fmt:
     name: Rustfmt
     runs-on: self-hosted
