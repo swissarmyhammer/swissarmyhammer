@@ -33,6 +33,11 @@ import { QuickCapture } from "@/components/quick-capture";
 const IS_QUICK_CAPTURE = new URLSearchParams(window.location.search).has("window") &&
   new URLSearchParams(window.location.search).get("window") === "quick-capture";
 
+// Mark <html> so CSS can make the quick-capture window fully transparent.
+if (IS_QUICK_CAPTURE) {
+  document.documentElement.setAttribute("data-quick-capture", "");
+}
+
 const PANEL_WIDTH = 420;
 
 /** Payload for entity-created Tauri event. */
