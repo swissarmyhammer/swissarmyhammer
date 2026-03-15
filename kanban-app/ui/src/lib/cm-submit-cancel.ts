@@ -25,6 +25,9 @@ import { CodeMirror as CM, Vim, getCM } from "@replit/codemirror-vim";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const CodeMirror = CM as any;
 
+// DEBUG: verify this module loads
+console.log("[cm-submit-cancel] module loaded");
+
 /** Generic ref type — avoids importing React in this utility. */
 interface Ref<T> {
   current: T;
@@ -73,10 +76,11 @@ function ensureVimActions() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Vim.defineAction("submit", (cm: any) => {
     const entry = editorCallbacks.get(cm);
+    console.log(`[cm-submit-cancel] submit action fired, entry=${!!entry} singleLine=${entry?.singleLine}`);
     if (!entry?.singleLine) return;
-    // Only submit if doc has content — read from CM6 view
     const view = cm?.cm6;
     const text = view?.state?.doc?.toString() ?? "";
+    console.log(`[cm-submit-cancel] submit text=${JSON.stringify(text)} hasCallback=${!!entry.onSubmitRef.current}`);
     if (text.length > 0) {
       entry.onSubmitRef.current?.();
     }
@@ -85,11 +89,13 @@ function ensureVimActions() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Vim.defineAction("cancel", (cm: any) => {
     const entry = editorCallbacks.get(cm);
+    console.log(`[cm-submit-cancel] cancel action fired, entry=${!!entry} hasCallback=${!!entry?.onCancelRef.current}`);
     entry?.onCancelRef.current?.();
   });
 
   Vim.mapCommand("<CR>", "action", "submit", undefined, { context: "normal" });
   Vim.mapCommand("<Esc>", "action", "cancel", undefined, { context: "normal" });
+  console.log("[cm-submit-cancel] registered submit/cancel actions and mappings");
 }
 
 /**
@@ -104,6 +110,8 @@ function ensureVimActions() {
 export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extension[] {
   const { mode, onSubmitRef, onCancelRef, saveInPlaceRef, singleLine = true } = opts;
 
+  console.log(`[cm-submit-cancel] buildSubmitCancelExtensions mode=${mode} singleLine=${singleLine}`);
+
   if (mode === "vim") {
     ensureVimActions();
 
@@ -111,7 +119,7 @@ export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extensio
       ViewPlugin.define((view) => {
         const cm = getCM(view);
 
-        // Register this editor's callbacks in the global WeakMap
+        console.log(`[cm-submit-cancel] ViewPlugin create, cm=${!!cm} singleLine=${singleLine}`);
         if (cm) {
           editorCallbacks.set(cm, { onSubmitRef, onCancelRef, saveInPlaceRef, singleLine });
         }

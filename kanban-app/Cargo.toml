@@ -21,6 +21,7 @@ swissarmyhammer-entity-search = { path = "../swissarmyhammer-entity-search" }
 swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
 tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-log = { version = "2", features = ["tracing"] }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

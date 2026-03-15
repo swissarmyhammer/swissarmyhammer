@@ -5,6 +5,7 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "global-shortcut:allow-register"
+    "global-shortcut:allow-register",
+    "log:default"
   ]
 }
