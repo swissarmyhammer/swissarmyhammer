@@ -66,7 +66,6 @@ export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extensio
                 if (cm?.state?.vim?.insertMode) return; // let vim insert newline
                 const text = view.state.doc.toString();
                 if (text.length > 0) {
-                  console.log("[cm-submit-cancel] vim Enter capture, submitting");
                   event.preventDefault();
                   event.stopPropagation();
                   onSubmitRef.current?.();
@@ -92,7 +91,6 @@ export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extensio
               }
               return false;
             }
-            console.log("[cm-submit-cancel] vim Escape in normal mode, cancelling");
             onCancelRef.current?.();
             return true;
           }

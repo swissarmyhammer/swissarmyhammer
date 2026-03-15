@@ -145,7 +145,6 @@ export function QuickCapture() {
   }, []);
 
   const hideWindow = useCallback(() => {
-    console.log("[quick-capture] hideWindow called");
     getCurrentWindow().hide();
   }, []);
 
