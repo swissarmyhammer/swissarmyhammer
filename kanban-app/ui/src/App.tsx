@@ -484,9 +484,11 @@ function QuickCaptureApp() {
   return (
     <SchemaProvider>
     <EntityStoreProvider entities={{}}>
+    <FieldUpdateProvider>
     <KeymapProvider>
       <QuickCapture />
     </KeymapProvider>
+    </FieldUpdateProvider>
     </EntityStoreProvider>
     </SchemaProvider>
   );

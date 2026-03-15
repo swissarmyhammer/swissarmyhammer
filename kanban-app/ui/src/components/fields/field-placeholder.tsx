@@ -138,15 +138,38 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
 
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
-      if (mode === "vim") {
-        const cm = getCM(view);
-        if (cm?.state?.vim?.insertMode) {
+      if (mode !== "vim") return;
+      const cm = getCM(view);
+      if (!cm) return;
+
+      if (onSubmit) {
+        // Popup/quick-capture mode: auto-enter insert mode so user can type immediately.
+        // Same rAF retry pattern as command-palette.tsx.
+        let cancelled = false;
+        let attempts = 0;
+        const tryEnterInsert = () => {
+          if (cancelled || attempts > 20) return;
+          attempts++;
+          const c = getCM(view);
+          if (!c) { requestAnimationFrame(tryEnterInsert); return; }
+          if (!c.state?.vim?.insertMode) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            Vim.handleKey(c as any, "i", "mapping");
+          }
+        };
+        requestAnimationFrame(tryEnterInsert);
+        // Store cleanup on the view for the effect below
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (view as any).__cancelInsert = () => { cancelled = true; };
+      } else {
+        // Grid cell editing: ensure we start in normal mode
+        if (cm.state?.vim?.insertMode) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           Vim.exitInsertMode(cm as any);
         }
       }
     },
-    [mode],
+    [mode, onSubmit],
   );
 
   const extensions = useMemo(
