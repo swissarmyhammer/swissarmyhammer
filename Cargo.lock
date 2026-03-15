@@ -8246,6 +8246,7 @@ dependencies = [
  "include_dir",
  "liquid",
  "lru",
+ "markdowndown",
  "regex",
  "serde",
  "serde_json",

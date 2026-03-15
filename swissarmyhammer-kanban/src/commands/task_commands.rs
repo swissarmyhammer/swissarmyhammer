@@ -104,13 +104,14 @@ impl Command for MoveTaskCmd {
                 .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
 
             // Load and sort all tasks in the target column (excluding the moved task)
-            let all_tasks = ectx.list("task").await
+            let all_tasks = ectx
+                .list("task")
+                .await
                 .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
             let mut col_tasks: Vec<_> = all_tasks
                 .into_iter()
                 .filter(|t| {
-                    t.get_str("position_column") == Some(&column)
-                        && t.id.as_str() != task_id
+                    t.get_str("position_column") == Some(&column) && t.id.as_str() != task_id
                 })
                 .collect();
             col_tasks.sort_by(|a, b| {
@@ -134,7 +135,9 @@ impl Command for MoveTaskCmd {
                     Some(idx) => {
                         // Between predecessor and ref
                         let pred_ord = Ordinal::from_string(
-                            col_tasks[idx - 1].get_str("position_ordinal").unwrap_or("a0"),
+                            col_tasks[idx - 1]
+                                .get_str("position_ordinal")
+                                .unwrap_or("a0"),
                         );
                         let ref_ord = Ordinal::from_string(
                             col_tasks[idx].get_str("position_ordinal").unwrap_or("a0"),
@@ -147,11 +150,14 @@ impl Command for MoveTaskCmd {
                     None => {
                         // ref not found — append at end
                         crate::task_helpers::compute_ordinal_for_neighbors(
-                            col_tasks.last().map(|t| {
-                                Ordinal::from_string(
-                                    t.get_str("position_ordinal").unwrap_or("a0"),
-                                )
-                            }).as_ref(),
+                            col_tasks
+                                .last()
+                                .map(|t| {
+                                    Ordinal::from_string(
+                                        t.get_str("position_ordinal").unwrap_or("a0"),
+                                    )
+                                })
+                                .as_ref(),
                             None,
                         )
                     }
@@ -174,7 +180,9 @@ impl Command for MoveTaskCmd {
                             col_tasks[idx].get_str("position_ordinal").unwrap_or("a0"),
                         );
                         let succ_ord = Ordinal::from_string(
-                            col_tasks[idx + 1].get_str("position_ordinal").unwrap_or("a0"),
+                            col_tasks[idx + 1]
+                                .get_str("position_ordinal")
+                                .unwrap_or("a0"),
                         );
                         crate::task_helpers::compute_ordinal_for_neighbors(
                             Some(&ref_ord),
@@ -184,11 +192,14 @@ impl Command for MoveTaskCmd {
                     None => {
                         // ref not found — append at end
                         crate::task_helpers::compute_ordinal_for_neighbors(
-                            col_tasks.last().map(|t| {
-                                Ordinal::from_string(
-                                    t.get_str("position_ordinal").unwrap_or("a0"),
-                                )
-                            }).as_ref(),
+                            col_tasks
+                                .last()
+                                .map(|t| {
+                                    Ordinal::from_string(
+                                        t.get_str("position_ordinal").unwrap_or("a0"),
+                                    )
+                                })
+                                .as_ref(),
                             None,
                         )
                     }

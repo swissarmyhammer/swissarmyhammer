@@ -1,3 +1,4 @@
+use markdowndown::frontmatter::strip_frontmatter;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -40,16 +41,6 @@ fn load_shared_partials(library: &mut PromptLibrary) {
             }
         }
     }
-}
-
-/// Strip YAML frontmatter (---\n...\n---\n) from content
-fn strip_frontmatter(content: &str) -> String {
-    if let Some(after_prefix) = content.strip_prefix("---") {
-        if let Some(end) = after_prefix.find("\n---") {
-            return after_prefix[end + 4..].to_string();
-        }
-    }
-    content.to_string()
 }
 
 #[test]

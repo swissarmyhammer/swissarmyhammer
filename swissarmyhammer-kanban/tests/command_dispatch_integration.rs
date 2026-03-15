@@ -698,8 +698,11 @@ async fn reorder_move_last_to_first() {
     // Move C before A → order should be [C, A, B]
     move_before(&engine, &ids[2], &ids[0]).await;
     let order = todo_order(&engine).await;
-    assert_eq!(order, vec![ids[2].clone(), ids[0].clone(), ids[1].clone()],
-        "C should be first after moving before A");
+    assert_eq!(
+        order,
+        vec![ids[2].clone(), ids[0].clone(), ids[1].clone()],
+        "C should be first after moving before A"
+    );
 }
 
 #[tokio::test]
@@ -710,8 +713,11 @@ async fn reorder_move_first_to_last() {
     // Move A after C → order should be [B, C, A]
     move_after(&engine, &ids[0], &ids[2]).await;
     let order = todo_order(&engine).await;
-    assert_eq!(order, vec![ids[1].clone(), ids[2].clone(), ids[0].clone()],
-        "A should be last after moving after C");
+    assert_eq!(
+        order,
+        vec![ids[1].clone(), ids[2].clone(), ids[0].clone()],
+        "A should be last after moving after C"
+    );
 }
 
 #[tokio::test]
@@ -722,17 +728,41 @@ async fn reorder_pairwise_swap() {
     // Swap A and B: move A after B → [B, A, C, D]
     move_after(&engine, &ids[0], &ids[1]).await;
     let order = todo_order(&engine).await;
-    assert_eq!(order, vec![ids[1].clone(), ids[0].clone(), ids[2].clone(), ids[3].clone()]);
+    assert_eq!(
+        order,
+        vec![
+            ids[1].clone(),
+            ids[0].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ]
+    );
 
     // Swap C and D: move C after D → [B, A, D, C]
     move_after(&engine, &ids[2], &ids[3]).await;
     let order = todo_order(&engine).await;
-    assert_eq!(order, vec![ids[1].clone(), ids[0].clone(), ids[3].clone(), ids[2].clone()]);
+    assert_eq!(
+        order,
+        vec![
+            ids[1].clone(),
+            ids[0].clone(),
+            ids[3].clone(),
+            ids[2].clone()
+        ]
+    );
 
     // Swap back: move B after A → [A, B, D, C]
     move_after(&engine, &ids[1], &ids[0]).await;
     let order = todo_order(&engine).await;
-    assert_eq!(order, vec![ids[0].clone(), ids[1].clone(), ids[3].clone(), ids[2].clone()]);
+    assert_eq!(
+        order,
+        vec![
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[3].clone(),
+            ids[2].clone()
+        ]
+    );
 }
 
 #[tokio::test]
@@ -753,7 +783,13 @@ async fn reorder_reverse_list_by_dragging_end_to_beginning() {
     let order = todo_order(&engine).await;
     assert_eq!(
         order,
-        vec![ids[1].clone(), ids[2].clone(), ids[3].clone(), ids[4].clone(), ids[0].clone()],
+        vec![
+            ids[1].clone(),
+            ids[2].clone(),
+            ids[3].clone(),
+            ids[4].clone(),
+            ids[0].clone()
+        ],
         "list should be [B,C,D,E,A] after reversing"
     );
 }
@@ -776,7 +812,13 @@ async fn reorder_reverse_list_by_dragging_beginning_to_end() {
     let order = todo_order(&engine).await;
     assert_eq!(
         order,
-        vec![ids[4].clone(), ids[0].clone(), ids[1].clone(), ids[2].clone(), ids[3].clone()],
+        vec![
+            ids[4].clone(),
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ],
         "list should be [E,A,B,C,D] after reversing"
     );
 }
@@ -791,7 +833,13 @@ async fn reorder_move_to_middle() {
     let order = todo_order(&engine).await;
     assert_eq!(
         order,
-        vec![ids[0].clone(), ids[1].clone(), ids[4].clone(), ids[2].clone(), ids[3].clone()],
+        vec![
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[4].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ],
     );
 
     // Move A after E → [B, E, A, C, D]
@@ -799,6 +847,12 @@ async fn reorder_move_to_middle() {
     let order = todo_order(&engine).await;
     assert_eq!(
         order,
-        vec![ids[1].clone(), ids[4].clone(), ids[0].clone(), ids[2].clone(), ids[3].clone()],
+        vec![
+            ids[1].clone(),
+            ids[4].clone(),
+            ids[0].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ],
     );
 }

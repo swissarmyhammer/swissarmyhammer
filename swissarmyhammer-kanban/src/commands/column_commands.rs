@@ -3,7 +3,6 @@
 use super::run_op;
 use crate::context::KanbanContext;
 use async_trait::async_trait;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
 
@@ -13,14 +12,6 @@ use swissarmyhammer_commands::{Command, CommandContext, CommandError};
 /// moved column, inserts it at `target_index`, then assigns sequential order
 /// values (0, 1, 2, …) and persists all changes.
 pub struct ColumnReorderCmd;
-
-#[derive(Deserialize)]
-struct ColumnReorderArgs {
-    /// The ID of the column being moved.
-    id: String,
-    /// The 0-based position the column should end up at.
-    target_index: usize,
-}
 
 #[async_trait]
 impl Command for ColumnReorderCmd {
@@ -72,7 +63,7 @@ impl Command for ColumnReorderCmd {
         let mut operation_ids: Vec<String> = Vec::new();
         for (i, col) in columns.iter().enumerate() {
             let op = crate::column::UpdateColumn::new(col.id.as_str()).with_order(i);
-            let result = run_op(&op, &*kanban).await?;
+            let result = run_op(&op, &kanban).await?;
             if let Some(op_id) = result.get("operation_id").and_then(|v| v.as_str()) {
                 operation_ids.push(op_id.to_string());
             }

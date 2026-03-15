@@ -20,10 +20,19 @@ partial: true
 
 **IMPORTANT:** Do NOT glob for test files. Use `go test ./...` to run all tests - Go discovers `*_test.go` files automatically.
 
+**Formatting:**
+- **Format command:** `go fmt ./...`
+- **Check with imports:** `goimports -w .` (if installed, also fixes imports)
+- Go enforces formatting as a language standard — ALWAYS run `go fmt` before committing
+- `go fmt` is idempotent and safe to run at any time
+
+**Linting:**
+- **Vet:** `go vet ./...` (catches common mistakes)
+- **golangci-lint:** `golangci-lint run` (comprehensive, if installed)
+
 **Best Practices:**
 - Always run `go fmt` before committing (Go standard)
 - Use `go mod tidy` to clean up dependencies
-- Run `go vet` to catch common mistakes
 - Test coverage: `go test -cover ./...`
 - Consider using `golangci-lint` for comprehensive linting
 

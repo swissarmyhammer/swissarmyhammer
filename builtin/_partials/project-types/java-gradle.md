@@ -25,6 +25,12 @@ partial: true
 
 **IMPORTANT:** Do NOT glob for test files. Gradle automatically discovers tests in `src/test/`. Use `./gradlew test` to run all tests.
 
+**Formatting:**
+- **Spotless:** `./gradlew spotlessApply` (format) or `./gradlew spotlessCheck` (verify) — if configured
+- **Check for format tasks:** `./gradlew tasks --group formatting`
+- Check `build.gradle` / `build.gradle.kts` for formatter plugins
+- ALWAYS run the project's formatter before committing
+
 **Best Practices:**
 - Always use the Gradle wrapper (`./gradlew`) for consistency
 - Run `./gradlew clean` before full builds to avoid stale artifacts

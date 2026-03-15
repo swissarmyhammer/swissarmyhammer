@@ -20,6 +20,13 @@ partial: true
 
 **IMPORTANT:** Do NOT glob for test files. .NET automatically discovers test projects and tests. Use `dotnet test` to run all tests.
 
+**Formatting:**
+- **Format command:** `dotnet format`
+- **Check only:** `dotnet format --verify-no-changes`
+- **Specific project:** `dotnet format ProjectName.csproj`
+- Check for `.editorconfig` for formatting rules
+- ALWAYS run `dotnet format` before committing
+
 **Best Practices:**
 - Run `dotnet restore` after cloning or when dependencies change
 - Use `dotnet build` for development, `dotnet publish` for deployment

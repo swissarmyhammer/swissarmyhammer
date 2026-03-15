@@ -1,0 +1,8 @@
+---
+position_column: done
+position_ordinal: b5
+title: Add icon field to LSP YAML specs and expose extension-based registry query
+---
+## What
+
+The LSP YAML files in `builtin/lsp/*.yaml` already define `command`, `file_extensions`, `install_hint`, and `project_types` per server. But they're missing an `icon` field (emoji for statusline), and the registry API (`servers_for_project`) only queries by project type — not by file extension.\n\nThis card adds the missing pieces so the YAML-based registry becomes the single source of truth for language-to-LSP-to-icon mapping.\n\n### Files to change:\n- `swissarmyhammer-lsp/src/types.rs` — add `icon: Option<String>` to `OwnedLspServerSpec`\n- `builtin/lsp/*.yaml` — add `icon` field to each (🦀, 🐍, 📜, 🐹, 🐘, 💎)\n- Add YAML files for languages that the statusline currently hardcodes but have no YAML: Ruby (solargraph), Go (gopls), Java (jdtls), C# (omnisharp), C/C++ (clangd), Dart, Swift, Kotlin\n- `swissarmyhammer-lsp/src/registry.rs` — add `fn all_servers() -> &[OwnedLspServerSpec]` and `fn servers_for_extensions(exts: &[&str]) -> Vec<&OwnedLspServerSpec>`\n\n## Acceptance Criteria\n- [ ] Every LSP YAML file has an `icon` field\n- [ ] `OwnedLspServerSpec` includes `icon: Option<String>`\n- [ ] `all_servers()` returns every loaded spec\n- [ ] `servers_for_extensions(&[\"rs\"])` returns rust-analyzer spec with icon\n- [ ] YAML files exist for all languages the statusline currently shows icons for\n\n## Tests\n- [ ] Unit test: `servers_for_extensions` returns correct specs for known extensions\n- [ ] Unit test: `all_servers()` includes all YAML-loaded servers\n- [ ] Unit test: loaded specs have non-empty icon field\n- [ ] `cargo test -p swissarmyhammer-lsp`

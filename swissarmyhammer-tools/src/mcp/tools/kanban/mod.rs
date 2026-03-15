@@ -193,7 +193,10 @@ impl McpTool for KanbanTool {
         if !arguments.contains_key("actor") {
             let actor_guard = _context.session_actor.read().await;
             if let Some(ref actor_id) = *actor_guard {
-                arguments.insert("actor".to_string(), serde_json::Value::String(actor_id.clone()));
+                arguments.insert(
+                    "actor".to_string(),
+                    serde_json::Value::String(actor_id.clone()),
+                );
                 tracing::debug!(actor = %actor_id, "auto-injected session actor into kanban call");
             }
         }
@@ -2094,7 +2097,11 @@ mod tests {
         let assignees = data["assignees"]
             .as_array()
             .expect("assignees should be an array");
-        assert_eq!(assignees.len(), 1, "task should be auto-assigned to session actor");
+        assert_eq!(
+            assignees.len(),
+            1,
+            "task should be auto-assigned to session actor"
+        );
         assert_eq!(assignees[0], "claude-code");
     }
 
@@ -2161,6 +2168,9 @@ mod tests {
         let assignees = data["assignees"]
             .as_array()
             .expect("assignees should be an array");
-        assert!(assignees.is_empty(), "should be unassigned when no session actor");
+        assert!(
+            assignees.is_empty(),
+            "should be unassigned when no session actor"
+        );
     }
 }

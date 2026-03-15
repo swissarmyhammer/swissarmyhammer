@@ -49,8 +49,8 @@ impl BoardHandle {
         // Reads all tasks, groups by column, sorts by existing ordinal string,
         // then assigns new FractionalIndex ordinals preserving that order.
         if let Ok(ectx) = ctx.entity_context().await {
-            use swissarmyhammer_kanban::types::Ordinal;
             use std::collections::HashMap;
+            use swissarmyhammer_kanban::types::Ordinal;
 
             if let Ok(tasks) = ectx.list("task").await {
                 // Check if any task has a legacy (non-FractionalIndex) ordinal
@@ -69,7 +69,7 @@ impl BoardHandle {
                         by_column.entry(col).or_default().push(t);
                     }
 
-                    for (_col, tasks) in &mut by_column {
+                    for tasks in by_column.values_mut() {
                         tasks.sort_by(|a, b| {
                             let oa = a.get_str("position_ordinal").unwrap_or("");
                             let ob = b.get_str("position_ordinal").unwrap_or("");
@@ -90,7 +90,6 @@ impl BoardHandle {
                 }
             }
         }
-
 
         // Load all entities into search index
         let mut all_entities: Vec<Entity> = Vec::new();

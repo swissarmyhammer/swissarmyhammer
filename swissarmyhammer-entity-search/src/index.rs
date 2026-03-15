@@ -159,8 +159,7 @@ impl EntitySearchIndex {
             return Ok(Vec::new());
         }
         let query_result = embedder.embed_text(query).await?;
-        let results =
-            semantic::semantic_search(query_result.embedding(), &self.embeddings, limit);
+        let results = semantic::semantic_search(query_result.embedding(), &self.embeddings, limit);
         Ok(results)
     }
 

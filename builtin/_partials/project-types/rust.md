@@ -24,9 +24,18 @@ partial: true
 - Documentation: `cargo doc --open`
 - Test: `cargo nextest run`, you might need to install it first with `cargo install cargo-nextest --locked`
 
+**Formatting:**
+- **Format command:** `cargo fmt`
+- **Check only (no changes):** `cargo fmt --check`
+- ALWAYS run `cargo fmt` before committing — CI enforces this
+- For workspaces, `cargo fmt` formats all members automatically
+
+**Linting:**
+- **Lint command:** `cargo clippy -- -D warnings`
+- ALWAYS run `cargo clippy` before committing — CI enforces `-D warnings`
+
 **Best Practices:**
-- Run `cargo clippy` before committing to catch common issues
-- Use `cargo fmt` to maintain consistent code style
+- Run `cargo fmt` and `cargo clippy` before committing
 - Prefer `cargo check` for quick validation during development
 - Use workspace features if this is part of a Cargo workspace
 

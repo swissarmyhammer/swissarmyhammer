@@ -27,7 +27,7 @@ directory:
 # Source: git2 Repository::discover() + repo.head()
 git_branch:
   style: "purple"
-  symbol: "\ue0a0 "
+  symbol: ""
   format: "$symbol$branch"
   truncation_length: 20
   truncation_symbol: "\u2026"
@@ -131,7 +131,7 @@ version:
 kanban:
   style: "yellow"
   bar_width: 6
-  format: "\U0001f4cb [$bar] $done/$total"
+  format: " [$bar] $done/$total"
   thresholds:
     low:
       below: 25

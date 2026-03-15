@@ -731,7 +731,7 @@ impl McpServer {
             &mut tool_registry,
             skill_library,
             agent_library,
-            prompt_library,
+            prompt_library.clone(),
             agent_mode,
         )
         .await;
@@ -740,7 +740,11 @@ impl McpServer {
         tool_context.working_dir = working_dir;
 
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
-        let tool_context = Arc::new(tool_context.with_tool_registry(tool_registry_arc.clone()));
+        let tool_context = Arc::new(
+            tool_context
+                .with_prompt_library(prompt_library)
+                .with_tool_registry(tool_registry_arc.clone()),
+        );
 
         (tool_registry_arc, tool_context)
     }

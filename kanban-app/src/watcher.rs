@@ -83,8 +83,7 @@ pub fn sync_search_index(
             id,
             fields,
         } => {
-            let mut entity =
-                swissarmyhammer_entity::Entity::new(entity_type.as_str(), id.as_str());
+            let mut entity = swissarmyhammer_entity::Entity::new(entity_type.as_str(), id.as_str());
             for (k, v) in fields {
                 entity.set(k, v.clone());
             }
