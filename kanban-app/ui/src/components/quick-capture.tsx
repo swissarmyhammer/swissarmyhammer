@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
@@ -37,6 +37,7 @@ export function QuickCapture() {
   // Key to force-remount the editor on each window show
   const [editorKey, setEditorKey] = useState(0);
   const mountedRef = useRef(true);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const loadBoards = useCallback(async () => {
     try {
@@ -158,11 +159,25 @@ export function QuickCapture() {
     hideWindow();
   }, [hideWindow]);
 
+  // Auto-resize the Tauri window to match card content height (max 400px).
+  // The outer wrapper has p-2 (8px each side), so window height = card + 16.
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card) return;
+    const win = getCurrentWindow();
+    const observer = new ResizeObserver(() => {
+      const cardHeight = Math.min(card.scrollHeight, 400);
+      win.setSize(new LogicalSize(560, cardHeight + 16)).catch(() => {});
+    });
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, []);
+
   if (!ready) return null;
 
   return (
     <div className="h-screen w-screen flex items-start justify-center p-2" style={{ background: "transparent" }}>
-      <div className="w-full rounded-xl border border-border bg-background overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div ref={cardRef} className="w-full rounded-xl border border-border bg-background animate-in fade-in zoom-in-95 duration-150">
         {/* Header — draggable, shows icon and keyboard hints */}
         <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30" data-tauri-drag-region>
           <img src={appIcon} alt="" className="h-4 w-4 shrink-0" />
