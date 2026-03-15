@@ -6,6 +6,9 @@
     "core:default",
     "dialog:default",
     "global-shortcut:allow-register",
-    "log:default"
+    "log:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus"
   ]
 }

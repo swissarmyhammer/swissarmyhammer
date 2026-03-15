@@ -132,7 +132,7 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
   // otherwise preserve existing defaults (vim: commit, CUA: cancel)
   const semanticCancelRef = useRef<(() => void) | null>(null);
   semanticCancelRef.current = onSubmit
-    ? () => onCancel()
+    ? () => { console.log("[field-placeholder] semanticCancel → onCancel()"); onCancel(); }
     : mode === "vim"
       ? () => commitAndExitRef.current()
       : () => cancelAndExitRef.current();
