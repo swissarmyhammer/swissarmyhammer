@@ -170,7 +170,12 @@ mod tests {
     fn test_ordinal_before() {
         let first = Ordinal::first();
         let before = Ordinal::before(&first);
-        assert!(before < first, "'{}' should be < '{}'", before.as_str(), first.as_str());
+        assert!(
+            before < first,
+            "'{}' should be < '{}'",
+            before.as_str(),
+            first.as_str()
+        );
     }
 
     #[test]
@@ -198,7 +203,12 @@ mod tests {
         let mut current = Ordinal::first();
         for _ in 0..20 {
             let prev = Ordinal::before(&current);
-            assert!(prev < current, "'{}' should be < '{}'", prev.as_str(), current.as_str());
+            assert!(
+                prev < current,
+                "'{}' should be < '{}'",
+                prev.as_str(),
+                current.as_str()
+            );
             current = prev;
         }
     }
@@ -209,7 +219,12 @@ mod tests {
         let mut current = Ordinal::first();
         for _ in 0..20 {
             let next = Ordinal::after(&current);
-            assert!(next > current, "'{}' should be > '{}'", next.as_str(), current.as_str());
+            assert!(
+                next > current,
+                "'{}' should be > '{}'",
+                next.as_str(),
+                current.as_str()
+            );
             current = next;
         }
     }
@@ -260,6 +275,10 @@ mod tests {
         // Verify round-trip
         let s = a.as_str().to_string();
         let parsed = Ordinal::from_string(&s);
-        assert_eq!(parsed.as_str(), a.as_str(), "round-trip should preserve ordinal");
+        assert_eq!(
+            parsed.as_str(),
+            a.as_str(),
+            "round-trip should preserve ordinal"
+        );
     }
 }

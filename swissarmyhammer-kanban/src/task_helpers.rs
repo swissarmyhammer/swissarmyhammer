@@ -644,7 +644,10 @@ mod tests {
     fn test_compute_ordinal_append_at_end() {
         let ord0 = Ordinal::first();
         let ord1 = Ordinal::after(&ord0);
-        let tasks = vec![make_ordinal_task("t1", &ord0), make_ordinal_task("t2", &ord1)];
+        let tasks = vec![
+            make_ordinal_task("t1", &ord0),
+            make_ordinal_task("t2", &ord1),
+        ];
         let ordinal = compute_ordinal_for_drop(&tasks, 2);
         assert!(
             ordinal > ord1,
@@ -660,7 +663,10 @@ mod tests {
         let base = Ordinal::after(&Ordinal::after(&Ordinal::after(&Ordinal::first())));
         let ord0 = base;
         let ord1 = Ordinal::after(&ord0);
-        let tasks = vec![make_ordinal_task("t1", &ord0), make_ordinal_task("t2", &ord1)];
+        let tasks = vec![
+            make_ordinal_task("t1", &ord0),
+            make_ordinal_task("t2", &ord1),
+        ];
         let ordinal = compute_ordinal_for_drop(&tasks, 0);
         assert!(
             ordinal < ord0,
@@ -675,7 +681,10 @@ mod tests {
         let ord0 = Ordinal::first();
         let ord1 = Ordinal::after(&ord0);
         let ord2 = Ordinal::after(&ord1);
-        let tasks = vec![make_ordinal_task("t1", &ord0), make_ordinal_task("t2", &ord2)];
+        let tasks = vec![
+            make_ordinal_task("t1", &ord0),
+            make_ordinal_task("t2", &ord2),
+        ];
         let ordinal = compute_ordinal_for_drop(&tasks, 1);
         assert!(
             ordinal > ord0,
@@ -696,7 +705,12 @@ mod tests {
         let ord0 = Ordinal::first();
         let tasks = vec![make_ordinal_task("t1", &ord0)];
         let ordinal = compute_ordinal_for_drop(&tasks, 1);
-        assert!(ordinal > ord0, "'{}' should be > '{}'", ordinal.as_str(), ord0.as_str());
+        assert!(
+            ordinal > ord0,
+            "'{}' should be > '{}'",
+            ordinal.as_str(),
+            ord0.as_str()
+        );
     }
 
     #[test]
@@ -704,7 +718,12 @@ mod tests {
         let ord0 = Ordinal::after(&Ordinal::after(&Ordinal::first()));
         let tasks = vec![make_ordinal_task("t1", &ord0)];
         let ordinal = compute_ordinal_for_drop(&tasks, 0);
-        assert!(ordinal < ord0, "'{}' should be < '{}'", ordinal.as_str(), ord0.as_str());
+        assert!(
+            ordinal < ord0,
+            "'{}' should be < '{}'",
+            ordinal.as_str(),
+            ord0.as_str()
+        );
     }
 
     #[test]
@@ -713,7 +732,12 @@ mod tests {
         let tasks = vec![make_ordinal_task("t1", &ord0)];
         // drop_index way beyond list length — should still append
         let ordinal = compute_ordinal_for_drop(&tasks, 100);
-        assert!(ordinal > ord0, "'{}' should be > '{}'", ordinal.as_str(), ord0.as_str());
+        assert!(
+            ordinal > ord0,
+            "'{}' should be > '{}'",
+            ordinal.as_str(),
+            ord0.as_str()
+        );
     }
 
     // =========================================================================
@@ -826,15 +850,35 @@ mod tests {
 
         // Insert before ord0
         let new_first = compute_ordinal_for_neighbors(None, Some(&ord0));
-        assert!(new_first < ord0, "'{}' should be < '{}'", new_first.as_str(), ord0.as_str());
+        assert!(
+            new_first < ord0,
+            "'{}' should be < '{}'",
+            new_first.as_str(),
+            ord0.as_str()
+        );
 
         // Insert between ord0 and ord1
         let mid = compute_ordinal_for_neighbors(Some(&ord0), Some(&ord1));
-        assert!(mid > ord0, "'{}' should be > '{}'", mid.as_str(), ord0.as_str());
-        assert!(mid < ord1, "'{}' should be < '{}'", mid.as_str(), ord1.as_str());
+        assert!(
+            mid > ord0,
+            "'{}' should be > '{}'",
+            mid.as_str(),
+            ord0.as_str()
+        );
+        assert!(
+            mid < ord1,
+            "'{}' should be < '{}'",
+            mid.as_str(),
+            ord1.as_str()
+        );
 
         // Append after ord2
         let last = compute_ordinal_for_neighbors(Some(&ord2), None);
-        assert!(last > ord2, "'{}' should be > '{}'", last.as_str(), ord2.as_str());
+        assert!(
+            last > ord2,
+            "'{}' should be > '{}'",
+            last.as_str(),
+            ord2.as_str()
+        );
     }
 }

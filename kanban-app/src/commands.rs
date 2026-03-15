@@ -391,7 +391,11 @@ pub async fn search_entities(
     let results = search_index.search(&query, limit);
 
     // Resolve display names using entity schema
-    let ectx = handle.ctx.entity_context().await.map_err(|e| e.to_string())?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
     let fields_ctx = ectx.fields();
 
     let output: Vec<Value> = results
