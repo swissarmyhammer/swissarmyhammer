@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Plus } from "lucide-react";
 import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
 import { BoardSelector } from "@/components/board-selector";
 import appIcon from "@/assets/app-icon-32.png";
@@ -20,6 +21,7 @@ export function QuickCapture() {
   const [boards, setBoards] = useState<OpenBoard[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [draft, setDraft] = useState("");
   // Key to force-remount the editor on each window show
   const [editorKey, setEditorKey] = useState(0);
   const mountedRef = useRef(true);
@@ -48,6 +50,7 @@ export function QuickCapture() {
     const unlisten = win.onFocusChanged(({ payload: focused }) => {
       if (focused) {
         loadBoards();
+        setDraft("");
         setEditorKey((k) => k + 1);
       }
     });
@@ -119,7 +122,7 @@ export function QuickCapture() {
 
   return (
     <div className="h-screen w-screen flex items-start justify-center p-2" style={{ background: "transparent" }}>
-      <div className="w-full rounded-xl border border-border bg-background/95 backdrop-blur-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div className="w-full rounded-xl border border-border bg-background overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Header — draggable, shows icon and keyboard hints */}
         <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30" data-tauri-drag-region>
           <img src={appIcon} alt="" className="h-4 w-4 shrink-0" />
@@ -129,16 +132,28 @@ export function QuickCapture() {
           </span>
         </div>
 
-        {/* Editor */}
-        <div className="px-3 py-2">
-          <FieldPlaceholderEditor
-            key={editorKey}
-            value=""
-            onCommit={() => {}}
-            onCancel={handleCancel}
-            onSubmit={handleSubmit}
-            placeholder="What needs to be done?"
-          />
+        {/* Editor + Add button */}
+        <div className="px-3 py-2 flex items-start gap-2">
+          <div className="flex-1 min-w-0">
+            <FieldPlaceholderEditor
+              key={editorKey}
+              value=""
+              onCommit={() => {}}
+              onCancel={handleCancel}
+              onSubmit={handleSubmit}
+              placeholder="What needs to be done?"
+              onChange={setDraft}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => { if (draft.trim()) handleSubmit(draft); }}
+            disabled={!draft.trim()}
+            className="shrink-0 mt-0.5 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            title="Add task"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
         </div>
 
         {/* Divider + Board selector — always shown */}
@@ -148,8 +163,7 @@ export function QuickCapture() {
             boards={boards}
             selectedPath={selectedPath}
             onSelect={setSelectedPath}
-            variant="compact"
-            className="flex-1 text-muted-foreground"
+            className="flex-1 text-xs"
           />
         </div>
       </div>

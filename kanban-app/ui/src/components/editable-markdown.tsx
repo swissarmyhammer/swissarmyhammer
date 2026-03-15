@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { keymap, EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { Compartment, type Extension } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -295,27 +295,17 @@ export function EditableMarkdown({
 
   const extensions = useMemo(
     () => [
-      keymapCompartment.current.of(keymapExtension(mode)),
-      EditorView.lineWrapping,
+      // Submit/cancel handlers must be first — they use DOM-level event
+      // handlers that need to fire before vim/markdown keymaps consume keys.
       ...buildSubmitCancelExtensions({
         mode,
         onSubmitRef: semanticSubmitRef,
         onCancelRef: semanticCancelRef,
         saveInPlaceRef,
+        singleLine: !multiline,
       }),
-      ...(!multiline
-        ? [
-            keymap.of([
-              {
-                key: "Enter",
-                run: () => {
-                  commitAndExitRef.current();
-                  return true;
-                },
-              },
-            ]),
-          ]
-        : []),
+      keymapCompartment.current.of(keymapExtension(mode)),
+      EditorView.lineWrapping,
       ...(multiline
         ? [markdown({ base: markdownLanguage, codeLanguages: languages })]
         : []),

@@ -71,9 +71,11 @@ interface EditorProps {
   onSubmit?: (text: string) => void;
   /** Placeholder text shown when the editor is empty. */
   placeholder?: string;
+  /** Called on every content change with the current text. */
+  onChange?: (text: string) => void;
 }
 
-export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, placeholder }: EditorProps) {
+export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, placeholder, onChange }: EditorProps) {
   const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
@@ -149,15 +151,17 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
 
   const extensions = useMemo(
     () => [
-      keymapCompartment.current.of(keymapExtension(mode)),
-      EditorView.lineWrapping,
-      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      // Submit/cancel handlers must be first — they use DOM-level event
+      // handlers that need to fire before vim/markdown keymaps consume keys.
       ...buildSubmitCancelExtensions({
         mode,
         onSubmitRef: semanticSubmitRef,
         onCancelRef: semanticCancelRef,
         saveInPlaceRef,
       }),
+      keymapCompartment.current.of(keymapExtension(mode)),
+      EditorView.lineWrapping,
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
       ...(placeholder ? [cmPlaceholder(placeholder)] : []),
     ],
     [mode, placeholder],
@@ -168,7 +172,7 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
       ref={editorRef}
       autoFocus
       value={draft}
-      onChange={(val) => setDraft(val)}
+      onChange={(val) => { setDraft(val); onChange?.(val); }}
       onBlur={() => commitAndExitRef.current()}
       onCreateEditor={handleCreateEditor}
       extensions={extensions}

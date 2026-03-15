@@ -1,8 +1,8 @@
 /**
  * Shared CM6 extension factory for vim-mode-aware submit/cancel semantics.
  *
- * Consumers wire up `onSubmitRef` and `onCancelRef` and get correct behavior
- * across vim, emacs, and CUA keymaps without knowing about mode state.
+ * Uses DOM-level event handlers to ensure Escape/Enter fire before any
+ * language extension keymaps (e.g. markdown's Enter handler).
  *
  * Vim mode:
  *   - Insert Escape → normal mode (internal to CM6, no callback)
@@ -12,10 +12,10 @@
  *
  * CUA/emacs mode:
  *   - Escape → onCancelRef
- *   - Enter  → onSubmitRef
+ *   - Enter  → onSubmitRef (only when singleLine is true)
  */
 
-import { keymap, EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { getCM } from "@replit/codemirror-vim";
 
@@ -33,14 +33,24 @@ export interface SubmitCancelOptions {
   onCancelRef: Ref<(() => void) | null>;
   /** Called when vim exits insert mode (save-in-place). Optional. */
   saveInPlaceRef?: Ref<(() => void) | null>;
+  /**
+   * When true, Enter always triggers submit (single-line input behavior).
+   * When false, Enter only submits in vim normal mode; in CUA/emacs it
+   * inserts a newline as normal (multiline editing).
+   * Default: true.
+   */
+  singleLine?: boolean;
 }
 
 /**
  * Build CM6 extensions that route Escape and Enter to semantic callbacks,
  * respecting the current keymap mode and vim insert/normal state.
+ *
+ * Uses EditorView.domEventHandlers so handlers fire before CM6's internal
+ * keymaps (which would otherwise swallow Enter for markdown newlines).
  */
 export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extension[] {
-  const { mode, onSubmitRef, onCancelRef, saveInPlaceRef } = opts;
+  const { mode, onSubmitRef, onCancelRef, saveInPlaceRef, singleLine = true } = opts;
 
   if (mode === "vim") {
     return [
@@ -79,23 +89,20 @@ export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extensio
     ];
   }
 
-  // CUA / emacs: simple keymap bindings
+  // CUA / emacs: DOM-level handlers
   return [
-    keymap.of([
-      {
-        key: "Escape",
-        run: () => {
+    EditorView.domEventHandlers({
+      keydown(event) {
+        if (event.key === "Escape") {
           onCancelRef.current?.();
           return true;
-        },
-      },
-      {
-        key: "Enter",
-        run: () => {
+        }
+        if (event.key === "Enter" && singleLine) {
           onSubmitRef.current?.();
           return true;
-        },
+        }
+        return false;
       },
-    ]),
+    }),
   ];
 }

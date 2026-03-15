@@ -482,9 +482,13 @@ function QuickCaptureApp() {
   }, []);
 
   return (
+    <SchemaProvider>
+    <EntityStoreProvider entities={{}}>
     <KeymapProvider>
       <QuickCapture />
     </KeymapProvider>
+    </EntityStoreProvider>
+    </SchemaProvider>
   );
 }
 

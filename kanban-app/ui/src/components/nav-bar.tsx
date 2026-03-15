@@ -7,7 +7,6 @@ import type { BoardData, OpenBoard } from "@/types/kanban";
 interface NavBarProps {
   board: BoardData | null;
   openBoards: OpenBoard[];
-  /** Called after switching the active board to reload board data. */
   onBoardSwitched: () => void;
   onBoardInspect?: () => void;
 }
@@ -35,7 +34,7 @@ export function NavBar({
         boards={openBoards}
         selectedPath={openBoards.find((b) => b.is_active)?.path ?? null}
         onSelect={handleSwitchBoard}
-        variant="full"
+        boardEntity={board?.board}
       />
       {board && onBoardInspect && (
         <button
