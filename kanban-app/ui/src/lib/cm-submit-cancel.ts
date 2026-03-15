@@ -1,14 +1,16 @@
 /**
  * Shared CM6 extension factory for vim-mode-aware submit/cancel semantics.
  *
- * Uses Prec.highest + DOM-level event handlers to ensure Enter/Escape
- * fire before any other extension (vim, markdown, etc.).
+ * Vim mode: uses Vim.defineAction + Vim.mapCommand to register normal-mode
+ * keybindings that vim handles natively. No DOM hacks needed.
+ *
+ * CUA/emacs mode: uses Prec.highest + EditorView.domEventHandlers.
  *
  * Vim mode:
- *   - Insert Escape → normal mode (internal to CM6, no callback)
- *   - Insert Escape → then calls saveInPlaceRef (optional)
+ *   - Insert Escape → normal mode (vim built-in)
  *   - Normal Escape → onCancelRef
  *   - Normal Enter  → onSubmitRef (if doc is non-empty)
+ *   - Insert→Normal transition → saveInPlaceRef (optional)
  *
  * CUA/emacs mode:
  *   - Escape → onCancelRef
@@ -17,7 +19,7 @@
 
 import { EditorView } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
-import { getCM } from "@replit/codemirror-vim";
+import { Vim, getCM } from "@replit/codemirror-vim";
 
 /** Generic ref type — avoids importing React in this utility. */
 interface Ref<T> {
@@ -42,52 +44,59 @@ export interface SubmitCancelOptions {
   singleLine?: boolean;
 }
 
+// Counter to generate unique action names per editor instance
+let actionCounter = 0;
+
 /**
  * Build CM6 extensions that route Escape and Enter to semantic callbacks,
  * respecting the current keymap mode and vim insert/normal state.
- *
- * Wrapped in Prec.highest so handlers fire before vim/markdown/etc.
  */
 export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extension[] {
   const { mode, onSubmitRef, onCancelRef, saveInPlaceRef, singleLine = true } = opts;
 
   if (mode === "vim") {
-    return [
-      Prec.highest(
+    // Use unique action names so multiple editors don't collide
+    const id = ++actionCounter;
+    const cancelAction = `_sc_cancel_${id}`;
+    const submitAction = `_sc_submit_${id}`;
+
+    // Define vim actions that call our refs
+    Vim.defineAction(cancelAction, () => {
+      onCancelRef.current?.();
+    });
+
+    Vim.defineAction(submitAction, (cm) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const view = (cm as any)?.cm as EditorView | undefined;
+      const text = view ? view.state.doc.toString() : "";
+      if (text.length > 0) {
+        onSubmitRef.current?.();
+      }
+    });
+
+    // Map Escape and Enter in normal mode to our actions
+    Vim.mapCommand("<Esc>", "action", cancelAction, {}, { context: "normal" });
+    Vim.mapCommand("<CR>", "action", submitAction, {}, { context: "normal" });
+
+    // Handle insert→normal transition for save-in-place
+    if (saveInPlaceRef) {
+      return [
         EditorView.domEventHandlers({
           keydown(event, view) {
             if (event.key === "Escape") {
               const cm = getCM(view);
-              if (cm?.state?.vim?.insertMode) {
-                // In insert mode: let CM6/vim handle Escape (→ normal mode),
-                // then save in place if the ref is provided.
-                if (saveInPlaceRef?.current) {
-                  setTimeout(() => saveInPlaceRef.current?.(), 0);
-                }
-                return false;
+              if (cm?.state?.vim?.insertMode && saveInPlaceRef.current) {
+                setTimeout(() => saveInPlaceRef.current?.(), 0);
               }
-              // Normal mode: semantic cancel
-              onCancelRef.current?.();
-              return true;
             }
-            if (event.key === "Enter") {
-              const cm = getCM(view);
-              if (!cm?.state?.vim?.insertMode) {
-                // Normal mode + doc has content: semantic submit
-                const text = view.state.doc.toString();
-                if (text.length > 0) {
-                  onSubmitRef.current?.();
-                  return true;
-                }
-              }
-              // Insert mode: let CM6 handle Enter normally
-              return false;
-            }
+            // Never consume — let vim handle everything
             return false;
           },
         }),
-      ),
-    ];
+      ];
+    }
+
+    return [];
   }
 
   // CUA / emacs: DOM-level handlers with highest precedence
