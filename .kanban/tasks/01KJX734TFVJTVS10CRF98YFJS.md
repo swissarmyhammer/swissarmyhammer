@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: d380
+position_ordinal: f480
 title: 'Card 10: Build and type-check'
 ---

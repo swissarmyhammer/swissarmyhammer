@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffd180
+position_ordinal: ffffff8280
 title: 'warning: XDG test helpers mutate global env vars without concurrency guards'
 ---
 `swissarmyhammer-directory/src/directory.rs:522-571` — `test_xdg_config_with_env_var`, `test_xdg_data_with_env_var`, `test_xdg_cache_with_env_var`, `test_xdg_config_does_not_append_dir_name`, `test_xdg_base_dir_uses_env_var`\n\nAll XDG tests call `std::env::set_var` / `std::env::remove_var` without any `#[serial]` annotation or mutex. `cargo nextest` runs tests in parallel by default (multiple threads per process), so one test can read a stale env var set by another test, causing intermittent failures.\n\nThe existing test at line 527-530 is particularly telling — it reads `XDG_CONFIG_HOME` at the start but does nothing with the result (`let _ = dir;`), which looks like leftover confusion from working around this exact problem.\n\nSuggestion: Either:\n- Annotate all env-mutating tests with `#[serial_test::serial]` (already a dev-dep in other crates)\n- Or pass the directory through a parameter rather than an env var in tests (e.g., add a `xdg_config_from_env_fn(fn() -> Option<String>) -> Result<Self>` variant for easier testing) #review-finding

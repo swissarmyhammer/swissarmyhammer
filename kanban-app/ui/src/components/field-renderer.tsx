@@ -1,12 +1,12 @@
 import { useCallback, useState } from "react";
 import { FieldPlaceholder } from "@/components/fields/field-placeholder";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { useFieldUpdate } from "@/lib/field-update-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 interface FieldRendererProps {
   entity: Entity;
   field: FieldDef;
-  onCommit: (fieldName: string, value: unknown) => void;
   /** Render inline (no label). Default: false */
   inline?: boolean;
   className?: string;
@@ -16,22 +16,22 @@ interface FieldRendererProps {
  * Generic field renderer — the building block for all views (board, grid, inspector).
  *
  * Renders the field value using `fieldDef.display` for read mode and
- * `fieldDef.editor` for edit mode. Inline-editable unless `editor === "none"`
- * (computed fields).
+ * `fieldDef.editor` for edit mode. Persists changes via `useFieldUpdate`
+ * internally — no `onCommit` wiring needed.
  *
  * Usage:
  * ```tsx
- * <FieldRenderer entity={task} field={titleField} onCommit={handleUpdate} />
+ * <FieldRenderer entity={task} field={titleField} />
  * ```
  */
 export function FieldRenderer({
   entity,
   field,
-  onCommit,
   inline,
   className,
 }: FieldRendererProps) {
   const [editing, setEditing] = useState(false);
+  const { updateField } = useFieldUpdate();
   const value = entity.fields[field.name];
   const editable = field.editor !== "none" && field.type.kind !== "computed";
 
@@ -42,9 +42,9 @@ export function FieldRenderer({
   const handleCommit = useCallback(
     (v: unknown) => {
       setEditing(false);
-      onCommit(field.name, v);
+      updateField(entity.entity_type, entity.id, field.name, v).catch(() => {});
     },
-    [field.name, onCommit],
+    [updateField, entity.entity_type, entity.id, field.name],
   );
 
   const handleCancel = useCallback(() => {

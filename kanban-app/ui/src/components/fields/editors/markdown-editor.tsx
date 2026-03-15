@@ -6,6 +6,8 @@ export interface EditorProps {
   value: unknown;
   onCommit: (value: unknown) => void;
   onCancel: () => void;
+  /** Semantic submit — fires on Enter (CUA/emacs) or normal-mode Enter (vim). */
+  onSubmit?: (value: unknown) => void;
   mode: "compact" | "full";
 }
 
@@ -23,6 +25,7 @@ export function MarkdownEditor({
   value,
   onCommit,
   onCancel,
+  onSubmit,
   mode,
   multiline,
   tags,
@@ -36,6 +39,7 @@ export function MarkdownEditor({
         value={text}
         onCommit={(v) => onCommit(v)}
         onCancel={onCancel}
+        onSubmit={onSubmit ? (v) => onSubmit(v) : undefined}
       />
     );
   }

@@ -1,8 +1,8 @@
 //! Project detection operation for discovering project types at runtime
 //!
 //! This operation scans the filesystem to detect project types (Rust, Node.js, Python, etc.)
-//! and returns project metadata with language-specific guidelines. It does NOT require
-//! a code-context workspace/index — it's a pure filesystem scan.
+//! and returns project metadata with language-specific guidelines rendered through the
+//! Liquid template engine via `PromptLibrary`.
 
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use rmcp::model::CallToolResult;
@@ -11,7 +11,9 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
+use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_project_detection::{detect_projects, DetectedProject, ProjectType};
+use swissarmyhammer_prompts::PromptLibrary;
 
 /// Deserialize request parameters for project detection.
 #[derive(Deserialize, Default)]
@@ -19,65 +21,6 @@ struct DetectRequest {
     path: Option<String>,
     max_depth: Option<usize>,
     include_guidelines: Option<bool>,
-}
-
-// Include guideline files at compile time
-static GUIDELINES_RUST: &str =
-    include_str!("../../../../../builtin/_partials/project-types/rust.md");
-static GUIDELINES_NODEJS: &str =
-    include_str!("../../../../../builtin/_partials/project-types/nodejs.md");
-static GUIDELINES_PYTHON: &str =
-    include_str!("../../../../../builtin/_partials/project-types/python.md");
-static GUIDELINES_GO: &str = include_str!("../../../../../builtin/_partials/project-types/go.md");
-static GUIDELINES_JAVA_MAVEN: &str =
-    include_str!("../../../../../builtin/_partials/project-types/java-maven.md");
-static GUIDELINES_JAVA_GRADLE: &str =
-    include_str!("../../../../../builtin/_partials/project-types/java-gradle.md");
-static GUIDELINES_CSHARP: &str =
-    include_str!("../../../../../builtin/_partials/project-types/csharp.md");
-static GUIDELINES_CMAKE: &str =
-    include_str!("../../../../../builtin/_partials/project-types/cmake.md");
-static GUIDELINES_MAKEFILE: &str =
-    include_str!("../../../../../builtin/_partials/project-types/makefile.md");
-static GUIDELINES_FLUTTER: &str =
-    include_str!("../../../../../builtin/_partials/project-types/flutter.md");
-
-/// Get the guideline content for a project type.
-///
-/// Returns `Some(content)` for types that have a guideline partial,
-/// `None` for types without one (e.g. Php).
-fn guidelines_for_type(project_type: ProjectType) -> Option<&'static str> {
-    match project_type {
-        ProjectType::Rust => Some(GUIDELINES_RUST),
-        ProjectType::NodeJs => Some(GUIDELINES_NODEJS),
-        ProjectType::Python => Some(GUIDELINES_PYTHON),
-        ProjectType::Go => Some(GUIDELINES_GO),
-        ProjectType::JavaMaven => Some(GUIDELINES_JAVA_MAVEN),
-        ProjectType::JavaGradle => Some(GUIDELINES_JAVA_GRADLE),
-        ProjectType::CSharp => Some(GUIDELINES_CSHARP),
-        ProjectType::CMake => Some(GUIDELINES_CMAKE),
-        ProjectType::Makefile => Some(GUIDELINES_MAKEFILE),
-        ProjectType::Flutter => Some(GUIDELINES_FLUTTER),
-        ProjectType::Php => None,
-    }
-}
-
-/// Strip YAML frontmatter from markdown content.
-///
-/// Frontmatter is delimited by `---` at the start of the content.
-pub fn strip_frontmatter(content: &str) -> &str {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return content;
-    }
-    // Find the closing ---
-    if let Some(end_pos) = trimmed[3..].find("\n---") {
-        // Skip past closing --- and the newline after it
-        let after_frontmatter = &trimmed[3 + end_pos + 4..];
-        after_frontmatter.trim_start_matches('\n')
-    } else {
-        content
-    }
 }
 
 /// Get a display name for a project type.
@@ -114,6 +57,72 @@ fn project_type_key(pt: ProjectType) -> &'static str {
     }
 }
 
+/// Get the partial include name for a project type.
+///
+/// Returns `Some("_partials/project-types/{key}")` for types that have a guideline partial,
+/// `None` for types without one (e.g. Php).
+fn partial_name_for_type(pt: ProjectType) -> Option<&'static str> {
+    match pt {
+        ProjectType::Rust => Some("_partials/project-types/rust"),
+        ProjectType::NodeJs => Some("_partials/project-types/nodejs"),
+        ProjectType::Python => Some("_partials/project-types/python"),
+        ProjectType::Go => Some("_partials/project-types/go"),
+        ProjectType::JavaMaven => Some("_partials/project-types/java-maven"),
+        ProjectType::JavaGradle => Some("_partials/project-types/java-gradle"),
+        ProjectType::CSharp => Some("_partials/project-types/csharp"),
+        ProjectType::CMake => Some("_partials/project-types/cmake"),
+        ProjectType::Makefile => Some("_partials/project-types/makefile"),
+        ProjectType::Flutter => Some("_partials/project-types/flutter"),
+        ProjectType::Php => None,
+    }
+}
+
+/// Build a Liquid template string that includes guidelines for the given project types.
+///
+/// Constructs `{% include %}` directives for each unique project type, which will be
+/// resolved by the `PromptLibrary` partial adapter.
+fn build_guidelines_template(project_types: &[ProjectType]) -> String {
+    let mut template = String::from("## Project Guidelines\n\n");
+    for pt in project_types {
+        if let Some(partial) = partial_name_for_type(*pt) {
+            template.push_str(&format!("{{% include \"{}\" %}}\n\n", partial));
+        }
+    }
+    template
+}
+
+/// Render guidelines for the given project types through the Liquid template engine.
+///
+/// Returns rendered markdown, or `None` if the prompt library is not available or
+/// rendering fails.
+fn render_guidelines(
+    project_types: &[ProjectType],
+    prompt_library: Option<&PromptLibrary>,
+) -> Option<String> {
+    let prompt_lib = prompt_library?;
+    if project_types.is_empty() {
+        return None;
+    }
+
+    let template = build_guidelines_template(project_types);
+    let ctx = TemplateContext::new();
+
+    match prompt_lib.render_text(&template, &ctx) {
+        Ok(rendered) => {
+            let trimmed = rendered.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(rendered)
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to render project guidelines: {e}");
+            None
+        }
+    }
+}
+
 /// Make a path relative to a root, returning the relative portion.
 ///
 /// If the path is not under root, returns it as-is.
@@ -132,10 +141,14 @@ fn make_relative(path: &Path, root: &Path) -> String {
 }
 
 /// Format detected projects as markdown output.
+///
+/// When `prompt_library` is provided and `include_guidelines` is true, project-type
+/// guidelines are rendered through the Liquid template engine with full partial resolution.
 fn format_detected_projects(
     projects: &[DetectedProject],
     root: &Path,
     include_guidelines: bool,
+    prompt_library: Option<&PromptLibrary>,
 ) -> String {
     if projects.is_empty() {
         return "## No Projects Detected\n\n\
@@ -184,15 +197,8 @@ fn format_detected_projects(
             .map(|p| p.project_type)
             .collect();
 
-        if !unique_types.is_empty() {
-            output.push_str("## Project Guidelines\n\n");
-            for pt in unique_types {
-                if let Some(raw) = guidelines_for_type(pt) {
-                    let stripped = strip_frontmatter(raw);
-                    output.push_str(stripped);
-                    output.push_str("\n\n");
-                }
-            }
+        if let Some(rendered) = render_guidelines(&unique_types, prompt_library) {
+            output.push_str(&rendered);
         }
     }
 
@@ -219,7 +225,7 @@ fn resolve_workspace_path(request_path: Option<&String>, context: &ToolContext) 
 /// Execute project detection.
 ///
 /// Scans the filesystem for project marker files and returns detected project types
-/// with optional language-specific guidelines.
+/// with optional language-specific guidelines rendered through the Liquid template engine.
 pub async fn execute_detect(
     arguments: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
@@ -238,9 +244,23 @@ pub async fn execute_detect(
     let projects = detect_projects(&root_path, Some(max_depth))
         .map_err(|e| McpError::internal_error(format!("Failed to detect projects: {}", e), None))?;
 
+    // Get the prompt library for guideline rendering (if available)
+    let prompt_lib_guard;
+    let prompt_lib_ref = if let Some(ref lib) = context.prompt_library {
+        prompt_lib_guard = lib.read().await;
+        Some(&*prompt_lib_guard)
+    } else {
+        None
+    };
+
     // Use the canonicalized root for relative path computation
     let canonical_root = root_path.canonicalize().unwrap_or(root_path);
-    let output = format_detected_projects(&projects, &canonical_root, include_guidelines);
+    let output = format_detected_projects(
+        &projects,
+        &canonical_root,
+        include_guidelines,
+        prompt_lib_ref,
+    );
 
     Ok(BaseToolImpl::create_success_response(output))
 }
@@ -250,35 +270,6 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_strip_frontmatter_with_frontmatter() {
-        let content =
-            "---\ntitle: Test\ndescription: A test\npartial: true\n---\n\n### Hello\n\nWorld";
-        let result = strip_frontmatter(content);
-        assert_eq!(result, "### Hello\n\nWorld");
-    }
-
-    #[test]
-    fn test_strip_frontmatter_without_frontmatter() {
-        let content = "### Hello\n\nWorld";
-        let result = strip_frontmatter(content);
-        assert_eq!(result, "### Hello\n\nWorld");
-    }
-
-    #[test]
-    fn test_strip_frontmatter_empty() {
-        let result = strip_frontmatter("");
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_strip_frontmatter_only_opening() {
-        let content = "---\ntitle: Test\nno closing delimiter";
-        let result = strip_frontmatter(content);
-        // No closing ---, returns original
-        assert_eq!(result, content);
-    }
 
     #[test]
     fn test_make_relative_under_root() {
@@ -303,7 +294,6 @@ mod tests {
 
     #[test]
     fn test_project_type_name_all_types() {
-        // Verify all project types have display names
         let types = [
             ProjectType::Rust,
             ProjectType::NodeJs,
@@ -324,7 +314,10 @@ mod tests {
     }
 
     #[test]
-    fn test_all_project_types_have_guidelines() {
+    fn test_all_project_types_have_renderable_guidelines() {
+        let prompt_lib = PromptLibrary::default();
+        let ctx = TemplateContext::new();
+
         let types = [
             ProjectType::Rust,
             ProjectType::NodeJs,
@@ -338,23 +331,29 @@ mod tests {
             ProjectType::Flutter,
         ];
         for pt in types {
-            let guidelines = guidelines_for_type(pt);
+            let partial = partial_name_for_type(pt);
             assert!(
-                guidelines.is_some(),
-                "Project type {:?} should have guidelines",
+                partial.is_some(),
+                "Project type {:?} should have a partial name",
                 pt
             );
-            let raw = guidelines.unwrap();
+
+            // Render the include through the Liquid engine
+            let template = format!("{{% include \"{}\" %}}", partial.unwrap());
+            let rendered = prompt_lib
+                .render_text(&template, &ctx)
+                .unwrap_or_else(|e| panic!("Failed to render {:?} guidelines: {e}", pt));
+
             assert!(
-                !raw.is_empty(),
-                "Project type {:?} guidelines should not be empty",
+                !rendered.trim().is_empty(),
+                "Rendered guidelines for {:?} should not be empty",
                 pt
             );
-            // Verify frontmatter stripping works
-            let stripped = strip_frontmatter(raw);
+
+            // Frontmatter should be stripped by the rendering pipeline
             assert!(
-                !stripped.starts_with("---"),
-                "Guidelines for {:?} should not start with frontmatter after stripping",
+                !rendered.trim().starts_with("---"),
+                "Rendered guidelines for {:?} should not start with frontmatter",
                 pt
             );
         }
@@ -362,12 +361,39 @@ mod tests {
 
     #[test]
     fn test_php_has_no_guidelines() {
-        assert!(guidelines_for_type(ProjectType::Php).is_none());
+        assert!(partial_name_for_type(ProjectType::Php).is_none());
+    }
+
+    #[test]
+    fn test_render_project_guidelines_through_liquid() {
+        let prompt_lib = PromptLibrary::default();
+
+        let types = vec![ProjectType::Rust];
+        let rendered = render_guidelines(&types, Some(&prompt_lib));
+
+        assert!(rendered.is_some(), "Should render Rust guidelines");
+        let text = rendered.unwrap();
+        assert!(
+            text.contains("Rust Project Guidelines"),
+            "Should contain Rust header"
+        );
+        assert!(text.contains("cargo fmt"), "Should contain formatting info");
+        assert!(text.contains("cargo nextest"), "Should contain test info");
+    }
+
+    #[test]
+    fn test_render_guidelines_without_prompt_library() {
+        let types = vec![ProjectType::Rust];
+        let rendered = render_guidelines(&types, None);
+        assert!(
+            rendered.is_none(),
+            "Should return None without prompt library"
+        );
     }
 
     #[test]
     fn test_format_no_projects() {
-        let output = format_detected_projects(&[], Path::new("/root"), true);
+        let output = format_detected_projects(&[], Path::new("/root"), true, None);
         assert!(output.contains("No Projects Detected"));
     }
 
@@ -381,7 +407,7 @@ mod tests {
             workspace_info: None,
         }];
 
-        let output = format_detected_projects(&projects, root, false);
+        let output = format_detected_projects(&projects, root, false, None);
         assert!(output.contains("`backend`"), "Path should be relative");
         assert!(
             !output.contains("/workspace/backend"),
@@ -391,6 +417,7 @@ mod tests {
 
     #[test]
     fn test_format_with_guidelines() {
+        let prompt_lib = PromptLibrary::default();
         let root = Path::new("/workspace");
         let projects = vec![DetectedProject {
             path: "/workspace".into(),
@@ -399,10 +426,10 @@ mod tests {
             workspace_info: None,
         }];
 
-        let output = format_detected_projects(&projects, root, true);
+        let output = format_detected_projects(&projects, root, true, Some(&prompt_lib));
         assert!(output.contains("Project Guidelines"));
         assert!(output.contains("Rust Project Guidelines"));
-        // Frontmatter should be stripped
+        // Frontmatter should be stripped by the rendering pipeline
         assert!(!output.contains("partial: true"));
     }
 
@@ -416,12 +443,29 @@ mod tests {
             workspace_info: None,
         }];
 
-        let output = format_detected_projects(&projects, root, false);
+        let output = format_detected_projects(&projects, root, false, None);
+        assert!(!output.contains("Project Guidelines"));
+    }
+
+    #[test]
+    fn test_format_without_prompt_library_omits_guidelines() {
+        let root = Path::new("/workspace");
+        let projects = vec![DetectedProject {
+            path: "/workspace".into(),
+            project_type: ProjectType::Rust,
+            marker_files: vec!["Cargo.toml".to_string()],
+            workspace_info: None,
+        }];
+
+        // include_guidelines=true but no prompt library — should omit guidelines
+        let output = format_detected_projects(&projects, root, true, None);
+        assert!(output.contains("Rust Project"));
         assert!(!output.contains("Project Guidelines"));
     }
 
     #[test]
     fn test_guidelines_deduplication() {
+        let prompt_lib = PromptLibrary::default();
         let root = Path::new("/workspace");
         let projects = vec![
             DetectedProject {
@@ -438,7 +482,7 @@ mod tests {
             },
         ];
 
-        let output = format_detected_projects(&projects, root, true);
+        let output = format_detected_projects(&projects, root, true, Some(&prompt_lib));
         // Rust guidelines should appear only once despite two Rust projects
         let count = output.matches("Rust Project Guidelines").count();
         assert_eq!(count, 1, "Rust guidelines should appear exactly once");
@@ -458,7 +502,7 @@ mod tests {
             }),
         }];
 
-        let output = format_detected_projects(&projects, root, false);
+        let output = format_detected_projects(&projects, root, false, None);
         assert!(output.contains("**Workspace:** Yes (2 members)"));
         assert!(output.contains("crate-a, crate-b"));
     }
@@ -472,7 +516,12 @@ mod tests {
         )
         .unwrap();
 
-        let context = crate::test_utils::create_test_context().await;
+        let mut context = crate::test_utils::create_test_context().await;
+        // Wire in prompt library so guidelines render
+        context.prompt_library = Some(std::sync::Arc::new(tokio::sync::RwLock::new(
+            PromptLibrary::default(),
+        )));
+
         let mut args = serde_json::Map::new();
         args.insert(
             "path".to_string(),
@@ -490,6 +539,8 @@ mod tests {
         };
         assert!(text.contains("Rust Project"));
         assert!(text.contains("Cargo.toml"));
+        // Guidelines should be rendered
+        assert!(text.contains("Rust Project Guidelines"));
     }
 
     #[tokio::test]

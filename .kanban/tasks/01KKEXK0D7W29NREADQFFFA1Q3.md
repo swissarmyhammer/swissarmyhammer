@@ -2,7 +2,7 @@
 depends_on:
 - 01KKEXB1G2VCN4GZ86T0P73751
 position_column: done
-position_ordinal: b2
+position_ordinal: be80
 title: 'code_context get status: surface missing LSPs in response JSON'
 ---
 ## What\n\n`execute_get_status()` in `swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:1400-1431` runs `doctor::run_doctor()` and logs LSP availability at DEBUG level, but never includes the doctor report in the JSON response. The `lsp_daemons` section from the supervisor is merged in (lines 1421-1428), but that only shows daemons that were started — it doesn't show LSPs that are needed but missing.\n\nThe fix: merge `doctor_report.lsp_servers` into the response JSON so the agent (and user) can see which LSPs are needed, installed, missing, and what the install hint is.\n\nThis is blocked by the code-context doctor card since `run_doctor()` currently short-circuits on Cargo.toml and never reports TS LSP availability.\n\n**Affected files:**\n- `swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs` — `execute_get_status()` around line 1420\n\n## Acceptance Criteria\n- [ ] `code_context get status` response includes `lsp_availability` array with name, installed, path, install_hint for each LSP\n- [ ] Missing LSPs show install_hint so the user/agent knows what to do\n- [ ] Both rust-analyzer and typescript-language-server appear in the output for this repo\n\n## Tests\n- [ ] Add test that `get status` response contains `lsp_availability` key\n- [ ] `cargo nextest run --package swissarmyhammer-tools`

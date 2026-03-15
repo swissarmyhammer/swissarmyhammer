@@ -6,5 +6,6 @@ type:
   single_line: true
 editor: markdown
 display: text
+section: header
 sort: alphanumeric
 width: 200

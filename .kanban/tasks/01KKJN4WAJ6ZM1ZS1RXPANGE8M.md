@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffb280
+position_ordinal: ffffe280
 title: '[warning] `initialize_code_context` is a sync fn that calls `tokio::spawn` — must be called from within a Tokio runtime'
 ---
 **File:** `swissarmyhammer-tools/src/mcp/server.rs` lines ~297–491\n**Severity:** warning\n\n`initialize_code_context` is declared `fn` (not `async fn`) but it calls `tokio::spawn` three times internally. This is only sound if the caller guarantees a Tokio runtime is active. If ever called from a non-async context (e.g. a test or a future refactor) it will panic with \"no reactor running\".\n\nThe `std::sync::Once` guard is used to protect the spawn, which is fine, but the signature hides the Tokio dependency. A doc comment stating the requirement, or making it `async fn` (and using `tokio::spawn` from within), would make the constraint explicit.\n\n**Fix:** Add a `# Panics` doc comment: \"Panics if called outside a Tokio runtime.\" Alternatively restructure as `async fn` and remove the Once (callers can do their own deduplication with a `OnceCell<JoinHandle>`)." #review-finding

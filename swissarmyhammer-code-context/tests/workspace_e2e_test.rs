@@ -1198,7 +1198,9 @@ mod tests {
         }
     }
 
-    // Re-open the modified file in rust-analyzer
+    // Close then re-open the modified file in rust-analyzer
+    // (LSP protocol requires didClose before a new didOpen for the same file)
+    client.send_did_close(&lib_rs_abs).expect("didClose failed");
     let modified_content = std::fs::read_to_string(&lib_rs_abs).unwrap();
     client
         .send_did_open(&lib_rs_abs, "rust", &modified_content)

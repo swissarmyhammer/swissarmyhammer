@@ -19,6 +19,13 @@ partial: true
 - Specify generator: `cmake -G "Unix Makefiles" ..` or `cmake -G Ninja ..`
 - Parallel build: `cmake --build . -j $(nproc)` or `make -j$(nproc)`
 
+**Formatting:**
+- **clang-format:** `find src include -name '*.cpp' -o -name '*.h' | xargs clang-format -i`
+- **Check only:** `clang-format --dry-run --Werror`
+- **cmake-format:** `cmake-format -i CMakeLists.txt` (for CMake files, if installed)
+- Check for `.clang-format` config file in project root
+- ALWAYS run the project's formatter before committing
+
 **Best Practices:**
 - Always use out-of-source builds (separate `build/` directory)
 - Clean rebuild: `rm -rf build && mkdir build && cd build && cmake ..`

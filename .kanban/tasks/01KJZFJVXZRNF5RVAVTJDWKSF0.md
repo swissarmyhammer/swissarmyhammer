@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ff8b80
+position_ordinal: ffbb80
 title: Add FocusScope to ColumnView and BoardView
 ---

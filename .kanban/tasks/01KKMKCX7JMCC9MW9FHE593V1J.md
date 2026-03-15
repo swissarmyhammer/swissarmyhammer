@@ -3,7 +3,7 @@ assignees:
 - claude-code
 position_column: done
 position_ordinal: '80'
-title: Create swissarmyhammer-entity-search crate scaffold
+title: Create swissarmyhammer-entity-search crate scaffold!
 ---
 ## What
 Create a new workspace crate `swissarmyhammer-entity-search/` that provides in-memory search over `Entity` objects from `swissarmyhammer-entity`. Add to workspace members in root `Cargo.toml`.

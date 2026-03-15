@@ -63,16 +63,28 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     let boards = state.boards.read().await;
     let active = state.active_board.read().await;
 
-    let list: Vec<Value> = boards
-        .keys()
-        .map(|path| {
-            let is_active = active.as_ref() == Some(path);
-            json!({
-                "path": path.display().to_string(),
-                "is_active": is_active,
-            })
-        })
-        .collect();
+    let mut list: Vec<Value> = Vec::new();
+    for (path, handle) in boards.iter() {
+        let is_active = active.as_ref() == Some(path);
+        // Read the board entity name if available
+        let name = match handle.ctx.entity_context().await {
+            Ok(ectx) => match ectx.read("board", "board").await {
+                Ok(entity) => entity
+                    .fields
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                Err(_) => String::new(),
+            },
+            Err(_) => String::new(),
+        };
+        list.push(json!({
+            "path": path.display().to_string(),
+            "is_active": is_active,
+            "name": name,
+        }));
+    }
 
     Ok(json!(list))
 }

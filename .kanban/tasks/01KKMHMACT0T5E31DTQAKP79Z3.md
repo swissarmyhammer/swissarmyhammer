@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: ffffb080
+position_ordinal: ffffe080
 title: 'Update all markdown/yaml/description.md refs: .swissarmyhammer → .sah'
 ---
 ## What

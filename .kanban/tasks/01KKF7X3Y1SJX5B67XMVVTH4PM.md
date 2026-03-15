@@ -2,7 +2,7 @@
 depends_on:
 - 01KKF7WPK1JFZEXSJT7VPKHADX
 position_column: done
-position_ordinal: c7
+position_ordinal: e180
 title: Fix `detected-projects.md` partial to reference code_context tool
 ---
 ## What

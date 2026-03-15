@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: af80
+position_ordinal: b980
 title: '[Low] search_entities reconstructs Entity from index but loses field completeness'
 ---
 In `commands.rs` `search_entities` (lines 372-404), the search results are resolved by calling `search_index.get(&result.entity_id)` which returns the Entity stored in the index. However, this Entity was constructed from WatchEvent fields which may be incomplete — for EntityFieldChanged events, only the changed fields are provided (or the full set if enrichment succeeds).\n\nFor the initial load in `BoardHandle::open` (state.rs line 52), entities are loaded via `ectx.list()` which gives complete entities, so the initial data is fine. But after incremental updates via the watcher path, the Entity in the index is reconstructed from event fields, which replaces the complete entity with a potentially partial one (the `update` call replaces the old entity entirely via `add`).\n\nThe display_name fallback chain (search_display_field > mention_display_field > name > title > id) mitigates this well, but consider updating the index entity by merging fields rather than replacing.\n\nSeverity: Low (mitigated by fallback chain)" #review-finding

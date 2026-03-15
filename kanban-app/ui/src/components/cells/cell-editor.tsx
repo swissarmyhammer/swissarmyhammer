@@ -50,7 +50,8 @@ export function CellEditor({ field, value, entity, onCommit, onCancel }: CellEdi
       );
     case "markdown":
     default:
-      return <MarkdownEditor {...props} />;
+      // Pass onCommit as onSubmit so Enter commits + exits edit mode
+      return <MarkdownEditor {...props} onSubmit={onCommit} />;
   }
 }
 

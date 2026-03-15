@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffe180
+position_ordinal: ffffff9280
 title: Update mirdan/src/cli.rs help text for XDG paths
 ---
 Update help text that references ~/.avp/validators/ to show XDG paths instead.

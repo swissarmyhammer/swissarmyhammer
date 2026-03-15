@@ -32,6 +32,7 @@ export interface ViewDef {
 export interface OpenBoard {
   path: string;
   is_active: boolean;
+  name: string;
 }
 
 export interface RecentBoard {

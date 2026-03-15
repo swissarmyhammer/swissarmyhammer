@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffd480
+position_ordinal: ffff8580
 title: RwLock on commands_registry held across an await point in dispatch_command
 ---
 swissarmyhammer-kanban-app/src/commands.rs:495-501\n\nThe code correctly drops the read guard before the async execute call by scoping the registry read inside a block and only extracting the `undoable` bool. This is good -- no issue here.\n\nHowever, in `list_available_commands` (line 565), `registry` is held as a read guard while calling `available_commands()` and then the `retain()` closure. Since `retain()` is synchronous and does not cross an await point, this is safe. But `active_handle` is awaited at line 571 while `registry` is still held. This means the RwLock read guard on `commands_registry` is held across the `active_handle().await` call.\n\nIf `active_handle()` needs to acquire any locks, this could create contention. In practice, `active_handle()` reads `active_board` and `boards`, which are separate RwLocks, so there is no deadlock. But it is still a code smell to hold one lock across an await.\n\nSuggestion: Collect the available commands into a Vec before the await, then drop the registry guard. Something like:\n```rust\nlet available = {\n    let registry = state.commands_registry.read().await;\n    registry.available_commands(&scope).into_iter().cloned().collect::<Vec<_>>()\n};\n```\nBut this requires CommandDef to be Clone (which it already is). #review-finding #warning

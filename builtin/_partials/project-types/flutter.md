@@ -24,10 +24,15 @@ partial: true
 
 **IMPORTANT:** Do NOT glob for test files. Use `flutter test` to run all tests - it automatically discovers all test files in the `test/` directory.
 
+**Formatting:**
+- **Format command:** `dart format .` or `fvm dart format .`
+- **Check only:** `dart format --output=none --set-exit-if-changed .`
+- **Analyze:** `flutter analyze` (lint + static analysis)
+- ALWAYS run `dart format .` before committing
+
 **Best Practices:**
 - Always check for FVM before running commands (look for `.fvm/` directory)
 - Run `flutter analyze` before committing to catch potential issues
-- Use `dart format .` to maintain consistent code style
 - Check `pubspec.yaml` for project configuration and dependencies
 - Run tests frequently during development
 

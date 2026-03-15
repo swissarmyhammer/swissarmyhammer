@@ -1,14 +1,9 @@
 ---
 name: test-loop
-description: Continuously run tests, create failure cards, and implement fixes until the suite is fully green. Uses ralph to prevent stopping between iterations.
+description: Continuously run tests, create failure cards, and delegate fixes to /implement until the suite is fully green. Uses ralph to prevent stopping between iterations.
 metadata:
-  author: swissarmyhammer
+  author: "swissarmyhammer"
   version: "1.0"
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: "sah tool ralph ralph check --"
 ---
 
 # Test Loop
@@ -22,16 +17,18 @@ This skill is an **orchestrator**. It does not write code or run tests itself. I
 1. **Set ralph**: call `ralph` with `op: "set ralph"` and instruction "Run tests and fix failures until all green".
 2. **Run `/test`** — it runs the suite, creates `test-failure` kanban cards for any failures.
 3. **Check for failure cards**: query `kanban` for tasks tagged `test-failure`.
-4. **If failure cards exist**: run `/implement` to pick up and fix each one.
-5. **Loop**: go back to step 2.
-6. **If no failure cards and tests are green**: `clear ralph` and report.
+4. **If failure cards exist**: run `/implement` once — it picks up exactly one card and fixes it. Then go back to step 2 to re-run tests and check for remaining failures. Repeat until no failure cards remain.
+5. **Stop condition**: before clearing ralph, independently verify by querying kanban for any tasks tagged `test-failure` — if any exist, continue the loop regardless of what `/test` reported. Only when the kanban board has zero `test-failure` cards **and** `/test` reports a fully green run (zero failures, zero warnings, zero skipped) may you `clear ralph` and report.
 
 ## Constraints
 
 ### Ralph
 
 - **First action**: set ralph. The Stop hook blocks you from stopping while ralph is active.
-- Only call `ralph` with `op: "clear ralph"` when `/test` reports all green with zero failures, zero warnings, and zero skipped tests.
+- Only call `ralph` with `op: "clear ralph"` when **both** conditions are met:
+  1. The kanban board has zero tasks tagged `test-failure` (verified by a direct kanban query).
+  2. `/test` reports all green with zero failures, zero warnings, and zero skipped tests.
+- Never rely solely on `/test`'s prose summary — always re-check the kanban board independently before clearing ralph.
 
 ### Delegation
 

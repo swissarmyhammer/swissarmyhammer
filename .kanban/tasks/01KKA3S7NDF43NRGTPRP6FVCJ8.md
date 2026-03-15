@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffff9d80
+position_ordinal: ffffcd80
 title: Register task.tag command and update tags field editor to multi-select
 ---
 Wire up the missing `task.tag` command registration and change the tags field editor from `none` to `multi-select` so the frontend can edit computed tag fields through the standard editor path.\n\n## task.tag registration\n`TagTask` exists in `task/tag.rs` but is NOT registered in `commands/mod.rs`. Add a `TagTaskCmd` wrapper (like `UntagTaskCmd`) and register it as `\"task.tag\"`.\n\nThe `TagTaskCmd` should accept args `id` (task) and `tag` (tag name) — same as the existing MCP kanban tool's `tag task` operation.\n\n## Tags field editor\nCurrently `builtin/fields/definitions/tags.yaml` has `editor: none` because computed fields were read-only. Now that `update_field` routes through `DeriveHandler`, change to `editor: multi-select` so the frontend knows this field is editable.\n\n## Files\n- Edit: `swissarmyhammer-kanban/src/commands/task_commands.rs` — add `TagTaskCmd`\n- Edit: `swissarmyhammer-kanban/src/commands/mod.rs` — register `\"task.tag\"`\n- Edit: `swissarmyhammer-kanban/builtin/fields/definitions/tags.yaml` — change `editor: none` to `editor: multi-select`\n\n## Checklist\n- [ ] Add `TagTaskCmd` struct in task_commands.rs\n- [ ] Register `\"task.tag\"` in `register_commands()`\n- [ ] Update tags.yaml editor from `none` to `multi-select`\n- [ ] Test: `task.tag` command is available and executes\n- [ ] `cargo test -p swissarmyhammer-kanban` passes
