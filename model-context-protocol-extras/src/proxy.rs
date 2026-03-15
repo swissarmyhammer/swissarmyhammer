@@ -160,7 +160,7 @@ impl ServerHandler for McpProxyHandler {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        tracing::info!("McpProxy: call_tool '{}'", request.name);
+        tracing::debug!("McpProxy: call_tool '{}'", request.name);
         let peer = self.get_peer().await?;
         peer.call_tool(request)
             .await

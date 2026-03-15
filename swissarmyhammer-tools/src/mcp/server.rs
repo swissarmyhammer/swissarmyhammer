@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use swissarmyhammer_common::utils::find_git_repository_root_from;
-use swissarmyhammer_common::{is_prompt_visible, Pretty, Result, SwissArmyHammerError};
+use swissarmyhammer_common::{is_prompt_visible, Result, SwissArmyHammerError};
 use swissarmyhammer_config::model::{parse_model_config, ModelManager};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
@@ -1257,29 +1257,6 @@ impl McpServer {
             .with_peer(Arc::new(peer.clone()))
     }
 
-    /// Execute a tool with logging.
-    ///
-    /// # Arguments
-    ///
-    /// * `tool` - The tool to execute
-    /// * `name` - The name of the tool
-    /// * `arguments` - Tool arguments
-    /// * `context` - Tool execution context
-    ///
-    /// # Returns
-    ///
-    /// * `Result<CallToolResult, McpError>` - The execution result
-    async fn execute_tool_with_logging(
-        tool: &dyn super::tool_registry::McpTool,
-        name: &str,
-        arguments: serde_json::Map<String, Value>,
-        context: &ToolContext,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::info!("🔧 Executing tool: {}", name);
-        let result = tool.execute(arguments, context).await;
-        tracing::debug!("🔧 Tool execution result for {}: {}", name, Pretty(&result));
-        result
-    }
 
     /// Ensure an agent actor exists for the connecting MCP client.
     ///
@@ -1508,23 +1485,49 @@ impl ServerHandler for McpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::debug!(
-            "🔧 call_tool() invoked for tool: {}, arguments: {:?}",
-            request.name,
-            request.arguments
+        use tracing::Instrument;
+
+        let tool_name = request.name.to_string();
+        let arg_count = request.arguments.as_ref().map_or(0, |a| a.len());
+
+        let span = tracing::info_span!(
+            "tool_call",
+            tool = %tool_name,
+            args = arg_count,
+            caller = "mcp",
+            status = tracing::field::Empty,
         );
 
-        let registry = self.tool_registry.read().await;
-        let tool = registry.get_tool(&request.name).ok_or_else(|| {
-            tracing::error!("🔧 Unknown tool requested: {}", request.name);
-            McpError::invalid_request(format!("Unknown tool: {}", request.name), None)
-        })?;
+        async {
+            let registry = self.tool_registry.read().await;
+            let tool = registry.get_tool(&request.name).ok_or_else(|| {
+                tracing::error!(tool = %request.name, "unknown tool requested");
+                McpError::invalid_request(format!("Unknown tool: {}", request.name), None)
+            })?;
 
-        let tool_context_with_peer = self.prepare_tool_context(context.peer.clone());
-        let arguments = request.arguments.unwrap_or_default();
+            let tool_context_with_peer = self.prepare_tool_context(context.peer.clone());
+            let arguments = request.arguments.unwrap_or_default();
 
-        Self::execute_tool_with_logging(tool, &request.name, arguments, &tool_context_with_peer)
-            .await
+            let start = std::time::Instant::now();
+            let result = tool.execute(arguments, &tool_context_with_peer).await;
+            let elapsed = start.elapsed();
+
+            let is_error = match &result {
+                Ok(r) => r.is_error.unwrap_or(false),
+                Err(_) => true,
+            };
+            tracing::Span::current().record("status", if is_error { "error" } else { "ok" });
+
+            tracing::info!(
+                duration_ms = elapsed.as_millis(),
+                error = is_error,
+                "tool_call complete"
+            );
+
+            result
+        }
+        .instrument(span)
+        .await
     }
 
     fn get_info(&self) -> ServerInfo {
