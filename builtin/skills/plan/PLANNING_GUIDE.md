@@ -105,7 +105,7 @@ Each card's description MUST include these sections:
 
 A card without acceptance criteria and tests is not a valid card. These sections ensure the definition of "done" is unambiguous and verifiable when the card is picked up for implementation.
 
-Then add subtasks for individual steps: use `kanban` with `op: "add subtask"`, `task_id: "<task-id>"`, `title: "<specific step>"`.
+Subtasks go in the card's `description` as GitHub Flavored Markdown checklists (`- [ ]` items). Include them when creating the card, or use `op: "update task"` to add them later. There is no separate "add subtask" API — subtasks live in the description.
 
 ### Set dependencies between cards
 
