@@ -609,3 +609,250 @@ async fn full_session_add_move_update() {
     assert_eq!(task.get_str("position_column"), Some("doing"));
     assert_eq!(task.get_str("title"), Some("Updated Title"));
 }
+
+// ===========================================================================
+// Task reorder integration tests — before_id / after_id placement
+// ===========================================================================
+
+/// Helper: add N tasks to "todo" column with distinct ordinals, return IDs in creation order.
+async fn add_tasks(engine: &TestEngine, titles: &[&str]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (i, title) in titles.iter().enumerate() {
+        let mut args = HashMap::new();
+        args.insert("title".into(), json!(title));
+        let result = engine
+            .dispatch("task.add", &["column:todo"], None, args)
+            .await
+            .expect("task.add should succeed");
+        let id = result["id"].as_str().unwrap().to_string();
+
+        // Set distinct ordinals using Ordinal::after chain so tasks have a
+        // defined sort order. We pass the string form of valid FractionalIndex
+        // ordinals. Build them: first(), after(first), after(after(first)), ...
+        {
+            use swissarmyhammer_kanban::types::Ordinal;
+            let mut ord = Ordinal::first();
+            for _ in 0..i {
+                ord = Ordinal::after(&ord);
+            }
+            let mut move_args = HashMap::new();
+            move_args.insert("id".into(), json!(&id));
+            move_args.insert("column".into(), json!("todo"));
+            move_args.insert("ordinal".into(), json!(ord.as_str()));
+            engine
+                .dispatch("task.move", &[], None, move_args)
+                .await
+                .expect("task.move to set ordinal should succeed");
+        }
+
+        ids.push(id);
+    }
+    ids
+}
+
+/// Helper: read tasks in "todo" column, sorted by ordinal, return IDs in order.
+async fn todo_order(engine: &TestEngine) -> Vec<String> {
+    let ectx = engine.kanban.entity_context().await.unwrap();
+    let all = ectx.list("task").await.unwrap();
+    let mut col_tasks: Vec<_> = all
+        .into_iter()
+        .filter(|t| t.get_str("position_column") == Some("todo"))
+        .collect();
+    col_tasks.sort_by(|a, b| {
+        let oa = a.get_str("position_ordinal").unwrap_or("a0");
+        let ob = b.get_str("position_ordinal").unwrap_or("a0");
+        oa.cmp(ob)
+    });
+    col_tasks.iter().map(|t| t.id.to_string()).collect()
+}
+
+/// Helper: move task with before_id (place before reference task).
+async fn move_before(engine: &TestEngine, task_id: &str, before_id: &str) {
+    let mut args = HashMap::new();
+    args.insert("id".into(), json!(task_id));
+    args.insert("column".into(), json!("todo"));
+    args.insert("before_id".into(), json!(before_id));
+    engine
+        .dispatch("task.move", &[], None, args)
+        .await
+        .expect("task.move before should succeed");
+}
+
+/// Helper: move task with after_id (place after reference task).
+async fn move_after(engine: &TestEngine, task_id: &str, after_id: &str) {
+    let mut args = HashMap::new();
+    args.insert("id".into(), json!(task_id));
+    args.insert("column".into(), json!("todo"));
+    args.insert("after_id".into(), json!(after_id));
+    engine
+        .dispatch("task.move", &[], None, args)
+        .await
+        .expect("task.move after should succeed");
+}
+
+#[tokio::test]
+async fn reorder_move_last_to_first() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C"]).await;
+
+    // Move C before A → order should be [C, A, B]
+    move_before(&engine, &ids[2], &ids[0]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![ids[2].clone(), ids[0].clone(), ids[1].clone()],
+        "C should be first after moving before A"
+    );
+}
+
+#[tokio::test]
+async fn reorder_move_first_to_last() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C"]).await;
+
+    // Move A after C → order should be [B, C, A]
+    move_after(&engine, &ids[0], &ids[2]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![ids[1].clone(), ids[2].clone(), ids[0].clone()],
+        "A should be last after moving after C"
+    );
+}
+
+#[tokio::test]
+async fn reorder_pairwise_swap() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D"]).await;
+
+    // Swap A and B: move A after B → [B, A, C, D]
+    move_after(&engine, &ids[0], &ids[1]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[1].clone(),
+            ids[0].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ]
+    );
+
+    // Swap C and D: move C after D → [B, A, D, C]
+    move_after(&engine, &ids[2], &ids[3]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[1].clone(),
+            ids[0].clone(),
+            ids[3].clone(),
+            ids[2].clone()
+        ]
+    );
+
+    // Swap back: move B after A → [A, B, D, C]
+    move_after(&engine, &ids[1], &ids[0]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[3].clone(),
+            ids[2].clone()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn reorder_reverse_list_by_dragging_end_to_beginning() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D", "E"]).await;
+
+    // Reverse by repeatedly moving last to first:
+    // [A,B,C,D,E] → move E before A → [E,A,B,C,D]
+    move_before(&engine, &ids[4], &ids[0]).await;
+    // → move D before E → [D,E,A,B,C]
+    move_before(&engine, &ids[3], &ids[4]).await;
+    // → move C before D → [C,D,E,A,B]
+    move_before(&engine, &ids[2], &ids[3]).await;
+    // → move B before C → [B,C,D,E,A]
+    move_before(&engine, &ids[1], &ids[2]).await;
+
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[1].clone(),
+            ids[2].clone(),
+            ids[3].clone(),
+            ids[4].clone(),
+            ids[0].clone()
+        ],
+        "list should be [B,C,D,E,A] after reversing"
+    );
+}
+
+#[tokio::test]
+async fn reorder_reverse_list_by_dragging_beginning_to_end() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D", "E"]).await;
+
+    // Reverse by repeatedly moving first to last:
+    // [A,B,C,D,E] → move A after E → [B,C,D,E,A]
+    move_after(&engine, &ids[0], &ids[4]).await;
+    // → move B after A → [C,D,E,A,B]
+    move_after(&engine, &ids[1], &ids[0]).await;
+    // → move C after B → [D,E,A,B,C]
+    move_after(&engine, &ids[2], &ids[1]).await;
+    // → move D after C → [E,A,B,C,D]
+    move_after(&engine, &ids[3], &ids[2]).await;
+
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[4].clone(),
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ],
+        "list should be [E,A,B,C,D] after reversing"
+    );
+}
+
+#[tokio::test]
+async fn reorder_move_to_middle() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D", "E"]).await;
+
+    // Move E before C → [A, B, E, C, D]
+    move_before(&engine, &ids[4], &ids[2]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[4].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ],
+    );
+
+    // Move A after E → [B, E, A, C, D]
+    move_after(&engine, &ids[0], &ids[4]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[1].clone(),
+            ids[4].clone(),
+            ids[0].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ],
+    );
+}

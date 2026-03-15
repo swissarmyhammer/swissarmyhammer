@@ -49,7 +49,9 @@ impl Command for AddTaskCmd {
 /// Position can be specified via:
 /// - `ordinal` arg (explicit ordinal string), or
 /// - `drop_index` arg (integer index in the target column; ordinal is computed
-///   server-side from neighbor ordinals via `compute_ordinal_for_drop`)
+///   server-side from neighbor ordinals via `compute_ordinal_for_drop`), or
+/// - `before_id` and/or `after_id` args (task IDs of the neighbors; ordinal is
+///   computed server-side from their ordinals).
 ///
 /// Optional: `swimlane` arg.
 pub struct MoveTaskCmd;
@@ -83,9 +85,131 @@ impl Command for MoveTaskCmd {
 
         let mut op = crate::task::MoveTask::to_column(task_id, column.clone());
 
-        // Determine ordinal: explicit string, or computed from drop_index
+        // Determine ordinal: explicit > before_id/after_id placement > drop_index > append
         if let Some(ordinal) = ctx.arg("ordinal").and_then(|v| v.as_str()) {
             op = op.with_ordinal(ordinal);
+        } else if ctx.arg("before_id").is_some() || ctx.arg("after_id").is_some() {
+            // Placement-based ordering:
+            //   before_id = "place me before this task"
+            //   after_id  = "place me after this task"
+            // We load all tasks in the target column (sorted by ordinal),
+            // find the reference task, and compute an ordinal between it
+            // and its neighbor. Only ONE entity (the moved task) is updated.
+            let before_id = ctx.arg("before_id").and_then(|v| v.as_str());
+            let after_id = ctx.arg("after_id").and_then(|v| v.as_str());
+
+            let ectx = kanban
+                .entity_context()
+                .await
+                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+            // Load and sort all tasks in the target column (excluding the moved task)
+            let all_tasks = ectx
+                .list("task")
+                .await
+                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+            let mut col_tasks: Vec<_> = all_tasks
+                .into_iter()
+                .filter(|t| {
+                    t.get_str("position_column") == Some(&column) && t.id.as_str() != task_id
+                })
+                .collect();
+            col_tasks.sort_by(|a, b| {
+                let oa = a.get_str("position_ordinal").unwrap_or("a0");
+                let ob = b.get_str("position_ordinal").unwrap_or("a0");
+                oa.cmp(ob)
+            });
+
+            let ordinal = if let Some(ref_id) = before_id {
+                // "Place me before ref_id" — find ref in sorted list,
+                // compute ordinal between predecessor and ref.
+                let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
+                match ref_idx {
+                    Some(0) => {
+                        // Placing before the first task
+                        let ref_ord = Ordinal::from_string(
+                            col_tasks[0].get_str("position_ordinal").unwrap_or("a0"),
+                        );
+                        crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
+                    }
+                    Some(idx) => {
+                        // Between predecessor and ref
+                        let pred_ord = Ordinal::from_string(
+                            col_tasks[idx - 1]
+                                .get_str("position_ordinal")
+                                .unwrap_or("a0"),
+                        );
+                        let ref_ord = Ordinal::from_string(
+                            col_tasks[idx].get_str("position_ordinal").unwrap_or("a0"),
+                        );
+                        crate::task_helpers::compute_ordinal_for_neighbors(
+                            Some(&pred_ord),
+                            Some(&ref_ord),
+                        )
+                    }
+                    None => {
+                        // ref not found — append at end
+                        crate::task_helpers::compute_ordinal_for_neighbors(
+                            col_tasks
+                                .last()
+                                .map(|t| {
+                                    Ordinal::from_string(
+                                        t.get_str("position_ordinal").unwrap_or("a0"),
+                                    )
+                                })
+                                .as_ref(),
+                            None,
+                        )
+                    }
+                }
+            } else if let Some(ref_id) = after_id {
+                // "Place me after ref_id" — find ref in sorted list,
+                // compute ordinal between ref and successor.
+                let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
+                match ref_idx {
+                    Some(idx) if idx == col_tasks.len() - 1 => {
+                        // Placing after the last task
+                        let ref_ord = Ordinal::from_string(
+                            col_tasks[idx].get_str("position_ordinal").unwrap_or("a0"),
+                        );
+                        crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
+                    }
+                    Some(idx) => {
+                        // Between ref and successor
+                        let ref_ord = Ordinal::from_string(
+                            col_tasks[idx].get_str("position_ordinal").unwrap_or("a0"),
+                        );
+                        let succ_ord = Ordinal::from_string(
+                            col_tasks[idx + 1]
+                                .get_str("position_ordinal")
+                                .unwrap_or("a0"),
+                        );
+                        crate::task_helpers::compute_ordinal_for_neighbors(
+                            Some(&ref_ord),
+                            Some(&succ_ord),
+                        )
+                    }
+                    None => {
+                        // ref not found — append at end
+                        crate::task_helpers::compute_ordinal_for_neighbors(
+                            col_tasks
+                                .last()
+                                .map(|t| {
+                                    Ordinal::from_string(
+                                        t.get_str("position_ordinal").unwrap_or("a0"),
+                                    )
+                                })
+                                .as_ref(),
+                            None,
+                        )
+                    }
+                }
+            } else {
+                // Neither — shouldn't happen, append at end
+                crate::task_helpers::compute_ordinal_for_neighbors(None, None)
+            };
+
+            op = op.with_ordinal(ordinal.as_str());
         } else if let Some(drop_index) = ctx.arg("drop_index").and_then(|v| v.as_u64()) {
             // Load tasks in the target column, sorted by ordinal, to compute
             // the new ordinal from the drop position.

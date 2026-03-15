@@ -1,6 +1,7 @@
 name: actor
 mention_prefix: "@"
 mention_display_field: name
+search_display_field: name
 fields:
   - name
   - color

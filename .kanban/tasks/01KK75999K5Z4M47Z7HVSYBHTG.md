@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: w3
+position_ordinal: ffff9080
 title: Multi-select dropdown always visible instead of popover
 ---
 **W5: Multi-select editor dropdown always visible**

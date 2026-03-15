@@ -1,0 +1,12 @@
+---
+assignees:
+- assistant
+depends_on:
+- 01KKEZAWBW9NMJWNPA0JY7PYTJ
+position_column: done
+position_ordinal: c0
+title: Add `lsp status` operation to code-context MCP tool
+---
+## What
+
+Add an `lsp status` operation to the existing code-context MCP tool that returns structured language/LSP health info. This replaces the hardcoded `get_lsp_servers_for_type()` in `doctor.rs` and becomes the single API that both the /lsp skill and the statusline consume.\n\nThe operation queries indexed file extensions from the code-context database, cross-references with the LSP registry (from card 1), and returns which languages are present, which LSPs are installed/missing, and install hints.\n\n### Files to change:\n- `swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs` — add `lsp status` op\n- New file: `swissarmyhammer-tools/src/mcp/tools/code_context/lsp_status.rs` — handler\n- `swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs` — delete `get_lsp_servers_for_type()` and `detect_project_types()`, use the LSP registry instead\n- `swissarmyhammer-code-context/src/ops/` — add `distinct_extensions(conn) -> Result<HashSet<String>>` query function\n\n### Response shape:\n```json\n{\n  \"languages\": [\n    {\n      \"icon\": \"🦀\",\n      \"extensions\": [\"rs\"],\n      \"lsp_server\": \"rust-analyzer\",\n      \"installed\": true,\n      \"install_hint\": null\n    },\n    {\n      \"icon\": \"🐍\",\n      \"extensions\": [\"py\"],\n      \"lsp_server\": \"pylsp\",\n      \"installed\": false,\n      \"install_hint\": \"pip install python-lsp-server\"\n    }\n  ],\n  \"all_healthy\": false\n}\n```\n\n## Acceptance Criteria\n- [ ] `code_context` tool accepts `op: \"lsp status\"` and returns language/LSP JSON\n- [ ] Only languages with files in the index appear in the response\n- [ ] Each language entry includes icon, extensions, server command, installed bool, install_hint\n- [ ] `all_healthy` is true only when every present language has its LSP installed\n- [ ] `doctor.rs` no longer has hardcoded server lists — it delegates to the registry\n\n## Tests\n- [ ] Unit test: `distinct_extensions` returns correct set from test DB\n- [ ] Integration test: `lsp status` op returns expected shape\n- [ ] `cargo test -p swissarmyhammer-tools`

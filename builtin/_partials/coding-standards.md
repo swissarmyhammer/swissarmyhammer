@@ -4,6 +4,8 @@ description: Shared coding standards for all agents
 partial: true
 ---
 
+** Fix the root cause, not the symptoms **
+
 ## Code Quality
 
 - Write clean, readable code that follows existing patterns in the codebase

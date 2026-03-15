@@ -1,0 +1,3 @@
+color: ff6600
+description: Restore detect projects op that was lost in treesitter→code_context refactor
+tag_name: detect-projects

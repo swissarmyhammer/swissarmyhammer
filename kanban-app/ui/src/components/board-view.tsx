@@ -21,7 +21,6 @@ import { SortableColumn } from "@/components/sortable-column";
 import { EntityCard } from "@/components/entity-card";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
-import { reorderColumns } from "@/lib/column-reorder";
 /** Default title for new tasks — the Rust side also uses this as fallback. */
 function defaultTaskTitle(_columnName: string): string {
   return "New task";
@@ -30,7 +29,7 @@ import { useFieldUpdate } from "@/lib/field-update-context";
 import { moniker } from "@/lib/moniker";
 import { useInspect } from "@/lib/inspect-context";
 import type { BoardData, Entity } from "@/types/kanban";
-import { getStr, getStrList, getNum } from "@/types/kanban";
+import { getStr, getNum } from "@/types/kanban";
 
 interface BoardViewProps {
   board: BoardData;
@@ -82,7 +81,10 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     return map;
   }, [columns]);
 
-  // The "real" column layout from persisted state
+  // Group tasks by column and sort each column by ordinal.
+  // The backend sorts on initial load, but incremental entity-field-changed
+  // events patch the tasks array in-place without re-sorting, so the frontend
+  // must sort to maintain correct visual order after moves.
   const baseLayout = useMemo<ColumnLayout>(() => {
     const map: ColumnLayout = new Map();
     for (const col of columns) map.set(col.id, []);
@@ -91,8 +93,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       const list = map.get(col);
       if (list) list.push(task.id);
     }
-    // Sort each column by ordinal
-    for (const [colId, ids] of map) {
+    for (const ids of map.values()) {
       ids.sort((a, b) => {
         const ta = taskMap.get(a)!;
         const tb = taskMap.get(b)!;
@@ -100,7 +101,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
           getStr(tb, "position_ordinal", "a0")
         );
       });
-      map.set(colId, ids);
     }
     return map;
   }, [columns, tasks, taskMap]);
@@ -116,22 +116,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   const currentLayout = virtualLayout ?? baseLayout;
   const currentColumnOrder = virtualColumnOrder ?? columnIdList;
 
-  // Collect blocked task IDs
-  const blockedIds = useMemo(() => {
-    const set = new Set<string>();
-    for (const task of tasks) {
-      const dependsOn = getStrList(task, "depends_on");
-      if (dependsOn.length > 0) {
-        const terminalCol = columns[columns.length - 1]?.id;
-        const hasIncomplete = dependsOn.some((depId) => {
-          const dep = taskMap.get(depId);
-          return dep && getStr(dep, "position_column") !== terminalCol;
-        });
-        if (hasIncomplete) set.add(task.id);
-      }
-    }
-    return set;
-  }, [tasks, columns, taskMap]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -231,7 +215,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       const toCol = findColumn(overId, virtualLayout);
       if (!fromCol || !toCol || fromCol === toCol) return;
 
-      // Move the task from one column to another in the virtual layout
+      // Cross-column move: transfer task between columns in the virtual layout
       setVirtualLayout((prev) => {
         if (!prev) return prev;
         const clone: ColumnLayout = new Map();
@@ -247,10 +231,8 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         // Insert into target
         const isColumnDrop = columnIds.has(overId) || overId.startsWith("drop:");
         if (isColumnDrop) {
-          // Dropped over the column droppable — append at end
           toList.push(activeId);
         } else {
-          // Dropped over a task — insert at that position
           const overIdx = toList.indexOf(overId);
           if (overIdx !== -1) {
             toList.splice(overIdx, 0, activeId);
@@ -265,12 +247,28 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     [virtualLayout, virtualColumnOrder, findColumn, columnIds, resolveToColumnId, currentLayout]
   );
 
+  /**
+   * Tell the backend: put taskId in column, before or after a reference task.
+   * The backend computes the ordinal. Only ONE entity is touched.
+   */
   const persistMove = useCallback(
-    async (taskId: string, column: string, ordinal: string, entity: Entity) => {
+    async (
+      taskId: string,
+      column: string,
+      entity: Entity,
+      placement: { before?: string; after?: string }
+    ) => {
       try {
+        const args: Record<string, unknown> = {
+          id: taskId,
+          column,
+          swimlane: getStr(entity, "position_swimlane") || null,
+        };
+        if (placement.before) args.before_id = placement.before;
+        if (placement.after) args.after_id = placement.after;
         await invoke("dispatch_command", {
           cmd: "task.move",
-          args: { id: taskId, column, ordinal, swimlane: getStr(entity, "position_swimlane") || null },
+          args,
         });
       } catch (e) {
         console.error("Failed to move task:", e);
@@ -293,8 +291,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         }
 
         const activeId = active.id as string;
-
-        // Use the virtual column order — it was maintained during dragOver
         const oldIndex = columnIdList.indexOf(activeId);
         const newIndex = colOrder.indexOf(activeId);
 
@@ -303,14 +299,11 @@ export function BoardView({ board, tasks }: BoardViewProps) {
           return;
         }
 
-        const updates = reorderColumns(columnIdList, oldIndex, newIndex);
-        if (updates.length === 0) {
-          setVirtualColumnOrder(null);
-          return;
-        }
-
         try {
-          await invoke("dispatch_command", { cmd: "column.reorder", args: { columns: updates } });
+          await invoke("dispatch_command", {
+            cmd: "column.reorder",
+            args: { id: activeId, target_index: newIndex },
+          });
         } catch (e) {
           console.error("Failed to reorder columns:", e);
         } finally {
@@ -335,37 +328,41 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       const draggedTask = taskMap.get(activeId);
       if (!draggedTask) return;
 
-      // Find which column the task ended up in
       const targetColumn = findColumn(activeId, layout);
       if (!targetColumn) return;
 
-      // Handle same-position drop (no-op)
-      const targetList = layout.get(targetColumn);
-      if (!targetList) return;
-
-      // If dropped on itself with no column change
       const draggedColumn = getStr(draggedTask, "position_column");
+
+      // No-op: dropped on itself, same column
       if (activeId === overId && targetColumn === draggedColumn) return;
 
-      // Handle same-column reorder via arrayMove for correct index
+      // Resolve overId: is it a column/drop-zone, or a task?
       const isColumnDrop = columnIds.has(overId) || overId.startsWith("drop:");
-      if (targetColumn === draggedColumn && !isColumnDrop) {
-        const oldIndex = targetList.indexOf(activeId);
-        const newIndex = targetList.indexOf(overId);
-        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-          const reordered = arrayMove(targetList, oldIndex, newIndex);
-          const ordinal = computeOrdinal(reordered, newIndex, taskMap);
-          await persistMove(activeId, targetColumn, ordinal, draggedTask);
-          return;
-        }
+
+      if (isColumnDrop && targetColumn !== draggedColumn) {
+        // Cross-column drop onto column zone — append at end (no before/after)
+        await persistMove(activeId, targetColumn, draggedTask, {});
+        return;
       }
 
-      // Cross-column or drop on column: use the virtual layout position
-      const finalIndex = targetList.indexOf(activeId);
-      if (finalIndex === -1) return;
+      if (isColumnDrop && targetColumn === draggedColumn) {
+        // Same-column drop onto column zone — no-op (can't determine intent)
+        return;
+      }
 
-      const ordinal = computeOrdinal(targetList, finalIndex, taskMap);
-      await persistMove(activeId, targetColumn, ordinal, draggedTask);
+      // Dropped onto a specific task (overId is a task ID).
+      // Simple rule: "put me before overId".
+      // The backend reads overId's ordinal and computes a new ordinal
+      // that sorts just before it. One entity touched.
+      const oldIndex = (baseLayout.get(draggedColumn) ?? []).indexOf(activeId);
+      const overIndex = (layout.get(targetColumn) ?? []).indexOf(overId);
+
+      // If dragging downward within same column, place AFTER the target instead
+      if (targetColumn === draggedColumn && oldIndex < overIndex) {
+        await persistMove(activeId, targetColumn, draggedTask, { after: overId });
+      } else {
+        await persistMove(activeId, targetColumn, draggedTask, { before: overId });
+      }
     },
     [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList, persistMove]
   );
@@ -422,12 +419,10 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                   <ColumnView
                     column={col}
                     tasks={colTasks}
-                    blockedIds={blockedIds}
                     // Only the first column gets the + button — new tasks should
                     // always enter at the first workflow stage.
                     onAddTask={i === 0 ? handleAddTask : undefined}
                     onRenameColumn={handleRenameColumn}
-                    presorted
                   />
                 </SortableColumn>
               );
@@ -445,56 +440,4 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       </DndContext>
     </FocusScope>
   );
-}
-
-/**
- * Compute an ordinal for the task at `index` within the ordered `ids` list,
- * based on the ordinals of its neighbors.
- */
-function computeOrdinal(
-  ids: string[],
-  index: number,
-  taskMap: Map<string, Entity>
-): string {
-  const prevEntity = index > 0 ? taskMap.get(ids[index - 1]) : undefined;
-  const nextEntity = index < ids.length - 1 ? taskMap.get(ids[index + 1]) : undefined;
-  const prev = prevEntity ? getStr(prevEntity, "position_ordinal") || undefined : undefined;
-  const next = nextEntity ? getStr(nextEntity, "position_ordinal") || undefined : undefined;
-
-  if (!prev && !next) return "a0";
-  if (!prev && next) {
-    const code = next.charCodeAt(0);
-    const ord = code > 97 ? String.fromCharCode(code - 1) + "0" : "a0";
-    return ord < next ? ord : "a0";
-  }
-  if (prev && !next) {
-    const lastChar = prev.charCodeAt(prev.length - 1);
-    return prev.slice(0, -1) + String.fromCharCode(lastChar + 1);
-  }
-  return midpointOrdinal(prev!, next!);
-}
-
-/** Compute a string midpoint between two ordinals for fractional indexing. */
-function midpointOrdinal(before: string, after: string): string {
-  const maxLen = Math.max(before.length, after.length);
-  const result: number[] = [];
-
-  for (let i = 0; i < maxLen; i++) {
-    const b = i < before.length ? before.charCodeAt(i) : 48; // '0'
-    const a = i < after.length ? after.charCodeAt(i) : 122; // 'z'
-
-    if (b < a) {
-      const mid = b + Math.floor((a - b) / 2);
-      if (mid > b) {
-        result.push(mid);
-        return String.fromCharCode(...result);
-      }
-      result.push(b);
-    } else {
-      result.push(b);
-    }
-  }
-
-  result.push(86); // 'V'
-  return String.fromCharCode(...result);
 }

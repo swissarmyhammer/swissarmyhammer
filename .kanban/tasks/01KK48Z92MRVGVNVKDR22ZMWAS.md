@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: t9
+position_ordinal: fff780
 title: Load actors in frontend EntityStore
 ---
 Add actor entities to the frontend data loading pipeline and add a Tauri command for mention search.

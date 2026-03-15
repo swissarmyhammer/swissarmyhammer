@@ -20,6 +20,7 @@ jobs:
     runs-on: self-hosted
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         app:
           - name: mirdan
@@ -55,12 +56,26 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
-          security create-keychain -p "" build.keychain || true
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          security import /tmp/certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
-          rm /tmp/certificate.p12
+
+          # Create and configure build keychain
+          security create-keychain -p "" ${{ matrix.app.name }}-build.keychain-db || true
+          security unlock-keychain -p "" ${{ matrix.app.name }}-build.keychain-db
+          security set-keychain-settings -lut 21600 ${{ matrix.app.name }}-build.keychain-db
+
+          # Add build keychain to search list (keep login keychain too)
+          security list-keychains -d user -s ${{ matrix.app.name }}-build.keychain-db $(security list-keychains -d user | tr -d '"')
+
+          # Install Apple intermediate certificates (needed for chain validation)
+          curl -sL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o /tmp/DevIDG2.cer
+          security import /tmp/DevIDG2.cer -k ${{ matrix.app.name }}-build.keychain-db -T /usr/bin/codesign
+          curl -sL https://www.apple.com/appleca/AppleIncRootCertificate.cer -o /tmp/AppleRoot.cer
+          security import /tmp/AppleRoot.cer -k ${{ matrix.app.name }}-build.keychain-db -T /usr/bin/codesign
+
+          # Import certificate and private key
+          security import /tmp/certificate.p12 -k ${{ matrix.app.name }}-build.keychain-db -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" ${{ matrix.app.name }}-build.keychain-db
+
+          rm /tmp/certificate.p12 /tmp/DevIDG2.cer /tmp/AppleRoot.cer
 
       - name: Build Tauri app (${{ matrix.app.product }})
         env:
@@ -74,7 +89,6 @@ jobs:
 
       - name: Find DMG
         id: find-dmg
-        working-directory: ${{ matrix.app.dir }}
         run: |
           DMG=$(find target/aarch64-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
           echo "dmg_path=$DMG" >> "$GITHUB_OUTPUT"
@@ -95,21 +109,21 @@ jobs:
             sleep 10
           done
           # Upload versioned DMG (original filename includes version)
-          gh release upload "$TAG" "${{ matrix.app.dir }}/${{ steps.find-dmg.outputs.dmg_path }}" --clobber
+          gh release upload "$TAG" "${{ steps.find-dmg.outputs.dmg_path }}" --clobber
           # Upload stable-name DMG for permanent download URLs
-          cp "${{ matrix.app.dir }}/${{ steps.find-dmg.outputs.dmg_path }}" "${{ matrix.app.product }}-latest.dmg"
+          cp "${{ steps.find-dmg.outputs.dmg_path }}" "${{ matrix.app.product }}-latest.dmg"
           gh release upload "$TAG" "${{ matrix.app.product }}-latest.dmg" --clobber
 
       - name: Upload DMG as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.app.name }}-app-dmg
-          path: ${{ matrix.app.dir }}/${{ steps.find-dmg.outputs.dmg_path }}
+          path: ${{ steps.find-dmg.outputs.dmg_path }}
 
       - name: Cleanup keychain
         if: always()
         run: |
-          security delete-keychain build.keychain || true
+          security delete-keychain ${{ matrix.app.name }}-build.keychain-db || true
 
   publish-homebrew-cask:
     needs: build-macos

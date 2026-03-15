@@ -1,6 +1,10 @@
 //! Position types for task ordering using fractional indexing.
+//!
+//! Uses the `fractional_index` crate (Figma's algorithm) for correct,
+//! unbounded fractional key generation.
 
 use super::ids::{ColumnId, SwimlaneId};
+use fractional_index::FractionalIndex;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
@@ -33,100 +37,80 @@ impl Position {
     }
 }
 
-/// Ordering within a column/swimlane cell. Uses fractional indexing.
+/// Ordering within a column/swimlane cell using fractional indexing.
 ///
-/// Ordinals are strings that sort lexicographically to determine display order.
-/// This allows inserting between existing items without updating other positions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Ordinal(String);
+/// Backed by the `fractional_index` crate (Figma's algorithm).
+/// Legacy ordinals are migrated on board open — no dual-algorithm support.
+#[derive(Debug, Clone)]
+pub struct Ordinal {
+    fi: FractionalIndex,
+    /// Cached string form for serialization and comparison.
+    str_repr: String,
+}
+
+impl PartialEq for Ordinal {
+    fn eq(&self, other: &Self) -> bool {
+        self.str_repr == other.str_repr
+    }
+}
+
+impl Eq for Ordinal {}
+
+impl std::hash::Hash for Ordinal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.str_repr.hash(state);
+    }
+}
 
 impl Ordinal {
-    /// Ordinal at the start
+    fn wrap(fi: FractionalIndex) -> Self {
+        let str_repr = fi.to_string();
+        Self { fi, str_repr }
+    }
+
+    /// Default first ordinal.
     pub fn first() -> Self {
-        Self("a0".to_string())
+        Self::wrap(FractionalIndex::default())
     }
 
-    /// Ordinal after all existing ordinals
+    /// Ordinal that sorts after `last`.
     pub fn after(last: &Ordinal) -> Self {
-        // Increment the last character or append
-        let bytes = last.0.as_bytes();
-        let mut result = last.0.clone();
-
-        // Find the last character and increment it
-        if let Some(&last_byte) = bytes.last() {
-            let new_char = match last_byte {
-                b'0'..=b'8' => (last_byte + 1) as char,
-                b'9' => {
-                    // 9 -> a, but we need to handle rollover
-                    result.pop();
-                    if result.is_empty() {
-                        return Self("b0".to_string());
-                    }
-                    // Increment the previous character
-                    return Self::after(&Ordinal(result)).append_zero();
-                }
-                b'a'..=b'y' => (last_byte + 1) as char,
-                b'z' => {
-                    // z -> append 0
-                    return Self(format!("{}0", last.0));
-                }
-                _ => '0',
-            };
-            result.pop();
-            result.push(new_char);
-        }
-
-        Self(result)
+        Self::wrap(FractionalIndex::new_after(&last.fi))
     }
 
-    /// Helper to append zero
-    fn append_zero(self) -> Self {
-        Self(format!("{}0", self.0))
+    /// Ordinal that sorts before `first`.
+    pub fn before(first: &Ordinal) -> Self {
+        Self::wrap(FractionalIndex::new_before(&first.fi))
     }
 
-    /// Ordinal between two existing ordinals (fractional index)
+    /// Ordinal that sorts between `before` and `after`.
     pub fn between(before: &Ordinal, after: &Ordinal) -> Self {
-        // Simple implementation: find midpoint string
-        // For strings of different lengths, pad the shorter one
-        let before_bytes = before.0.as_bytes();
-        let after_bytes = after.0.as_bytes();
-
-        let max_len = before_bytes.len().max(after_bytes.len());
-        let mut result = Vec::with_capacity(max_len + 1);
-
-        for i in 0..max_len {
-            let b = before_bytes.get(i).copied().unwrap_or(b'0');
-            let a = after_bytes.get(i).copied().unwrap_or(b'z');
-
-            if b < a {
-                // Found a position where we can insert
-                let mid = b + (a - b) / 2;
-                if mid > b {
-                    result.push(mid);
-                    return Self(String::from_utf8(result).unwrap_or_else(|_| before.0.clone()));
-                } else {
-                    // Need to go deeper - use current char and continue
-                    result.push(b);
-                }
-            } else {
-                result.push(b);
-            }
+        match FractionalIndex::new_between(&before.fi, &after.fi) {
+            Some(fi) => Self::wrap(fi),
+            None => Self::after(before),
         }
-
-        // Couldn't find midpoint, append a character in the middle
-        result.push(b'V'); // Middle of alphabet
-        Self(String::from_utf8(result).unwrap_or_else(|_| format!("{}V", before.0)))
     }
 
-    /// Create an ordinal from a string value
+    /// Create from a FractionalIndex string.
+    ///
+    /// If the string is not a valid FractionalIndex encoding (e.g. legacy
+    /// ordinals like "a0"), returns `Ordinal::first()`. Call
+    /// `migrate_ordinals` on board open to rewrite legacy data.
     pub fn from_string(s: &str) -> Self {
-        Self(s.to_string())
+        match FractionalIndex::from_string(s) {
+            Ok(fi) => Self::wrap(fi),
+            Err(_) => Self::first(),
+        }
     }
 
-    /// Get the inner string value
+    /// Check if a string is a valid FractionalIndex encoding.
+    pub fn is_valid(s: &str) -> bool {
+        FractionalIndex::from_string(s).is_ok()
+    }
+
+    /// Get the string representation for persistence.
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.str_repr
     }
 }
 
@@ -138,13 +122,26 @@ impl PartialOrd for Ordinal {
 
 impl Ord for Ordinal {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.0.cmp(&other.0)
+        self.str_repr.cmp(&other.str_repr)
     }
 }
 
 impl Default for Ordinal {
     fn default() -> Self {
         Self::first()
+    }
+}
+
+impl Serialize for Ordinal {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.str_repr)
+    }
+}
+
+impl<'de> Deserialize<'de> for Ordinal {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::from_string(&s))
     }
 }
 
@@ -155,7 +152,7 @@ mod tests {
     #[test]
     fn test_ordinal_first() {
         let ord = Ordinal::first();
-        assert_eq!(ord.as_str(), "a0");
+        assert!(!ord.as_str().is_empty());
     }
 
     #[test]
@@ -164,16 +161,27 @@ mod tests {
         let second = Ordinal::after(&first);
         assert!(second > first);
 
-        // Chain multiple
         let third = Ordinal::after(&second);
         assert!(third > second);
         assert!(third > first);
     }
 
     #[test]
+    fn test_ordinal_before() {
+        let first = Ordinal::first();
+        let before = Ordinal::before(&first);
+        assert!(
+            before < first,
+            "'{}' should be < '{}'",
+            before.as_str(),
+            first.as_str()
+        );
+    }
+
+    #[test]
     fn test_ordinal_between() {
-        let first = Ordinal::from("a0");
-        let third = Ordinal::from("a2");
+        let first = Ordinal::first();
+        let third = Ordinal::after(&Ordinal::after(&first));
 
         let second = Ordinal::between(&first, &third);
         assert!(second > first);
@@ -181,19 +189,96 @@ mod tests {
     }
 
     #[test]
+    fn test_ordinal_between_adjacent() {
+        let a = Ordinal::first();
+        let b = Ordinal::after(&a);
+        let mid = Ordinal::between(&a, &b);
+        assert!(mid > a, "'{}' should be > '{}'", mid.as_str(), a.as_str());
+        assert!(mid < b, "'{}' should be < '{}'", mid.as_str(), b.as_str());
+    }
+
+    #[test]
+    fn test_ordinal_repeated_before() {
+        // Repeatedly prepending should always produce smaller ordinals
+        let mut current = Ordinal::first();
+        for _ in 0..20 {
+            let prev = Ordinal::before(&current);
+            assert!(
+                prev < current,
+                "'{}' should be < '{}'",
+                prev.as_str(),
+                current.as_str()
+            );
+            current = prev;
+        }
+    }
+
+    #[test]
+    fn test_ordinal_repeated_after() {
+        // Repeatedly appending should always produce larger ordinals
+        let mut current = Ordinal::first();
+        for _ in 0..20 {
+            let next = Ordinal::after(&current);
+            assert!(
+                next > current,
+                "'{}' should be > '{}'",
+                next.as_str(),
+                current.as_str()
+            );
+            current = next;
+        }
+    }
+
+    #[test]
+    fn test_ordinal_repeated_between() {
+        // Repeatedly inserting between should always produce valid ordinals
+        let mut lo = Ordinal::first();
+        let hi = Ordinal::after(&Ordinal::after(&lo));
+        for _ in 0..20 {
+            let mid = Ordinal::between(&lo, &hi);
+            assert!(mid > lo, "'{}' should be > '{}'", mid.as_str(), lo.as_str());
+            assert!(mid < hi, "'{}' should be < '{}'", mid.as_str(), hi.as_str());
+            lo = mid;
+        }
+    }
+
+    #[test]
     fn test_ordinal_ordering() {
-        let a = Ordinal::from("a0");
-        let b = Ordinal::from("a1");
-        let c = Ordinal::from("b0");
+        let a = Ordinal::first();
+        let b = Ordinal::after(&a);
+        let c = Ordinal::after(&b);
 
         assert!(a < b);
         assert!(b < c);
         assert!(a < c);
     }
 
-    impl From<&str> for Ordinal {
-        fn from(s: &str) -> Self {
-            Self(s.to_string())
-        }
+    #[test]
+    fn test_ordinal_from_legacy_string() {
+        // Legacy ordinals like "a0" can't be parsed — should fall back to default
+        let ord = Ordinal::from_string("a0");
+        assert!(!ord.as_str().is_empty());
+    }
+
+    #[test]
+    fn test_fractional_index_string_format() {
+        // Check what format the crate uses
+        let a = Ordinal::first();
+        eprintln!("first: '{}'", a.as_str());
+        let b = Ordinal::after(&a);
+        eprintln!("after first: '{}'", b.as_str());
+        let c = Ordinal::after(&b);
+        eprintln!("after after: '{}'", c.as_str());
+        let before = Ordinal::before(&a);
+        eprintln!("before first: '{}'", before.as_str());
+
+        // Verify round-trip
+        let s = a.as_str().to_string();
+        let parsed = Ordinal::from_string(&s);
+        assert_eq!(
+            parsed.as_str(),
+            a.as_str(),
+            "round-trip should preserve ordinal"
+        );
     }
 }

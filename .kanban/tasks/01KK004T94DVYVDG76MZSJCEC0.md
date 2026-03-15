@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: p5
+position_ordinal: ffcb80
 title: 'End-to-end integration tests: command dispatch → state → events → UI'
 ---
 Final integration test suite that validates the full architecture works end-to-end. Primarily Rust tests that simulate full user sessions without a UI.

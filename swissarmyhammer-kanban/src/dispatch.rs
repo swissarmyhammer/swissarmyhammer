@@ -1,0 +1,468 @@
+//! Public dispatch for parsed kanban operations.
+//!
+//! Executes a `KanbanOperation` (from `parse::parse_input`) against a `KanbanContext`.
+//! This is the single source of truth for operation dispatch, used by both the MCP tool
+//! and the standalone kanban CLI.
+
+use crate::activity::ListActivity;
+use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
+use crate::attachment::{
+    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
+};
+use crate::board::{GetBoard, InitBoard, UpdateBoard};
+use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
+use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
+use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
+use crate::task::{
+    AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask,
+    UnassignTask, UntagTask, UpdateTask,
+};
+use crate::types::{ActorId, Noun, Operation as KanbanOperation, TaskId, Verb};
+use crate::{KanbanContext, KanbanError, KanbanOperationProcessor, OperationProcessor};
+use serde_json::Value;
+
+/// Helper: require a string param, returning KanbanError on missing.
+fn req<'a>(op: &'a KanbanOperation, key: &str) -> Result<&'a str, KanbanError> {
+    op.get_string(key)
+        .ok_or_else(|| KanbanError::parse(format!("missing required field: {}", key)))
+}
+
+/// Execute a parsed kanban operation against a context.
+///
+/// This is the central dispatch function that maps `(Verb, Noun)` pairs
+/// to concrete operation structs and executes them via the processor.
+pub async fn execute_operation(
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let processor = match &op.actor {
+        Some(actor) => KanbanOperationProcessor::with_actor(actor.to_string()),
+        None => KanbanOperationProcessor::new(),
+    };
+
+    match (op.verb, op.noun) {
+        // Board operations
+        (Verb::Init, Noun::Board) => {
+            let name = req(op, "name")?;
+            let mut cmd = InitBoard::new(name);
+            if let Some(desc) = op.get_string("description") {
+                cmd = cmd.with_description(desc);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Board) => {
+            let include_counts = op.get_bool("include_counts").unwrap_or(true);
+            processor.process(&GetBoard { include_counts }, ctx).await
+        }
+        (Verb::Update, Noun::Board) => {
+            let mut cmd = UpdateBoard::new();
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(desc) = op.get_string("description") {
+                cmd = cmd.with_description(desc);
+            }
+            processor.process(&cmd, ctx).await
+        }
+
+        // Column operations
+        (Verb::Add, Noun::Column) => {
+            let id = req(op, "id")?;
+            let name = req(op, "name")?;
+            let mut cmd = AddColumn::new(id, name);
+            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_order(order as usize);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Column) => {
+            let id = req(op, "id")?;
+            processor.process(&GetColumn::new(id), ctx).await
+        }
+        (Verb::Update, Noun::Column) => {
+            let id = req(op, "id")?;
+            let mut cmd = UpdateColumn::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_order(order as usize);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Column) => {
+            let id = req(op, "id")?;
+            processor.process(&DeleteColumn::new(id), ctx).await
+        }
+        (Verb::List, Noun::Columns) => processor.process(&ListColumns, ctx).await,
+
+        // Task operations
+        (Verb::Add, Noun::Task) => {
+            let title = req(op, "title")?;
+            let mut cmd = AddTask::new(title);
+            if let Some(desc) = op.get_string("description") {
+                cmd = cmd.with_description(desc);
+            }
+            if let Some(column) = op.get_string("column") {
+                cmd.column = Some(column.to_string());
+            }
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd.swimlane = Some(swimlane.to_string());
+            }
+            if let Some(ordinal) = op.get_string("ordinal") {
+                cmd.ordinal = Some(ordinal.to_string());
+            }
+
+            // Parse assignees
+            let explicit_assignees: Vec<ActorId> = op
+                .get_param("assignees")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(ActorId::from_string))
+                        .collect()
+                })
+                .or_else(|| {
+                    op.get_string("assignee")
+                        .map(|a| vec![ActorId::from_string(a)])
+                })
+                .unwrap_or_default();
+
+            let assignees = if explicit_assignees.is_empty() {
+                match &op.actor {
+                    Some(actor) => vec![actor.clone()],
+                    None => Vec::new(),
+                }
+            } else {
+                explicit_assignees
+            };
+
+            if !assignees.is_empty() {
+                cmd = cmd.with_assignees(assignees);
+            }
+
+            if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
+                let dep_ids: Vec<TaskId> = deps
+                    .iter()
+                    .filter_map(|v| v.as_str().map(TaskId::from_string))
+                    .collect();
+                if !dep_ids.is_empty() {
+                    cmd = cmd.with_depends_on(dep_ids);
+                }
+            }
+
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Task) => {
+            let id = req(op, "id")?;
+            processor.process(&GetTask::new(id), ctx).await
+        }
+        (Verb::Update, Noun::Task) => {
+            let id = req(op, "id")?;
+            let mut cmd = UpdateTask::new(id);
+            if let Some(title) = op.get_string("title") {
+                cmd = cmd.with_title(title);
+            }
+            if let Some(desc) = op.get_string("description") {
+                cmd = cmd.with_description(desc);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Move, Noun::Task) => {
+            let id = req(op, "id")?;
+            let column = req(op, "column")?;
+            let mut cmd = MoveTask::to_column(id, column);
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd.swimlane = Some(swimlane.into());
+            }
+            if let Some(ordinal) = op.get_string("ordinal") {
+                cmd.ordinal = Some(ordinal.to_string());
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Task) => {
+            let id = req(op, "id")?;
+            processor.process(&DeleteTask::new(id), ctx).await
+        }
+        (Verb::Complete, Noun::Task) => {
+            let id = req(op, "id")?;
+            processor.process(&CompleteTask::new(id), ctx).await
+        }
+        (Verb::Assign, Noun::Task) => {
+            let id = req(op, "id")?;
+            let assignee = req(op, "assignee")?;
+            processor.process(&AssignTask::new(id, assignee), ctx).await
+        }
+        (Verb::Unassign, Noun::Task) => {
+            let id = req(op, "id")?;
+            let assignee = req(op, "assignee")?;
+            processor
+                .process(&UnassignTask::new(id, assignee), ctx)
+                .await
+        }
+        (Verb::Next, Noun::Task) => {
+            let mut cmd = NextTask::new();
+            if let Some(tag) = op.get_string("tag") {
+                cmd = cmd.with_tag(tag);
+            }
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd = cmd.with_swimlane(swimlane);
+            }
+            if let Some(assignee) = op.get_string("assignee") {
+                cmd = cmd.with_assignee(assignee);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::List, Noun::Tasks) => {
+            let mut cmd = ListTasks::new();
+            if let Some(column) = op.get_string("column") {
+                cmd = cmd.with_column(column);
+            }
+            if let Some(tag) = op.get_string("tag") {
+                cmd = cmd.with_tag(tag);
+            }
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd = cmd.with_swimlane(swimlane);
+            }
+            if let Some(assignee) = op.get_string("assignee") {
+                cmd = cmd.with_assignee(assignee);
+            }
+            if let Some(ready) = op.get_param("ready").and_then(|v| v.as_bool()) {
+                cmd = cmd.with_ready(ready);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Tag, Noun::Task) => {
+            let id = req(op, "id")?;
+            let tag = req(op, "tag")?;
+            processor.process(&TagTask::new(id, tag), ctx).await
+        }
+        (Verb::Untag, Noun::Task) => {
+            let id = req(op, "id")?;
+            let tag = req(op, "tag")?;
+            processor.process(&UntagTask::new(id, tag), ctx).await
+        }
+
+        // Swimlane operations
+        (Verb::Add, Noun::Swimlane) => {
+            let id = req(op, "id")?;
+            let name = req(op, "name")?;
+            let mut cmd = AddSwimlane::new(id, name);
+            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_order(order as usize);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Swimlane) => {
+            let id = req(op, "id")?;
+            processor.process(&GetSwimlane::new(id), ctx).await
+        }
+        (Verb::Update, Noun::Swimlane) => {
+            let id = req(op, "id")?;
+            let mut cmd = UpdateSwimlane::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_order(order as usize);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Swimlane) => {
+            let id = req(op, "id")?;
+            processor.process(&DeleteSwimlane::new(id), ctx).await
+        }
+        (Verb::List, Noun::Swimlanes) => processor.process(&ListSwimlanes, ctx).await,
+
+        // Actor operations
+        (Verb::Add, Noun::Actor) => {
+            let id = req(op, "id")?;
+            let name = req(op, "name")?;
+            let ensure = op.get_bool("ensure").unwrap_or(false);
+            let mut cmd = AddActor::new(id, name);
+            if ensure {
+                cmd = cmd.with_ensure();
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Actor) => {
+            let id = req(op, "id")?;
+            processor.process(&GetActor::new(id), ctx).await
+        }
+        (Verb::Update, Noun::Actor) => {
+            let id = req(op, "id")?;
+            let mut cmd = UpdateActor::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Actor) => {
+            let id = req(op, "id")?;
+            processor.process(&DeleteActor::new(id), ctx).await
+        }
+        (Verb::List, Noun::Actors) => processor.process(&ListActors, ctx).await,
+
+        // Tag operations (board-level)
+        (Verb::Add, Noun::Tag) => {
+            let name = op
+                .get_string("name")
+                .or_else(|| op.get_string("id"))
+                .ok_or_else(|| KanbanError::parse("missing required field: name"))?;
+            let mut cmd = AddTag::new(name);
+            if let Some(color) = op.get_string("color") {
+                cmd = cmd.with_color(color);
+            }
+            if let Some(desc) = op.get_string("description") {
+                cmd = cmd.with_description(desc);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Tag) => {
+            let id = req(op, "id")?;
+            processor.process(&GetTag::new(id), ctx).await
+        }
+        (Verb::Update, Noun::Tag) => {
+            let id = req(op, "id")?;
+            let mut cmd = UpdateTag::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(color) = op.get_string("color") {
+                cmd = cmd.with_color(color);
+            }
+            if let Some(desc) = op.get_string("description") {
+                cmd = cmd.with_description(desc);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Tag) => {
+            let id = req(op, "id")?;
+            processor.process(&DeleteTag::new(id), ctx).await
+        }
+        (Verb::List, Noun::Tags) => processor.process(&ListTags::default(), ctx).await,
+
+        // Attachment operations
+        (Verb::Add, Noun::Attachment) => {
+            let task_id = req(op, "task_id")?;
+            let name = req(op, "name")?;
+            let path = req(op, "path")?;
+            processor
+                .process(&AddAttachment::new(task_id, name, path), ctx)
+                .await
+        }
+        (Verb::Get, Noun::Attachment) => {
+            let task_id = req(op, "task_id")?;
+            let id = req(op, "id")?;
+            processor
+                .process(&GetAttachment::new(task_id, id), ctx)
+                .await
+        }
+        (Verb::Update, Noun::Attachment) => {
+            let task_id = req(op, "task_id")?;
+            let id = req(op, "id")?;
+            let mut cmd = UpdateAttachment::new(task_id, id);
+            if let Some(name) = op.get_string("name") {
+                cmd.name = Some(name.to_string());
+            }
+            if let Some(mime) = op.get_string("mime_type") {
+                cmd.mime_type = Some(mime.to_string());
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Attachment) => {
+            let task_id = req(op, "task_id")?;
+            let id = req(op, "id")?;
+            processor
+                .process(&DeleteAttachment::new(task_id, id), ctx)
+                .await
+        }
+        (Verb::List, Noun::Attachments) => {
+            let task_id = req(op, "task_id")?;
+            processor.process(&ListAttachments::new(task_id), ctx).await
+        }
+
+        // Activity operations
+        (Verb::List, Noun::Activity) => {
+            let mut cmd = ListActivity::default();
+            if let Some(limit) = op.get_param("limit").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_limit(limit as usize);
+            }
+            processor.process(&cmd, ctx).await
+        }
+
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse::parse_input;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+        // Init a board first
+        let ops = parse_input(json!({"op": "init board", "name": "Test"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_board() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        let ops = parse_input(json!({"op": "init board", "name": "My Board"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "My Board");
+        assert!(result["columns"].is_array());
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_and_list_tasks() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task
+        let ops = parse_input(json!({"op": "add task", "title": "Fix bug"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "Fix bug");
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        // List tasks
+        let ops = parse_input(json!({"op": "list tasks", "column": "todo"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["id"], task_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_board() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "get board"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Test");
+    }
+
+    #[tokio::test]
+    async fn dispatch_unsupported_operation_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        let op = crate::types::Operation::new(
+            crate::types::Verb::Rename,
+            crate::types::Noun::Board,
+            serde_json::Map::new(),
+        );
+        let result = execute_operation(&ctx, &op).await;
+        assert!(result.is_err());
+    }
+}

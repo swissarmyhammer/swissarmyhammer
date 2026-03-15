@@ -226,9 +226,9 @@ dependencies = [
 
 [[package]]
 name = "anstyle"
-version = "1.0.13"
+version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5192cca8006f1fd4f7237516f40fa183bb07f8fbdfedaa0036de5ea9b0b45e78"
+checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
 name = "anstyle-parse"
@@ -932,9 +932,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.56"
+version = "1.2.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aebf35691d1bfb0ac386a69bac2fde4dd276fb618cf8bf4f5318fe285e821bb2"
+checksum = "7a0dd1ca384932ff3641c8718a02769f1698e7563dc6974ffd03346116310423"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1194,9 +1194,9 @@ dependencies = [
 
 [[package]]
 name = "colorchoice"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
+checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "colored"
@@ -1638,16 +1638,6 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cdf337090841a411e2a7f3deb9187445851f91b309c0c0a29e05f74a00a48c0"
-dependencies = [
- "darling_core 0.21.3",
- "darling_macro 0.21.3",
-]
-
-[[package]]
-name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
@@ -1661,20 +1651,6 @@ name = "darling_core"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
-dependencies = [
- "fnv",
- "ident_case",
- "proc-macro2",
- "quote",
- "strsim",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "darling_core"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1247195ecd7e3c85f83c8d2a366e4210d588e802133e1e355180a9870b517ea4"
 dependencies = [
  "fnv",
  "ident_case",
@@ -1704,17 +1680,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
 dependencies = [
  "darling_core 0.20.11",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "darling_macro"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38308df82d1080de0afee5d069fa14b0326a88c14f15c5ccda35b4a6c414c81"
-dependencies = [
- "darling_core 0.21.3",
  "quote",
  "syn 2.0.117",
 ]
@@ -2430,6 +2395,15 @@ checksum = "0f158e3ff0a1b334408dc9fb811cd99b446986f4d8b741bb08f9df1604085ae7"
 dependencies = [
  "lazy_static",
  "num",
+]
+
+[[package]]
+name = "fractional_index"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce01fad85c73f947e62a39152c7b0f785af7f44859da36e421c42a3023bcbe3a"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -3910,10 +3884,13 @@ dependencies = [
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-directory",
+ "swissarmyhammer-entity",
+ "swissarmyhammer-entity-search",
  "swissarmyhammer-kanban",
  "swissarmyhammer-views",
  "tauri",
  "tauri-build",
+ "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
  "tauri-plugin-window-state",
  "tempfile",
@@ -3923,7 +3900,26 @@ dependencies = [
  "tracing-log",
  "tracing-oslog",
  "tracing-subscriber",
+ "urlencoding",
  "whoami",
+]
+
+[[package]]
+name = "kanban-cli"
+version = "0.9.2"
+dependencies = [
+ "clap",
+ "is-terminal",
+ "once_cell",
+ "open",
+ "serde_json",
+ "swissarmyhammer-kanban",
+ "swissarmyhammer-operations",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
 ]
 
 [[package]]
@@ -4674,6 +4670,7 @@ dependencies = [
  "async-trait",
  "md5",
  "serde",
+ "simsimd",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -7243,9 +7240,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.17.0"
+version = "3.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "381b283ce7bc6b476d903296fb59d0d36633652b633b27f64db4fb46dcbfc3b9"
+checksum = "dd5414fad8e6907dbdd5bc441a50ae8d6e26151a03b1de04d89a5576de61d01f"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7262,11 +7259,11 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.17.0"
+version = "3.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6d4e30573c8cb306ed6ab1dca8423eec9a463ea0e155f45399455e0368b27e0"
+checksum = "d3db8978e608f1fe7357e211969fd9abdcae80bac1ba7a3369bb7eb6b404eb65"
 dependencies = [
- "darling 0.21.3",
+ "darling 0.23.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -7884,6 +7881,7 @@ dependencies = [
  "fuzzy-matcher",
  "ignore",
  "lsp-types",
+ "model-embedding",
  "rayon",
  "regex",
  "rusqlite",
@@ -8028,6 +8026,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-entity-search"
+version = "0.9.2"
+dependencies = [
+ "fuzzy-matcher",
+ "model-embedding",
+ "serde_json",
+ "swissarmyhammer-entity",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-fields"
 version = "0.9.2"
 dependencies = [
@@ -8086,6 +8097,7 @@ version = "0.9.2"
 dependencies = [
  "async-trait",
  "chrono",
+ "fractional_index",
  "fs2",
  "include_dir",
  "serde",
@@ -8376,6 +8388,7 @@ dependencies = [
  "libc",
  "llama-agent",
  "md5",
+ "model-embedding",
  "notify 6.1.1",
  "once_cell",
  "owo-colors",
@@ -8430,13 +8443,13 @@ dependencies = [
  "async-watcher",
  "ignore",
  "md5",
+ "model-embedding",
  "notify 6.1.1",
  "once_cell",
  "rusqlite",
  "serde",
  "serde_json",
  "serial_test",
- "simsimd",
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-embedding",
@@ -9647,9 +9660,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.26.6"
+version = "0.26.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13f456d2108c3fef07342ba4689a8503ec1fb5beed245e2b9be93096ef394848"
+checksum = "e7a6592b1aec0109df37b6bafea77eb4e61466e37b0a5a98bef4f89bfb81b7a2"
 dependencies = [
  "cc",
  "regex",

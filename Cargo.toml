@@ -53,8 +53,10 @@ members = [
     "mirdan-cli",
     "mirdan-app",
     "kanban-app",
+    "kanban-cli",
     "swissarmyhammer-fields",
     "swissarmyhammer-entity",
+    "swissarmyhammer-entity-search",
     "swissarmyhammer-views",
     "swissarmyhammer-commands",
     "benches/embedding_benchmark",
@@ -280,6 +282,11 @@ rstest = "0.26.1"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
+
+[build]
+rustflags = ["-Z", "threads=8"]
+rustc-wrapper = "sccache"
+
 
 # Profile for faster test compilation
 [profile.test]

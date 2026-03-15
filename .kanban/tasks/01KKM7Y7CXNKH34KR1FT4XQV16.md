@@ -6,7 +6,7 @@ depends_on:
 - 01KKM7XB6QMFC920836DCB8DNV
 - 01KKM7XTJKT3FPEXC9SNMNVF9Y
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffd080
 title: 'Final sweep: grep-clean all .swissarmyhammer references'
 ---
 ## What

@@ -671,6 +671,7 @@ type:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -698,6 +699,7 @@ type:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -723,6 +725,7 @@ type:
                 validate: None,
                 mention_prefix: None,
                 mention_display_field: None,
+                search_display_field: None,
             })
             .await
             .unwrap();

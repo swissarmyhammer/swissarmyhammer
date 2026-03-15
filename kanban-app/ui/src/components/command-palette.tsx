@@ -4,17 +4,31 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
+import { invoke } from "@tauri-apps/api/core";
 import { useAvailableCommands, collectAvailableCommands, dispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap } from "@/lib/keymap-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
+import { useInspectOptional } from "@/lib/inspect-context";
+import { moniker } from "@/lib/moniker";
+import { FocusScope } from "@/components/focus-scope";
+
+/** Result shape returned by the backend `search_entities` command. */
+interface SearchResult {
+  entity_type: string;
+  entity_id: string;
+  display_name: string;
+  score: number;
+}
 
 interface CommandPaletteProps {
   /** Whether the palette is currently visible. */
   open: boolean;
   /** Called to dismiss the palette. */
   onClose: () => void;
+  /** Palette mode: "command" (default) filters commands; "search" calls backend search. */
+  mode?: "command" | "search";
 }
 
 /**
@@ -29,10 +43,16 @@ interface CommandPaletteProps {
  * Navigation: Arrow keys or j/k to move selection, Enter to execute, Escape
  * to close. In vim mode, Escape in insert mode returns to normal mode;
  * Escape in normal mode closes the palette.
+ *
+ * In "search" mode, the backend `search_entities` command is invoked with
+ * the debounced query. Each result is wrapped in a FocusScope so entity.inspect
+ * commands are available. Selecting a result opens the entity inspector.
  */
-export function CommandPalette({ open, onClose }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, mode: paletteMode = "command" }: CommandPaletteProps) {
   const [filter, setFilter] = useState("");
+  const [debouncedFilter, setDebouncedFilter] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
@@ -46,13 +66,53 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     [focusedScope, rootCommands],
   );
 
+  // Inspect hook for search mode (only used in search mode)
+  const inspectEntity = useInspectOptional();
+
   // Reset state when palette opens
   useEffect(() => {
     if (open) {
       setFilter("");
+      setDebouncedFilter("");
       setSelectedIndex(0);
+      setSearchResults([]);
     }
   }, [open]);
+
+  // 150ms debounce on filter for search mode
+  useEffect(() => {
+    if (paletteMode !== "search") {
+      setDebouncedFilter(filter);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setDebouncedFilter(filter);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [filter, paletteMode]);
+
+  // Call backend search_entities when debouncedFilter changes (search mode only)
+  useEffect(() => {
+    if (paletteMode !== "search") return;
+    if (!debouncedFilter.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    let cancelled = false;
+    invoke<SearchResult[]>("search_entities", { query: debouncedFilter, limit: 50 })
+      .then((results) => {
+        if (!cancelled) {
+          setSearchResults(results);
+        }
+      })
+      .catch((err) => {
+        console.error("search_entities error:", err);
+        if (!cancelled) {
+          setSearchResults([]);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [paletteMode, debouncedFilter]);
 
   // Auto-enter insert mode in vim when the palette opens.
   // Retries until getCM() returns a value — the vim extension may take
@@ -80,8 +140,9 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     return () => { cancelled = true; };
   }, [open, mode]);
 
-  // Filter and sort commands by fuzzy match score
-  const filtered = useMemo(() => {
+  // Filter and sort commands by fuzzy match score (command mode)
+  const filteredCommands = useMemo(() => {
+    if (paletteMode !== "command") return [];
     if (filter.length === 0) {
       return allCommands;
     }
@@ -94,21 +155,36 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
     scored.sort((a, b) => a.score - b.score);
     return scored.map((s) => s.entry);
-  }, [filter, allCommands]);
+  }, [filter, allCommands, paletteMode]);
+
+  // Combined length for selection clamping
+  const filteredLength = paletteMode === "search" ? searchResults.length : filteredCommands.length;
 
   // Clamp selection when filtered list changes
   useEffect(() => {
-    setSelectedIndex((prev) => Math.min(prev, Math.max(0, filtered.length - 1)));
-  }, [filtered]);
+    setSelectedIndex((prev) => Math.min(prev, Math.max(0, filteredLength - 1)));
+  }, [filteredLength]);
 
-  // Execute the selected command
-  const executeSelected = useCallback(() => {
-    const entry = filtered[selectedIndex];
+  // Execute the selected command (command mode)
+  const executeSelectedCommand = useCallback(() => {
+    const entry = filteredCommands[selectedIndex];
     if (entry) {
       onClose();
       dispatchCommand(entry.command);
     }
-  }, [filtered, selectedIndex, onClose]);
+  }, [filteredCommands, selectedIndex, onClose]);
+
+  // Execute the selected entity result (search mode)
+  const executeSelectedResult = useCallback(() => {
+    const result = searchResults[selectedIndex];
+    if (result && inspectEntity) {
+      const entityMoniker = moniker(result.entity_type, result.entity_id);
+      onClose();
+      inspectEntity(entityMoniker);
+    }
+  }, [searchResults, selectedIndex, onClose, inspectEntity]);
+
+  const executeSelected = paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
 
   // Ref so CM6 extensions always see the latest closures
   const executeSelectedRef = useRef(executeSelected);
@@ -120,10 +196,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const moveSelection = useCallback(
     (delta: number) => {
       setSelectedIndex((prev) =>
-        Math.max(0, Math.min(filtered.length - 1, prev + delta))
+        Math.max(0, Math.min(filteredLength - 1, prev + delta))
       );
     },
-    [filtered.length]
+    [filteredLength]
   );
   const moveSelectionRef = useRef(moveSelection);
   moveSelectionRef.current = moveSelection;
@@ -250,52 +326,146 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             extensions={extensions}
             theme={shadcnTheme}
             basicSetup={false}
-            placeholder="Type a command..."
+            placeholder={paletteMode === "search" ? "Type to search..." : "Type a command..."}
             className="text-sm"
           />
         </div>
 
-        {/* Command list */}
+        {/* Results list */}
         <div
           ref={listRef}
           data-testid="command-palette-list"
           className="max-h-64 overflow-y-auto py-1"
           role="listbox"
         >
-          {filtered.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-muted-foreground">
-              No matching commands
-            </div>
+          {paletteMode === "search" ? (
+            <SearchResults
+              results={searchResults}
+              selectedIndex={selectedIndex}
+              hasQuery={debouncedFilter.length > 0}
+              onClose={onClose}
+              onHoverIndex={setSelectedIndex}
+              inspectEntity={inspectEntity}
+            />
           ) : (
-            filtered.map((entry, index) => {
-              const hint = keyHint(entry);
-              return (
-                <div
-                  key={entry.command.id + ":" + (entry.command.target ?? "")}
-                  role="option"
-                  aria-selected={index === selectedIndex}
-                  data-testid={`command-item-${entry.command.id}`}
-                  className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
-                    ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-                  onClick={() => {
-                    onClose();
-                    dispatchCommand(entry.command);
-                  }}
-                  onMouseEnter={() => setSelectedIndex(index)}
-                >
-                  <span>{entry.command.name}</span>
-                  {hint && (
-                    <kbd className="ml-4 shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
-                      {hint}
-                    </kbd>
-                  )}
-                </div>
-              );
-            })
+            filteredCommands.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-muted-foreground">
+                No matching commands
+              </div>
+            ) : (
+              filteredCommands.map((entry, index) => {
+                const hint = keyHint(entry);
+                return (
+                  <div
+                    key={entry.command.id + ":" + (entry.command.target ?? "")}
+                    role="option"
+                    aria-selected={index === selectedIndex}
+                    data-testid={`command-item-${entry.command.id}`}
+                    className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
+                      ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+                    onClick={() => {
+                      onClose();
+                      dispatchCommand(entry.command);
+                    }}
+                    onMouseEnter={() => setSelectedIndex(index)}
+                  >
+                    <span>{entry.command.name}</span>
+                    {hint && (
+                      <kbd className="ml-4 shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+                        {hint}
+                      </kbd>
+                    )}
+                  </div>
+                );
+              })
+            )
           )}
         </div>
       </div>
     </div>,
     document.body
+  );
+}
+
+/** Renders search results in search mode. Extracted to keep CommandPalette readable. */
+function SearchResults({
+  results,
+  selectedIndex,
+  hasQuery,
+  onClose,
+  onHoverIndex,
+  inspectEntity,
+}: {
+  results: SearchResult[];
+  selectedIndex: number;
+  hasQuery: boolean;
+  onClose: () => void;
+  onHoverIndex: (index: number) => void;
+  inspectEntity: ((moniker: string) => void) | null;
+}) {
+  if (!hasQuery) {
+    return (
+      <div className="px-3 py-2 text-sm text-muted-foreground">
+        Type to search...
+      </div>
+    );
+  }
+
+  if (results.length === 0) {
+    return (
+      <div className="px-3 py-2 text-sm text-muted-foreground">
+        No matching entities
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {results.map((result, index) => {
+        const entityMoniker = moniker(result.entity_type, result.entity_id);
+        const typeLabel = result.entity_type.charAt(0).toUpperCase() + result.entity_type.slice(1);
+
+        const commands = [
+          {
+            id: "entity.inspect",
+            name: `Inspect ${result.entity_type}`,
+            target: entityMoniker,
+            contextMenu: true,
+            execute: () => {
+              if (inspectEntity) {
+                onClose();
+                inspectEntity(entityMoniker);
+              }
+            },
+          },
+        ];
+
+        return (
+          <FocusScope
+            key={entityMoniker}
+            moniker={entityMoniker}
+            commands={commands}
+          >
+            <div
+              role="option"
+              aria-selected={index === selectedIndex}
+              data-testid={`search-result-${entityMoniker}`}
+              className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
+                ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+              onClick={() => {
+                if (inspectEntity) {
+                  onClose();
+                  inspectEntity(entityMoniker);
+                }
+              }}
+              onMouseEnter={() => onHoverIndex(index)}
+            >
+              <span className="shrink-0 text-xs text-muted-foreground">{typeLabel}</span>
+              <span className="min-w-0 truncate">{result.display_name}</span>
+            </div>
+          </FocusScope>
+        );
+      })}
+    </>
   );
 }

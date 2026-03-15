@@ -1,0 +1,29 @@
+[package]
+name = "kanban-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Standalone CLI for SwissArmyHammer Kanban board"
+
+[[bin]]
+name = "kanban"
+path = "src/main.rs"
+
+[dependencies]
+swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
+swissarmyhammer-operations = { workspace = true }
+
+clap = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+urlencoding = { workspace = true }
+open = "5"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+is-terminal = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

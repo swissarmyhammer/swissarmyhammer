@@ -68,6 +68,44 @@ pub struct FieldChange {
     pub value: serde_json::Value,
 }
 
+/// Apply a single `WatchEvent` to an `EntitySearchIndex`.
+///
+/// Reconstructs an `Entity` from the event fields and calls `update` or
+/// `remove` on the index. Used from both the file-watcher callback and the
+/// `dispatch_command` post-write path to avoid duplicated sync logic.
+pub fn sync_search_index(
+    idx: &mut swissarmyhammer_entity_search::EntitySearchIndex,
+    evt: &WatchEvent,
+) {
+    match evt {
+        WatchEvent::EntityCreated {
+            entity_type,
+            id,
+            fields,
+        } => {
+            let mut entity = swissarmyhammer_entity::Entity::new(entity_type.as_str(), id.as_str());
+            for (k, v) in fields {
+                entity.set(k, v.clone());
+            }
+            idx.update(entity);
+        }
+        WatchEvent::EntityFieldChanged {
+            entity_type,
+            id,
+            fields,
+            ..
+        } => {
+            if let Some(fields) = fields {
+                // Merge into existing entity to preserve fields not in this event
+                idx.merge_fields(entity_type, id, fields);
+            }
+        }
+        WatchEvent::EntityRemoved { id, .. } => {
+            idx.remove(id);
+        }
+    }
+}
+
 /// Handle to a running file watcher. Dropping this stops the watcher.
 pub struct BoardWatcher {
     _watcher: RecommendedWatcher,

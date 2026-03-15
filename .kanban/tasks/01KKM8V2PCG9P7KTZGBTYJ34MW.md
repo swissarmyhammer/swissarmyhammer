@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffc780
 title: Verify no .swissarmyhammer directory references remain and run tests
 ---
 Run cargo nextest run -p swissarmyhammer-common and -p swissarmyhammer-config, then verify grep shows no remaining references

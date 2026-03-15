@@ -16,30 +16,17 @@ import { getStr } from "@/types/kanban";
 
 interface ColumnViewProps {
   column: Entity;
+  /** Tasks for this column, pre-sorted by the backend. */
   tasks: Entity[];
-  blockedIds: Set<string>;
   onAddTask?: (columnId: string) => void;
   onRenameColumn?: (columnId: string, name: string) => void;
-  presorted?: boolean;
 }
 
-export function ColumnView({ column, tasks, blockedIds, onAddTask, onRenameColumn, presorted }: ColumnViewProps) {
+export function ColumnView({ column, tasks, onAddTask, onRenameColumn }: ColumnViewProps) {
   const inspectEntity = useInspect();
   const columnMoniker = moniker("column", column.id);
 
-  const sorted = useMemo(
-    () =>
-      presorted
-        ? tasks
-        : [...tasks].sort((a, b) =>
-            getStr(a, "position_ordinal", "a0").localeCompare(
-              getStr(b, "position_ordinal", "a0")
-            )
-          ),
-    [tasks, presorted]
-  );
-
-  const taskIds = useMemo(() => sorted.map((e) => e.id), [sorted]);
+  const taskIds = useMemo(() => tasks.map((e) => e.id), [tasks]);
   const { setNodeRef } = useDroppable({ id: `drop:${column.id}` });
 
   const commands = useMemo(() => [
@@ -77,17 +64,17 @@ export function ColumnView({ column, tasks, blockedIds, onAddTask, onRenameColum
         </div>
         <div ref={setNodeRef} className="flex-1 overflow-y-auto px-2 pt-1 pb-2 space-y-1.5">
           <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
-            {sorted.length === 0 ? (
+            {tasks.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground opacity-40">
                 <Inbox className="h-8 w-8 mb-2" />
                 <p className="text-xs">No tasks</p>
               </div>
             ) : (
-              sorted.map((entity) => (
+              tasks.map((entity) => (
                 <SortableEntityCard
                   key={entity.id}
                   entity={entity}
-                  isBlocked={blockedIds.has(entity.id)}
+                  isBlocked={entity.fields.ready === false}
                 />
               ))
             )}

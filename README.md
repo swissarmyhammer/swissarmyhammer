@@ -73,9 +73,10 @@ Either way, once the plan is on the board:
 
 ```
 > /implement                     # Do one kanban card at a time, with context-aware code editing and testing
-> /implement-all                 # RalphLoop those kanban cards. Go for a walk with your 🦮.
+> /implement-loop                # RalphLoop those kanban cards. Go for a walk with your 🦮.
+> /test                          # Run tests, report failures as cards
+> /test-loop                     # RalphLoop test→fix→test until green
 > /review                        # Code review -- findings become new cards
-> /test                          # Run tests, fix failures
 > /commit                        # Clean conventional commit
 ```
 
@@ -98,7 +99,7 @@ Every stage of the software development lifecycle gets the same treatment: a **t
 |-------|-------------|---------|
 | **Plan** | Read your spec, explore the codebase, create a kanban board with ordered tasks | `/plan` |
 | **Implement** | Pick up tasks one-by-one, write code, run tests, mark complete | `/implement` |
-| **Test** | Run the full suite, analyze failures, fix them | `/test` |
+| **Test** | Run the full suite, report failures as kanban cards | `/test` |
 | **Coverage** | Find untested code, create cards for the gaps | `/coverage` |
 | **Review** | Structured code review -- findings become kanban cards | `/review` |
 | **Commit** | Stage changes, write a conventional commit message | `/commit` |

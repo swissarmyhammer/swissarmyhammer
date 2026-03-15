@@ -3,6 +3,7 @@
 
 mod cli;
 mod commands;
+mod deeplink;
 mod menu;
 mod state;
 mod tauri_reporter;
@@ -44,6 +45,7 @@ fn main() {
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());
     tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -70,6 +72,7 @@ fn main() {
             commands::list_entities,
             commands::get_entity,
             commands::search_mentions,
+            commands::search_entities,
             commands::get_board_data,
             commands::quit_app,
             commands::reset_windows,
@@ -83,6 +86,23 @@ fn main() {
             // send the full manifest via rebuild_menu_from_manifest once loaded.
             let config = crate::state::AppConfig::load();
             let _ = menu::build_menu_from_manifest(app.handle(), &[], &config.recent_boards);
+
+            // Handle deep-link URLs at cold start
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    for url in urls {
+                        deeplink::handle_url(app.handle(), url.to_string());
+                    }
+                }
+
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        deeplink::handle_url(&handle, url.to_string());
+                    }
+                });
+            }
 
             // Start file watchers for boards opened during auto_open_board
             // (which ran before Tauri was ready, so didn't have an AppHandle).

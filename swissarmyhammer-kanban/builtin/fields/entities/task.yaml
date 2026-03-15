@@ -1,11 +1,11 @@
 name: task
 body_field: body
+search_display_field: title
 fields:
   - title
   - tags
   - progress
   - assignees
-  - due
   - depends_on
   - body
   - position_column

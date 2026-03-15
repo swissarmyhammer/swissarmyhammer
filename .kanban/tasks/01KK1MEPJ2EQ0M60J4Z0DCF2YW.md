@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: m5
+position_ordinal: ffad80
 title: Wire new commands into main.rs
 ---

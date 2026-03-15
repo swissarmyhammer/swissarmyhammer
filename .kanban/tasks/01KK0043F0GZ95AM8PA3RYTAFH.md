@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: p4
+position_ordinal: ffca80
 title: Delete old command infrastructure and dead React state code
 ---
 Clean cut removal of all superseded code once the new system is working.

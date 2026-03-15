@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: s8
+position_ordinal: ffec80
 title: 'Shared display components: deduplicate grid CellDispatch and inspector FieldDispatch'
 ---
 The problem: The grid view's CellDispatch and the inspector's FieldDispatch both render the same field display types but with separate, duplicated components. Both should dispatch on `field.display` and call the same underlying display components.

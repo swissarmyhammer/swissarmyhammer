@@ -8,6 +8,8 @@ use std::sync::Arc;
 use swissarmyhammer_commands::{
     builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
 };
+use swissarmyhammer_entity::Entity;
+use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor};
 use tokio::sync::RwLock;
 
@@ -26,6 +28,8 @@ pub struct BoardHandle {
     pub processor: KanbanOperationProcessor,
     /// Entity cache for detecting external file changes with field-level diffing.
     pub entity_cache: EntityCache,
+    /// In-memory search index over all entities.
+    pub search_index: Arc<RwLock<EntitySearchIndex>>,
     /// File watcher — dropped when the handle is dropped.
     _watcher: Option<BoardWatcher>,
 }
@@ -40,10 +44,69 @@ impl BoardHandle {
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
         let entity_cache = watcher::new_entity_cache(&kanban_path);
+
+        // Migrate legacy ordinals to FractionalIndex format.
+        // Reads all tasks, groups by column, sorts by existing ordinal string,
+        // then assigns new FractionalIndex ordinals preserving that order.
+        if let Ok(ectx) = ctx.entity_context().await {
+            use std::collections::HashMap;
+            use swissarmyhammer_kanban::types::Ordinal;
+
+            if let Ok(tasks) = ectx.list("task").await {
+                // Check if any task has a legacy (non-FractionalIndex) ordinal
+                let needs_migration = tasks.iter().any(|t| {
+                    let ord = t.get_str("position_ordinal").unwrap_or("");
+                    !ord.is_empty() && !Ordinal::is_valid(ord)
+                });
+
+                if needs_migration {
+                    tracing::info!("migrating legacy ordinals to fractional index format");
+
+                    // Group by column, sort by existing ordinal string
+                    let mut by_column: HashMap<String, Vec<Entity>> = HashMap::new();
+                    for t in tasks {
+                        let col = t.get_str("position_column").unwrap_or("todo").to_string();
+                        by_column.entry(col).or_default().push(t);
+                    }
+
+                    for tasks in by_column.values_mut() {
+                        tasks.sort_by(|a, b| {
+                            let oa = a.get_str("position_ordinal").unwrap_or("");
+                            let ob = b.get_str("position_ordinal").unwrap_or("");
+                            oa.cmp(ob)
+                        });
+
+                        // Assign new ordinals: first(), after(first), after(after(first)), ...
+                        let mut ord = Ordinal::first();
+                        for task in tasks.iter_mut() {
+                            task.set("position_ordinal", serde_json::json!(ord.as_str()));
+                            if let Err(e) = ectx.write(task).await {
+                                tracing::warn!(id = %task.id, error = %e, "failed to migrate ordinal");
+                            }
+                            ord = Ordinal::after(&ord);
+                        }
+                    }
+                    tracing::info!("ordinal migration complete");
+                }
+            }
+        }
+
+        // Load all entities into search index
+        let mut all_entities: Vec<Entity> = Vec::new();
+        if let Ok(ectx) = ctx.entity_context().await {
+            for entity_type in &["task", "tag", "column", "actor", "swimlane", "board"] {
+                if let Ok(entities) = ectx.list(entity_type).await {
+                    all_entities.extend(entities);
+                }
+            }
+        }
+        let search_index = Arc::new(RwLock::new(EntitySearchIndex::from_entities(all_entities)));
+
         Ok(Self {
             ctx: Arc::new(ctx),
             processor: KanbanOperationProcessor::new(),
             entity_cache,
+            search_index,
             _watcher: None,
         })
     }
@@ -86,9 +149,16 @@ impl BoardHandle {
     pub fn start_watcher(&mut self, app_handle: tauri::AppHandle) {
         let kanban_root = self.ctx.root().to_path_buf();
         let cache = self.entity_cache.clone();
+        let search_index = self.search_index.clone();
 
         match watcher::start_watching(kanban_root.clone(), cache, move |evt| {
             use tauri::Emitter;
+            // Update search index for external file changes.
+            // Use try_write to avoid blocking the notify thread if the async
+            // dispatch_command path holds the write lock concurrently.
+            if let Ok(mut idx) = search_index.try_write() {
+                watcher::sync_search_index(&mut idx, &evt);
+            }
             let event_name = match &evt {
                 watcher::WatchEvent::EntityCreated { .. } => "entity-created",
                 watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",

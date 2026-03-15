@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: f9
+position_ordinal: ec80
 title: 'Card 8: Convert TagInspector and TagPill to Entity'
 ---
 Tags use entity.fields['tag_name'], entity.fields['color'], etc. Note: tag entity stores name as tag_name, not name.

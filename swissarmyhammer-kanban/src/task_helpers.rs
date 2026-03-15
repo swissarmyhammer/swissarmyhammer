@@ -71,6 +71,31 @@ pub fn compute_ordinal_for_drop(tasks: &[Entity], drop_index: usize) -> Ordinal 
     Ordinal::between(&prev, &next)
 }
 
+/// Compute an ordinal for a task being inserted between two known neighbor ordinals.
+///
+/// - `before` — ordinal of the task that will be immediately above (lower ordinal).
+/// - `after`  — ordinal of the task that will be immediately below (higher ordinal).
+///
+/// Any combination of `None` values is handled:
+/// - Both `None`: returns `Ordinal::first()`
+/// - Only `after` given (inserting at top): returns an ordinal before `after`
+/// - Only `before` given (appending at bottom): returns `Ordinal::after(before)`
+/// - Both given: returns `Ordinal::between(before, after)`
+///
+/// Compute an ordinal for a task given its neighbors.
+///
+/// Uses the `fractional_index` crate (via `Ordinal`) for correct
+/// fractional key generation. Only ONE ordinal is ever computed —
+/// no other entities are modified.
+pub fn compute_ordinal_for_neighbors(before: Option<&Ordinal>, after: Option<&Ordinal>) -> Ordinal {
+    match (before, after) {
+        (None, None) => Ordinal::first(),
+        (None, Some(after_ord)) => Ordinal::before(after_ord),
+        (Some(before_ord), None) => Ordinal::after(before_ord),
+        (Some(before_ord), Some(after_ord)) => Ordinal::between(before_ord, after_ord),
+    }
+}
+
 /// Read tag names from the entity's pre-computed `tags` field.
 ///
 /// Tags are derived by `ComputeEngine` (parse-body-tags) on read.
@@ -332,7 +357,22 @@ mod tests {
         e.set("title", json!(title));
         e.set("body", json!(body));
         e.set("position_column", json!(column));
-        e.set("position_ordinal", json!("a0"));
+        e.set("position_ordinal", json!(Ordinal::first().as_str()));
+        e
+    }
+
+    /// Make a task with a specific ordinal index (0, 1, 2, ...).
+    /// Generates distinct ordinals using Ordinal::after chain.
+    fn make_task_at(id: &str, title: &str, column: &str, ordinal_idx: usize) -> Entity {
+        let mut ord = Ordinal::first();
+        for _ in 0..ordinal_idx {
+            ord = Ordinal::after(&ord);
+        }
+        let mut e = Entity::new("task", id);
+        e.set("title", json!(title));
+        e.set("body", json!(""));
+        e.set("position_column", json!(column));
+        e.set("position_ordinal", json!(ord.as_str()));
         e
     }
 
@@ -478,7 +518,9 @@ mod tests {
             0,
         );
         e.set("position_swimlane", json!("feature"));
-        e.set("position_ordinal", json!("a1"));
+        let ordinal = Ordinal::after(&Ordinal::first());
+        let ordinal_str = ordinal.as_str().to_string();
+        e.set("position_ordinal", json!(ordinal_str));
         e.set("assignees", json!(["alice"]));
 
         let result = task_entity_to_json(&e);
@@ -487,7 +529,7 @@ mod tests {
         assert_eq!(result["description"], "Some #bug description");
         assert_eq!(result["position"]["column"], "todo");
         assert_eq!(result["position"]["swimlane"], "feature");
-        assert_eq!(result["position"]["ordinal"], "a1");
+        assert_eq!(result["position"]["ordinal"], ordinal_str);
         assert!(result["tags"].as_array().unwrap().contains(&json!("bug")));
         assert_eq!(result["assignees"], json!(["alice"]));
     }
@@ -584,9 +626,9 @@ mod tests {
     // compute_ordinal_for_drop tests
     // =========================================================================
 
-    fn make_ordinal_task(id: &str, ordinal: &str) -> Entity {
+    fn make_ordinal_task(id: &str, ordinal: &Ordinal) -> Entity {
         let mut e = Entity::new("task", id);
-        e.set("position_ordinal", json!(ordinal));
+        e.set("position_ordinal", json!(ordinal.as_str()));
         e.set("position_column", json!("todo"));
         e
     }
@@ -594,62 +636,249 @@ mod tests {
     #[test]
     fn test_compute_ordinal_empty_list() {
         let ordinal = compute_ordinal_for_drop(&[], 0);
-        assert_eq!(ordinal.as_str(), "a0");
+        // Should return Ordinal::first() — compare against a freshly generated first
+        assert_eq!(ordinal.as_str(), Ordinal::first().as_str());
     }
 
     #[test]
     fn test_compute_ordinal_append_at_end() {
-        let tasks = vec![make_ordinal_task("t1", "a0"), make_ordinal_task("t2", "a1")];
+        let ord0 = Ordinal::first();
+        let ord1 = Ordinal::after(&ord0);
+        let tasks = vec![
+            make_ordinal_task("t1", &ord0),
+            make_ordinal_task("t2", &ord1),
+        ];
         let ordinal = compute_ordinal_for_drop(&tasks, 2);
         assert!(
-            ordinal.as_str() > "a1",
-            "appended ordinal should be after last"
+            ordinal > ord1,
+            "appended ordinal '{}' should be after last '{}'",
+            ordinal.as_str(),
+            ord1.as_str()
         );
     }
 
     #[test]
     fn test_compute_ordinal_insert_at_beginning() {
-        let tasks = vec![make_ordinal_task("t1", "b0"), make_ordinal_task("t2", "c0")];
+        // Start from a couple steps above the minimum so there's room to prepend
+        let base = Ordinal::after(&Ordinal::after(&Ordinal::after(&Ordinal::first())));
+        let ord0 = base;
+        let ord1 = Ordinal::after(&ord0);
+        let tasks = vec![
+            make_ordinal_task("t1", &ord0),
+            make_ordinal_task("t2", &ord1),
+        ];
         let ordinal = compute_ordinal_for_drop(&tasks, 0);
         assert!(
-            ordinal.as_str() < "b0",
-            "prepended ordinal should be before first"
+            ordinal < ord0,
+            "prepended ordinal '{}' should be before first '{}'",
+            ordinal.as_str(),
+            ord0.as_str()
         );
     }
 
     #[test]
     fn test_compute_ordinal_insert_between() {
-        let tasks = vec![make_ordinal_task("t1", "a0"), make_ordinal_task("t2", "c0")];
+        let ord0 = Ordinal::first();
+        let ord1 = Ordinal::after(&ord0);
+        let ord2 = Ordinal::after(&ord1);
+        let tasks = vec![
+            make_ordinal_task("t1", &ord0),
+            make_ordinal_task("t2", &ord2),
+        ];
         let ordinal = compute_ordinal_for_drop(&tasks, 1);
         assert!(
-            ordinal.as_str() > "a0",
-            "between ordinal should be after first"
+            ordinal > ord0,
+            "between ordinal '{}' should be after first '{}'",
+            ordinal.as_str(),
+            ord0.as_str()
         );
         assert!(
-            ordinal.as_str() < "c0",
-            "between ordinal should be before second"
+            ordinal < ord2,
+            "between ordinal '{}' should be before second '{}'",
+            ordinal.as_str(),
+            ord2.as_str()
         );
     }
 
     #[test]
     fn test_compute_ordinal_single_element_append() {
-        let tasks = vec![make_ordinal_task("t1", "a0")];
+        let ord0 = Ordinal::first();
+        let tasks = vec![make_ordinal_task("t1", &ord0)];
         let ordinal = compute_ordinal_for_drop(&tasks, 1);
-        assert!(ordinal.as_str() > "a0");
+        assert!(
+            ordinal > ord0,
+            "'{}' should be > '{}'",
+            ordinal.as_str(),
+            ord0.as_str()
+        );
     }
 
     #[test]
     fn test_compute_ordinal_single_element_prepend() {
-        let tasks = vec![make_ordinal_task("t1", "c0")];
+        let ord0 = Ordinal::after(&Ordinal::after(&Ordinal::first()));
+        let tasks = vec![make_ordinal_task("t1", &ord0)];
         let ordinal = compute_ordinal_for_drop(&tasks, 0);
-        assert!(ordinal.as_str() < "c0");
+        assert!(
+            ordinal < ord0,
+            "'{}' should be < '{}'",
+            ordinal.as_str(),
+            ord0.as_str()
+        );
     }
 
     #[test]
     fn test_compute_ordinal_drop_index_beyond_end() {
-        let tasks = vec![make_ordinal_task("t1", "a0")];
+        let ord0 = Ordinal::first();
+        let tasks = vec![make_ordinal_task("t1", &ord0)];
         // drop_index way beyond list length — should still append
         let ordinal = compute_ordinal_for_drop(&tasks, 100);
-        assert!(ordinal.as_str() > "a0");
+        assert!(
+            ordinal > ord0,
+            "'{}' should be > '{}'",
+            ordinal.as_str(),
+            ord0.as_str()
+        );
+    }
+
+    // =========================================================================
+    // compute_ordinal_for_neighbors tests
+    // =========================================================================
+
+    #[test]
+    fn test_compute_ordinal_for_neighbors_both_none() {
+        let ordinal = compute_ordinal_for_neighbors(None, None);
+        // Should return Ordinal::first()
+        assert_eq!(ordinal.as_str(), Ordinal::first().as_str());
+    }
+
+    #[test]
+    fn test_compute_ordinal_for_neighbors_only_after() {
+        // Use a valid ordinal a couple steps after first
+        let after = Ordinal::after(&Ordinal::after(&Ordinal::first()));
+        let ordinal = compute_ordinal_for_neighbors(None, Some(&after));
+        assert!(
+            ordinal < after,
+            "should be before after ordinal '{}', got '{}'",
+            after.as_str(),
+            ordinal.as_str()
+        );
+    }
+
+    #[test]
+    fn test_compute_ordinal_for_neighbors_only_before() {
+        let before = Ordinal::first();
+        let ordinal = compute_ordinal_for_neighbors(Some(&before), None);
+        assert!(
+            ordinal > before,
+            "should be after before ordinal '{}', got '{}'",
+            before.as_str(),
+            ordinal.as_str()
+        );
+    }
+
+    #[test]
+    fn test_compute_ordinal_for_neighbors_between() {
+        let before = Ordinal::first();
+        let after = Ordinal::after(&Ordinal::after(&before));
+        let ordinal = compute_ordinal_for_neighbors(Some(&before), Some(&after));
+        assert!(
+            ordinal > before,
+            "should be after before '{}', got '{}'",
+            before.as_str(),
+            ordinal.as_str()
+        );
+        assert!(
+            ordinal < after,
+            "should be before after '{}', got '{}'",
+            after.as_str(),
+            ordinal.as_str()
+        );
+    }
+
+    #[test]
+    fn test_compute_ordinal_for_neighbors_tight_range() {
+        // Even with adjacent ordinals, should produce a valid in-between value
+        let before = Ordinal::first();
+        let after = Ordinal::after(&before);
+        let ordinal = compute_ordinal_for_neighbors(Some(&before), Some(&after));
+        assert!(
+            ordinal > before,
+            "between: '{}' should be > '{}'",
+            ordinal.as_str(),
+            before.as_str()
+        );
+        assert!(
+            ordinal < after,
+            "between: '{}' should be < '{}'",
+            ordinal.as_str(),
+            after.as_str()
+        );
+    }
+
+    #[test]
+    fn test_compute_ordinal_prepend_before_first() {
+        // Inserting before the first task
+        let after = Ordinal::first();
+        let ordinal = compute_ordinal_for_neighbors(None, Some(&after));
+        assert!(
+            ordinal < after,
+            "prepend ordinal '{}' should be < '{}'",
+            ordinal.as_str(),
+            after.as_str()
+        );
+    }
+
+    #[test]
+    fn test_compute_ordinal_prepend_before_third() {
+        // Inserting before a task that is a few steps in
+        let after = Ordinal::after(&Ordinal::after(&Ordinal::after(&Ordinal::first())));
+        let ordinal = compute_ordinal_for_neighbors(None, Some(&after));
+        assert!(
+            ordinal < after,
+            "prepend ordinal '{}' should be < '{}'",
+            ordinal.as_str(),
+            after.as_str()
+        );
+    }
+
+    #[test]
+    fn test_compute_ordinal_sequence_maintains_order() {
+        // Simulate: 3 tasks. Move last to first position.
+        let ord0 = Ordinal::first();
+        let ord1 = Ordinal::after(&ord0);
+        let ord2 = Ordinal::after(&ord1);
+
+        // Insert before ord0
+        let new_first = compute_ordinal_for_neighbors(None, Some(&ord0));
+        assert!(
+            new_first < ord0,
+            "'{}' should be < '{}'",
+            new_first.as_str(),
+            ord0.as_str()
+        );
+
+        // Insert between ord0 and ord1
+        let mid = compute_ordinal_for_neighbors(Some(&ord0), Some(&ord1));
+        assert!(
+            mid > ord0,
+            "'{}' should be > '{}'",
+            mid.as_str(),
+            ord0.as_str()
+        );
+        assert!(
+            mid < ord1,
+            "'{}' should be < '{}'",
+            mid.as_str(),
+            ord1.as_str()
+        );
+
+        // Append after ord2
+        let last = compute_ordinal_for_neighbors(Some(&ord2), None);
+        assert!(
+            last > ord2,
+            "'{}' should be > '{}'",
+            last.as_str(),
+            ord2.as_str()
+        );
     }
 }

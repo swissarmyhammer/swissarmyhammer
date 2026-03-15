@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ACTOR_COLORS } from "@/lib/actor-colors";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { SubtaskProgress } from "@/components/subtask-progress";
@@ -153,24 +154,32 @@ function FieldRow({
   onCommit,
   onCancel,
 }: FieldRowProps) {
+  const content = (
+    <FieldDispatch
+      field={field}
+      value={value}
+      entity={entity}
+      editing={editing && editable}
+      bodyFieldName={bodyFieldName}
+      onEdit={onEdit}
+      onCommit={onCommit}
+      onCancel={onCancel}
+    />
+  );
+
+  if (!showLabel) {
+    return <section data-testid={`field-row-${field.name}`}>{content}</section>;
+  }
+
   return (
-    <section data-testid={`field-row-${field.name}`}>
-      {showLabel && (
-        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
-          {fieldLabel(field)}
-        </h3>
-      )}
-      <FieldDispatch
-        field={field}
-        value={value}
-        entity={entity}
-        editing={editing && editable}
-        bodyFieldName={bodyFieldName}
-        onEdit={onEdit}
-        onCommit={onCommit}
-        onCancel={onCancel}
-      />
-    </section>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <section data-testid={`field-row-${field.name}`}>{content}</section>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="start">
+        {fieldLabel(field)}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -248,6 +257,13 @@ function FieldDispatch({
   }
 
   // Read-only: use the same CellDispatch as the grid — single rendering path
+  if (isEmpty(value)) {
+    return (
+      <div className="text-sm cursor-text min-h-[1.25rem] text-muted-foreground/50 italic" onClick={onEdit}>
+        {fieldLabel(field)}
+      </div>
+    );
+  }
   return (
     <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
       <CellDispatch field={field} value={value} entity={entity} />
@@ -327,4 +343,11 @@ function ColorField({ value, onCommit }: { value: string; onCommit: (v: string) 
 
 function fieldLabel(field: FieldDef): string {
   return field.name.replace(/_/g, " ");
+}
+
+function isEmpty(value: unknown): boolean {
+  if (value == null) return true;
+  if (value === "") return true;
+  if (Array.isArray(value) && value.length === 0) return true;
+  return false;
 }

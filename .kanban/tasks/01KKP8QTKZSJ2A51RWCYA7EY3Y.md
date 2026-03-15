@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: ac80
+title: '[Medium] blocking_write in watcher callback risks deadlock on contention'
+---
+In `state.rs` line 112, the file watcher callback calls `search_index.blocking_write()` inside a synchronous closure. The watcher callback runs on a notify thread, not a tokio async context, so `blocking_write` is correct for that path.\n\nHowever, in `commands.rs` line 791, `handle.search_index.write().await` is used in the async `dispatch_command` function. If a file watcher event fires while `dispatch_command` holds the write lock (or vice versa), the blocking_write in the watcher thread will block the notify thread until the async write completes. This is generally fine with tokio's RwLock (which is fair), but could cause noticeable jank if the async write takes time.\n\nConsider: (a) keeping the critical section minimal (already done), or (b) using a channel to send index updates to a single consumer task, eliminating cross-thread lock contention.\n\nSeverity: Medium (potential latency under contention, not a correctness bug)" #review-finding

@@ -230,6 +230,17 @@ pub async fn list_entities(
 
         // Batch-enrich in O(N) using pre-built dependency indexes
         enrich_all_task_entities(&mut entities, &terminal_id);
+
+        // Sort by position so the frontend can trust the order
+        entities.sort_by(|a, b| {
+            let col_a = a.get_str("position_column").unwrap_or("");
+            let col_b = b.get_str("position_column").unwrap_or("");
+            col_a.cmp(col_b).then_with(|| {
+                let ord_a = a.get_str("position_ordinal").unwrap_or("a0");
+                let ord_b = b.get_str("position_ordinal").unwrap_or("a0");
+                ord_a.cmp(ord_b)
+            })
+        });
     }
 
     let json_entities: Vec<Value> = entities.iter().map(|e| e.to_json()).collect();
@@ -339,6 +350,87 @@ pub async fn search_mentions(
         .collect();
 
     Ok(json!(matches))
+}
+
+/// Search all entities using the backend search index.
+///
+/// The backend owns the search strategy: currently fuzzy matching via
+/// `EntitySearchIndex::search()`, switching to hybrid (fuzzy + semantic
+/// embedding) when an embedder is configured. The frontend calls this
+/// command and displays results — no search logic runs client-side.
+///
+/// For each result, resolves the display name using the entity's
+/// `search_display_field` (falling back to `mention_display_field`,
+/// then "name", then "title").
+///
+/// Returns `[{ entity_type, entity_id, display_name, score }]`.
+#[tauri::command]
+pub async fn search_entities(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Value, String> {
+    let handle = state.active_handle().await.ok_or("No active board")?;
+    let limit = limit.unwrap_or(50);
+
+    // Cap query length to prevent excessive fuzzy matcher work
+    if query.len() > 500 {
+        return Err("Search query too long (max 500 characters)".into());
+    }
+
+    // Empty query returns empty results
+    if query.trim().is_empty() {
+        return Ok(json!([]));
+    }
+
+    let search_index = handle.search_index.read().await;
+    // Strategy decision point: currently fuzzy-only. When a TextEmbedder is
+    // stored on BoardHandle, switch to search_index.search_hybrid(&query,
+    // &embedder, limit) which automatically picks fuzzy for short queries
+    // and semantic for longer ones, with cross-strategy fallback.
+    let results = search_index.search(&query, limit);
+
+    // Resolve display names using entity schema
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let fields_ctx = ectx.fields();
+
+    let output: Vec<Value> = results
+        .iter()
+        .filter_map(|result| {
+            let entity = search_index.get(&result.entity_id)?;
+            let entity_type = entity.entity_type.as_str();
+
+            // Resolve display field: search_display_field > mention_display_field > "name" > "title"
+            let display_field = fields_ctx
+                .get_entity(entity_type)
+                .and_then(|def| {
+                    def.search_display_field
+                        .as_ref()
+                        .or(def.mention_display_field.as_ref())
+                        .map(|f| f.as_str())
+                })
+                .unwrap_or("name");
+
+            let display_name = entity
+                .get_str(display_field)
+                .or_else(|| entity.get_str("name"))
+                .or_else(|| entity.get_str("title"))
+                .unwrap_or(entity.id.as_str());
+
+            Some(json!({
+                "entity_type": entity_type,
+                "entity_id": entity.id,
+                "display_name": display_name,
+                "score": result.score,
+            }))
+        })
+        .collect();
+
+    Ok(json!(output))
 }
 
 /// Get the board data with all entities as raw entity bags.
@@ -723,13 +815,20 @@ pub async fn dispatch_command(
                 }
             }
 
-            for evt in events {
-                let event_name = match &evt {
-                    crate::watcher::WatchEvent::EntityCreated { .. } => "entity-created",
-                    crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
-                    crate::watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
-                };
-                let _ = app.emit(event_name, &evt);
+            // Update search index and emit events
+            {
+                let mut search_idx = handle.search_index.write().await;
+                for evt in events {
+                    crate::watcher::sync_search_index(&mut search_idx, &evt);
+                    let event_name = match &evt {
+                        crate::watcher::WatchEvent::EntityCreated { .. } => "entity-created",
+                        crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
+                        crate::watcher::WatchEvent::EntityFieldChanged { .. } => {
+                            "entity-field-changed"
+                        }
+                    };
+                    let _ = app.emit(event_name, &evt);
+                }
             }
         }
     }

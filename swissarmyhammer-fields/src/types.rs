@@ -197,6 +197,9 @@ pub struct EntityDef {
     /// Which field to display in mentions (e.g. "tag_name", "name").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_display_field: Option<FieldName>,
+    /// Which field to display in search results (e.g. "title", "name").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_display_field: Option<FieldName>,
 }
 
 #[cfg(test)]
@@ -361,6 +364,7 @@ mod tests {
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -376,6 +380,7 @@ mod tests {
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            search_display_field: None,
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         assert!(!yaml.contains("body_field"));

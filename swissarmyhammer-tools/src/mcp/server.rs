@@ -1318,6 +1318,8 @@ impl McpServer {
                 } else {
                     tracing::debug!(id = %actor_id, "MCP agent actor already exists");
                 }
+                // Store the actor_id so tool calls can auto-inject it
+                *self.tool_context.session_actor.write().await = Some(actor_id);
             }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to ensure MCP agent actor");

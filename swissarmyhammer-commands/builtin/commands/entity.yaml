@@ -90,7 +90,9 @@
   undoable: true
   visible: false
   params:
-    - name: columns
+    - name: id
+      from: args
+    - name: target_index
       from: args
 
 - id: attachment.delete

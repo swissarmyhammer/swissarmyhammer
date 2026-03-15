@@ -1,4 +1,5 @@
 name: swimlane
+search_display_field: name
 fields:
   - name
   - order

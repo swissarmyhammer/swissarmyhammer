@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: w8
+position_ordinal: ffff9580
 title: Remove ActorType enum and actor_type field entirely
 ---
 Remove the human/agent distinction from actors. An actor is just an actor.

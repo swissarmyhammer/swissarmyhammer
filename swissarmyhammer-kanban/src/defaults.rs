@@ -27,6 +27,9 @@ static BUILTIN_ENTITIES: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/
 /// Builtin view definition YAML files, embedded at compile time.
 static BUILTIN_VIEWS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/views");
 
+/// Builtin actor entity YAML files, embedded at compile time.
+static BUILTIN_ACTORS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/actors");
+
 /// Load builtin field definitions as `(name, yaml_content)` pairs.
 pub fn builtin_field_definitions() -> Vec<(&'static str, &'static str)> {
     BUILTIN_DEFINITIONS
@@ -54,6 +57,20 @@ pub fn builtin_entity_definitions() -> Vec<(&'static str, &'static str)> {
 /// Load builtin view definitions as `(name, yaml_content)` pairs.
 pub fn builtin_view_definitions() -> Vec<(&'static str, &'static str)> {
     BUILTIN_VIEWS
+        .files()
+        .filter_map(|file| {
+            let name = file.path().file_stem()?.to_str()?;
+            let content = file.contents_utf8()?;
+            Some((name, content))
+        })
+        .collect()
+}
+
+/// Load builtin actor entity YAML as `(id, yaml_content)` pairs.
+///
+/// The file stem is the actor ID (e.g. `claude-code.yaml` → `"claude-code"`).
+pub fn builtin_actor_entities() -> Vec<(&'static str, &'static str)> {
+    BUILTIN_ACTORS
         .files()
         .filter_map(|file| {
             let name = file.path().file_stem()?.to_str()?;
@@ -208,7 +225,7 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 21, "expected 21 builtin field definitions");
+        assert_eq!(defs.len(), 20, "expected 20 builtin field definitions");
     }
 
     #[test]
@@ -353,11 +370,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 21);
+        assert_eq!(ctx.all_fields().len(), 20);
         assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
-        assert_eq!(ctx.fields_for_entity("task").len(), 11);
+        assert_eq!(ctx.fields_for_entity("task").len(), 10);
     }
 
     #[test]

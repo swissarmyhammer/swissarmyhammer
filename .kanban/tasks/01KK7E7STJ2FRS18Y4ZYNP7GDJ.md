@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: w4
+position_ordinal: ffff9180
 title: Add info logging to Rust command dispatch
 ---
 Log every command invocation in the Rust command system with a readable format so we can verify all activity flows through dispatch and nothing is hard-wired in the UI.

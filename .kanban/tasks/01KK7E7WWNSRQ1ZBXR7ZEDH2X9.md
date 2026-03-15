@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: w5
+position_ordinal: ffff9280
 title: Auto-assign tasks to agent actor on creation
 ---
 When an agent creates a task via the kanban system, it should be automatically assigned to itself.

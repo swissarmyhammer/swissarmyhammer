@@ -16,136 +16,16 @@
 use crate::mcp::plan_notifications::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
-use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use swissarmyhammer_kanban::{
-    activity::ListActivity,
-    actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor},
-    attachment::{
-        AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
-    },
-    board::{GetBoard, InitBoard, UpdateBoard},
-    column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn},
-    parse::parse_input,
-    swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane},
-    tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag},
-    task::{
-        AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask,
-        TagTask, UnassignTask, UntagTask, UpdateTask,
-    },
-    ActorId, Execute, KanbanContext, KanbanOperation, KanbanOperationProcessor, Noun, Operation,
-    OperationProcessor, TaskId, Verb,
+    parse::parse_input, task::ListTasks, Execute, KanbanContext, KanbanOperation, Noun, Verb,
 };
 
-// Static operation instances for metadata access
-// These are used by the CLI to generate subcommands from operation metadata
-
-static INIT_BOARD: Lazy<InitBoard> = Lazy::new(|| InitBoard::new(""));
-static GET_BOARD: Lazy<GetBoard> = Lazy::new(GetBoard::default);
-static UPDATE_BOARD: Lazy<UpdateBoard> = Lazy::new(UpdateBoard::new);
-
-static ADD_COLUMN: Lazy<AddColumn> = Lazy::new(|| AddColumn::new("", ""));
-static GET_COLUMN: Lazy<GetColumn> = Lazy::new(|| GetColumn::new(""));
-static UPDATE_COLUMN: Lazy<UpdateColumn> = Lazy::new(|| UpdateColumn::new(""));
-static DELETE_COLUMN: Lazy<DeleteColumn> = Lazy::new(|| DeleteColumn::new(""));
-static LIST_COLUMNS: Lazy<ListColumns> = Lazy::new(ListColumns::default);
-
-static ADD_SWIMLANE: Lazy<AddSwimlane> = Lazy::new(|| AddSwimlane::new("", ""));
-static GET_SWIMLANE: Lazy<GetSwimlane> = Lazy::new(|| GetSwimlane::new(""));
-static UPDATE_SWIMLANE: Lazy<UpdateSwimlane> = Lazy::new(|| UpdateSwimlane::new(""));
-static DELETE_SWIMLANE: Lazy<DeleteSwimlane> = Lazy::new(|| DeleteSwimlane::new(""));
-static LIST_SWIMLANES: Lazy<ListSwimlanes> = Lazy::new(ListSwimlanes::default);
-
-static ADD_ACTOR: Lazy<AddActor> = Lazy::new(|| AddActor::new("", ""));
-static GET_ACTOR: Lazy<GetActor> = Lazy::new(|| GetActor::new(""));
-static UPDATE_ACTOR: Lazy<UpdateActor> = Lazy::new(|| UpdateActor::new(""));
-static DELETE_ACTOR: Lazy<DeleteActor> = Lazy::new(|| DeleteActor::new(""));
-static LIST_ACTORS: Lazy<ListActors> = Lazy::new(ListActors::default);
-
-static ADD_TASK: Lazy<AddTask> = Lazy::new(|| AddTask::new(""));
-static GET_TASK: Lazy<GetTask> = Lazy::new(|| GetTask::new(""));
-static UPDATE_TASK: Lazy<UpdateTask> = Lazy::new(|| UpdateTask::new(""));
-static DELETE_TASK: Lazy<DeleteTask> = Lazy::new(|| DeleteTask::new(""));
-static MOVE_TASK: Lazy<MoveTask> = Lazy::new(|| MoveTask::to_column("", ""));
-static COMPLETE_TASK: Lazy<CompleteTask> = Lazy::new(|| CompleteTask::new(""));
-static ASSIGN_TASK: Lazy<AssignTask> = Lazy::new(|| AssignTask::new("", ""));
-static UNASSIGN_TASK: Lazy<UnassignTask> = Lazy::new(|| UnassignTask::new("", ""));
-static NEXT_TASK: Lazy<NextTask> = Lazy::new(NextTask::new);
-static TAG_TASK: Lazy<TagTask> = Lazy::new(|| TagTask::new("", ""));
-static UNTAG_TASK: Lazy<UntagTask> = Lazy::new(|| UntagTask::new("", ""));
-static LIST_TASKS: Lazy<ListTasks> = Lazy::new(ListTasks::new);
-
-static ADD_TAG: Lazy<AddTag> = Lazy::new(|| AddTag::new(""));
-static GET_TAG: Lazy<GetTag> = Lazy::new(|| GetTag::new(""));
-static UPDATE_TAG: Lazy<UpdateTag> = Lazy::new(|| UpdateTag::new(""));
-static DELETE_TAG: Lazy<DeleteTag> = Lazy::new(|| DeleteTag::new(""));
-static LIST_TAGS: Lazy<ListTags> = Lazy::new(ListTags::default);
-
-static LIST_ACTIVITY: Lazy<ListActivity> = Lazy::new(ListActivity::default);
-
-static ADD_ATTACHMENT: Lazy<AddAttachment> = Lazy::new(|| AddAttachment::new("", "", ""));
-static GET_ATTACHMENT: Lazy<GetAttachment> = Lazy::new(|| GetAttachment::new("", ""));
-static UPDATE_ATTACHMENT: Lazy<UpdateAttachment> = Lazy::new(|| UpdateAttachment::new("", ""));
-static DELETE_ATTACHMENT: Lazy<DeleteAttachment> = Lazy::new(|| DeleteAttachment::new("", ""));
-static LIST_ATTACHMENTS: Lazy<ListAttachments> = Lazy::new(|| ListAttachments::new(""));
-
-/// All kanban operations for CLI generation
-static KANBAN_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
-    vec![
-        // Board operations
-        &*INIT_BOARD as &dyn Operation,
-        &*GET_BOARD as &dyn Operation,
-        &*UPDATE_BOARD as &dyn Operation,
-        // Column operations
-        &*ADD_COLUMN as &dyn Operation,
-        &*GET_COLUMN as &dyn Operation,
-        &*UPDATE_COLUMN as &dyn Operation,
-        &*DELETE_COLUMN as &dyn Operation,
-        &*LIST_COLUMNS as &dyn Operation,
-        // Swimlane operations
-        &*ADD_SWIMLANE as &dyn Operation,
-        &*GET_SWIMLANE as &dyn Operation,
-        &*UPDATE_SWIMLANE as &dyn Operation,
-        &*DELETE_SWIMLANE as &dyn Operation,
-        &*LIST_SWIMLANES as &dyn Operation,
-        // Actor operations
-        &*ADD_ACTOR as &dyn Operation,
-        &*GET_ACTOR as &dyn Operation,
-        &*UPDATE_ACTOR as &dyn Operation,
-        &*DELETE_ACTOR as &dyn Operation,
-        &*LIST_ACTORS as &dyn Operation,
-        // Task operations
-        &*ADD_TASK as &dyn Operation,
-        &*GET_TASK as &dyn Operation,
-        &*UPDATE_TASK as &dyn Operation,
-        &*DELETE_TASK as &dyn Operation,
-        &*MOVE_TASK as &dyn Operation,
-        &*COMPLETE_TASK as &dyn Operation,
-        &*ASSIGN_TASK as &dyn Operation,
-        &*UNASSIGN_TASK as &dyn Operation,
-        &*NEXT_TASK as &dyn Operation,
-        &*TAG_TASK as &dyn Operation,
-        &*UNTAG_TASK as &dyn Operation,
-        &*LIST_TASKS as &dyn Operation,
-        // Tag operations (board-level)
-        &*ADD_TAG as &dyn Operation,
-        &*GET_TAG as &dyn Operation,
-        &*UPDATE_TAG as &dyn Operation,
-        &*DELETE_TAG as &dyn Operation,
-        &*LIST_TAGS as &dyn Operation,
-        // Attachment operations
-        &*ADD_ATTACHMENT as &dyn Operation,
-        &*GET_ATTACHMENT as &dyn Operation,
-        &*UPDATE_ATTACHMENT as &dyn Operation,
-        &*DELETE_ATTACHMENT as &dyn Operation,
-        &*LIST_ATTACHMENTS as &dyn Operation,
-        // Activity operations
-        &*LIST_ACTIVITY as &dyn Operation,
-    ]
-});
+// Operations and schema are provided by the kanban crate's single source of truth:
+// `swissarmyhammer_kanban::schema::kanban_operations()`
 
 /// MCP tool for kanban board operations
 #[derive(Default)]
@@ -291,29 +171,35 @@ impl McpTool for KanbanTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema(&KANBAN_OPERATIONS)
+        let ops = swissarmyhammer_kanban::schema::kanban_operations();
+        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema(ops)
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
-        // Force initialization of the lazy static
-        let ops: &[&'static dyn Operation] = &KANBAN_OPERATIONS;
-        // This is safe because KANBAN_OPERATIONS is a static Lazy<Vec<...>>
-        // We need to convert to a slice with 'static lifetime
-        // SAFETY: The Lazy is initialized once and lives for 'static
-        unsafe {
-            std::mem::transmute::<
-                &[&dyn Operation],
-                &'static [&'static dyn swissarmyhammer_operations::Operation],
-            >(ops)
-        }
+        swissarmyhammer_kanban::schema::kanban_operations()
     }
 
     async fn execute(
         &self,
-        arguments: serde_json::Map<String, serde_json::Value>,
+        mut arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let ctx = Self::get_kanban_context(_context)?;
+
+        // Auto-inject the session actor when the caller hasn't provided one.
+        // This enables MCP-initiated tool calls (e.g. "add task") to be
+        // attributed to the connecting client without requiring callers to
+        // pass `actor` explicitly on every request.
+        if !arguments.contains_key("actor") {
+            let actor_guard = _context.session_actor.read().await;
+            if let Some(ref actor_id) = *actor_guard {
+                arguments.insert(
+                    "actor".to_string(),
+                    serde_json::Value::String(actor_id.clone()),
+                );
+                tracing::debug!(actor = %actor_id, "auto-injected session actor into kanban call");
+            }
+        }
 
         // Parse the input to get operations
         let input = Value::Object(arguments);
@@ -379,428 +265,14 @@ impl McpTool for KanbanTool {
     }
 }
 
-/// Execute a single kanban operation
+/// Execute a single kanban operation.
+///
+/// Delegates to [`swissarmyhammer_kanban::dispatch::execute_operation`] — the single
+/// source of truth for operation dispatch — and maps errors to MCP format.
 async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<Value, McpError> {
-    // Note: Can't use glob imports due to Verb::Tag and Noun::Tag collision
-
-    // Create processor with actor from operation context
-    let processor = match &op.actor {
-        Some(actor) => KanbanOperationProcessor::with_actor(actor.to_string()),
-        None => KanbanOperationProcessor::new(),
-    };
-
-    let result = match (op.verb, op.noun) {
-        // Board operations
-        (Verb::Init, Noun::Board) => {
-            let name = op
-                .get_string("name")
-                .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
-            let description = op.get_string("description").map(String::from);
-
-            let mut cmd = InitBoard::new(name);
-            if let Some(desc) = description {
-                cmd = cmd.with_description(desc);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Get, Noun::Board) => {
-            let include_counts = op.get_bool("include_counts").unwrap_or(true);
-            processor.process(&GetBoard { include_counts }, ctx).await
-        }
-        (Verb::Update, Noun::Board) => {
-            let mut cmd = UpdateBoard::new();
-            if let Some(name) = op.get_string("name") {
-                cmd = cmd.with_name(name);
-            }
-            if let Some(desc) = op.get_string("description") {
-                cmd = cmd.with_description(desc);
-            }
-            processor.process(&cmd, ctx).await
-        }
-
-        // Column operations
-        (Verb::Add, Noun::Column) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let name = op
-                .get_string("name")
-                .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
-
-            let mut cmd = AddColumn::new(id, name);
-            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_order(order as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Get, Noun::Column) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&GetColumn::new(id), ctx).await
-        }
-        (Verb::Update, Noun::Column) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-
-            let mut cmd = UpdateColumn::new(id);
-            if let Some(name) = op.get_string("name") {
-                cmd = cmd.with_name(name);
-            }
-            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_order(order as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Column) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&DeleteColumn::new(id), ctx).await
-        }
-        (Verb::List, Noun::Columns) => processor.process(&ListColumns, ctx).await,
-
-        // Task operations
-        (Verb::Add, Noun::Task) => {
-            let title = op
-                .get_string("title")
-                .ok_or_else(|| McpError::invalid_params("missing required field: title", None))?;
-
-            let mut cmd = AddTask::new(title);
-            if let Some(desc) = op.get_string("description") {
-                cmd = cmd.with_description(desc);
-            }
-            if let Some(column) = op.get_string("column") {
-                cmd.column = Some(column.to_string());
-            }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd.swimlane = Some(swimlane.to_string());
-            }
-            if let Some(ordinal) = op.get_string("ordinal") {
-                cmd.ordinal = Some(ordinal.to_string());
-            }
-
-            // Parse explicit assignees from params
-            let explicit_assignees: Vec<ActorId> = op
-                .get_param("assignees")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(ActorId::from_string))
-                        .collect()
-                })
-                .or_else(|| {
-                    // Also accept singular "assignee" param
-                    op.get_string("assignee")
-                        .map(|a| vec![ActorId::from_string(a)])
-                })
-                .unwrap_or_default();
-
-            // Auto-assign: if no explicit assignees and the operation has an actor,
-            // automatically assign the creating actor to the task
-            let assignees = if explicit_assignees.is_empty() {
-                match &op.actor {
-                    Some(actor) => vec![actor.clone()],
-                    None => Vec::new(),
-                }
-            } else {
-                explicit_assignees
-            };
-
-            if !assignees.is_empty() {
-                cmd = cmd.with_assignees(assignees);
-            }
-
-            // Parse depends_on
-            if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
-                let dep_ids: Vec<TaskId> = deps
-                    .iter()
-                    .filter_map(|v| v.as_str().map(TaskId::from_string))
-                    .collect();
-                if !dep_ids.is_empty() {
-                    cmd = cmd.with_depends_on(dep_ids);
-                }
-            }
-
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Get, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&GetTask::new(id), ctx).await
-        }
-        (Verb::Update, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-
-            let mut cmd = UpdateTask::new(id);
-            if let Some(title) = op.get_string("title") {
-                cmd = cmd.with_title(title);
-            }
-            if let Some(desc) = op.get_string("description") {
-                cmd = cmd.with_description(desc);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Move, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let column = op
-                .get_string("column")
-                .ok_or_else(|| McpError::invalid_params("missing required field: column", None))?;
-
-            let mut cmd = MoveTask::to_column(id, column);
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd.swimlane = Some(swimlane.into());
-            }
-            if let Some(ordinal) = op.get_string("ordinal") {
-                cmd.ordinal = Some(ordinal.to_string());
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&DeleteTask::new(id), ctx).await
-        }
-        (Verb::Complete, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&CompleteTask::new(id), ctx).await
-        }
-        (Verb::Assign, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let assignee = op.get_string("assignee").ok_or_else(|| {
-                McpError::invalid_params("missing required field: assignee", None)
-            })?;
-            processor.process(&AssignTask::new(id, assignee), ctx).await
-        }
-        (Verb::Unassign, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let assignee = op.get_string("assignee").ok_or_else(|| {
-                McpError::invalid_params("missing required field: assignee", None)
-            })?;
-            processor
-                .process(&UnassignTask::new(id, assignee), ctx)
-                .await
-        }
-        (Verb::Next, Noun::Task) => {
-            let mut cmd = NextTask::new();
-            if let Some(tag) = op.get_string("tag") {
-                cmd = cmd.with_tag(tag);
-            }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd = cmd.with_swimlane(swimlane);
-            }
-            if let Some(assignee) = op.get_string("assignee") {
-                cmd = cmd.with_assignee(assignee);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::List, Noun::Tasks) => {
-            let mut cmd = ListTasks::new();
-            if let Some(column) = op.get_string("column") {
-                cmd = cmd.with_column(column);
-            }
-            if let Some(tag) = op.get_string("tag") {
-                cmd = cmd.with_tag(tag);
-            }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd = cmd.with_swimlane(swimlane);
-            }
-            if let Some(assignee) = op.get_string("assignee") {
-                cmd = cmd.with_assignee(assignee);
-            }
-            if let Some(ready) = op.get_param("ready").and_then(|v| v.as_bool()) {
-                cmd = cmd.with_ready(ready);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Tag, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let tag = op
-                .get_string("tag")
-                .ok_or_else(|| McpError::invalid_params("missing required field: tag", None))?;
-            processor.process(&TagTask::new(id, tag), ctx).await
-        }
-        (Verb::Untag, Noun::Task) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let tag = op
-                .get_string("tag")
-                .ok_or_else(|| McpError::invalid_params("missing required field: tag", None))?;
-            processor.process(&UntagTask::new(id, tag), ctx).await
-        }
-
-        // Swimlane operations
-        (Verb::Add, Noun::Swimlane) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let name = op
-                .get_string("name")
-                .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
-
-            let mut cmd = AddSwimlane::new(id, name);
-            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_order(order as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Get, Noun::Swimlane) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&GetSwimlane::new(id), ctx).await
-        }
-        (Verb::Update, Noun::Swimlane) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-
-            let mut cmd = UpdateSwimlane::new(id);
-            if let Some(name) = op.get_string("name") {
-                cmd = cmd.with_name(name);
-            }
-            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_order(order as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Swimlane) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&DeleteSwimlane::new(id), ctx).await
-        }
-        (Verb::List, Noun::Swimlanes) => processor.process(&ListSwimlanes, ctx).await,
-
-        // Actor operations
-        (Verb::Add, Noun::Actor) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            let name = op
-                .get_string("name")
-                .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
-            let ensure = op
-                .get_param("ensure")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
-            let mut cmd = AddActor::new(id, name);
-
-            if ensure {
-                cmd = cmd.with_ensure();
-            }
-
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Get, Noun::Actor) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&GetActor::new(id), ctx).await
-        }
-        (Verb::Update, Noun::Actor) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-
-            let mut cmd = UpdateActor::new(id);
-            if let Some(name) = op.get_string("name") {
-                cmd = cmd.with_name(name);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Actor) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&DeleteActor::new(id), ctx).await
-        }
-        (Verb::List, Noun::Actors) => processor.process(&ListActors, ctx).await,
-
-        // Tag operations (board-level)
-        (Verb::Add, Noun::Tag) => {
-            // Accept "name" or fall back to "id" for the tag name
-            let name = op
-                .get_string("name")
-                .or_else(|| op.get_string("id"))
-                .ok_or_else(|| McpError::invalid_params("missing required field: name", None))?;
-
-            let mut cmd = AddTag::new(name);
-            if let Some(color) = op.get_string("color") {
-                cmd = cmd.with_color(color);
-            }
-            if let Some(desc) = op.get_string("description") {
-                cmd = cmd.with_description(desc);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Get, Noun::Tag) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&GetTag::new(id), ctx).await
-        }
-        (Verb::Update, Noun::Tag) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-
-            let mut cmd = UpdateTag::new(id);
-            if let Some(name) = op.get_string("name") {
-                cmd = cmd.with_name(name);
-            }
-            if let Some(color) = op.get_string("color") {
-                cmd = cmd.with_color(color);
-            }
-            if let Some(desc) = op.get_string("description") {
-                cmd = cmd.with_description(desc);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Tag) => {
-            let id = op
-                .get_string("id")
-                .ok_or_else(|| McpError::invalid_params("missing required field: id", None))?;
-            processor.process(&DeleteTag::new(id), ctx).await
-        }
-        (Verb::List, Noun::Tags) => processor.process(&ListTags::default(), ctx).await,
-
-        // Activity operations
-        (Verb::List, Noun::Activity) => {
-            let mut cmd = ListActivity::default();
-            if let Some(limit) = op.get_param("limit").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_limit(limit as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
-
-        // Unsupported operations
-        _ => {
-            return Err(McpError::invalid_params(
-                format!("unsupported operation: {} {}", op.verb, op.noun),
-                None,
-            ));
-        }
-    };
-
-    result.map_err(|e| McpError::internal_error(format!("{}: {}", op.op_string(), e), None))
+    swissarmyhammer_kanban::dispatch::execute_operation(ctx, op)
+        .await
+        .map_err(|e| McpError::internal_error(format!("{}: {}", op.op_string(), e), None))
 }
 
 /// Register all kanban tools with the tool registry
@@ -2583,5 +2055,122 @@ mod tests {
             .expect("assignees should be an array");
         assert_eq!(assignees.len(), 1);
         assert_eq!(assignees[0], "alice");
+    }
+
+    // =========================================================================
+    // Session actor injection tests
+    // =========================================================================
+
+    /// When `context.session_actor` is set (as it would be after an MCP
+    /// `initialize` call) and the caller does not pass `actor` explicitly,
+    /// the tool should auto-inject the session actor so the task is
+    /// auto-assigned.
+    #[tokio::test]
+    async fn test_session_actor_auto_injected_on_add_task() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Register an agent actor to represent the MCP client session
+        let mut actor_args = serde_json::Map::new();
+        actor_args.insert("op".to_string(), json!("add actor"));
+        actor_args.insert("id".to_string(), json!("claude-code"));
+        actor_args.insert("name".to_string(), json!("Claude Code"));
+        actor_args.insert("type".to_string(), json!("agent"));
+        tool.execute(actor_args, &context).await.unwrap();
+
+        // Simulate what ensure_agent_actor does: store the actor_id in the context
+        *context.session_actor.write().await = Some("claude-code".to_string());
+
+        // Add a task WITHOUT an explicit actor arg
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Session-injected task"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Task should be auto-assigned to the session actor
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert_eq!(
+            assignees.len(),
+            1,
+            "task should be auto-assigned to session actor"
+        );
+        assert_eq!(assignees[0], "claude-code");
+    }
+
+    /// When `context.session_actor` is set but the caller explicitly passes a
+    /// different `actor`, the explicit value must not be overridden.
+    #[tokio::test]
+    async fn test_explicit_actor_not_overridden_by_session_actor() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Register two actors
+        for (id, name) in [("claude-code", "Claude Code"), ("alice", "Alice")] {
+            let mut actor_args = serde_json::Map::new();
+            actor_args.insert("op".to_string(), json!("add actor"));
+            actor_args.insert("id".to_string(), json!(id));
+            actor_args.insert("name".to_string(), json!(name));
+            actor_args.insert("type".to_string(), json!("human"));
+            tool.execute(actor_args, &context).await.unwrap();
+        }
+
+        // Session actor is "claude-code"
+        *context.session_actor.write().await = Some("claude-code".to_string());
+
+        // Caller passes a different explicit actor
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Explicit actor task"));
+        add_args.insert("actor".to_string(), json!("alice"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        // Should use the explicitly provided actor, not the session one
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert_eq!(assignees.len(), 1, "explicit actor should be used");
+        assert_eq!(assignees[0], "alice");
+    }
+
+    /// When no session actor is set and no actor is passed, tasks should have
+    /// no assignees (existing baseline behaviour is preserved).
+    #[tokio::test]
+    async fn test_no_session_actor_no_assignees() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // session_actor is None (default)
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Unassigned task"));
+
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        let assignees = data["assignees"]
+            .as_array()
+            .expect("assignees should be an array");
+        assert!(
+            assignees.is_empty(),
+            "should be unassigned when no session actor"
+        );
     }
 }

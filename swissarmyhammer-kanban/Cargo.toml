@@ -29,6 +29,7 @@ swissarmyhammer-operations = { workspace = true }
 swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 
 include_dir = { workspace = true }
+fractional_index = "2.0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

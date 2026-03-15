@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: l5
+position_ordinal: ffa480
 title: YAML command registry with builtin loading and .kanban/commands/ overrides
 ---
 Build the `CommandsRegistry` that loads command definitions from YAML and supports layered overrides.

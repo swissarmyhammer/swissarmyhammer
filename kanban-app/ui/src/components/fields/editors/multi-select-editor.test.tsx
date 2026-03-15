@@ -289,7 +289,7 @@ describe("MultiSelectEditor", () => {
       // Find the first × remove button (sibling of the AvatarDisplay wrapper)
       const removeButtons = container.querySelectorAll("button");
       // Filter to × buttons (not CM6 internal buttons)
-      const removeBtns = Array.from(removeButtons).filter((b) => b.textContent?.includes("×"));
+      const removeBtns = Array.from(removeButtons).filter((b: Element) => b.textContent?.includes("×"));
       expect(removeBtns.length).toBe(2);
 
       await act(async () => {
@@ -386,7 +386,7 @@ describe("MultiSelectEditor", () => {
 
       // Find and click the first remove button (×)
       const removeButtons = Array.from(container.querySelectorAll("button")).filter(
-        (b) => b.textContent?.includes("×"),
+        (b: Element) => b.textContent?.includes("×"),
       );
       expect(removeButtons.length).toBe(2);
 
@@ -396,7 +396,7 @@ describe("MultiSelectEditor", () => {
 
       // After removing first tag, only one should remain
       const remainingBtns = Array.from(container.querySelectorAll("button")).filter(
-        (b) => b.textContent?.includes("×"),
+        (b: Element) => b.textContent?.includes("×"),
       );
       expect(remainingBtns.length).toBe(1);
     });
