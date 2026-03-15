@@ -145,6 +145,43 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
           Vim.exitInsertMode(cm as any);
         }
       }
+
+      // Capture-phase listener ensures Enter/Escape fire before vim or
+      // any CM6 extension can intercept them. This is the nuclear option
+      // because EditorView.domEventHandlers and Prec.highest still lose
+      // to @replit/codemirror-vim's internal event handling.
+      view.dom.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          if (mode === "vim") {
+            const cm = getCM(view);
+            if (cm?.state?.vim?.insertMode) {
+              // Insert mode: let vim handle Escape → normal mode
+              if (saveInPlaceRef.current) {
+                setTimeout(() => saveInPlaceRef.current(), 0);
+              }
+              return;
+            }
+          }
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          semanticCancelRef.current?.();
+        }
+        if (event.key === "Enter") {
+          if (mode === "vim") {
+            const cm = getCM(view);
+            if (cm?.state?.vim?.insertMode) {
+              // Insert mode: let vim handle Enter normally
+              return;
+            }
+          }
+          const text = view.state.doc.toString();
+          if (text.length > 0) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            semanticSubmitRef.current?.();
+          }
+        }
+      }, { capture: true });
     },
     [mode],
   );
