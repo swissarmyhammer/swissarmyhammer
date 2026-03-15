@@ -1,14 +1,11 @@
 /**
  * Shared CM6 extension factory for vim-mode-aware submit/cancel semantics.
  *
- * Vim mode: Uses Vim.defineAction + Vim.mapCommand to register normal-mode
- * Enter/Escape handlers inside vim's own key dispatch. A WeakMap routes
- * the global actions to per-editor callbacks.
- *
+ * Vim mode: EditorView.domEventHandlers checks vim state for Enter/Escape.
  * CUA/emacs mode: keymap.of bindings for Enter/Escape.
  *
  * Vim mode:
- *   - Insert Escape → normal mode (vim handles; save-in-place via vim-mode-change signal)
+ *   - Insert Escape → normal mode (vim handles, we optionally save in place)
  *   - Normal Escape → onCancelRef
  *   - Normal Enter  → onSubmitRef (if singleLine and doc is non-empty)
  *
@@ -17,16 +14,9 @@
  *   - Enter  → onSubmitRef (only when singleLine is true)
  */
 
-import { keymap, ViewPlugin } from "@codemirror/view";
+import { keymap, EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
-import { CodeMirror as CM, Vim, getCM } from "@replit/codemirror-vim";
-
-// CodeMirror.on/off are runtime methods not in the .d.ts — cast once here.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const CodeMirror = CM as any;
-
-// DEBUG: verify this module loads
-console.log("[cm-submit-cancel] module loaded");
+import { getCM } from "@replit/codemirror-vim";
 
 /** Generic ref type — avoids importing React in this utility. */
 interface Ref<T> {
@@ -50,99 +40,47 @@ export interface SubmitCancelOptions {
   singleLine?: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Per-editor callback registry (keyed by CM5 adapter from getCM)
-// ---------------------------------------------------------------------------
-
-interface EditorCallbacks {
-  onSubmitRef: Ref<(() => void) | null>;
-  onCancelRef: Ref<(() => void) | null>;
-  saveInPlaceRef?: Ref<(() => void) | null>;
-  singleLine: boolean;
-}
-
-const editorCallbacks = new WeakMap<object, EditorCallbacks>();
-
-// ---------------------------------------------------------------------------
-// One-time global vim action + mapping registration
-// ---------------------------------------------------------------------------
-
-let vimActionsRegistered = false;
-
-function ensureVimActions() {
-  if (vimActionsRegistered) return;
-  vimActionsRegistered = true;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  Vim.defineAction("submit", (cm: any) => {
-    const entry = editorCallbacks.get(cm);
-    console.log(`[cm-submit-cancel] submit action fired, entry=${!!entry} singleLine=${entry?.singleLine}`);
-    if (!entry?.singleLine) return;
-    const view = cm?.cm6;
-    const text = view?.state?.doc?.toString() ?? "";
-    console.log(`[cm-submit-cancel] submit text=${JSON.stringify(text)} hasCallback=${!!entry.onSubmitRef.current}`);
-    if (text.length > 0) {
-      entry.onSubmitRef.current?.();
-    }
-  });
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  Vim.defineAction("cancel", (cm: any) => {
-    const entry = editorCallbacks.get(cm);
-    console.log(`[cm-submit-cancel] cancel action fired, entry=${!!entry} hasCallback=${!!entry?.onCancelRef.current}`);
-    entry?.onCancelRef.current?.();
-  });
-
-  Vim.mapCommand("<CR>", "action", "submit", undefined, { context: "normal" });
-  Vim.mapCommand("<Esc>", "action", "cancel", undefined, { context: "normal" });
-  console.log("[cm-submit-cancel] registered submit/cancel actions and mappings");
-}
-
 /**
  * Build CM6 extensions that route Escape and Enter to semantic callbacks.
  *
- * Vim mode uses Vim.defineAction + Vim.mapCommand so that Enter/Escape in
- * normal mode are handled inside vim's own key dispatch — no DOM-level race.
- * A ViewPlugin registers/unregisters the per-editor callbacks in a WeakMap.
- *
- * CUA/emacs mode uses standard CM6 keymap.of bindings.
+ * This is the same pattern that worked in the original FieldPlaceholderEditor
+ * before the refactor — EditorView.domEventHandlers for vim, keymap.of for CUA.
  */
 export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extension[] {
   const { mode, onSubmitRef, onCancelRef, saveInPlaceRef, singleLine = true } = opts;
 
-  console.log(`[cm-submit-cancel] buildSubmitCancelExtensions mode=${mode} singleLine=${singleLine}`);
-
   if (mode === "vim") {
-    ensureVimActions();
-
     return [
-      ViewPlugin.define((view) => {
-        const cm = getCM(view);
-
-        console.log(`[cm-submit-cancel] ViewPlugin create, cm=${!!cm} singleLine=${singleLine}`);
-        if (cm) {
-          editorCallbacks.set(cm, { onSubmitRef, onCancelRef, saveInPlaceRef, singleLine });
-        }
-
-        // Listen for vim-mode-change to trigger save-in-place on insert → normal
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const onModeChange = (event: any) => {
-          if (event?.mode === "normal" && saveInPlaceRef?.current) {
-            saveInPlaceRef.current();
-          }
-        };
-        if (cm) {
-          CodeMirror.on(cm, "vim-mode-change", onModeChange);
-        }
-
-        return {
-          destroy() {
-            if (cm) {
-              editorCallbacks.delete(cm);
-              CodeMirror.off(cm, "vim-mode-change", onModeChange);
+      EditorView.domEventHandlers({
+        keydown(event, view) {
+          if (event.key === "Escape") {
+            const cm = getCM(view);
+            if (cm?.state?.vim?.insertMode) {
+              // Insert mode: let vim handle Escape (→ normal mode),
+              // then save in place if provided.
+              if (saveInPlaceRef?.current) {
+                setTimeout(() => saveInPlaceRef.current?.(), 0);
+              }
+              return false;
             }
-          },
-        };
+            // Normal mode: cancel
+            onCancelRef.current?.();
+            return true;
+          }
+          if (event.key === "Enter" && singleLine) {
+            const cm = getCM(view);
+            if (!cm?.state?.vim?.insertMode) {
+              // Normal mode: submit if doc has content
+              const text = view.state.doc.toString();
+              if (text.length > 0) {
+                onSubmitRef.current?.();
+                return true;
+              }
+            }
+            return false;
+          }
+          return false;
+        },
       }),
     ];
   }
