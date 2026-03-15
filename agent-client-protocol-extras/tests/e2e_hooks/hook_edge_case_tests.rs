@@ -342,8 +342,7 @@ async fn new_event_hooks_registered_but_not_triggered_by_prompt() {
     for event_name in &new_event_names {
         let tmp = tempfile::TempDir::new().unwrap();
         let script = helpers::write_exit_script(tmp.path(), "hook.sh", 0, "");
-        let config =
-            helpers::hook_config_json(event_name, script.to_str().unwrap(), None);
+        let config = helpers::hook_config_json(event_name, script.to_str().unwrap(), None);
         let playback = helpers::load_playback_agent("tool_call_session.json");
         // Config is accepted — hooks are registered (not skipped)
         let agent = helpers::build_hookable_agent(Arc::new(playback), &config);
@@ -366,11 +365,9 @@ async fn new_event_hooks_registered_but_not_triggered_by_prompt() {
 async fn mixed_supported_and_forward_compat_config() {
     let tmp = tempfile::TempDir::new().unwrap();
     // Supported hook that WILL fire
-    let supported_script =
-        helpers::write_exit_script(tmp.path(), "supported.sh", 0, "");
+    let supported_script = helpers::write_exit_script(tmp.path(), "supported.sh", 0, "");
     // Forward-compat hook that should NOT fire
-    let compat_script =
-        helpers::write_exit_script(tmp.path(), "compat.sh", 0, "");
+    let compat_script = helpers::write_exit_script(tmp.path(), "compat.sh", 0, "");
 
     let config = format!(
         r#"{{
@@ -393,8 +390,7 @@ async fn mixed_supported_and_forward_compat_config() {
     let _response = helpers::run_prompt(&agent, &session_id, "test").await;
 
     // Stop hook should have fired
-    let supported_captured =
-        helpers::read_stdin_capture(tmp.path(), "supported.sh");
+    let supported_captured = helpers::read_stdin_capture(tmp.path(), "supported.sh");
     assert!(
         supported_captured.is_some(),
         "Supported Stop hook should fire"

@@ -526,7 +526,12 @@ impl Default for AvpElicitationResultOutput {
     }
 }
 
-impl_allow_block!(AvpElicitationResultOutput, allow, block_reason, with_validator);
+impl_allow_block!(
+    AvpElicitationResultOutput,
+    allow,
+    block_reason,
+    with_validator
+);
 
 /// AVP output for InstructionsLoaded hook.
 ///
@@ -634,7 +639,12 @@ impl Default for AvpTeammateIdleOutput {
     }
 }
 
-impl_allow_block!(AvpTeammateIdleOutput, allow_idle, block_reason, with_validator);
+impl_allow_block!(
+    AvpTeammateIdleOutput,
+    allow_idle,
+    block_reason,
+    with_validator
+);
 
 /// AVP output for TaskCompleted hook.
 ///
@@ -849,8 +859,7 @@ mod tests {
 
     #[test]
     fn test_task_completed_block_from_validator() {
-        let output =
-            AvpTaskCompletedOutput::block_from_validator("qa-check", "tests not passing");
+        let output = AvpTaskCompletedOutput::block_from_validator("qa-check", "tests not passing");
         assert!(!output.allow);
         assert!(output.base.validator_block.is_some());
         assert_eq!(

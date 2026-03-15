@@ -114,7 +114,10 @@ impl HebContext {
     /// The workspace hash is the md5 hex digest of the canonical workspace root path,
     /// ensuring each workspace gets its own isolated SQLite database.
     fn resolve_data_dir(workspace_root: &Path) -> PathBuf {
-        let hash = format!("{:x}", md5::compute(workspace_root.to_string_lossy().as_bytes()));
+        let hash = format!(
+            "{:x}",
+            md5::compute(workspace_root.to_string_lossy().as_bytes())
+        );
         dirs::data_dir()
             .unwrap_or_else(|| {
                 dirs::home_dir()

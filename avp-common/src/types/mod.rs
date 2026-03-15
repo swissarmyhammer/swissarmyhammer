@@ -7,11 +7,10 @@ mod output;
 
 pub use avp_output::{
     AvpConfigChangeOutput, AvpElicitationOutput, AvpElicitationResultOutput,
-    AvpInstructionsLoadedOutput, AvpNotificationOutput, AvpOutputBase,
-    AvpPermissionRequestOutput, AvpPostCompactOutput, AvpPostToolUseFailureOutput,
-    AvpPostToolUseOutput, AvpPreCompactOutput, AvpPreToolUseOutput, AvpSessionEndOutput,
-    AvpSessionStartOutput, AvpSetupOutput, AvpStopOutput, AvpSubagentStartOutput,
-    AvpSubagentStopOutput, AvpTaskCompletedOutput, AvpTeammateIdleOutput,
+    AvpInstructionsLoadedOutput, AvpNotificationOutput, AvpOutputBase, AvpPermissionRequestOutput,
+    AvpPostCompactOutput, AvpPostToolUseFailureOutput, AvpPostToolUseOutput, AvpPreCompactOutput,
+    AvpPreToolUseOutput, AvpSessionEndOutput, AvpSessionStartOutput, AvpSetupOutput, AvpStopOutput,
+    AvpSubagentStartOutput, AvpSubagentStopOutput, AvpTaskCompletedOutput, AvpTeammateIdleOutput,
     AvpUserPromptSubmitOutput, AvpWorktreeCreateOutput, AvpWorktreeRemoveOutput, ValidatorBlock,
 };
 pub use common::{CommonInput, HookType};

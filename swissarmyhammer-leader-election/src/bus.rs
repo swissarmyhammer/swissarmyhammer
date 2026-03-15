@@ -100,8 +100,7 @@ impl<M: BusMessage> Publisher<M> {
             while let Ok(wire) = rx.recv() {
                 // Send as multipart: [topic, frame0, frame1, ...]
                 let total = 1 + wire.frames.len();
-                if let Err(e) = sock.send(&wire.topic, if total > 1 { zmq::SNDMORE } else { 0 })
-                {
+                if let Err(e) = sock.send(&wire.topic, if total > 1 { zmq::SNDMORE } else { 0 }) {
                     tracing::warn!("PUB send topic failed: {}", e);
                     continue;
                 }
@@ -247,9 +246,9 @@ impl<M: BusMessage> Subscriber<M> {
         match self.receiver.recv_timeout(timeout) {
             Ok(msg) => Some(msg),
             Err(mpsc::RecvTimeoutError::Timeout) => None,
-            Err(mpsc::RecvTimeoutError::Disconnected) => Some(Err(
-                ElectionError::Message("Subscriber channel disconnected".to_string()),
-            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Some(Err(ElectionError::Message(
+                "Subscriber channel disconnected".to_string(),
+            ))),
         }
     }
 }

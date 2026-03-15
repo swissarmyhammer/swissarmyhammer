@@ -178,8 +178,12 @@ mod tests {
                 r#"{{"session_id":"abc","transcript_path":"/p","cwd":"/c","permission_mode":"default","hook_event_name":"{}"}}"#,
                 name
             );
-            let input: CommonInput =
-                serde_json::from_str(&json).unwrap_or_else(|e| panic!("Failed to deserialize CommonInput with hook_event_name={}: {}", name, e));
+            let input: CommonInput = serde_json::from_str(&json).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to deserialize CommonInput with hook_event_name={}: {}",
+                    name, e
+                )
+            });
             assert_eq!(input.hook_event_name.to_string(), *name);
         }
     }

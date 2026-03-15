@@ -106,7 +106,13 @@ mod tests {
 
     #[test]
     fn test_header_roundtrip() {
-        let header = EventHeader::new("sess-1", "/workspace", EventCategory::Hook, "pre_tool_use", "avp-hook");
+        let header = EventHeader::new(
+            "sess-1",
+            "/workspace",
+            EventCategory::Hook,
+            "pre_tool_use",
+            "avp-hook",
+        );
         let json = serde_json::to_string(&header).unwrap();
         let restored: EventHeader = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.session_id, "sess-1");

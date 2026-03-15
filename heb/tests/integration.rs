@@ -93,7 +93,13 @@ impl TestEnv {
 }
 
 fn make_header(event_type: &str, category: EventCategory) -> EventHeader {
-    EventHeader::new("e2e-session", "/workspace", category, event_type, "e2e-test")
+    EventHeader::new(
+        "e2e-session",
+        "/workspace",
+        category,
+        event_type,
+        "e2e-test",
+    )
 }
 
 fn make_event(event_type: &str, category: EventCategory, body: &[u8]) -> HebEvent {
@@ -172,10 +178,17 @@ fn test_leader_and_follower_hear_each_other() {
     // Leader also hears its own message (subscribed to all)
     let leader_echo = leader_sub.recv_timeout(Duration::from_secs(2));
     assert!(leader_echo.is_some(), "leader should hear its own message");
-    assert_eq!(leader_echo.unwrap().unwrap().header.event_type, "from_leader");
+    assert_eq!(
+        leader_echo.unwrap().unwrap().header.event_type,
+        "from_leader"
+    );
 
     // Follower publishes → leader hears it
-    let follower_event = make_event("from_follower", EventCategory::Agent, b"hello from follower");
+    let follower_event = make_event(
+        "from_follower",
+        EventCategory::Agent,
+        b"hello from follower",
+    );
     follower.publish(&follower_event).unwrap();
 
     let leader_heard = leader_sub.recv_timeout(Duration::from_secs(2));
@@ -186,8 +199,14 @@ fn test_leader_and_follower_hear_each_other() {
 
     // Follower also hears its own message
     let follower_echo = follower_sub.recv_timeout(Duration::from_secs(2));
-    assert!(follower_echo.is_some(), "follower should hear its own message");
-    assert_eq!(follower_echo.unwrap().unwrap().header.event_type, "from_follower");
+    assert!(
+        follower_echo.is_some(),
+        "follower should hear its own message"
+    );
+    assert_eq!(
+        follower_echo.unwrap().unwrap().header.event_type,
+        "from_follower"
+    );
 }
 
 #[test]
@@ -239,7 +258,10 @@ fn test_sqlite_database_created_and_torn_down() {
     // TempDir drops here → database file deleted
     let db_path_copy = db_path.clone();
     drop(env);
-    assert!(!db_path_copy.exists(), "database should be cleaned up by TempDir");
+    assert!(
+        !db_path_copy.exists(),
+        "database should be cleaned up by TempDir"
+    );
 }
 
 #[test]
@@ -250,8 +272,20 @@ fn test_leader_and_follower_events_both_persist() {
     let follower = env.expect_follower();
 
     // Both publish events, both write to the same SQLite
-    let h1 = EventHeader::new("leader-sess", "/ws", EventCategory::Hook, "leader_event", "leader");
-    let h2 = EventHeader::new("follower-sess", "/ws", EventCategory::Agent, "follower_event", "follower");
+    let h1 = EventHeader::new(
+        "leader-sess",
+        "/ws",
+        EventCategory::Hook,
+        "leader_event",
+        "leader",
+    );
+    let h2 = EventHeader::new(
+        "follower-sess",
+        "/ws",
+        EventCategory::Agent,
+        "follower_event",
+        "follower",
+    );
 
     let id1 = env.publish_to_db(&h1, b"leader body");
     let id2 = env.publish_to_db(&h2, b"follower body");
@@ -263,8 +297,14 @@ fn test_leader_and_follower_events_both_persist() {
     let sub = leader.subscribe(&[]).unwrap();
     wait_for_subscriptions();
 
-    let leader_event = HebEvent { header: h1.clone(), body: b"leader body".to_vec() };
-    let follower_event = HebEvent { header: h2.clone(), body: b"follower body".to_vec() };
+    let leader_event = HebEvent {
+        header: h1.clone(),
+        body: b"leader body".to_vec(),
+    };
+    let follower_event = HebEvent {
+        header: h2.clone(),
+        body: b"follower body".to_vec(),
+    };
     leader.publish(&leader_event).unwrap();
     follower.publish(&follower_event).unwrap();
 

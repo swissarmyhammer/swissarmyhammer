@@ -729,8 +729,18 @@ mod tests {
             );
             let input: HookInput = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("Failed to deserialize HookInput for {}: {}", name, e));
-            assert_eq!(input.hook_type(), expected_type, "hook_type() mismatch for {}", name);
-            assert_eq!(input.common().session_id.as_deref(), Some("abc"), "common() mismatch for {}", name);
+            assert_eq!(
+                input.hook_type(),
+                expected_type,
+                "hook_type() mismatch for {}",
+                name
+            );
+            assert_eq!(
+                input.common().session_id.as_deref(),
+                Some("abc"),
+                "common() mismatch for {}",
+                name
+            );
         }
     }
 
@@ -738,9 +748,15 @@ mod tests {
     fn test_new_inputs_optional_fields_default() {
         // All event-specific fields are optional — deserialize with only common fields
         let names = [
-            "Elicitation", "ElicitationResult", "InstructionsLoaded",
-            "ConfigChange", "WorktreeCreate", "WorktreeRemove",
-            "PostCompact", "TeammateIdle", "TaskCompleted",
+            "Elicitation",
+            "ElicitationResult",
+            "InstructionsLoaded",
+            "ConfigChange",
+            "WorktreeCreate",
+            "WorktreeRemove",
+            "PostCompact",
+            "TeammateIdle",
+            "TaskCompleted",
         ];
         for name in &names {
             let json = format!(

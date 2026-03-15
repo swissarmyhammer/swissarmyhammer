@@ -1986,10 +1986,7 @@ hooks:
                 HookEventKindConfig::Notification,
                 HookEventKind::Notification,
             ),
-            (
-                HookEventKindConfig::PostCompact,
-                HookEventKind::PostCompact,
-            ),
+            (HookEventKindConfig::PostCompact, HookEventKind::PostCompact),
             (
                 HookEventKindConfig::TeammateIdle,
                 HookEventKind::TeammateIdle,
@@ -1998,10 +1995,7 @@ hooks:
                 HookEventKindConfig::TaskCompleted,
                 HookEventKind::TaskCompleted,
             ),
-            (
-                HookEventKindConfig::Elicitation,
-                HookEventKind::Elicitation,
-            ),
+            (HookEventKindConfig::Elicitation, HookEventKind::Elicitation),
             (
                 HookEventKindConfig::ElicitationResult,
                 HookEventKind::ElicitationResult,

@@ -57,7 +57,9 @@ pub fn replay(
     let conn = open_connection(db_path)?;
 
     let sql = match category {
-        Some(_) => "SELECT header_json, body FROM events WHERE id > ?1 AND category = ?2 ORDER BY id",
+        Some(_) => {
+            "SELECT header_json, body FROM events WHERE id > ?1 AND category = ?2 ORDER BY id"
+        }
         None => "SELECT header_json, body FROM events WHERE id > ?1 ORDER BY id",
     };
 
@@ -206,6 +208,9 @@ mod tests {
 
         let events = replay(&db_path, "", None).unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].0.id, expected_id, "replayed header should have the correct ULID");
+        assert_eq!(
+            events[0].0.id, expected_id,
+            "replayed header should have the correct ULID"
+        );
     }
 }

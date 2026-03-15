@@ -17,8 +17,7 @@ impl BusMessage for HebEvent {
     }
 
     fn to_frames(&self) -> swissarmyhammer_leader_election::Result<Vec<Vec<u8>>> {
-        let header_json =
-            serde_json::to_vec(&self.header).map_err(ElectionError::Serialization)?;
+        let header_json = serde_json::to_vec(&self.header).map_err(ElectionError::Serialization)?;
         Ok(vec![header_json, self.body.clone()])
     }
 

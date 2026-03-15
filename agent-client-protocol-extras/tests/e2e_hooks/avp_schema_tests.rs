@@ -341,8 +341,8 @@ fn avp_schema_worktree_create() {
     };
 
     let json = event.to_command_input_full(&avp_test_context());
-    let input: HookInput = serde_json::from_value(json)
-        .expect("WorktreeCreate JSON should deserialize as HookInput");
+    let input: HookInput =
+        serde_json::from_value(json).expect("WorktreeCreate JSON should deserialize as HookInput");
 
     match input {
         HookInput::WorktreeCreate(inner) => {
@@ -365,8 +365,8 @@ fn avp_schema_worktree_remove() {
     };
 
     let json = event.to_command_input_full(&avp_test_context());
-    let input: HookInput = serde_json::from_value(json)
-        .expect("WorktreeRemove JSON should deserialize as HookInput");
+    let input: HookInput =
+        serde_json::from_value(json).expect("WorktreeRemove JSON should deserialize as HookInput");
 
     match input {
         HookInput::WorktreeRemove(inner) => {

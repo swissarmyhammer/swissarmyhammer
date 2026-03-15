@@ -355,7 +355,11 @@ impl<M: BusMessage> LeaderGuard<M> {
     /// Pass empty slice to subscribe to all messages. Reuses the ZMQ context
     /// from the proxy handle rather than allocating a new heavyweight context.
     pub fn subscribe(&self, topics: &[&[u8]]) -> Result<Subscriber<M>> {
-        Subscriber::connected(self._proxy.zmq_context(), &self.bus_addresses.backend, topics)
+        Subscriber::connected(
+            self._proxy.zmq_context(),
+            &self.bus_addresses.backend,
+            topics,
+        )
     }
 
     /// Get the bus addresses (for external subscribers).

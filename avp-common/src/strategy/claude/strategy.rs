@@ -771,7 +771,11 @@ mod tests {
                 "Hook {} should allow by default (no blocking validators)",
                 hook_name
             );
-            assert_eq!(exit_code, 0, "Hook {} should return exit 0 by default", hook_name);
+            assert_eq!(
+                exit_code, 0,
+                "Hook {} should return exit 0 by default",
+                hook_name
+            );
         }
     }
 
@@ -818,7 +822,11 @@ mod tests {
                 "Observe-only hook {} should always succeed",
                 hook_name
             );
-            assert_eq!(exit_code, 0, "Observe-only hook {} should return exit 0", hook_name);
+            assert_eq!(
+                exit_code, 0,
+                "Observe-only hook {} should return exit 0",
+                hook_name
+            );
         }
     }
 

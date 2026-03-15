@@ -158,15 +158,9 @@ pub enum HookEvent {
         cwd: PathBuf,
     },
     /// Fires when a worktree is removed.
-    WorktreeRemove {
-        worktree_path: String,
-        cwd: PathBuf,
-    },
+    WorktreeRemove { worktree_path: String, cwd: PathBuf },
     /// Fires after context compaction.
-    PostCompact {
-        session_id: String,
-        cwd: PathBuf,
-    },
+    PostCompact { session_id: String, cwd: PathBuf },
     /// Fires when an agent teammate goes idle.
     TeammateIdle {
         session_id: String,
@@ -240,8 +234,12 @@ impl HookEvent {
             Self::Notification { notification, .. } => {
                 Some(notification_update_name(&notification.update))
             }
-            Self::Elicitation { mcp_server_name, .. } => mcp_server_name.as_deref(),
-            Self::ElicitationResult { mcp_server_name, .. } => Some(mcp_server_name.as_str()),
+            Self::Elicitation {
+                mcp_server_name, ..
+            } => mcp_server_name.as_deref(),
+            Self::ElicitationResult {
+                mcp_server_name, ..
+            } => Some(mcp_server_name.as_str()),
             Self::InstructionsLoaded { file_path, .. } => file_path.as_deref(),
             Self::ConfigChange { source, .. } => source.as_deref(),
             Self::WorktreeCreate { .. }
@@ -457,10 +455,7 @@ impl HookEvent {
                 }
                 obj
             }
-            Self::WorktreeRemove {
-                worktree_path,
-                cwd,
-            } => serde_json::json!({
+            Self::WorktreeRemove { worktree_path, cwd } => serde_json::json!({
                 "cwd": cwd.display().to_string(),
                 "hook_event_name": "WorktreeRemove",
                 "worktree_path": worktree_path,
@@ -2116,7 +2111,10 @@ mod tests {
             requested_schema: serde_json::json!({}),
             cwd: PathBuf::from("/tmp"),
         };
-        assert!(reg.matches(&matching_event), "Should match mcp_server_name=sah");
+        assert!(
+            reg.matches(&matching_event),
+            "Should match mcp_server_name=sah"
+        );
 
         let non_matching_event = HookEvent::Elicitation {
             session_id: "s1".into(),
@@ -2126,7 +2124,10 @@ mod tests {
             requested_schema: serde_json::json!({}),
             cwd: PathBuf::from("/tmp"),
         };
-        assert!(!reg.matches(&non_matching_event), "Should NOT match mcp_server_name=other-server");
+        assert!(
+            !reg.matches(&non_matching_event),
+            "Should NOT match mcp_server_name=other-server"
+        );
 
         // Wrong event kind should not match
         let wrong_kind = HookEvent::Notification {
@@ -2142,7 +2143,10 @@ mod tests {
             )),
             cwd: PathBuf::from("/tmp"),
         };
-        assert!(!reg.matches(&wrong_kind), "Elicitation registration should NOT match Notification events");
+        assert!(
+            !reg.matches(&wrong_kind),
+            "Elicitation registration should NOT match Notification events"
+        );
     }
 
     // -- Decision routing intent tests --
