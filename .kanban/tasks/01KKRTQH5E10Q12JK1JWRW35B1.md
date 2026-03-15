@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: fffffa80
 title: 'FieldRenderer: self-contained field updates via useFieldUpdate'
 ---
 ## What

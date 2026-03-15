@@ -33,12 +33,10 @@ interface EntityInspectorProps {
  * Pulls everything from context:
  * - Field definitions and ordering from SchemaContext
  * - Tag entities from EntityStoreContext (for body_field markdown decorations)
- * - Save function from FieldUpdateContext
+ * - Save function from FieldUpdateContext (used internally by FieldRow)
  */
 export function EntityInspector({ entity }: EntityInspectorProps) {
-  const [editingField, setEditingField] = useState<string | null>(null);
   const { getSchema } = useSchema();
-  const { updateField } = useFieldUpdate();
   const schema = getSchema(entity.entity_type);
   const bodyFieldName = schema?.entity.body_field;
   const fields = schema?.fields ?? [];
@@ -47,7 +45,6 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     const header: FieldDef[] = [];
     const body: FieldDef[] = [];
     const footer: FieldDef[] = [];
-    // Fields are already in entity definition order from the schema
     for (const field of fields) {
       const section = field.section ?? "body";
       if (section === "hidden") continue;
@@ -58,30 +55,6 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     return { header, body, footer };
   }, [fields]);
 
-  const handleEdit = useCallback((fieldName: string) => {
-    setEditingField(fieldName);
-  }, []);
-
-  const handleCommit = useCallback(
-    (fieldName: string, value: unknown) => {
-      updateField(entity.entity_type, entity.id, fieldName, value).catch(() => {});
-      setEditingField(null);
-    },
-    [updateField, entity.entity_type, entity.id],
-  );
-
-  const handleCancel = useCallback(() => {
-    setEditingField(null);
-  }, []);
-
-  const isEditable = (field: FieldDef) => {
-    // Computed tag fields are editable via tag/untag commands
-    if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-tags") {
-      return true;
-    }
-    return field.type.kind !== "computed";
-  };
-
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
   }
@@ -90,15 +63,9 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     <FieldRow
       key={field.name}
       field={field}
-      value={entity.fields[field.name]}
       entity={entity}
-      editing={editingField === field.name}
-      editable={isEditable(field)}
       bodyFieldName={bodyFieldName}
       showLabel={showLabel}
-      onEdit={() => handleEdit(field.name)}
-      onCommit={(value) => handleCommit(field.name, value)}
-      onCancel={handleCancel}
     />
   );
 
@@ -131,39 +98,52 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
 
 interface FieldRowProps {
   field: FieldDef;
-  value: unknown;
   entity: Entity;
-  editing: boolean;
-  editable: boolean;
   bodyFieldName?: string;
   showLabel?: boolean;
-  onEdit: () => void;
-  onCommit: (value: unknown) => void;
-  onCancel: () => void;
 }
 
+/**
+ * A single field row in the inspector. Manages its own editing state
+ * and persists changes via useFieldUpdate — no onCommit prop needed.
+ */
 function FieldRow({
   field,
-  value,
   entity,
-  editing,
-  editable,
   bodyFieldName,
   showLabel = true,
-  onEdit,
-  onCommit,
-  onCancel,
 }: FieldRowProps) {
+  const [editing, setEditing] = useState(false);
+  const { updateField } = useFieldUpdate();
+
+  const editable = isEditable(field);
+
+  const handleEdit = useCallback(() => {
+    if (editable) setEditing(true);
+  }, [editable]);
+
+  const handleCommit = useCallback(
+    (value: unknown) => {
+      setEditing(false);
+      updateField(entity.entity_type, entity.id, field.name, value).catch(() => {});
+    },
+    [updateField, entity.entity_type, entity.id, field.name],
+  );
+
+  const handleCancel = useCallback(() => {
+    setEditing(false);
+  }, []);
+
   const content = (
     <FieldDispatch
       field={field}
-      value={value}
+      value={entity.fields[field.name]}
       entity={entity}
       editing={editing && editable}
       bodyFieldName={bodyFieldName}
-      onEdit={onEdit}
-      onCommit={onCommit}
-      onCancel={onCancel}
+      onEdit={handleEdit}
+      onCommit={handleCommit}
+      onCancel={handleCancel}
     />
   );
 
@@ -181,6 +161,14 @@ function FieldRow({
       </TooltipContent>
     </Tooltip>
   );
+}
+
+/** Check if a field is editable in the inspector. */
+function isEditable(field: FieldDef): boolean {
+  if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-tags") {
+    return true;
+  }
+  return field.type.kind !== "computed";
 }
 
 function FieldDispatch({

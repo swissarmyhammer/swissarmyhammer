@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
 import { BoardSelector } from "@/components/board-selector";
 import appIcon from "@/assets/app-icon-32.png";
@@ -133,7 +134,7 @@ export function QuickCapture() {
         </div>
 
         {/* Editor + Add button */}
-        <div className="px-3 py-2 flex items-start gap-2">
+        <div className="px-3 py-3 flex items-center gap-2">
           <div className="flex-1 min-w-0">
             <FieldPlaceholderEditor
               key={editorKey}
@@ -145,15 +146,14 @@ export function QuickCapture() {
               onChange={setDraft}
             />
           </div>
-          <button
-            type="button"
+          <Button
+            size="icon"
+            className="h-7 w-7 shrink-0"
             onClick={() => { if (draft.trim()) handleSubmit(draft); }}
             disabled={!draft.trim()}
-            className="shrink-0 mt-0.5 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-30 disabled:pointer-events-none transition-colors"
-            title="Add task"
           >
             <Plus className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         {/* Divider + Board selector — always shown */}
