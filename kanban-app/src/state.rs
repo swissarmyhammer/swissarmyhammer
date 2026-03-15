@@ -69,7 +69,7 @@ impl BoardHandle {
                         by_column.entry(col).or_default().push(t);
                     }
 
-                    for (_col, tasks) in &mut by_column {
+                    for tasks in by_column.values_mut() {
                         tasks.sort_by(|a, b| {
                             let oa = a.get_str("position_ordinal").unwrap_or("");
                             let ob = b.get_str("position_ordinal").unwrap_or("");

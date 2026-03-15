@@ -81,6 +81,7 @@ pub fn compute_ordinal_for_drop(tasks: &[Entity], drop_index: usize) -> Ordinal 
 /// - Only `after` given (inserting at top): returns an ordinal before `after`
 /// - Only `before` given (appending at bottom): returns `Ordinal::after(before)`
 /// - Both given: returns `Ordinal::between(before, after)`
+///
 /// Compute an ordinal for a task given its neighbors.
 ///
 /// Uses the `fractional_index` crate (via `Ordinal`) for correct
