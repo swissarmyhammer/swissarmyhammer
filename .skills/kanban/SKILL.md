@@ -12,7 +12,9 @@ Pick up and execute the next task from the kanban board.
 
 ## Important: Use Kanban for All Task Tracking
 
-The kanban board is your todo list. Do NOT use any built-in task or todo tools (like TodoWrite or TaskCreate) — always use the `kanban` tool instead. Every task, subtask, and work item belongs on the kanban board as cards with subtasks. This is how work is tracked across both Claude Code and llama-agent sessions, so it must be the single source of truth.
+The kanban board is your todo list. Do NOT use any built-in task or todo tools (like TodoWrite or TaskCreate) — always use the `kanban` tool instead. Every task and work item belongs on the kanban board. This is how work is tracked across both Claude Code and llama-agent sessions, so it must be the single source of truth.
+
+**Subtasks are GitHub Flavored Markdown checklists** inside the card's `description` field. There is no separate "add subtask" API — subtasks live in the description as `- [ ]` / `- [x]` items. To add subtasks, include them when creating the card or use `update task` to modify the description.
 
 When the user asks you to track work, create a todo list, or remember tasks — use kanban cards, not any other mechanism.
 

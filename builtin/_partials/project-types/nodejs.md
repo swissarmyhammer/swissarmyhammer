@@ -21,6 +21,13 @@ partial: true
 
 **IMPORTANT:** Do NOT glob for test files. Use `npm test` to run all tests - the test runner will discover them automatically.
 
+**Formatting:**
+- Check `package.json` scripts for a `format` or `prettier` script
+- **Prettier:** `npx prettier --write .` (format) or `npx prettier --check .` (verify)
+- **ESLint with fix:** `npm run lint -- --fix` (if configured)
+- **TypeScript check:** `npx tsc --noEmit` (type-check without emitting)
+- ALWAYS run the project's formatter before committing
+
 **Best Practices:**
 - Always run the appropriate package manager (don't mix npm/yarn/pnpm)
 - Check `package.json` scripts section for available commands

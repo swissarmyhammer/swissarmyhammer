@@ -20,6 +20,12 @@ partial: true
 
 **IMPORTANT:** Do NOT glob for test files. Maven automatically discovers tests in `src/test/java/`. Use `mvn test` to run all tests.
 
+**Formatting:**
+- **Spotless:** `mvn spotless:apply` (format) or `mvn spotless:check` (verify) — if configured in `pom.xml`
+- **Google Java Format:** check `pom.xml` for `google-java-format` plugin
+- Check `pom.xml` for formatter plugins before committing
+- ALWAYS run the project's formatter before committing
+
 **Best Practices:**
 - Use `mvn clean` before full builds to avoid stale artifacts
 - Run `mvn verify` for full validation including integration tests
