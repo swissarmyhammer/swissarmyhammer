@@ -295,8 +295,11 @@ export function EditableMarkdown({
 
   const extensions = useMemo(
     () => [
-      // Submit/cancel handlers must be first — they use DOM-level event
-      // handlers that need to fire before vim/markdown keymaps consume keys.
+      keymapCompartment.current.of(keymapExtension(mode)),
+      EditorView.lineWrapping,
+      ...(multiline
+        ? [markdown({ base: markdownLanguage, codeLanguages: languages })]
+        : []),
       ...buildSubmitCancelExtensions({
         mode,
         onSubmitRef: semanticSubmitRef,
@@ -304,11 +307,6 @@ export function EditableMarkdown({
         saveInPlaceRef,
         singleLine: !multiline,
       }),
-      keymapCompartment.current.of(keymapExtension(mode)),
-      EditorView.lineWrapping,
-      ...(multiline
-        ? [markdown({ base: markdownLanguage, codeLanguages: languages })]
-        : []),
       ...mentionExtensions,
     ],
     [mode, multiline, mentionExtensions]

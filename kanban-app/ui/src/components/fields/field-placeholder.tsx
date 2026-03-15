@@ -151,17 +151,15 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
 
   const extensions = useMemo(
     () => [
-      // Submit/cancel handlers must be first — they use DOM-level event
-      // handlers that need to fire before vim/markdown keymaps consume keys.
+      keymapCompartment.current.of(keymapExtension(mode)),
+      EditorView.lineWrapping,
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
       ...buildSubmitCancelExtensions({
         mode,
         onSubmitRef: semanticSubmitRef,
         onCancelRef: semanticCancelRef,
         saveInPlaceRef,
       }),
-      keymapCompartment.current.of(keymapExtension(mode)),
-      EditorView.lineWrapping,
-      markdown({ base: markdownLanguage, codeLanguages: languages }),
       ...(placeholder ? [cmPlaceholder(placeholder)] : []),
     ],
     [mode, placeholder],
