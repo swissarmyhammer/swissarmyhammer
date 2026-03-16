@@ -27,8 +27,8 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 }
 
 const twoBoards: OpenBoard[] = [
-  { path: "/home/user/project-a/.kanban", name: "Project A" },
-  { path: "/home/user/project-b/.kanban", name: "Project B" },
+  { path: "/home/user/project-a/.kanban", name: "Project A", is_active: true },
+  { path: "/home/user/project-b/.kanban", name: "Project B", is_active: false },
 ];
 
 describe("pathStem", () => {

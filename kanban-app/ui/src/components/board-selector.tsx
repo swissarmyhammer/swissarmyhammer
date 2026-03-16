@@ -5,6 +5,8 @@
  * The path stem + chevron open a Radix Select dropdown to switch boards.
  */
 
+import { invoke } from "@tauri-apps/api/core";
+import { ExternalLink } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -31,6 +33,8 @@ interface BoardSelectorProps {
   onSelect: (path: string) => void;
   /** The active board entity — used for live name display and in-place editing. */
   boardEntity?: Entity;
+  /** Show tear-off button to open board in a new window. */
+  showTearOff?: boolean;
   className?: string;
 }
 
@@ -39,6 +43,7 @@ export function BoardSelector({
   selectedPath,
   onSelect,
   boardEntity,
+  showTearOff,
   className,
 }: BoardSelectorProps) {
   if (boards.length === 0) return null;
@@ -86,6 +91,19 @@ export function BoardSelector({
           })}
         </SelectContent>
       </Select>
+
+      {showTearOff && selectedPath && (
+        <button
+          type="button"
+          className="p-1 rounded text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted transition-colors"
+          title="Open in new window"
+          onClick={() => {
+            invoke("create_window", { boardPath: selectedPath }).catch(console.error);
+          }}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </button>
+      )}
     </div>
   );
 }

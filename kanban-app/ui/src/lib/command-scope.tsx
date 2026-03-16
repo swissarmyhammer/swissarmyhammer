@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 /** Describes where a command should appear in the native OS menu bar. */
 export interface MenuPlacement {
   /** Which menu to place the command in. */
-  menu: "app" | "file" | "edit" | "settings";
+  menu: "app" | "file" | "edit" | "settings" | "window";
   /** Separator group number within the menu (items in the same group are contiguous). */
   group: number;
   /** Sort order within the group. */

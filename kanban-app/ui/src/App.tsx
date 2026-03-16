@@ -29,8 +29,14 @@ import { entityFromBag, getStr } from "@/types/kanban";
 import { refreshBoards } from "@/lib/refresh";
 import { QuickCapture } from "@/components/quick-capture";
 
+/** Parse URL params once at module level. */
+const URL_PARAMS = new URLSearchParams(window.location.search);
+
 /** Detect if this window instance is the quick-capture popup. */
-const IS_QUICK_CAPTURE = new URLSearchParams(window.location.search).get("window") === "quick-capture";
+const IS_QUICK_CAPTURE = URL_PARAMS.get("window") === "quick-capture";
+
+/** Initial board path from URL (set when opening a new window for a specific board). */
+const INITIAL_BOARD_PATH = URL_PARAMS.get("board") ?? undefined;
 
 // Mark <html> so CSS can make the quick-capture window fully transparent.
 if (IS_QUICK_CAPTURE) {
@@ -81,6 +87,10 @@ function App() {
     [],
   );
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
+  /** Per-window active board path. Each window independently selects which board to display. */
+  const [activeBoardPath, setActiveBoardPath] = useState<string | undefined>(INITIAL_BOARD_PATH);
+  const activeBoardPathRef = useRef(activeBoardPath);
+  activeBoardPathRef.current = activeBoardPath;
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
@@ -115,13 +125,22 @@ function App() {
   }, []);
 
   const refresh = useCallback(async () => {
-    const result = await refreshBoards();
+    const result = await refreshBoards(activeBoardPathRef.current);
     // Open boards always update — even if board data failed.
     setOpenBoards(result.openBoards);
+
+    // If we don't have an active board path yet, pick one from the open boards list.
+    if (!activeBoardPathRef.current && result.openBoards.length > 0) {
+      const active = result.openBoards.find((b) => b.is_active) ?? result.openBoards[0];
+      setActiveBoardPath(active.path);
+      activeBoardPathRef.current = active.path;
+    }
+
     if (result.openBoards.length === 0) {
       // All boards closed — clear stale state so the placeholder shows.
       setBoard(null);
       setEntitiesByType({});
+      setActiveBoardPath(undefined);
       return;
     }
     // Update board data and entities atomically. If board data arrives
@@ -234,8 +253,21 @@ function App() {
             });
         }
       }),
-      // Keep board-changed for structural operations (open/switch board)
-      listen("board-changed", () => {
+      // Keep board-changed for structural operations (open/switch board).
+      // Re-fetch the open boards list; if our active board was closed, fall back.
+      listen("board-changed", async () => {
+        let openList: OpenBoard[] = [];
+        try {
+          openList = await invoke<OpenBoard[]>("list_open_boards");
+        } catch { /* ignore */ }
+        setOpenBoards(openList);
+        const currentPath = activeBoardPathRef.current;
+        if (currentPath && !openList.some((b) => b.path === currentPath)) {
+          // Our board was closed — fall back to first available
+          const fallback = openList[0]?.path;
+          setActiveBoardPath(fallback);
+          activeBoardPathRef.current = fallback;
+        }
         refresh();
       }),
     ];
@@ -244,6 +276,15 @@ function App() {
         p.then((fn) => fn());
       }
     };
+  }, [refresh]);
+
+  /** Switch this window's active board. Updates local state + backend "last-used" default. */
+  const handleSwitchBoard = useCallback(async (path: string) => {
+    setActiveBoardPath(path);
+    activeBoardPathRef.current = path;
+    // Update backend's global active board (for commands that don't pass board_path)
+    try { await invoke("set_active_board", { path }); } catch { /* ignore */ }
+    refresh();
   }, [refresh]);
 
   const entityStore = useMemo(() => ({
@@ -264,14 +305,15 @@ function App() {
     <AppModeProvider>
     <UndoStackProvider>
     <InspectProvider onInspect={inspectEntity} onDismiss={dismissTopPanel}>
-    <AppShell>
+    <AppShell openBoards={openBoards} onSwitchBoard={handleSwitchBoard}>
     <ViewsProvider>
     <ViewCommandScope>
     <div className="h-screen bg-background text-foreground flex flex-col">
       <NavBar
         board={board}
         openBoards={openBoards}
-        onBoardSwitched={refresh}
+        activeBoardPath={activeBoardPath}
+        onSwitchBoard={handleSwitchBoard}
         onBoardInspect={() => inspectEntity("board", "board")}
       />
       {board ? (
