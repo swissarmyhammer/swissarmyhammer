@@ -21,7 +21,7 @@ import { GridView } from "@/components/grid-view";
 import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import { ViewsProvider, useViews } from "@/lib/views-context";
-import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
+import { CommandScopeProvider, ActiveBoardPathProvider, type CommandDef } from "@/lib/command-scope";
 import type {
   BoardData, OpenBoard, Entity, EntityBag,
 } from "@/types/kanban";
@@ -124,13 +124,18 @@ function App() {
     setPanelStack([]);
   }, []);
 
+  // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
+  // The ref is kept in sync with state inside the callback.
   const refresh = useCallback(async () => {
     const result = await refreshBoards(activeBoardPathRef.current);
     // Open boards always update — even if board data failed.
     setOpenBoards(result.openBoards);
 
-    // If we don't have an active board path yet, pick one from the open boards list.
-    if (!activeBoardPathRef.current && result.openBoards.length > 0) {
+    // Pick or fall back to a valid active board path. Handles both initial
+    // mount (no path yet) and board-closed (path no longer in open list).
+    const currentPath = activeBoardPathRef.current;
+    const pathStillOpen = currentPath && result.openBoards.some((b) => b.path === currentPath);
+    if ((!currentPath || !pathStillOpen) && result.openBoards.length > 0) {
       const active = result.openBoards.find((b) => b.is_active) ?? result.openBoards[0];
       setActiveBoardPath(active.path);
       activeBoardPathRef.current = active.path;
@@ -203,7 +208,11 @@ function App() {
           refresh();
           return;
         }
-        invoke<EntityBag>("get_entity", { entityType: entity_type, id })
+        invoke<EntityBag>("get_entity", {
+          entityType: entity_type,
+          id,
+          ...(activeBoardPathRef.current ? { boardPath: activeBoardPathRef.current } : {}),
+        })
           .then((bag) => {
             const entity = entityFromBag(bag);
             setEntitiesFor(entity_type, (prev) => {
@@ -246,7 +255,11 @@ function App() {
         if (fullFields) {
           applyEntity({ entity_type, id, fields: fullFields });
         } else {
-          invoke<EntityBag>("get_entity", { entityType: entity_type, id })
+          invoke<EntityBag>("get_entity", {
+            entityType: entity_type,
+            id,
+            ...(activeBoardPathRef.current ? { boardPath: activeBoardPathRef.current } : {}),
+          })
             .then((bag) => applyEntity(entityFromBag(bag)))
             .catch((err) => {
               console.error(`[entity-field-changed] Failed to fetch ${entity_type}/${id}:`, err);
@@ -254,20 +267,8 @@ function App() {
         }
       }),
       // Keep board-changed for structural operations (open/switch board).
-      // Re-fetch the open boards list; if our active board was closed, fall back.
-      listen("board-changed", async () => {
-        let openList: OpenBoard[] = [];
-        try {
-          openList = await invoke<OpenBoard[]>("list_open_boards");
-        } catch { /* ignore */ }
-        setOpenBoards(openList);
-        const currentPath = activeBoardPathRef.current;
-        if (currentPath && !openList.some((b) => b.path === currentPath)) {
-          // Our board was closed — fall back to first available
-          const fallback = openList[0]?.path;
-          setActiveBoardPath(fallback);
-          activeBoardPathRef.current = fallback;
-        }
+      // refresh() handles open boards list + active board fallback in one pass.
+      listen("board-changed", () => {
         refresh();
       }),
     ];
@@ -297,6 +298,7 @@ function App() {
     <TooltipProvider delayDuration={400}>
     <Toaster position="bottom-right" richColors />
     <InitProgressListener />
+    <ActiveBoardPathProvider value={activeBoardPath}>
     <SchemaProvider>
     <EntityStoreProvider entities={entityStore}>
     <EntityFocusProvider>
@@ -373,6 +375,7 @@ function App() {
     </EntityFocusProvider>
     </EntityStoreProvider>
     </SchemaProvider>
+    </ActiveBoardPathProvider>
     </TooltipProvider>
   );
 }

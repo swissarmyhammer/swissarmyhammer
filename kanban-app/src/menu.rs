@@ -117,14 +117,18 @@ pub fn build_menu_from_manifest(
     let window_menu = Submenu::new(app, "Window", true)?;
     if let Some(items) = menus.get("window") {
         let mut last_group: Option<usize> = None;
+        let mut count = 0usize;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
                 window_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
             window_menu.append(build_menu_item(app, entry)?.as_ref())?;
             last_group = Some(entry.group);
+            count += 1;
         }
-        window_menu.append(&PredefinedMenuItem::separator(app)?)?;
+        if count > 0 {
+            window_menu.append(&PredefinedMenuItem::separator(app)?)?;
+        }
     }
     window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
     window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;

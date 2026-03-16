@@ -16,6 +16,7 @@ import {
   horizontalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { invoke } from "@tauri-apps/api/core";
+import { useActiveBoardPath } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { EntityCard } from "@/components/entity-card";
@@ -46,6 +47,9 @@ type ColumnLayout = Map<string, string[]>;
 type DragType = "task" | "column";
 
 export function BoardView({ board, tasks }: BoardViewProps) {
+  const boardPath = useActiveBoardPath();
+  const boardPathRef = useRef(boardPath);
+  boardPathRef.current = boardPath;
   const { setFocus } = useEntityFocus();
   const inspectEntity = useInspect();
   const boardMoniker = moniker("board", "board");
@@ -269,6 +273,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await invoke("dispatch_command", {
           cmd: "task.move",
           args,
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         });
       } catch (e) {
         console.error("Failed to move task:", e);
@@ -303,6 +308,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
           await invoke("dispatch_command", {
             cmd: "column.reorder",
             args: { id: activeId, target_index: newIndex },
+            ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
           });
         } catch (e) {
           console.error("Failed to reorder columns:", e);
@@ -385,7 +391,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        await invoke("dispatch_command", { cmd: "task.add", args: { title, column: columnId } });
+        await invoke("dispatch_command", { cmd: "task.add", args: { title, column: columnId }, ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}) });
       } catch (e) {
         console.error("Failed to add task:", e);
       }

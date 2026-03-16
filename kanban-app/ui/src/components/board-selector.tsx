@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { ExternalLink } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -93,16 +94,17 @@ export function BoardSelector({
       </Select>
 
       {showTearOff && selectedPath && (
-        <button
-          type="button"
-          className="p-1 rounded text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted transition-colors"
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 text-muted-foreground/40"
           title="Open in new window"
           onClick={() => {
             invoke("create_window", { boardPath: selectedPath }).catch(console.error);
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       )}
     </div>
   );
