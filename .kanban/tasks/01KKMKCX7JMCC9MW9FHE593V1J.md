@@ -17,9 +17,9 @@ Files to create:
 - `swissarmyhammer-entity-search/src/error.rs` — `SearchError` type
 
 ## Acceptance Criteria
-- [ ] Crate compiles: `cargo check -p swissarmyhammer-entity-search`
-- [ ] `SearchResult` and `SearchStrategy` types are public
-- [ ] Depends on `swissarmyhammer-entity` for the `Entity` type
+- [x] Crate compiles: `cargo check -p swissarmyhammer-entity-search`
+- [x] `SearchResult` and `SearchStrategy` types are public
+- [x] Depends on `swissarmyhammer-entity` for the `Entity` type
 
 ## Tests
 - [ ] `cargo nextest run -p swissarmyhammer-entity-search`

@@ -19,7 +19,7 @@ pub mod id_types;
 pub mod types;
 pub mod validation;
 
-pub use compute::{ComputeEngine, DeriveFn};
+pub use compute::{AggregateFn, ComputeEngine, DeriveFn, EntityQueryFn};
 pub use context::{load_yaml_dir, FieldsContext, FieldsContextBuilder};
 pub use derive::{DeriveError, DeriveHandler, DeriveRegistry};
 pub use error::{FieldsError, Result};

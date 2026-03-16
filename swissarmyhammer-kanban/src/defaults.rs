@@ -411,7 +411,7 @@ mod tests {
             serde_json::json!("Fix the #bug in #login module"),
         );
 
-        let result = engine.derive(&field, &fields).await.unwrap();
+        let result = engine.derive(&field, &fields, None).await.unwrap();
         let tags: Vec<String> = serde_json::from_value(result).unwrap();
         assert_eq!(tags, vec!["bug", "login"]);
     }
@@ -441,7 +441,7 @@ mod tests {
             serde_json::json!("Tasks:\n- [x] First\n- [ ] Second\n- [x] Third\n- [ ] Fourth"),
         );
 
-        let result = engine.derive(&field, &fields).await.unwrap();
+        let result = engine.derive(&field, &fields, None).await.unwrap();
         assert_eq!(result["total"], 4);
         assert_eq!(result["completed"], 2);
         assert_eq!(result["percent"], 50);
@@ -487,7 +487,7 @@ mod tests {
 
         let fields = HashMap::new(); // No body field
 
-        let result = engine.derive(&field, &fields).await.unwrap();
+        let result = engine.derive(&field, &fields, None).await.unwrap();
         assert_eq!(result["total"], 0);
         assert_eq!(result["completed"], 0);
         assert_eq!(result["percent"], 0);
