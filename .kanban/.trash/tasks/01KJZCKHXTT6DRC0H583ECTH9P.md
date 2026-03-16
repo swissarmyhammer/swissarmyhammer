@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: j9
+title: 'Fix failing test: template_context::tests::test_with_template_vars in swissarmyhammer-config'
+---
+Test `template_context::tests::test_with_template_vars` in `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban/swissarmyhammer-config/src/template_context.rs` (line 1062) fails with a LoadError. The test calls `TemplateContext::with_template_vars()` which internally calls `Self::load()` attempting to read a YAML config file from disk. The temp directory used by the test does not contain the expected `.swissarmyhammer/sah.yaml` file. Error: `LoadError { path: "/private/var/folders/.../T/.tmppR0Y4q/.swissarmyhammer/sah.yaml", source: "Failed to read YAML file: No such file or directory (os error 2)" }`. The test should likely use `TemplateContext::from_template_vars()` (line 287) instead, which creates a context without loading config files. Rerun with: `cargo test -p swissarmyhammer-config --lib test_with_template_vars` #test-failure

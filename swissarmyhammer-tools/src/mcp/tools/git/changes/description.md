@@ -4,61 +4,24 @@ Git operations for analyzing branch changes and semantic diffs.
 
 ### get changes
 
-List files that have changed on a branch relative to its parent branch, including uncommitted changes.
+List files changed on a branch relative to its parent, including uncommitted changes.
 
 ```json
 {"op": "get changes"}
-```
-
-```json
 {"op": "get changes", "branch": "issue/feature-123"}
-```
-
-Use `range` to diff an explicit revision range. This takes precedence over parent-branch detection:
-
-```json
-{"op": "get changes", "range": "HEAD~1..HEAD"}
-```
-
-```json
 {"op": "get changes", "range": "HEAD~3..HEAD"}
 ```
 
-A single ref is treated as `ref..HEAD`:
-
-```json
-{"op": "get changes", "range": "HEAD~2"}
-```
-
-**Behavior summary:**
-
-- Feature branch (has parent): diff from parent + uncommitted changes
-- Main + uncommitted changes: uncommitted changes only
-- Main + clean + no `range`: defaults to `HEAD~1..HEAD` (last commit)
-- Any branch + `range` specified: range takes precedence
-
-Returns branch name, parent branch (if detected), range used (if any), and array of changed file paths.
+**Behavior**: Feature branch → diff from parent + uncommitted. Main + uncommitted → uncommitted only. Main + clean → defaults to `HEAD~1..HEAD`. `range` always takes precedence.
 
 ### get diff
 
-Semantic diff at the entity level (functions, classes, etc.) using tree-sitter parsing.
-
-**Inline text mode** -- compare two code snippets directly:
-
-```json
-{"op": "get diff", "left_text": "fn foo() {}", "right_text": "fn foo(x: i32) {}", "language": "rust"}
-```
-
-**File mode** -- compare files, optionally at different git refs:
-
-```json
-{"op": "get diff", "left": "src/main.rs@HEAD~1", "right": "src/main.rs"}
-```
-
-**Auto-detect mode** -- no extra parameters, diffs dirty/staged files:
+Semantic diff at the entity level (functions, classes) using tree-sitter.
 
 ```json
 {"op": "get diff"}
+{"op": "get diff", "left": "src/main.rs@HEAD~1", "right": "src/main.rs"}
+{"op": "get diff", "left_text": "fn foo() {}", "right_text": "fn foo(x: i32) {}", "language": "rust"}
 ```
 
-Returns summary counts and an array of semantic changes (added, modified, deleted, moved, renamed entities).
+Auto-detect mode (no params) diffs dirty/staged files. Returns summary counts and semantic changes (added, modified, deleted, moved, renamed).

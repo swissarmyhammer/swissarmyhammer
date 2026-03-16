@@ -1,0 +1,6 @@
+---
+position_column: done
+position_ordinal: n6
+title: Add coreml-rs dependency for native CoreML .mlpackage loading
+---
+Replace the planned ObjC wrapper approach with the existing `coreml-rs` crate (https://github.com/swarnimarun/coreml-rs).\n\n`coreml-rs` provides direct Rust bindings to CoreML: load .mlpackage, set ANE compute options, create inputs, run predictions. No need for custom Objective-C wrappers.\n\n**Why coreml-rs:**\n- Purpose-built for loading .mlpackage from Rust\n- Supports `CoreMLModelOptions` for ANE compute targeting\n- Has `.add_input()` / `.predict()` / `.bytesFrom()` API\n- No heavy framework dependencies (unlike candle-coreml)\n- Active development (72+ commits)\n\n**Alternatives considered:**\n- `candle-coreml` — pulls in entire Candle ecosystem, overkill\n- `objc2-core-ml` — low-level objc2 bindings, essentially writing the ObjC wrapper ourselves\n- Custom ObjC wrapper in onnxruntime-coreml-sys — rejected per ane-embed-crate-plan.md\n\n**Checklist:**\n- [ ] Add `coreml-rs` to ane-embedding/Cargo.toml\n- [ ] Verify it compiles on macOS arm64\n- [ ] Write a minimal test: load the .mlpackage from card 1, run inference, get output\n- [ ] Document any API quirks or version pins needed\n- [ ] All tests pass

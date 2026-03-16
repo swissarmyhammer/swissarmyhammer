@@ -162,8 +162,8 @@ impl ServerHandler for FilteringMcpProxy {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
-        tracing::warn!(
-            "🔍 PROXY list_tools called - filtering from {}",
+        tracing::debug!(
+            "FilteringMcpProxy: list_tools filtering from {}",
             self.upstream_url
         );
 
@@ -215,7 +215,7 @@ impl ServerHandler for FilteringMcpProxy {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::info!(
+        tracing::debug!(
             "call_tool '{}' - forwarding to {}",
             request.name,
             self.upstream_url

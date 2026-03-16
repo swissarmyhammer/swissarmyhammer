@@ -541,30 +541,66 @@ impl ToolContext {
         name: &str,
         params: serde_json::Value,
     ) -> Result<CallToolResult, McpError> {
-        // Get the tool registry
-        let registry = self.tool_registry.as_ref().ok_or_else(|| {
-            McpError::internal_error("Tool registry not available in this context", None)
-        })?;
+        use tracing::Instrument;
 
-        // Look up the tool
-        let registry_guard = registry.read().await;
-        let tool = registry_guard.get_tool(name).ok_or_else(|| {
-            McpError::internal_error(format!("Tool '{}' not found in registry", name), None)
-        })?;
-
-        // Convert params to a map
-        let params_map = match params {
-            serde_json::Value::Object(map) => map,
-            _ => {
-                return Err(McpError::invalid_params(
-                    format!("Tool parameters must be a JSON object, got: {:?}", params),
-                    None,
-                ));
-            }
+        let tool_name = name.to_string();
+        let arg_count = match &params {
+            serde_json::Value::Object(map) => map.len(),
+            _ => 0,
         };
 
-        // Execute the tool
-        tool.execute(params_map, self).await
+        let span = tracing::info_span!(
+            "tool_call",
+            tool = %tool_name,
+            args = arg_count,
+            caller = "internal",
+            status = tracing::field::Empty,
+        );
+
+        async {
+            // Get the tool registry
+            let registry = self.tool_registry.as_ref().ok_or_else(|| {
+                McpError::internal_error("Tool registry not available in this context", None)
+            })?;
+
+            // Look up the tool
+            let registry_guard = registry.read().await;
+            let tool = registry_guard.get_tool(name).ok_or_else(|| {
+                tracing::error!(tool = %tool_name, "tool not found in registry");
+                McpError::internal_error(format!("Tool '{}' not found in registry", name), None)
+            })?;
+
+            // Convert params to a map
+            let params_map = match params {
+                serde_json::Value::Object(map) => map,
+                _ => {
+                    return Err(McpError::invalid_params(
+                        format!("Tool parameters must be a JSON object, got: {:?}", params),
+                        None,
+                    ));
+                }
+            };
+
+            let start = std::time::Instant::now();
+            let result = tool.execute(params_map, self).await;
+            let elapsed = start.elapsed();
+
+            let is_error = match &result {
+                Ok(r) => r.is_error.unwrap_or(false),
+                Err(_) => true,
+            };
+            tracing::Span::current().record("status", if is_error { "error" } else { "ok" });
+
+            tracing::info!(
+                duration_ms = elapsed.as_millis(),
+                error = is_error,
+                "tool_call complete"
+            );
+
+            result
+        }
+        .instrument(span)
+        .await
     }
 }
 

@@ -1,0 +1,1 @@
+{"id":"01KK1XMA2QZHRGYHTA4XE4P260","timestamp":"2026-03-06T15:53:00.247346Z","entity_type":"tag","entity_id":"01KK1XMA2P32FH5YQKK70EKJRP","op":"create","changes":[["color",{"kind":"set","value":"00cc66"}],["description",{"kind":"set","value":"Builtin model YAML configs"}],["tag_name",{"kind":"set","value":"models"}]],"transaction_id":"01KK1XMA2GJAFBYQA6GC3NG8SP"}

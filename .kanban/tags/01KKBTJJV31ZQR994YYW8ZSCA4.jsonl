@@ -1,0 +1,1 @@
+{"id":"01KKBTJJV7YHH4Z5EXD5C84KZW","timestamp":"2026-03-10T12:12:02.279089Z","entity_type":"tag","entity_id":"01KKBTJJV31ZQR994YYW8ZSCA4","op":"create","changes":[["color",{"kind":"set","value":"0088cc"}],["description",{"kind":"set","value":"Shell security config redesign"}],["tag_name",{"kind":"set","value":"shell-config"}]],"transaction_id":"01KKBTJJTFHWG5ZZ0J1WREYVMA"}
