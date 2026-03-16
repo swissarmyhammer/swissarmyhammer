@@ -229,6 +229,15 @@ export function AppShell({ children }: { children: ReactNode }) {
         },
       },
       {
+        id: "file.closeBoard",
+        name: "Close Board",
+        keys: { cua: "Mod+W", vim: "Mod+W" },
+        menuPlacement: { menu: "file", group: 0, order: 2 },
+        execute: async () => {
+          await invoke("close_board");
+        },
+      },
+      {
         id: "app.about",
         name: "About",
         menuPlacement: { menu: "app", group: 0, order: 0 },

@@ -65,14 +65,14 @@ export function BoardSelector({
 
       <Select value={selectedPath ?? undefined} onValueChange={onSelect}>
         <SelectTrigger
-          className="border-none shadow-none h-auto py-0 px-0 gap-1 w-auto min-w-0"
+          className="border-none shadow-none h-auto py-0 px-0 gap-1 w-auto min-w-0 focus-visible:ring-0 focus-visible:border-transparent"
           size="sm"
         >
           {stem && (
             <span className="text-xs text-muted-foreground/50 shrink-0">{stem}</span>
           )}
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent position="popper">
           {boards.map((b) => {
             const name = b.path === selectedPath
               ? displayName

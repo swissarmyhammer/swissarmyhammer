@@ -62,6 +62,7 @@ fn main() {
             commands::list_available_commands,
             commands::show_context_menu,
             commands::open_board,
+            commands::close_board,
             commands::list_open_boards,
             commands::set_active_board,
             commands::get_recent_boards,

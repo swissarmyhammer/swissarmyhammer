@@ -81,9 +81,10 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            // Count tasks by column
+            // Count tasks by column, computing ready status in a single pass.
             let mut column_counts: HashMap<String, usize> = HashMap::new();
             let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
+            let mut total_ready: usize = 0;
 
             for task in &all_tasks {
                 let col = task
@@ -94,6 +95,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
 
                 if task_is_ready(task, &all_tasks, terminal_id) {
                     *column_ready_counts.entry(col).or_insert(0) += 1;
+                    total_ready += 1;
                 }
             }
 
@@ -169,12 +171,9 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 })
                 .collect();
 
-            // Calculate summary
+            // Calculate summary (ready count already computed in the column pass)
             let total_tasks = all_tasks.len();
-            let ready_tasks = all_tasks
-                .iter()
-                .filter(|t| task_is_ready(t, &all_tasks, terminal_id))
-                .count();
+            let ready_tasks = total_ready;
             let blocked_tasks = total_tasks - ready_tasks;
             let done_tasks = column_counts.get(terminal_id).copied().unwrap_or(0);
             let percent_complete = if total_tasks > 0 {
