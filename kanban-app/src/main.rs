@@ -122,6 +122,44 @@ fn main() {
                 let _ = win.set_focus();
             }
 
+            // The quick-capture window must always start hidden — it is shown
+            // only by the global hotkey toggle.  The window-state plugin may
+            // have restored it as visible (if it was open last session), so
+            // force-hide it here.
+            //
+            // We also explicitly disable the window shadow at runtime.  The
+            // shadow config in tauri.conf.json handles the initial state, but
+            // calling set_shadow(false) here ensures the platform chrome is
+            // suppressed even if the window-state plugin or OS restores it.
+            // Without this, macOS renders a visible shadow/border artifact
+            // around the transparent region of the undecorated window.
+            if let Some(win) = app.get_webview_window("quick-capture") {
+                let _ = win.set_shadow(false);
+
+                // On macOS the NSWindow backing layer still has a non-clear
+                // background color even with `transparent: true`, producing a
+                // subtle glass-blur rectangle behind the webview content.
+                // Clear it via the raw NSWindow pointer that Tauri exposes
+                // when the `macos-private-api` feature is enabled.
+                #[cfg(target_os = "macos")]
+                {
+                    use objc2::msg_send;
+                    use objc2::runtime::AnyObject;
+
+                    if let Ok(ptr) = win.ns_window() {
+                        unsafe {
+                            let ns_win = ptr as *mut AnyObject;
+                            let cls = objc2::runtime::AnyClass::get(c"NSColor").unwrap();
+                            let clear: *mut AnyObject = msg_send![cls, clearColor];
+                            let _: () = msg_send![ns_win, setBackgroundColor: clear];
+                            let _: () = msg_send![ns_win, setOpaque: false];
+                        }
+                    }
+                }
+
+                let _ = win.hide();
+            }
+
             // Register global hotkey for quick-capture window toggle
             {
                 use tauri_plugin_global_shortcut::GlobalShortcutExt;

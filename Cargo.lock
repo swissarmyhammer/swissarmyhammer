@@ -3872,6 +3872,7 @@ dependencies = [
  "clap",
  "dirs",
  "notify 6.1.1",
+ "objc2",
  "serde",
  "serde_json",
  "serde_yaml_ng",

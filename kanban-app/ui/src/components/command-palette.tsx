@@ -13,15 +13,7 @@ import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { useInspectOptional } from "@/lib/inspect-context";
 import { moniker } from "@/lib/moniker";
 import { FocusScope } from "@/components/focus-scope";
-import { CheckSquare, Tag, Columns, User, type LucideIcon } from "lucide-react";
-
-/** Map entity_type to a Lucide icon. Returns undefined for unknown types. */
-const entityTypeIcons: Record<string, LucideIcon> = {
-  task: CheckSquare,
-  tag: Tag,
-  column: Columns,
-  actor: User,
-};
+import { EntityIcon } from "@/components/entity-icon";
 
 /** Result shape returned by the backend `search_entities` command. */
 interface SearchResult {
@@ -432,8 +424,6 @@ function SearchResults({
     <>
       {results.map((result, index) => {
         const entityMoniker = moniker(result.entity_type, result.entity_id);
-        const Icon = entityTypeIcons[result.entity_type];
-        const typeLabel = result.entity_type.charAt(0).toUpperCase() + result.entity_type.slice(1);
 
         const commands = [
           {
@@ -470,10 +460,7 @@ function SearchResults({
               }}
               onMouseEnter={() => onHoverIndex(index)}
             >
-              {Icon
-                ? <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                : <span className="shrink-0 text-xs text-muted-foreground">{typeLabel}</span>
-              }
+              <EntityIcon entityType={result.entity_type} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 truncate">{result.display_name}</span>
             </div>
           </FocusScope>

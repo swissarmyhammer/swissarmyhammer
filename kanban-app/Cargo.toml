@@ -43,6 +43,9 @@ urlencoding = { workspace = true }
 whoami = "1"
 base64 = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { EntityIcon } from "@/components/entity-icon";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -212,7 +213,7 @@ export function QuickCapture() {
 
         {/* Divider + Board selector — always shown */}
         <div className="border-t border-border/50 px-3 py-1.5 flex items-center gap-2 bg-muted/20">
-          <span className="text-[10px] text-muted-foreground/50 shrink-0">Board</span>
+          <EntityIcon entityType="board" className="h-3 w-3 shrink-0 text-muted-foreground/50" />
           <BoardSelector
             boards={boards}
             selectedPath={selectedPath}

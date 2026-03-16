@@ -1054,14 +1054,38 @@ impl EntityContext {
     }
 
     /// Derive computed fields after reading.
+    ///
+    /// Constructs an entity query function so aggregate derivations can
+    /// list entities of other types. The query reads raw entities from disk
+    /// (without applying compute) to avoid infinite recursion.
     async fn apply_compute(&self, entity_type: &str, entity: &mut Entity) -> Result<()> {
         let Some(ref engine) = self.compute else {
             return Ok(());
         };
         let field_defs = self.fields.fields_for_entity(entity_type);
         let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+
+        // Build query fn for aggregate derives — reads raw entities without
+        // applying compute to avoid recursion.
+        let root = self.root.clone();
+        let fields_ctx = Arc::clone(&self.fields);
+        let query_fn: std::sync::Arc<swissarmyhammer_fields::EntityQueryFn> =
+            std::sync::Arc::new(Box::new(move |et: &str| {
+                let root = root.clone();
+                let fields_ctx = Arc::clone(&fields_ctx);
+                let et = et.to_string();
+                Box::pin(async move {
+                    let Some(def) = fields_ctx.get_entity(&et) else {
+                        return vec![];
+                    };
+                    let dir = root.join(format!("{}s", et));
+                    let entities = io::read_entity_dir(&dir, &et, def).await.unwrap_or_default();
+                    entities.into_iter().map(|e| e.fields).collect()
+                })
+            }));
+
         engine
-            .derive_all(&mut entity.fields, &owned_defs)
+            .derive_all(&mut entity.fields, &owned_defs, Some(&query_fn))
             .await
             .map_err(|e| {
                 // Extract field name from the inner FieldsError if available
