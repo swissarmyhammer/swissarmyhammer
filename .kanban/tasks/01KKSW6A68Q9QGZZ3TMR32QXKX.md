@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KKSW5P87FEMVWSN21EHVRV8D
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffb280
 title: Add percent_complete computed field to board entity
 ---
 ## What

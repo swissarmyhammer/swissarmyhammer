@@ -36,8 +36,3 @@ export function EntityIcon({ entityType, className }: EntityIconProps) {
     </span>
   );
 }
-
-/** Look up the Lucide icon for an entity type (undefined if unmapped). */
-export function getEntityIcon(entityType: string): LucideIcon | undefined {
-  return entityTypeIcons[entityType];
-}

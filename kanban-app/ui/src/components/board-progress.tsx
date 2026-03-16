@@ -1,7 +1,5 @@
-import { useMemo } from "react";
 import { RadialBarChart, RadialBar, PolarAngleAxis } from "recharts";
 import type { BoardData } from "@/types/kanban";
-import { getNum } from "@/types/kanban";
 import {
   Tooltip,
   TooltipContent,
@@ -13,25 +11,15 @@ interface BoardProgressProps {
 }
 
 /**
- * Tiny radial progress ring for the navbar.
- * Shows done tasks (last column) / total tasks as a percentage.
+ * Radial progress ring for the navbar.
+ * Reads done_tasks and percent_complete from the backend-computed board summary.
  */
 export function BoardProgress({ board }: BoardProgressProps) {
-  const { done, total, pct } = useMemo(() => {
-    const totalTasks = board.summary.total_tasks;
-    if (totalTasks === 0) return { done: 0, total: 0, pct: 0 };
+  const { done_tasks, total_tasks, percent_complete } = board.summary;
 
-    // Last column is the terminal/done column
-    const lastCol = board.columns[board.columns.length - 1];
-    const doneTasks = lastCol ? getNum(lastCol, "task_count", 0) : 0;
-    const percent = Math.round((doneTasks / totalTasks) * 100);
+  if (total_tasks === 0) return null;
 
-    return { done: doneTasks, total: totalTasks, pct: percent };
-  }, [board]);
-
-  if (total === 0) return null;
-
-  const data = [{ value: pct, fill: "var(--color-chart-2)" }];
+  const data = [{ value: percent_complete, fill: "var(--color-chart-2)" }];
 
   return (
     <Tooltip>
@@ -65,13 +53,13 @@ export function BoardProgress({ board }: BoardProgressProps) {
             </RadialBarChart>
           </div>
           <span className="text-xs text-muted-foreground tabular-nums">
-            {pct}%
+            {percent_complete}%
           </span>
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom">
         <p className="text-xs">
-          {done}/{total} tasks done ({pct}%)
+          {done_tasks}/{total_tasks} tasks done ({percent_complete}%)
         </p>
       </TooltipContent>
     </Tooltip>

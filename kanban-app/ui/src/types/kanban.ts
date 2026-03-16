@@ -156,6 +156,8 @@ export interface BoardSummary {
   total_actors: number;
   ready_tasks: number;
   blocked_tasks: number;
+  done_tasks: number;
+  percent_complete: number;
 }
 
 // ---------------------------------------------------------------------------

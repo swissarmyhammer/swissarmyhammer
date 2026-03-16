@@ -176,6 +176,12 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .filter(|t| task_is_ready(t, &all_tasks, terminal_id))
                 .count();
             let blocked_tasks = total_tasks - ready_tasks;
+            let done_tasks = column_counts.get(terminal_id).copied().unwrap_or(0);
+            let percent_complete = if total_tasks > 0 {
+                (done_tasks as f64 / total_tasks as f64 * 100.0).round() as u32
+            } else {
+                0
+            };
             let total_actors = ectx.list("actor").await?.len();
 
             Ok(json!({
@@ -188,7 +194,9 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                     "total_tasks": total_tasks,
                     "total_actors": total_actors,
                     "ready_tasks": ready_tasks,
-                    "blocked_tasks": blocked_tasks
+                    "blocked_tasks": blocked_tasks,
+                    "done_tasks": done_tasks,
+                    "percent_complete": percent_complete
                 }
             }))
         }
@@ -243,6 +251,8 @@ mod tests {
         assert_eq!(result["summary"]["total_actors"], 0);
         assert_eq!(result["summary"]["ready_tasks"], 0);
         assert_eq!(result["summary"]["blocked_tasks"], 0);
+        assert_eq!(result["summary"]["done_tasks"], 0);
+        assert_eq!(result["summary"]["percent_complete"], 0);
 
         // Check columns have zero counts
         let columns = result["columns"].as_array().unwrap();
@@ -300,6 +310,8 @@ mod tests {
 
         // Check summary
         assert_eq!(result["summary"]["total_tasks"], 3);
+        assert_eq!(result["summary"]["done_tasks"], 1);
+        assert_eq!(result["summary"]["percent_complete"], 33);
 
         // Check column counts
         let columns = result["columns"].as_array().unwrap();
