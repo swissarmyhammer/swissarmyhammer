@@ -23,6 +23,7 @@ async fn create_test_context() -> ToolContext {
 
 /// Test web search with Brave Search
 #[tokio::test]
+#[ignore = "requires network access to Brave Search"]
 async fn test_web_search_brave() {
     let tool = WebTool::new();
     let context = create_test_context().await;
@@ -69,6 +70,7 @@ async fn test_web_search_brave() {
 
 /// Test web search with content fetching
 #[tokio::test]
+#[ignore = "requires network access to Brave Search"]
 async fn test_web_search_with_content() {
     let tool = WebTool::new();
     let context = create_test_context().await;
