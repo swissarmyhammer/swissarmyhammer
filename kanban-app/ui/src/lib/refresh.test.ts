@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const mockInvoke = vi.fn((..._args: unknown[]) => Promise.resolve({}));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockInvoke = vi.fn((..._args: any[]) => Promise.resolve({}));
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  invoke: (...args: any[]) => mockInvoke(...args),
 }));
 
 import { refreshBoards } from "./refresh";
@@ -16,7 +18,7 @@ describe("refreshBoards", () => {
   it("returns open boards even when get_board_data fails", async () => {
     // Simulate: list_open_boards succeeds with 2 boards,
     // but get_board_data fails (new board not fully ready).
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation((cmd: string, ..._args: unknown[]) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
           { path: "/a/.kanban", is_active: false, name: "Board A" },
@@ -42,7 +44,7 @@ describe("refreshBoards", () => {
   });
 
   it("returns all data when everything succeeds", async () => {
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation((cmd: string, ..._args: unknown[]) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
           { path: "/a/.kanban", is_active: true, name: "Board A" },
@@ -70,7 +72,7 @@ describe("refreshBoards", () => {
   });
 
   it("returns open boards even when list_entities fails", async () => {
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation((cmd: string, ..._args: unknown[]) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
           { path: "/a/.kanban", is_active: false, name: "Board A" },

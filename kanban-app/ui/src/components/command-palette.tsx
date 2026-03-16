@@ -30,6 +30,8 @@ interface CommandPaletteProps {
   onClose: () => void;
   /** Palette mode: "command" (default) filters commands; "search" calls backend search. */
   mode?: "command" | "search";
+  /** Optional handler for switching board — used when a search result is a board entity. */
+  onSwitchBoard?: (path: string) => void;
 }
 
 /**
@@ -49,7 +51,7 @@ interface CommandPaletteProps {
  * the debounced query. Each result is wrapped in a FocusScope so entity.inspect
  * commands are available. Selecting a result opens the entity inspector.
  */
-export function CommandPalette({ open, onClose, mode: paletteMode = "command" }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, mode: paletteMode = "command", onSwitchBoard }: CommandPaletteProps) {
   const [filter, setFilter] = useState("");
   const [debouncedFilter, setDebouncedFilter] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -178,12 +180,17 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command" }:
   // Execute the selected entity result (search mode)
   const executeSelectedResult = useCallback(() => {
     const result = searchResults[selectedIndex];
-    if (result && inspectEntity) {
+    if (!result) return;
+    onClose();
+    // Board results switch the active board + open inspector
+    if (result.entity_type === "board" && onSwitchBoard) {
+      onSwitchBoard(result.entity_id);
+    }
+    if (inspectEntity) {
       const entityMoniker = moniker(result.entity_type, result.entity_id);
-      onClose();
       inspectEntity(entityMoniker);
     }
-  }, [searchResults, selectedIndex, onClose, inspectEntity]);
+  }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
 
   const executeSelected = paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
 

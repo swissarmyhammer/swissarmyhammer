@@ -113,7 +113,23 @@ pub fn build_menu_from_manifest(
         ],
     )?;
 
-    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])?;
+    // --- Window menu ---
+    let window_menu = Submenu::new(app, "Window", true)?;
+    if let Some(items) = menus.get("window") {
+        let mut last_group: Option<usize> = None;
+        for entry in items {
+            if last_group.is_some() && last_group != Some(entry.group) {
+                window_menu.append(&PredefinedMenuItem::separator(app)?)?;
+            }
+            window_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            last_group = Some(entry.group);
+        }
+        window_menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+    window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
+    window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;
+
+    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])?;
     app.set_menu(menu).map_err(|e| {
         tracing::error!("Failed to set menu: {}", e);
         e

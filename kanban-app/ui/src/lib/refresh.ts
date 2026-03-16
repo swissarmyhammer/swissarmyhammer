@@ -26,8 +26,11 @@ export interface RefreshResult {
 /**
  * Fetch board state from the backend. The open boards list is always
  * populated even if other data fetches fail.
+ *
+ * @param boardPath — optional board path to scope queries to a specific board
+ *   (for multi-window support). When omitted, the backend uses the global active board.
  */
-export async function refreshBoards(): Promise<RefreshResult> {
+export async function refreshBoards(boardPath?: string): Promise<RefreshResult> {
   // Always fetch open boards independently — this must not be coupled
   // to get_board_data or list_entities via Promise.all.
   let openBoards: OpenBoard[] = [];
@@ -41,10 +44,11 @@ export async function refreshBoards(): Promise<RefreshResult> {
   let boardData: BoardData | null = null;
   let entitiesByType: Record<string, Entity[]> | null = null;
   try {
+    const bp = boardPath ? { boardPath } : {};
     const [bd, taskData, actorData] = await Promise.all([
-      invoke<BoardDataResponse>("get_board_data"),
-      invoke<EntityListResponse>("list_entities", { entityType: "task" }),
-      invoke<EntityListResponse>("list_entities", { entityType: "actor" }),
+      invoke<BoardDataResponse>("get_board_data", bp),
+      invoke<EntityListResponse>("list_entities", { entityType: "task", ...bp }),
+      invoke<EntityListResponse>("list_entities", { entityType: "actor", ...bp }),
     ]);
     boardData = parseBoardData(bd);
     entitiesByType = {

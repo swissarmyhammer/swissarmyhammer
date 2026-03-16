@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capability for the kanban app",
-  "windows": ["main", "quick-capture"],
+  "windows": ["main", "quick-capture", "board-*"],
   "permissions": [
     "core:default",
     "dialog:default",
@@ -10,6 +10,7 @@
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-set-focus",
-    "core:window:allow-set-size"
+    "core:window:allow-set-size",
+    "core:window:allow-create"
   ]
 }
