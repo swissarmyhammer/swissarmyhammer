@@ -1238,7 +1238,10 @@ mod tests {
                     > 0
             };
             if found_added_later {
-                println!("Re-index LSP: found added_later after {:?}", start.elapsed());
+                println!(
+                    "Re-index LSP: found added_later after {:?}",
+                    start.elapsed()
+                );
                 break;
             }
             assert!(

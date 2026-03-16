@@ -107,8 +107,7 @@ async fn execute_validator_with_tools(temp: &TempDir) -> (HookOutput, i32) {
     // Create a custom RuleSet that requires tool use
     create_unsafe_check_ruleset(temp);
 
-    let context =
-        create_context_with_playback(temp, "validator_with_tool_calls.json");
+    let context = create_context_with_playback(temp, "validator_with_tool_calls.json");
     let turn_state = Arc::new(TurnStateManager::new(temp.path()));
 
     // Use empty loader + load RuleSets from the project dir only (no builtins)

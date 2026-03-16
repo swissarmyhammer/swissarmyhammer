@@ -127,11 +127,7 @@ pub fn kanban_compute_engine() -> ComputeEngine {
                 // Terminal column is the one with the highest order
                 let terminal_id = columns
                     .iter()
-                    .max_by_key(|c| {
-                        c.get("order")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0)
-                    })
+                    .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                     .and_then(|c| c.get("id").and_then(|v| v.as_str()))
                     .unwrap_or("done");
 

@@ -1073,7 +1073,9 @@ impl EntityContext {
                     return vec![];
                 };
                 let dir = root.join(format!("{}s", et));
-                let entities = io::read_entity_dir(&dir, &et, def).await.unwrap_or_default();
+                let entities = io::read_entity_dir(&dir, &et, def)
+                    .await
+                    .unwrap_or_default();
                 entities.into_iter().map(|e| e.fields).collect()
             })
         }))

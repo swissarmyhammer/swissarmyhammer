@@ -545,7 +545,10 @@ mod tests {
         fs::write(&settings_file, "[]").unwrap();
 
         let result = install(InitScope::Project, temp.path());
-        assert!(result.is_err(), "install should return Err for non-object settings JSON");
+        assert!(
+            result.is_err(),
+            "install should return Err for non-object settings JSON"
+        );
         assert!(result.unwrap_err().contains("not a JSON object"));
     }
 
@@ -560,7 +563,10 @@ mod tests {
         // (User scope only touches ~/.claude/settings.json)
         let _ = uninstall(InitScope::User, temp.path());
 
-        assert!(avp_dir.exists(), ".avp directory should not be removed for User scope uninstall");
+        assert!(
+            avp_dir.exists(),
+            ".avp directory should not be removed for User scope uninstall"
+        );
     }
 
     #[test]

@@ -43,7 +43,10 @@ async fn test_web_search_brave() {
     // Skip gracefully on rate limiting (HTTP 429) — common when running alongside
     // other tests that also hit Brave Search.
     if let Err(ref e) = result {
-        if e.message.contains("429") || e.message.contains("Too Many Requests") || e.message.contains("rate") {
+        if e.message.contains("429")
+            || e.message.contains("Too Many Requests")
+            || e.message.contains("rate")
+        {
             eprintln!("SKIP: Brave Search rate-limited (429), skipping test");
             return;
         }
@@ -99,7 +102,10 @@ async fn test_web_search_with_content() {
     // Skip gracefully on rate limiting (HTTP 429) — common when running alongside
     // other tests that also hit Brave Search.
     if let Err(ref e) = result {
-        if e.message.contains("429") || e.message.contains("Too Many Requests") || e.message.contains("rate") {
+        if e.message.contains("429")
+            || e.message.contains("Too Many Requests")
+            || e.message.contains("rate")
+        {
             eprintln!("SKIP: Brave Search rate-limited (429), skipping test");
             return;
         }

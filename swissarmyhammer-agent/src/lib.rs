@@ -284,9 +284,12 @@ pub async fn create_agent_with_options(
 ) -> AcpResult<AcpAgentHandle> {
     let (agent_name, handle) = match config.executor_type() {
         ModelExecutorType::ClaudeCode => {
-            let handle =
-                create_claude_agent(mcp_config, options.ephemeral, options.tools_override.clone())
-                    .await?;
+            let handle = create_claude_agent(
+                mcp_config,
+                options.ephemeral,
+                options.tools_override.clone(),
+            )
+            .await?;
             ("Claude", handle)
         }
         ModelExecutorType::LlamaAgent => {

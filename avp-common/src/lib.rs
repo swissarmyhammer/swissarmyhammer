@@ -11,9 +11,9 @@
 pub mod builtin;
 pub mod chain;
 pub mod context;
-pub mod install;
 pub mod error;
 pub mod hooks;
+pub mod install;
 pub mod lockfile;
 pub mod strategy;
 pub mod turn;

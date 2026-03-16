@@ -1622,22 +1622,45 @@ mod tests {
         // Full server should have many tools
         let full_tools = server.tool_registry.read().await;
         let full_count = full_tools.len();
-        assert!(full_count > 2, "Full server should have more than 2 tools, got {}", full_count);
+        assert!(
+            full_count > 2,
+            "Full server should have more than 2 tools, got {}",
+            full_count
+        );
         drop(full_tools);
 
         // Validator server should have exactly 2 tools
         let validator = server.create_validator_server();
         let validator_tools = validator.tool_registry.read().await;
-        assert_eq!(validator_tools.len(), 2, "Validator should have exactly 2 tools");
+        assert_eq!(
+            validator_tools.len(),
+            2,
+            "Validator should have exactly 2 tools"
+        );
 
         // Verify the right tools are present
-        assert!(validator_tools.get_tool("files").is_some(), "Validator should have 'files' tool");
-        assert!(validator_tools.get_tool("code_context").is_some(), "Validator should have 'code_context' tool");
+        assert!(
+            validator_tools.get_tool("files").is_some(),
+            "Validator should have 'files' tool"
+        );
+        assert!(
+            validator_tools.get_tool("code_context").is_some(),
+            "Validator should have 'code_context' tool"
+        );
 
         // Verify disallowed tools are absent
-        assert!(validator_tools.get_tool("kanban").is_none(), "Validator should NOT have 'kanban' tool");
-        assert!(validator_tools.get_tool("shell").is_none(), "Validator should NOT have 'shell' tool");
-        assert!(validator_tools.get_tool("git").is_none(), "Validator should NOT have 'git' tool");
+        assert!(
+            validator_tools.get_tool("kanban").is_none(),
+            "Validator should NOT have 'kanban' tool"
+        );
+        assert!(
+            validator_tools.get_tool("shell").is_none(),
+            "Validator should NOT have 'shell' tool"
+        );
+        assert!(
+            validator_tools.get_tool("git").is_none(),
+            "Validator should NOT have 'git' tool"
+        );
     }
 
     #[tokio::test]
@@ -1647,17 +1670,27 @@ mod tests {
         let validator = server.create_validator_server();
 
         // The validator's tool_context should have its own filtered registry
-        let validator_ctx_registry = validator.tool_context.tool_registry.as_ref()
+        let validator_ctx_registry = validator
+            .tool_context
+            .tool_registry
+            .as_ref()
             .expect("Validator context should have a tool_registry");
         let registry = validator_ctx_registry.read().await;
 
         // call_tool on the validator context should NOT find non-validator tools
-        assert!(registry.get_tool("kanban").is_none(),
-            "Validator context registry should not contain 'kanban'");
-        assert!(registry.get_tool("files").is_some(),
-            "Validator context registry should contain 'files'");
-        assert_eq!(registry.len(), 2,
-            "Validator context registry should have exactly 2 tools");
+        assert!(
+            registry.get_tool("kanban").is_none(),
+            "Validator context registry should not contain 'kanban'"
+        );
+        assert!(
+            registry.get_tool("files").is_some(),
+            "Validator context registry should contain 'files'"
+        );
+        assert_eq!(
+            registry.len(),
+            2,
+            "Validator context registry should have exactly 2 tools"
+        );
     }
 
     #[test]
