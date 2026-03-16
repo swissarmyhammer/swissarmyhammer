@@ -53,6 +53,9 @@ num_cpus = { workspace = true }
 # CLI detection
 which = { workspace = true }
 
+# Home directory resolution
+dirs = { workspace = true }
+
 [build-dependencies]
 swissarmyhammer-build = { path = "../swissarmyhammer-build" }
 

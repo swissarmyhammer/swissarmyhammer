@@ -24,6 +24,7 @@ pub fn register_all(registry: &mut InitRegistry, global: bool, remove_directory:
     registry.register(SkillDeployment::new(global));
     registry.register(AgentDeployment::new(global));
     registry.register(LockfileCleanup);
+    registry.register(AvpHooks);
 }
 
 // ── McpRegistration (priority 10) ────────────────────────────────────
@@ -1220,6 +1221,80 @@ impl Initializable for LockfileCleanup {
     }
 }
 
+// ── AvpHooks (priority 35) ───────────────────────────────────────────
+
+/// Installs/removes AVP (Agent Validator Protocol) hooks in Claude Code settings.
+///
+/// Delegates to `avp_common::install` — the same logic used by `avp init`.
+pub struct AvpHooks;
+
+impl Initializable for AvpHooks {
+    fn name(&self) -> &str {
+        "avp-hooks"
+    }
+
+    fn category(&self) -> &str {
+        "configuration"
+    }
+
+    fn priority(&self) -> i32 {
+        35
+    }
+
+    /// AVP hooks are project-scoped — installing them at User scope would register
+    /// hooks for every project, which is not the intended use. Use `avp init --user`
+    /// directly if global installation is explicitly desired.
+    fn is_applicable(&self, scope: &InitScope) -> bool {
+        matches!(scope, InitScope::Project | InitScope::Local)
+    }
+
+    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                return vec![InitResult::error(
+                    self.name(),
+                    format!("Failed to get current directory: {}", e),
+                )];
+            }
+        };
+
+        match avp_common::install::install(*scope, &cwd) {
+            Ok(()) => {
+                reporter.emit(&InitEvent::Action {
+                    verb: "Installed".to_string(),
+                    message: "AVP hooks in Claude Code settings".to_string(),
+                });
+                vec![InitResult::ok(self.name(), "AVP hooks installed")]
+            }
+            Err(e) => vec![InitResult::error(self.name(), e)],
+        }
+    }
+
+    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                return vec![InitResult::error(
+                    self.name(),
+                    format!("Failed to get current directory: {}", e),
+                )];
+            }
+        };
+
+        match avp_common::install::uninstall(*scope, &cwd) {
+            Ok(()) => {
+                reporter.emit(&InitEvent::Action {
+                    verb: "Removed".to_string(),
+                    message: "AVP hooks from Claude Code settings".to_string(),
+                });
+                vec![InitResult::ok(self.name(), "AVP hooks removed")]
+            }
+            Err(e) => vec![InitResult::error(self.name(), e)],
+        }
+    }
+}
+
 // ── Shared helpers ───────────────────────────────────────────────────
 
 /// Remove named entries from a store directory and their symlinks from link directories.
@@ -1288,5 +1363,33 @@ pub(crate) fn remove_if_symlink(path: &std::path::Path, reporter: &dyn InitRepor
             }
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swissarmyhammer_common::lifecycle::InitScope;
+
+    #[test]
+    fn test_avp_hooks_applicable_project() {
+        assert!(AvpHooks.is_applicable(&InitScope::Project));
+    }
+
+    #[test]
+    fn test_avp_hooks_applicable_local() {
+        assert!(AvpHooks.is_applicable(&InitScope::Local));
+    }
+
+    #[test]
+    fn test_avp_hooks_not_applicable_user() {
+        assert!(!AvpHooks.is_applicable(&InitScope::User));
+    }
+
+    #[test]
+    fn test_avp_hooks_metadata() {
+        assert_eq!(AvpHooks.name(), "avp-hooks");
+        assert_eq!(AvpHooks.category(), "configuration");
+        assert_eq!(AvpHooks.priority(), 35);
     }
 }
