@@ -127,3 +127,6 @@ ane-embedding/convert/output/
 
 # SAH runtime state
 **/.sah/
+
+# Shell tool runtime state
+**/.shell/
