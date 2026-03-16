@@ -116,6 +116,50 @@ pub fn kanban_compute_engine() -> ComputeEngine {
         }),
     );
 
+    // board-percent-complete: aggregate — counts done tasks (terminal column) vs total
+    engine.register_aggregate(
+        "board-percent-complete",
+        Box::new(|_fields, query| {
+            Box::pin(async move {
+                let columns = query("column").await;
+                let tasks = query("task").await;
+
+                // Terminal column is the one with the highest order
+                let terminal_id = columns
+                    .iter()
+                    .max_by_key(|c| {
+                        c.get("order")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0)
+                    })
+                    .and_then(|c| c.get("id").and_then(|v| v.as_str()))
+                    .unwrap_or("done");
+
+                let total = tasks.len();
+                let done = tasks
+                    .iter()
+                    .filter(|t| {
+                        t.get("position_column")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("todo")
+                            == terminal_id
+                    })
+                    .count();
+                let percent = if total > 0 {
+                    (done as f64 / total as f64 * 100.0).round() as u32
+                } else {
+                    0
+                };
+
+                serde_json::json!({
+                    "done": done,
+                    "total": total,
+                    "percent": percent,
+                })
+            })
+        }),
+    );
+
     // attachment-mime-type: stub — actual detection requires filesystem access
     engine.register(
         "attachment-mime-type",
@@ -225,7 +269,7 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 20, "expected 20 builtin field definitions");
+        assert_eq!(defs.len(), 21, "expected 21 builtin field definitions");
     }
 
     #[test]
@@ -370,7 +414,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 20);
+        assert_eq!(ctx.all_fields().len(), 21);
         assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());

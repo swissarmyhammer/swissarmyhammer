@@ -1,0 +1,9 @@
+id: "0000000000000000000000000U"
+name: percent_complete
+description: Board completion percentage (done tasks / total tasks)
+type:
+  kind: computed
+  derive: board-percent-complete
+editor: none
+display: number
+section: header

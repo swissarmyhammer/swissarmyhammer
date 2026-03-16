@@ -771,8 +771,8 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 20 built-in fields
-        assert_eq!(fields.all_fields().len(), 20);
+        // Should have all 21 built-in fields
+        assert_eq!(fields.all_fields().len(), 21);
 
         // Should have all 7 entity templates
         assert_eq!(fields.all_entities().len(), 7);
@@ -803,7 +803,7 @@ type:
         // Open — should have 21 built-in + 1 custom = 22
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 21);
+        assert_eq!(fields.all_fields().len(), 22);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();

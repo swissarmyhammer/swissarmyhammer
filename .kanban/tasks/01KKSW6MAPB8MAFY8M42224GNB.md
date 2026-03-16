@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KKSW6A68Q9QGZZ3TMR32QXKX
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffb380
 title: Update frontend BoardProgress to read percent_complete from board entity
 ---
 ## What

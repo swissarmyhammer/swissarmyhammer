@@ -573,6 +573,11 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
         .map_err(|e| format!("get_board_data: {}", e))?
         .len();
 
+    // Extract percent_complete from the board entity's computed field
+    let pc = board.get("percent_complete").cloned().unwrap_or(json!(null));
+    let done_tasks = pc.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
+    let percent_complete = pc.get("percent").and_then(|v| v.as_u64()).unwrap_or(0);
+
     Ok(json!({
         "board": board.to_json(),
         "columns": columns_json,
@@ -583,6 +588,8 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
             "total_actors": total_actors,
             "ready_tasks": ready_tasks,
             "blocked_tasks": total_tasks - ready_tasks,
+            "done_tasks": done_tasks,
+            "percent_complete": percent_complete,
         }
     }))
 }
