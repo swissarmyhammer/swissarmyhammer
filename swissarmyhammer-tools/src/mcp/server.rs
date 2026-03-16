@@ -1261,7 +1261,6 @@ impl McpServer {
             .with_peer(Arc::new(peer.clone()))
     }
 
-
     /// Ensure an agent actor exists for the connecting MCP client.
     ///
     /// Slugifies the client name as the actor ID, derives a deterministic color,
