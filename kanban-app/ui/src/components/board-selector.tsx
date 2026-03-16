@@ -5,6 +5,9 @@
  * The path stem + chevron open a Radix Select dropdown to switch boards.
  */
 
+import { invoke } from "@tauri-apps/api/core";
+import { ExternalLink } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -31,6 +34,8 @@ interface BoardSelectorProps {
   onSelect: (path: string) => void;
   /** The active board entity — used for live name display and in-place editing. */
   boardEntity?: Entity;
+  /** Show tear-off button to open board in a new window. */
+  showTearOff?: boolean;
   className?: string;
 }
 
@@ -39,6 +44,7 @@ export function BoardSelector({
   selectedPath,
   onSelect,
   boardEntity,
+  showTearOff,
   className,
 }: BoardSelectorProps) {
   if (boards.length === 0) return null;
@@ -65,14 +71,14 @@ export function BoardSelector({
 
       <Select value={selectedPath ?? undefined} onValueChange={onSelect}>
         <SelectTrigger
-          className="border-none shadow-none h-auto py-0 px-0 gap-1 w-auto min-w-0"
+          className="border-none shadow-none h-auto py-0 px-0 gap-1 w-auto min-w-0 focus-visible:ring-0 focus-visible:border-transparent"
           size="sm"
         >
           {stem && (
             <span className="text-xs text-muted-foreground/50 shrink-0">{stem}</span>
           )}
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent position="popper">
           {boards.map((b) => {
             const name = b.path === selectedPath
               ? displayName
@@ -86,6 +92,20 @@ export function BoardSelector({
           })}
         </SelectContent>
       </Select>
+
+      {showTearOff && selectedPath && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 text-muted-foreground/40"
+          title="Open in new window"
+          onClick={() => {
+            invoke("create_window", { boardPath: selectedPath }).catch(console.error);
+          }}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </Button>
+      )}
     </div>
   );
 }

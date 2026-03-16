@@ -23,13 +23,13 @@ const CONFIG_APP_SUBDIR: &str = "kanban-app";
 const CONFIG_FILE_NAME: &str = "config.json";
 
 /// A handle to a single open kanban board.
-pub struct BoardHandle {
-    pub ctx: Arc<KanbanContext>,
-    pub processor: KanbanOperationProcessor,
+pub(crate) struct BoardHandle {
+    pub(crate) ctx: Arc<KanbanContext>,
+    pub(crate) processor: KanbanOperationProcessor,
     /// Entity cache for detecting external file changes with field-level diffing.
-    pub entity_cache: EntityCache,
+    pub(crate) entity_cache: EntityCache,
     /// In-memory search index over all entities.
-    pub search_index: Arc<RwLock<EntitySearchIndex>>,
+    pub(crate) search_index: Arc<RwLock<EntitySearchIndex>>,
     /// File watcher — dropped when the handle is dropped.
     _watcher: Option<BoardWatcher>,
 }
@@ -124,9 +124,15 @@ impl BoardHandle {
             .with_ensure()
             .with_color(&color);
 
-        // Only set avatar if we have a real profile picture.
-        // Initials are rendered client-side as fallback.
-        if let Some(photo) = macos_profile_picture(&username) {
+        // Profile picture lookup involves synchronous file I/O and may
+        // shell out to `dscl` on macOS — run on the blocking thread pool
+        // to avoid stalling the async executor.
+        let uname = username.clone();
+        let photo = tokio::task::spawn_blocking(move || macos_profile_picture(&uname))
+            .await
+            .ok()
+            .flatten();
+        if let Some(photo) = photo {
             cmd = cmd.with_avatar(photo);
         }
 
@@ -186,25 +192,29 @@ impl BoardHandle {
 
 /// A recently opened board entry for MRU persistence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecentBoard {
-    pub path: PathBuf,
-    pub name: String,
-    pub last_opened: DateTime<Utc>,
+pub(crate) struct RecentBoard {
+    pub(crate) path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) last_opened: DateTime<Utc>,
 }
 
 /// Persisted app configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AppConfig {
-    pub recent_boards: Vec<RecentBoard>,
+pub(crate) struct AppConfig {
+    pub(crate) recent_boards: Vec<RecentBoard>,
     #[serde(default = "default_keymap_mode")]
-    pub keymap_mode: String,
+    pub(crate) keymap_mode: String,
     /// Last active view ID — restored on reload, falls back to first view if invalid.
     #[serde(default)]
-    pub active_view_id: Option<String>,
+    pub(crate) active_view_id: Option<String>,
     /// Inspector panel stack as monikers (e.g. ["task:01XYZ"]) — restored on reload,
     /// entries that no longer resolve are silently dropped.
     #[serde(default)]
-    pub inspector_stack: Vec<String>,
+    pub(crate) inspector_stack: Vec<String>,
+    /// Paths of boards that were open when the app last ran.
+    /// Restored on startup so multi-board sessions survive reloads.
+    #[serde(default)]
+    pub(crate) open_boards: Vec<PathBuf>,
 }
 
 fn default_keymap_mode() -> String {
@@ -252,23 +262,23 @@ impl AppConfig {
 }
 
 /// The shared application state, managed by Tauri.
-pub struct AppState {
-    pub boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
-    pub active_board: RwLock<Option<PathBuf>>,
-    pub config: RwLock<AppConfig>,
+pub(crate) struct AppState {
+    pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
+    pub(crate) active_board: RwLock<Option<PathBuf>>,
+    pub(crate) config: RwLock<AppConfig>,
     /// IDs of items in the most recently shown generic context menu.
     /// Used by `handle_menu_event` to distinguish context menu selections
     /// from regular menu commands.
-    pub context_menu_ids: RwLock<HashSet<String>>,
+    pub(crate) context_menu_ids: RwLock<HashSet<String>>,
     /// Shared UI state (inspector stack, palette, keymap, etc.).
-    pub ui_state: Arc<UIState>,
+    pub(crate) ui_state: Arc<UIState>,
     /// YAML-loaded command definitions. Behind RwLock because user overrides
     /// are merged when switching boards.
-    pub commands_registry: RwLock<CommandsRegistry>,
+    pub(crate) commands_registry: RwLock<CommandsRegistry>,
     /// Trait object map from `register_commands()`.
-    pub command_impls: HashMap<String, Arc<dyn Command>>,
+    pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
     /// Current focus scope chain stored by `set_focus`.
-    pub focus_scope_chain: RwLock<Vec<String>>,
+    pub(crate) focus_scope_chain: RwLock<Vec<String>>,
 }
 
 impl AppState {
@@ -320,11 +330,6 @@ impl AppState {
         // Ensure OS user actor exists
         handle.ensure_os_actor().await;
 
-        // Start file watcher if we have an app handle
-        if let Some(app) = app_handle {
-            handle.start_watcher(app);
-        }
-
         // Read board name for MRU
         let board_name = if handle.ctx.is_initialized() {
             match handle.ctx.entity_context().await {
@@ -338,15 +343,32 @@ impl AppState {
             canonical.display().to_string()
         };
 
+        // Start the file watcher on the owned handle BEFORE wrapping in
+        // Arc and inserting into the map. This avoids a TOCTOU race where
+        // a concurrent Tauri command could clone the Arc between insert
+        // and Arc::get_mut, silently preventing the watcher from starting.
+        if let Some(ref app) = app_handle {
+            handle.start_watcher(app.clone());
+        }
+
+        // Insert into the boards map and set active. The watcher may
+        // already be emitting events, but the frontend won't see them
+        // until list_open_boards returns this board.
+        //
+        // Collect open board paths inside the write lock, then drop it
+        // before touching config to avoid lock-ordering hazards.
+        let open_paths: Vec<PathBuf>;
         {
             let mut boards = self.boards.write().await;
             boards.insert(canonical.clone(), Arc::new(handle));
+            open_paths = boards.keys().cloned().collect();
         }
 
-        // Update MRU
+        // Update MRU + persist open boards list (no boards lock held)
         {
             let mut config = self.config.write().await;
             config.touch_recent(&canonical, &board_name);
+            config.open_boards = open_paths;
             let _ = config.save();
         }
 
@@ -363,6 +385,32 @@ impl AppState {
     /// If no `.kanban` directory is found in any ancestor, the app starts without
     /// a board (the frontend shows the "No board loaded" prompt).
     pub async fn auto_open_board(&self) {
+        // Restore previously-open boards from persisted config.
+        {
+            let config = self.config.read().await;
+            let paths = config.open_boards.clone();
+            drop(config);
+            for path in paths {
+                if path.is_dir() {
+                    tracing::info!(path = %path.display(), "auto_open_board: restoring persisted board");
+                    if let Err(e) = self.open_board(&path, None).await {
+                        tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore board");
+                    }
+                } else {
+                    tracing::info!(path = %path.display(), "auto_open_board: persisted board no longer exists, skipping");
+                }
+            }
+        }
+
+        // If we restored boards, we're done — don't override with CWD discovery.
+        {
+            let boards = self.boards.read().await;
+            if !boards.is_empty() {
+                tracing::info!(count = boards.len(), "auto_open_board: restored {} board(s) from config", boards.len());
+                return;
+            }
+        }
+
         let cwd = match std::env::current_dir() {
             Ok(dir) => dir,
             Err(e) => {
@@ -477,6 +525,45 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Close a board, removing it from the open set.
+    ///
+    /// If the closed board was the active board, switches to another open board
+    /// (if any) or sets active to None.
+    pub async fn close_board(&self, path: &Path) -> Result<(), String> {
+        let canonical = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf());
+
+        // Collect remaining board paths inside the write lock, then drop it
+        // before touching config. This avoids the lock-ordering hazard where
+        // sync_open_boards_to_config would re-acquire a boards read lock.
+        let remaining_paths: Vec<PathBuf>;
+        {
+            let mut boards = self.boards.write().await;
+            if boards.remove(&canonical).is_none() {
+                return Err(format!("Board not open: {}", canonical.display()));
+            }
+
+            // If we just closed the active board, switch to another one.
+            let mut active = self.active_board.write().await;
+            if active.as_ref() == Some(&canonical) {
+                *active = boards.keys().next().cloned();
+            }
+
+            remaining_paths = boards.keys().cloned().collect();
+        }
+
+        // Persist updated open boards list (no boards lock held)
+        {
+            let mut config = self.config.write().await;
+            config.open_boards = remaining_paths;
+            let _ = config.save();
+        }
+
+        tracing::info!(path = %canonical.display(), "closed board");
+        Ok(())
     }
 
     /// Get the handle for the active board.
@@ -846,6 +933,32 @@ mod tests {
         // boards map should contain the handle
         let boards = state.boards.read().await;
         assert!(boards.contains_key(&canonical));
+    }
+
+    #[tokio::test]
+    async fn test_open_second_board_keeps_both_in_list() {
+        let tmp_a = TempDir::new().unwrap();
+        let tmp_b = TempDir::new().unwrap();
+        create_board_at(tmp_a.path(), "Board A");
+        create_board_at(tmp_b.path(), "Board B");
+
+        let state = AppState::new();
+
+        // Open board A
+        let path_a = state.open_board(tmp_a.path(), None).await.unwrap();
+
+        // Open board B
+        let path_b = state.open_board(tmp_b.path(), None).await.unwrap();
+
+        // Both boards must be in the map
+        let boards = state.boards.read().await;
+        assert_eq!(boards.len(), 2, "Expected 2 boards, got {}", boards.len());
+        assert!(boards.contains_key(&path_a), "Board A missing from map");
+        assert!(boards.contains_key(&path_b), "Board B missing from map");
+
+        // Active board should be B (most recently opened)
+        let active = state.active_board.read().await;
+        assert_eq!(*active, Some(path_b));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useActiveBoardPath } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useKeymap } from "@/lib/keymap-context";
@@ -19,6 +20,9 @@ interface GridViewProps {
 }
 
 export function GridView({ view }: GridViewProps) {
+  const boardPath = useActiveBoardPath();
+  const boardPathRef = useRef(boardPath);
+  boardPathRef.current = boardPath;
   const { getEntities } = useEntityStore();
   const entityType = view.entity_type ?? "task";
   const entities = getEntities(entityType);
@@ -201,6 +205,7 @@ export function GridView({ view }: GridViewProps) {
           invoke("dispatch_command", {
             cmd: `${entityType}.archive`,
             args: { id: entity.id },
+            ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
           }).catch((err) => console.error("Failed to delete row:", err));
         }
       },
@@ -213,6 +218,7 @@ export function GridView({ view }: GridViewProps) {
         invoke("dispatch_command", {
           cmd: `${entityType}.add`,
           args: { title: `New ${entityType}` },
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         }).catch((err) => console.error("Failed to add row:", err));
       },
     },
@@ -224,6 +230,7 @@ export function GridView({ view }: GridViewProps) {
         invoke("dispatch_command", {
           cmd: `${entityType}.add`,
           args: { title: `New ${entityType}` },
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         }).catch((err) => console.error("Failed to add row:", err));
       },
     },
@@ -249,6 +256,7 @@ export function GridView({ view }: GridViewProps) {
           invoke("dispatch_command", {
             cmd: `${entityType}.archive`,
             args: { id: currentEntity.id },
+            ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
           }).catch((err) => console.error("Failed to archive:", err));
         },
       },

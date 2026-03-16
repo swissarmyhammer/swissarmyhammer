@@ -21,17 +21,22 @@ import { GridView } from "@/components/grid-view";
 import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import { ViewsProvider, useViews } from "@/lib/views-context";
-import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
+import { CommandScopeProvider, ActiveBoardPathProvider, type CommandDef } from "@/lib/command-scope";
 import type {
   BoardData, OpenBoard, Entity, EntityBag,
-  BoardDataResponse, EntityListResponse,
 } from "@/types/kanban";
-import { entityFromBag, parseBoardData, getStr } from "@/types/kanban";
+import { entityFromBag, getStr } from "@/types/kanban";
+import { refreshBoards } from "@/lib/refresh";
 import { QuickCapture } from "@/components/quick-capture";
 
+/** Parse URL params once at module level. */
+const URL_PARAMS = new URLSearchParams(window.location.search);
+
 /** Detect if this window instance is the quick-capture popup. */
-const IS_QUICK_CAPTURE = new URLSearchParams(window.location.search).has("window") &&
-  new URLSearchParams(window.location.search).get("window") === "quick-capture";
+const IS_QUICK_CAPTURE = URL_PARAMS.get("window") === "quick-capture";
+
+/** Initial board path from URL (set when opening a new window for a specific board). */
+const INITIAL_BOARD_PATH = URL_PARAMS.get("board") ?? undefined;
 
 // Mark <html> so CSS can make the quick-capture window fully transparent.
 if (IS_QUICK_CAPTURE) {
@@ -82,6 +87,10 @@ function App() {
     [],
   );
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
+  /** Per-window active board path. Each window independently selects which board to display. */
+  const [activeBoardPath, setActiveBoardPath] = useState<string | undefined>(INITIAL_BOARD_PATH);
+  const activeBoardPathRef = useRef(activeBoardPath);
+  activeBoardPathRef.current = activeBoardPath;
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
@@ -115,24 +124,35 @@ function App() {
     setPanelStack([]);
   }, []);
 
+  // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
+  // The ref is kept in sync with state inside the callback.
   const refresh = useCallback(async () => {
-    try {
-      const [boardData, openData, taskData, actorData] = await Promise.all([
-        invoke<BoardDataResponse>("get_board_data"),
-        invoke<OpenBoard[]>("list_open_boards"),
-        invoke<EntityListResponse>("list_entities", { entityType: "task" }),
-        invoke<EntityListResponse>("list_entities", { entityType: "actor" }),
-      ]);
-      setBoard(parseBoardData(boardData));
-      setOpenBoards(openData);
-      setEntitiesByType({
-        task: taskData.entities.map(entityFromBag),
-        tag: boardData.tags.map(entityFromBag),
-        actor: actorData.entities.map(entityFromBag),
-      });
-    } catch (error) {
-      console.error("Failed to load board data:", error);
+    const result = await refreshBoards(activeBoardPathRef.current);
+    // Open boards always update — even if board data failed.
+    setOpenBoards(result.openBoards);
+
+    // Pick or fall back to a valid active board path. Handles both initial
+    // mount (no path yet) and board-closed (path no longer in open list).
+    const currentPath = activeBoardPathRef.current;
+    const pathStillOpen = currentPath && result.openBoards.some((b) => b.path === currentPath);
+    if ((!currentPath || !pathStillOpen) && result.openBoards.length > 0) {
+      const active = result.openBoards.find((b) => b.is_active) ?? result.openBoards[0];
+      setActiveBoardPath(active.path);
+      activeBoardPathRef.current = active.path;
     }
+
+    if (result.openBoards.length === 0) {
+      // All boards closed — clear stale state so the placeholder shows.
+      setBoard(null);
+      setEntitiesByType({});
+      setActiveBoardPath(undefined);
+      return;
+    }
+    // Update board data and entities atomically. If board data arrives
+    // but entities fail, clear entities rather than leaving stale data
+    // from a previous board.
+    setBoard(result.boardData);
+    setEntitiesByType(result.entitiesByType ?? {});
   }, []);
 
   useEffect(() => {
@@ -188,7 +208,11 @@ function App() {
           refresh();
           return;
         }
-        invoke<EntityBag>("get_entity", { entityType: entity_type, id })
+        invoke<EntityBag>("get_entity", {
+          entityType: entity_type,
+          id,
+          ...(activeBoardPathRef.current ? { boardPath: activeBoardPathRef.current } : {}),
+        })
           .then((bag) => {
             const entity = entityFromBag(bag);
             setEntitiesFor(entity_type, (prev) => {
@@ -231,14 +255,19 @@ function App() {
         if (fullFields) {
           applyEntity({ entity_type, id, fields: fullFields });
         } else {
-          invoke<EntityBag>("get_entity", { entityType: entity_type, id })
+          invoke<EntityBag>("get_entity", {
+            entityType: entity_type,
+            id,
+            ...(activeBoardPathRef.current ? { boardPath: activeBoardPathRef.current } : {}),
+          })
             .then((bag) => applyEntity(entityFromBag(bag)))
             .catch((err) => {
               console.error(`[entity-field-changed] Failed to fetch ${entity_type}/${id}:`, err);
             });
         }
       }),
-      // Keep board-changed for structural operations (open/switch board)
+      // Keep board-changed for structural operations (open/switch board).
+      // refresh() handles open boards list + active board fallback in one pass.
       listen("board-changed", () => {
         refresh();
       }),
@@ -248,6 +277,15 @@ function App() {
         p.then((fn) => fn());
       }
     };
+  }, [refresh]);
+
+  /** Switch this window's active board. Updates local state + backend "last-used" default. */
+  const handleSwitchBoard = useCallback(async (path: string) => {
+    setActiveBoardPath(path);
+    activeBoardPathRef.current = path;
+    // Update backend's global active board (for commands that don't pass board_path)
+    try { await invoke("set_active_board", { path }); } catch { /* ignore */ }
+    refresh();
   }, [refresh]);
 
   const entityStore = useMemo(() => ({
@@ -260,6 +298,7 @@ function App() {
     <TooltipProvider delayDuration={400}>
     <Toaster position="bottom-right" richColors />
     <InitProgressListener />
+    <ActiveBoardPathProvider value={activeBoardPath}>
     <SchemaProvider>
     <EntityStoreProvider entities={entityStore}>
     <EntityFocusProvider>
@@ -268,14 +307,15 @@ function App() {
     <AppModeProvider>
     <UndoStackProvider>
     <InspectProvider onInspect={inspectEntity} onDismiss={dismissTopPanel}>
-    <AppShell>
+    <AppShell openBoards={openBoards} onSwitchBoard={handleSwitchBoard}>
     <ViewsProvider>
     <ViewCommandScope>
     <div className="h-screen bg-background text-foreground flex flex-col">
       <NavBar
         board={board}
         openBoards={openBoards}
-        onBoardSwitched={refresh}
+        activeBoardPath={activeBoardPath}
+        onSwitchBoard={handleSwitchBoard}
         onBoardInspect={() => inspectEntity("board", "board")}
       />
       {board ? (
@@ -313,9 +353,13 @@ function App() {
         </>
       ) : (
         <main className="flex-1 flex items-center justify-center">
-          <p className="text-muted-foreground">
-            No board loaded. Open a board to get started.
-          </p>
+          <div className="text-center space-y-3">
+            <p className="text-muted-foreground text-lg">No board loaded</p>
+            <div className="text-sm text-muted-foreground/70 space-y-1">
+              <p><kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">Cmd+N</kbd> New Board</p>
+              <p><kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">Cmd+O</kbd> Open Board</p>
+            </div>
+          </div>
         </main>
       )}
       <ModeIndicator />
@@ -331,6 +375,7 @@ function App() {
     </EntityFocusProvider>
     </EntityStoreProvider>
     </SchemaProvider>
+    </ActiveBoardPathProvider>
     </TooltipProvider>
   );
 }

@@ -13,15 +13,7 @@ import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { useInspectOptional } from "@/lib/inspect-context";
 import { moniker } from "@/lib/moniker";
 import { FocusScope } from "@/components/focus-scope";
-import { CheckSquare, Tag, Columns, User, type LucideIcon } from "lucide-react";
-
-/** Map entity_type to a Lucide icon. Returns undefined for unknown types. */
-const entityTypeIcons: Record<string, LucideIcon> = {
-  task: CheckSquare,
-  tag: Tag,
-  column: Columns,
-  actor: User,
-};
+import { EntityIcon } from "@/components/entity-icon";
 
 /** Result shape returned by the backend `search_entities` command. */
 interface SearchResult {
@@ -38,6 +30,8 @@ interface CommandPaletteProps {
   onClose: () => void;
   /** Palette mode: "command" (default) filters commands; "search" calls backend search. */
   mode?: "command" | "search";
+  /** Optional handler for switching board — used when a search result is a board entity. */
+  onSwitchBoard?: (path: string) => void;
 }
 
 /**
@@ -57,7 +51,7 @@ interface CommandPaletteProps {
  * the debounced query. Each result is wrapped in a FocusScope so entity.inspect
  * commands are available. Selecting a result opens the entity inspector.
  */
-export function CommandPalette({ open, onClose, mode: paletteMode = "command" }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, mode: paletteMode = "command", onSwitchBoard }: CommandPaletteProps) {
   const [filter, setFilter] = useState("");
   const [debouncedFilter, setDebouncedFilter] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -186,12 +180,17 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command" }:
   // Execute the selected entity result (search mode)
   const executeSelectedResult = useCallback(() => {
     const result = searchResults[selectedIndex];
-    if (result && inspectEntity) {
+    if (!result) return;
+    onClose();
+    // Board results switch the active board + open inspector
+    if (result.entity_type === "board" && onSwitchBoard) {
+      onSwitchBoard(result.entity_id);
+    }
+    if (inspectEntity) {
       const entityMoniker = moniker(result.entity_type, result.entity_id);
-      onClose();
       inspectEntity(entityMoniker);
     }
-  }, [searchResults, selectedIndex, onClose, inspectEntity]);
+  }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
 
   const executeSelected = paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
 
@@ -432,8 +431,6 @@ function SearchResults({
     <>
       {results.map((result, index) => {
         const entityMoniker = moniker(result.entity_type, result.entity_id);
-        const Icon = entityTypeIcons[result.entity_type];
-        const typeLabel = result.entity_type.charAt(0).toUpperCase() + result.entity_type.slice(1);
 
         const commands = [
           {
@@ -470,10 +467,7 @@ function SearchResults({
               }}
               onMouseEnter={() => onHoverIndex(index)}
             >
-              {Icon
-                ? <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                : <span className="shrink-0 text-xs text-muted-foreground">{typeLabel}</span>
-              }
+              <EntityIcon entityType={result.entity_type} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 truncate">{result.display_name}</span>
             </div>
           </FocusScope>

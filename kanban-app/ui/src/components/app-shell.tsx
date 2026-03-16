@@ -7,6 +7,7 @@ import { useKeymap, type KeymapMode } from "@/lib/keymap-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import { createKeyHandler } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
+import { pathStem } from "@/components/board-selector";
 import { syncMenuToNative } from "@/lib/menu-sync";
 import { dispatchContextMenuCommand } from "@/lib/context-menu";
 import { useInspectDismiss } from "@/lib/inspect-context";
@@ -96,7 +97,15 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
  * Provider nesting order:
  *   KeymapProvider > AppModeProvider > UndoStackProvider > AppShell > children
  */
-export function AppShell({ children }: { children: ReactNode }) {
+interface AppShellProps {
+  children: ReactNode;
+  /** Currently open boards — used to generate board.switch commands. */
+  openBoards?: Array<{ path: string; name: string; is_active: boolean }>;
+  /** Handler to switch the current window to a different board. */
+  onSwitchBoard?: (path: string) => void;
+}
+
+export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<"command" | "search">("command");
   const paletteOpenRef = useRef(false);
@@ -186,19 +195,19 @@ export function AppShell({ children }: { children: ReactNode }) {
       },
       {
         id: "settings.keymap.vim",
-        name: "Switch to Vim Keymap",
+        name: "Keymap Vim",
         menuPlacement: { menu: "settings", group: 0, order: 1, radioGroup: "keymap", checked: keymapMode === "vim" },
         execute: () => setKeymapMode("vim"),
       },
       {
         id: "settings.keymap.cua",
-        name: "Switch to CUA Keymap",
+        name: "Keymap CUA",
         menuPlacement: { menu: "settings", group: 0, order: 0, radioGroup: "keymap", checked: keymapMode === "cua" },
         execute: () => setKeymapMode("cua"),
       },
       {
         id: "settings.keymap.emacs",
-        name: "Switch to Emacs Keymap",
+        name: "Keymap Emacs",
         menuPlacement: { menu: "settings", group: 0, order: 2, radioGroup: "keymap", checked: keymapMode === "emacs" },
         execute: () => setKeymapMode("emacs"),
       },
@@ -229,6 +238,24 @@ export function AppShell({ children }: { children: ReactNode }) {
         },
       },
       {
+        id: "file.closeBoard",
+        name: "Close Board",
+        keys: { cua: "Mod+W", vim: "Mod+W" },
+        menuPlacement: { menu: "file", group: 0, order: 2 },
+        execute: async () => {
+          await invoke("close_board");
+        },
+      },
+      {
+        id: "window.new",
+        name: "New Window",
+        keys: { cua: "Mod+Shift+N", vim: "Mod+Shift+N", emacs: "Mod+Shift+N" },
+        menuPlacement: { menu: "window", group: 0, order: 0 },
+        execute: async () => {
+          await invoke("create_window");
+        },
+      },
+      {
         id: "app.about",
         name: "About",
         menuPlacement: { menu: "app", group: 0, order: 0 },
@@ -236,8 +263,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           // Tauri about dialog -- placeholder for now
         },
       },
+      // Dynamic board switch commands — one per open board.
+      // Uses index as suffix to avoid filesystem paths in command IDs.
+      ...(openBoards ?? []).map((b, i) => ({
+        id: `board.switch.${i}`,
+        name: `Switch to Board ${b.name || pathStem(b.path)}`,
+        execute: () => onSwitchBoard?.(b.path),
+      })),
     ],
-    [setMode, setKeymapMode, keymapMode, dismissInspector],
+    [setMode, setKeymapMode, keymapMode, dismissInspector, openBoards, onSwitchBoard],
   );
 
   /** Close the command palette and return to normal mode. */
@@ -255,7 +289,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <CommandScopeProvider commands={globalCommands}>
       <KeybindingHandler mode={keymapMode} />
       {children}
-      <CommandPalette open={paletteOpen} onClose={closePalette} mode={paletteMode} />
+      <CommandPalette open={paletteOpen} onClose={closePalette} mode={paletteMode} onSwitchBoard={onSwitchBoard} />
     </CommandScopeProvider>
   );
 }

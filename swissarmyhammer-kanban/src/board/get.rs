@@ -81,9 +81,10 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            // Count tasks by column
+            // Count tasks by column, computing ready status in a single pass.
             let mut column_counts: HashMap<String, usize> = HashMap::new();
             let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
+            let mut total_ready: usize = 0;
 
             for task in &all_tasks {
                 let col = task
@@ -94,6 +95,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
 
                 if task_is_ready(task, &all_tasks, terminal_id) {
                     *column_ready_counts.entry(col).or_insert(0) += 1;
+                    total_ready += 1;
                 }
             }
 
@@ -169,13 +171,16 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 })
                 .collect();
 
-            // Calculate summary
+            // Calculate summary (ready count already computed in the column pass)
             let total_tasks = all_tasks.len();
-            let ready_tasks = all_tasks
-                .iter()
-                .filter(|t| task_is_ready(t, &all_tasks, terminal_id))
-                .count();
+            let ready_tasks = total_ready;
             let blocked_tasks = total_tasks - ready_tasks;
+            let done_tasks = column_counts.get(terminal_id).copied().unwrap_or(0);
+            let percent_complete = if total_tasks > 0 {
+                (done_tasks as f64 / total_tasks as f64 * 100.0).round() as u32
+            } else {
+                0
+            };
             let total_actors = ectx.list("actor").await?.len();
 
             Ok(json!({
@@ -188,7 +193,9 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                     "total_tasks": total_tasks,
                     "total_actors": total_actors,
                     "ready_tasks": ready_tasks,
-                    "blocked_tasks": blocked_tasks
+                    "blocked_tasks": blocked_tasks,
+                    "done_tasks": done_tasks,
+                    "percent_complete": percent_complete
                 }
             }))
         }
@@ -243,6 +250,8 @@ mod tests {
         assert_eq!(result["summary"]["total_actors"], 0);
         assert_eq!(result["summary"]["ready_tasks"], 0);
         assert_eq!(result["summary"]["blocked_tasks"], 0);
+        assert_eq!(result["summary"]["done_tasks"], 0);
+        assert_eq!(result["summary"]["percent_complete"], 0);
 
         // Check columns have zero counts
         let columns = result["columns"].as_array().unwrap();
@@ -300,6 +309,8 @@ mod tests {
 
         // Check summary
         assert_eq!(result["summary"]["total_tasks"], 3);
+        assert_eq!(result["summary"]["done_tasks"], 1);
+        assert_eq!(result["summary"]["percent_complete"], 33);
 
         // Check column counts
         let columns = result["columns"].as_array().unwrap();

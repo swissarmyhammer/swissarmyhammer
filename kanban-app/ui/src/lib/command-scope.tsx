@@ -1,10 +1,30 @@
-import { createContext, useContext, useMemo, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useCallback, type ReactNode, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+
+// ---------------------------------------------------------------------------
+// ActiveBoardPath context — per-window board path for multi-window dispatch
+// ---------------------------------------------------------------------------
+
+const ActiveBoardPathContext = createContext<string | undefined>(undefined);
+
+/** Provide the per-window active board path so dispatch_command targets the correct board. */
+export function ActiveBoardPathProvider({ value, children }: { value: string | undefined; children: ReactNode }) {
+  return (
+    <ActiveBoardPathContext.Provider value={value}>
+      {children}
+    </ActiveBoardPathContext.Provider>
+  );
+}
+
+/** Read the per-window active board path. */
+export function useActiveBoardPath(): string | undefined {
+  return useContext(ActiveBoardPathContext);
+}
 
 /** Describes where a command should appear in the native OS menu bar. */
 export interface MenuPlacement {
   /** Which menu to place the command in. */
-  menu: "app" | "file" | "edit" | "settings";
+  menu: "app" | "file" | "edit" | "settings" | "window";
   /** Separator group number within the menu (items in the same group are contiguous). */
   group: number;
   /** Sort order within the group. */
@@ -176,8 +196,12 @@ export function useAvailableCommands(): CommandAtDepth[] {
 /**
  * Execute a command. If `execute` is set, calls it directly.
  * Otherwise dispatches to Rust by command id via invoke("dispatch_command").
+ *
+ * @param boardPath — optional per-window board path for multi-window dispatch.
+ *   When provided, Rust routes the command to the correct board instead of the
+ *   global "last-used" active board.
  */
-export async function dispatchCommand(cmd: CommandDef): Promise<void> {
+export async function dispatchCommand(cmd: CommandDef, boardPath?: string): Promise<void> {
   if (cmd.execute) {
     // Log to Rust backend so every command appears in the unified log
     Promise.resolve(invoke("log_command", { cmd: cmd.id, target: cmd.target })).catch(() => {});
@@ -188,6 +212,7 @@ export async function dispatchCommand(cmd: CommandDef): Promise<void> {
       cmd: cmd.id,
       target: cmd.target,
       args: cmd.args,
+      ...(boardPath ? { boardPath } : {}),
     });
   }
 }
@@ -202,12 +227,17 @@ export async function dispatchCommand(cmd: CommandDef): Promise<void> {
  */
 export function useExecuteCommand(): (id: string) => Promise<boolean> {
   const scope = useContext(CommandScopeContext);
+  const boardPath = useContext(ActiveBoardPathContext);
+  // Store in ref so the callback always sees the latest value without
+  // re-creating on every board path change.
+  const boardPathRef = useRef(boardPath);
+  boardPathRef.current = boardPath;
 
   return useCallback(
     async (id: string): Promise<boolean> => {
       const cmd = resolveCommand(scope, id);
       if (cmd === null) return false;
-      await dispatchCommand(cmd);
+      await dispatchCommand(cmd, boardPathRef.current);
       return true;
     },
     [scope],

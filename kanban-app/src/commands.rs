@@ -1,10 +1,11 @@
 //! Tauri commands for board operations.
 
 use crate::menu;
-use crate::state::AppState;
+use crate::state::{AppState, BoardHandle};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use swissarmyhammer_kanban::{
     board::GetBoard,
@@ -12,7 +13,37 @@ use swissarmyhammer_kanban::{
     OperationProcessor,
 };
 use tauri::menu::{ContextMenu, MenuBuilder};
+use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
+
+/// Counter for dynamically created window labels.
+static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
+
+/// Resolve a board handle — by explicit path or falling back to active board.
+///
+/// When `board_path` is provided, canonicalizes it to match the key format
+/// used by `AppState::boards` (which stores canonical paths from `open_board`).
+/// The fallback to the raw path on canonicalize failure is safe: it simply
+/// won't match any key, producing a clear "Board not open" error.
+async fn resolve_handle(
+    state: &AppState,
+    board_path: Option<String>,
+) -> Result<Arc<BoardHandle>, String> {
+    if let Some(bp) = board_path {
+        // Boards are keyed by canonical path; fall back to raw path if
+        // canonicalize fails (will produce "Board not open" on mismatch).
+        let canonical = PathBuf::from(&bp)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(&bp));
+        let boards = state.boards.read().await;
+        boards
+            .get(&canonical)
+            .cloned()
+            .ok_or_else(|| format!("Board not open: {}", bp))
+    } else {
+        state.active_handle().await.ok_or("No active board".into())
+    }
+}
 
 /// A single menu item entry received from the frontend manifest.
 ///
@@ -87,6 +118,34 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     }
 
     Ok(json!(list))
+}
+
+/// Close a board, removing it from the open set.
+///
+/// If `path` is omitted, closes the currently active board.
+/// If the closed board was active, switches to another open board (or none).
+/// Emits `board-changed` so the frontend refreshes.
+#[tauri::command]
+pub async fn close_board(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<Value, String> {
+    let target = match path {
+        Some(p) => PathBuf::from(&p),
+        None => {
+            let active = state.active_board.read().await;
+            active
+                .clone()
+                .ok_or_else(|| "No active board to close".to_string())?
+        }
+    };
+
+    state.close_board(&target).await?;
+
+    let _ = app.emit("board-changed", ());
+
+    Ok(json!({ "closed": target.display().to_string() }))
 }
 
 /// Set the active board to the specified path.
@@ -178,8 +237,9 @@ pub async fn set_inspector_stack(
 pub async fn get_entity_schema(
     state: State<'_, AppState>,
     entity_type: String,
+    board_path: Option<String>,
 ) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
+    let handle = resolve_handle(&state, board_path).await?;
     let ectx = handle
         .ctx
         .entity_context()
@@ -216,8 +276,9 @@ pub async fn get_entity_schema(
 pub async fn list_entities(
     state: State<'_, AppState>,
     entity_type: String,
+    board_path: Option<String>,
 ) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
+    let handle = resolve_handle(&state, board_path).await?;
     let ectx = handle
         .ctx
         .entity_context()
@@ -271,8 +332,9 @@ pub async fn get_entity(
     state: State<'_, AppState>,
     entity_type: String,
     id: String,
+    board_path: Option<String>,
 ) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
+    let handle = resolve_handle(&state, board_path).await?;
     let ectx = handle
         .ctx
         .entity_context()
@@ -315,8 +377,9 @@ pub async fn search_mentions(
     state: State<'_, AppState>,
     entity_type: String,
     query: String,
+    board_path: Option<String>,
 ) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
+    let handle = resolve_handle(&state, board_path).await?;
     let ectx = handle
         .ctx
         .entity_context()
@@ -381,8 +444,9 @@ pub async fn search_entities(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
+    board_path: Option<String>,
 ) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
+    let handle = resolve_handle(&state, board_path).await?;
     let limit = limit.unwrap_or(50);
 
     // Cap query length to prevent excessive fuzzy matcher work
@@ -451,8 +515,8 @@ pub async fn search_entities(
 /// computed count fields injected. Tasks are NOT included (use `list_entities`
 /// for that). A summary object provides aggregate counts.
 #[tauri::command]
-pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
+pub async fn get_board_data(state: State<'_, AppState>, board_path: Option<String>) -> Result<Value, String> {
+    let handle = resolve_handle(&state, board_path).await?;
     let ectx = handle
         .ctx
         .entity_context()
@@ -573,6 +637,11 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
         .map_err(|e| format!("get_board_data: {}", e))?
         .len();
 
+    // Extract percent_complete from the board entity's computed field
+    let pc = board.get("percent_complete").cloned().unwrap_or(json!(null));
+    let done_tasks = pc.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
+    let percent_complete = pc.get("percent").and_then(|v| v.as_u64()).unwrap_or(0);
+
     Ok(json!({
         "board": board.to_json(),
         "columns": columns_json,
@@ -583,6 +652,8 @@ pub async fn get_board_data(state: State<'_, AppState>) -> Result<Value, String>
             "total_actors": total_actors,
             "ready_tasks": ready_tasks,
             "blocked_tasks": total_tasks - ready_tasks,
+            "done_tasks": done_tasks,
+            "percent_complete": percent_complete,
         }
     }))
 }
@@ -628,10 +699,47 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Create a new window, optionally opening a specific board.
+#[tauri::command]
+pub async fn create_window(
+    app: AppHandle,
+    board_path: Option<String>,
+) -> Result<Value, String> {
+    // Increment past any labels that already exist (e.g. restored by
+    // tauri-plugin-window-state from a previous session).
+    let label = loop {
+        let n = WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = format!("board-{}", n);
+        if app.get_webview_window(&candidate).is_none() {
+            break candidate;
+        }
+    };
+
+    let mut url = String::from("index.html?window=board");
+    if let Some(ref bp) = board_path {
+        url.push_str("&board=");
+        url.push_str(&urlencoding::encode(bp));
+    }
+
+    let window = WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+        .title("SwissArmyHammer")
+        .inner_size(1200.0, 800.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| format!("Failed to create window: {e}"))?;
+
+    let _ = window.set_focus();
+
+    Ok(json!({
+        "label": label,
+        "board_path": board_path,
+    }))
+}
+
 /// List all view definitions, returning a JSON array.
 #[tauri::command]
-pub async fn list_views(state: State<'_, AppState>) -> Result<Value, String> {
-    let handle = state.active_handle().await.ok_or("No active board")?;
+pub async fn list_views(state: State<'_, AppState>, board_path: Option<String>) -> Result<Value, String> {
+    let handle = resolve_handle(&state, board_path).await?;
     let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
     let views = views_lock.read().await;
 
@@ -709,6 +817,7 @@ pub async fn dispatch_command(
     scope_chain: Option<Vec<String>>,
     target: Option<String>,
     args: Option<Value>,
+    board_path: Option<String>,
 ) -> Result<Value, String> {
     // Validate command ID: non-empty, reasonable length, ASCII-only
     if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
@@ -755,8 +864,10 @@ pub async fn dispatch_command(
         swissarmyhammer_commands::CommandContext::new(cmd.clone(), scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
-    // Set KanbanContext extension if board is open
-    if let Some(handle) = state.active_handle().await {
+    // Set KanbanContext extension if board is open.
+    // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
+    let active_handle = resolve_handle(&state, board_path).await.ok();
+    if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
     }
 
@@ -783,7 +894,7 @@ pub async fn dispatch_command(
     // fields like tags derived from body) by re-reading through the entity
     // context after detecting raw file changes.
     if undoable {
-        if let Some(handle) = state.active_handle().await {
+        if let Some(ref handle) = active_handle {
             let kanban_root = handle.ctx.root().to_path_buf();
             let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
 

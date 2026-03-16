@@ -25,10 +25,12 @@ When the user asks you to track work, create a todo list, or remember tasks — 
    - To filter by assignee: `op: "next task"`, `assignee: "<actor-id>"`
 2. Move it to doing: use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
 3. Read the task details: use `kanban` with `op: "get task"`, `id: "<task-id>"` to see description and subtasks
-4. Work through each subtask:
+4. **Work through each subtask and check it off immediately**:
    - Implement what the subtask describes
-   - Mark it complete: use `kanban` with `op: "update task"`, `id: "<task-id>"`, and update the `description` to change `- [ ]` to `- [x]` for the completed subtask
-5. **Complete the card**: when ALL subtasks are done, use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
+   - **Mark it complete right away**: use `kanban` with `op: "update task"`, `id: "<task-id>"`, and update the `description` to change `- [ ]` to `- [x]` for the completed subtask
+   - Do this after EVERY subtask — not in a batch at the end. The checklist is the progress indicator; leaving boxes unchecked while doing work defeats the purpose.
+   - When updating the description, preserve all existing content (other checklist items, prose, etc.) — only flip the one checkbox you just finished.
+5. **Complete the card**: when ALL subtasks are done (every `- [ ]` is now `- [x]`), use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
 
 ## Filtering Work
 
