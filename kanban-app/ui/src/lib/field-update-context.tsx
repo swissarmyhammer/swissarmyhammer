@@ -1,6 +1,7 @@
-import { createContext, useContext, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useCallback, useRef, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { error as logError } from "@/lib/log";
+import { useActiveBoardPath } from "@/lib/command-scope";
 
 /**
  * Signature for the centralized field update function.
@@ -37,12 +38,17 @@ interface FieldUpdateProviderProps {
  * `dispatch_command`.
  */
 export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
+  const boardPath = useActiveBoardPath();
+  const boardPathRef = useRef(boardPath);
+  boardPathRef.current = boardPath;
+
   const updateField: UpdateFieldFn = useCallback(
     async (entityType, entityId, fieldName, value) => {
       try {
         await invoke("dispatch_command", {
           cmd: "entity.update_field",
           args: { entity_type: entityType, id: entityId, field_name: fieldName, value },
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);

@@ -140,6 +140,7 @@ export function QuickCapture() {
         await invoke("dispatch_command", {
           cmd: "task.add",
           args: { column: firstColumnId, title: text.trim() },
+          boardPath: selectedPath,
         });
 
         localStorage.setItem(STORAGE_KEY, selectedPath);

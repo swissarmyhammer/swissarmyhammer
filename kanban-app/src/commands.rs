@@ -20,11 +20,18 @@ use tauri::{AppHandle, Emitter, Manager, State, Window};
 static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 /// Resolve a board handle — by explicit path or falling back to active board.
+///
+/// When `board_path` is provided, canonicalizes it to match the key format
+/// used by `AppState::boards` (which stores canonical paths from `open_board`).
+/// The fallback to the raw path on canonicalize failure is safe: it simply
+/// won't match any key, producing a clear "Board not open" error.
 async fn resolve_handle(
     state: &AppState,
     board_path: Option<String>,
 ) -> Result<Arc<BoardHandle>, String> {
     if let Some(bp) = board_path {
+        // Boards are keyed by canonical path; fall back to raw path if
+        // canonicalize fails (will produce "Board not open" on mismatch).
         let canonical = PathBuf::from(&bp)
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from(&bp));
@@ -698,8 +705,15 @@ pub async fn create_window(
     app: AppHandle,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    let n = WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let label = format!("board-{}", n);
+    // Increment past any labels that already exist (e.g. restored by
+    // tauri-plugin-window-state from a previous session).
+    let label = loop {
+        let n = WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = format!("board-{}", n);
+        if app.get_webview_window(&candidate).is_none() {
+            break candidate;
+        }
+    };
 
     let mut url = String::from("index.html?window=board");
     if let Some(ref bp) = board_path {
@@ -803,6 +817,7 @@ pub async fn dispatch_command(
     scope_chain: Option<Vec<String>>,
     target: Option<String>,
     args: Option<Value>,
+    board_path: Option<String>,
 ) -> Result<Value, String> {
     // Validate command ID: non-empty, reasonable length, ASCII-only
     if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
@@ -849,8 +864,10 @@ pub async fn dispatch_command(
         swissarmyhammer_commands::CommandContext::new(cmd.clone(), scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
-    // Set KanbanContext extension if board is open
-    if let Some(handle) = state.active_handle().await {
+    // Set KanbanContext extension if board is open.
+    // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
+    let active_handle = resolve_handle(&state, board_path).await.ok();
+    if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
     }
 
@@ -877,7 +894,7 @@ pub async fn dispatch_command(
     // fields like tags derived from body) by re-reading through the entity
     // context after detecting raw file changes.
     if undoable {
-        if let Some(handle) = state.active_handle().await {
+        if let Some(ref handle) = active_handle {
             let kanban_root = handle.ctx.root().to_path_buf();
             let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
 

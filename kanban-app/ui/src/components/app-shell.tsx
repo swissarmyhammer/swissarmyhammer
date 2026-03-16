@@ -263,9 +263,10 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
           // Tauri about dialog -- placeholder for now
         },
       },
-      // Dynamic board switch commands — one per open board
-      ...(openBoards ?? []).map((b) => ({
-        id: `board.switch.${b.path}`,
+      // Dynamic board switch commands — one per open board.
+      // Uses index as suffix to avoid filesystem paths in command IDs.
+      ...(openBoards ?? []).map((b, i) => ({
+        id: `board.switch.${i}`,
         name: `Switch to Board ${b.name || pathStem(b.path)}`,
         execute: () => onSwitchBoard?.(b.path),
       })),
