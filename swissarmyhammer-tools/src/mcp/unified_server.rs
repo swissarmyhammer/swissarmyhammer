@@ -524,21 +524,31 @@ async fn initialize_mcp_server(
     Ok(server_arc)
 }
 
-/// Create MCP router with HTTP service and health check endpoint
+/// Create MCP router with HTTP service, validator endpoint, and health check
 ///
 /// # Arguments
-/// * `server` - Arc reference to MCP server
+/// * `server` - Arc reference to MCP server (full tool set)
 ///
 /// # Returns
-/// * `axum::Router` - Configured router with MCP endpoints
+/// * `axum::Router` - Configured router with /mcp, /mcp/validator, and /health
 fn create_mcp_router(server: Arc<McpServer>) -> axum::Router {
+    let server_for_full = server.clone();
     let http_service = StreamableHttpService::new(
-        move || Ok((*server).clone()),
+        move || Ok((*server_for_full).clone()),
+        LocalSessionManager::default().into(),
+        Default::default(),
+    );
+
+    // Build a validator-only server with filtered tools
+    let validator_server = server.create_validator_server();
+    let validator_service = StreamableHttpService::new(
+        move || Ok(validator_server.clone()),
         LocalSessionManager::default().into(),
         Default::default(),
     );
 
     axum::Router::new()
+        .nest_service("/mcp/validator", validator_service)
         .nest_service("/mcp", http_service)
         .route("/health", axum::routing::get(health_check))
 }

@@ -1280,6 +1280,7 @@ impl ClaudeAgent {
             .mcp_servers(self.config.mcp_servers.clone())
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
+            .tools_override(self.config.claude.tools_override.clone())
             .build();
 
         match self
@@ -1687,6 +1688,7 @@ impl ClaudeAgent {
             .agent_mode(agent_mode)
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
+            .tools_override(self.config.claude.tools_override.clone())
             .build()
     }
 

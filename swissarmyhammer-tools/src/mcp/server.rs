@@ -804,6 +804,46 @@ impl McpServer {
         *port_lock = Some(port);
     }
 
+    /// Create a validator-only McpServer clone with a filtered tool registry.
+    ///
+    /// The returned server shares all state (ToolContext, prompt library, etc.)
+    /// but has a separate ToolRegistry containing only validator tools
+    /// (code_context + files read-only).
+    pub fn create_validator_server(&self) -> McpServer {
+        // Build a filtered registry with only validator tools
+        let mut validator_registry = ToolRegistry::new();
+
+        // Register the two validator tools directly
+        use super::tools::code_context::CodeContextTool;
+        use super::tools::files::FilesTool;
+
+        validator_registry.register(CodeContextTool::new());
+        validator_registry.register(FilesTool::read_only());
+
+        let validator_registry_arc = Arc::new(RwLock::new(validator_registry));
+
+        tracing::debug!(
+            "Created validator tool registry with {} tools",
+            validator_registry_arc.blocking_read().len()
+        );
+
+        // Clone the tool context but replace its registry with the validator-only one.
+        // This prevents validator tools from calling non-validator tools via context.call_tool().
+        let mut validator_context = (*self.tool_context).clone();
+        validator_context.tool_registry = Some(validator_registry_arc.clone());
+        let validator_context = Arc::new(validator_context);
+
+        McpServer {
+            library: self.library.clone(),
+            file_watcher: self.file_watcher.clone(),
+            tool_registry: validator_registry_arc,
+            tool_context: validator_context,
+            skill_library: self.skill_library.clone(),
+            agent_library: self.agent_library.clone(),
+            work_dir: self.work_dir.clone(),
+        }
+    }
+
     /// Initialize the server.
     ///
     /// This method loads all prompts using the PromptResolver.
@@ -1570,6 +1610,52 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = build_instructions_with_health(Some(tmp.path()));
         assert_eq!(result, SERVER_INSTRUCTIONS);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_validator_server_has_only_two_tools() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+
+        // Full server should have many tools
+        let full_tools = server.tool_registry.read().await;
+        let full_count = full_tools.len();
+        assert!(full_count > 2, "Full server should have more than 2 tools, got {}", full_count);
+        drop(full_tools);
+
+        // Validator server should have exactly 2 tools
+        let validator = server.create_validator_server();
+        let validator_tools = validator.tool_registry.read().await;
+        assert_eq!(validator_tools.len(), 2, "Validator should have exactly 2 tools");
+
+        // Verify the right tools are present
+        assert!(validator_tools.get_tool("files").is_some(), "Validator should have 'files' tool");
+        assert!(validator_tools.get_tool("code_context").is_some(), "Validator should have 'code_context' tool");
+
+        // Verify disallowed tools are absent
+        assert!(validator_tools.get_tool("kanban").is_none(), "Validator should NOT have 'kanban' tool");
+        assert!(validator_tools.get_tool("shell").is_none(), "Validator should NOT have 'shell' tool");
+        assert!(validator_tools.get_tool("git").is_none(), "Validator should NOT have 'git' tool");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_validator_context_registry_is_isolated() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let validator = server.create_validator_server();
+
+        // The validator's tool_context should have its own filtered registry
+        let validator_ctx_registry = validator.tool_context.tool_registry.as_ref()
+            .expect("Validator context should have a tool_registry");
+        let registry = validator_ctx_registry.read().await;
+
+        // call_tool on the validator context should NOT find non-validator tools
+        assert!(registry.get_tool("kanban").is_none(),
+            "Validator context registry should not contain 'kanban'");
+        assert!(registry.get_tool("files").is_some(),
+            "Validator context registry should contain 'files'");
+        assert_eq!(registry.len(), 2,
+            "Validator context registry should have exactly 2 tools");
     }
 
     #[test]

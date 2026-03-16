@@ -311,6 +311,42 @@ impl AvpContext {
         &self.model_config
     }
 
+    /// Resolve MCP config for the validator agent.
+    ///
+    /// If `SAH_HTTP_PORT` or `SWISSARMYHAMMER_HTTP_PORT` is set, returns an MCP
+    /// config pointing at `/mcp/validator` and `tools_override = Some("")` to
+    /// disable all built-in Claude tools. Otherwise returns `(None, None)`,
+    /// and the validator runs without tools (prompt-only, backward compatible).
+    fn resolve_validator_mcp_config() -> (
+        Option<swissarmyhammer_agent::McpServerConfig>,
+        Option<String>,
+    ) {
+        let port = std::env::var("SAH_HTTP_PORT")
+            .or_else(|_| std::env::var("SWISSARMYHAMMER_HTTP_PORT"))
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok());
+
+        match port {
+            Some(port) => {
+                let url = format!("http://localhost:{}/mcp/validator", port);
+                tracing::info!(
+                    "Validator agent will use MCP endpoint: {} (tools disabled)",
+                    url
+                );
+                (
+                    Some(swissarmyhammer_agent::McpServerConfig::new(url)),
+                    Some(String::new()), // --tools "" disables all built-in tools
+                )
+            }
+            None => {
+                tracing::debug!(
+                    "No SAH_HTTP_PORT set — validator agent will run without MCP tools"
+                );
+                (None, None)
+            }
+        }
+    }
+
     /// Get the agent for validator execution.
     ///
     /// Creates an agent on first access based on the resolved model configuration.
@@ -335,11 +371,21 @@ impl AvpContext {
             );
             let start = std::time::Instant::now();
 
-            let options = swissarmyhammer_agent::CreateAgentOptions { ephemeral: true };
-            let handle =
-                swissarmyhammer_agent::create_agent_with_options(&self.model_config, None, options)
-                    .await
-                    .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
+            // If an MCP server is available, point the validator agent at /mcp/validator
+            // and disable built-in tools so it only has code_context + read-only files.
+            let (mcp_config, tools_override) = Self::resolve_validator_mcp_config();
+
+            let options = swissarmyhammer_agent::CreateAgentOptions {
+                ephemeral: true,
+                tools_override,
+            };
+            let handle = swissarmyhammer_agent::create_agent_with_options(
+                &self.model_config,
+                mcp_config,
+                options,
+            )
+            .await
+            .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
 
             tracing::debug!("Agent created in {:.2}s", start.elapsed().as_secs_f64());
 

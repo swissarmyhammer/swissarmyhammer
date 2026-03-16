@@ -1206,31 +1206,49 @@ mod tests {
         .send_did_open(&lib_rs_abs, "rust", &modified_content)
         .expect("didOpen (modified) failed");
 
-    // Poll rust-analyzer until it returns symbols for the modified file.
+    // Poll rust-analyzer until it persists the `added_later` symbol for the modified file.
+    // We call collect_and_persist_file_symbols in each iteration so that once rust-analyzer
+    // returns the updated symbols, they are written to the DB immediately.
     {
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(60);
         let poll_interval = Duration::from_millis(500);
         loop {
-            if let Ok(result) = client.collect_file_symbols(&lib_rs_abs) {
-                if result.symbol_count > 0 || start.elapsed() >= timeout {
-                    break;
+            let symbol_count = {
+                let db = ws.db();
+                if let Ok(result) =
+                    client.collect_and_persist_file_symbols(&db, &lib_rs_abs, "src/lib.rs")
+                {
+                    result.symbol_count
+                } else {
+                    0
                 }
+            };
+            println!("Poll re-index LSP: {} symbols so far", symbol_count);
+
+            // Check if `added_later` is already in the DB.
+            let found_added_later: bool = {
+                let db = ws.db();
+                db.query_row(
+                    "SELECT COUNT(*) FROM lsp_symbols WHERE file_path = 'src/lib.rs' AND name = 'added_later'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                    > 0
+            };
+            if found_added_later {
+                println!("Re-index LSP: found added_later after {:?}", start.elapsed());
+                break;
             }
+            assert!(
+                start.elapsed() < timeout,
+                "Timed out waiting for added_later symbol in lsp_symbols after {:?}",
+                timeout
+            );
             thread::sleep(poll_interval);
         }
     }
-
-    let result2 = {
-        let db = ws.db();
-        client
-            .collect_and_persist_file_symbols(&db, &lib_rs_abs, "src/lib.rs")
-            .expect("collect_and_persist_file_symbols (re-index) failed")
-    };
-    println!(
-        "Re-index LSP: {} symbols for {}",
-        result2.symbol_count, result2.file_path
-    );
 
     // -- Phase 7: verify both flags back to 1 --
     {

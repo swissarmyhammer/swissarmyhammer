@@ -41,6 +41,10 @@ parameters:
 
 {{ rule_body }}
 
+## Available Tools
+
+You may have access to **files** (read file, glob, grep — read-only) and **code_context** (symbol lookup, call graphs, blast radius, code grep). Use them to inspect actual code before deciding. Do not guess about file contents.
+
 ## Required Response Format
 
 Respond with valid JSON ONLY:

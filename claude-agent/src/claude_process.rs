@@ -126,6 +126,10 @@ pub struct SpawnConfig {
     /// Ephemeral mode: uses haiku model and no session persistence
     #[builder(default)]
     pub ephemeral: bool,
+    /// Override for Claude's built-in tools. When set to Some(""), disables all built-in tools.
+    /// This is used for validator agents that should only have MCP-provided tools.
+    #[builder(default)]
+    pub tools_override: Option<String>,
 }
 
 /// Claude CLI command-line arguments for stream-json communication
@@ -354,6 +358,7 @@ impl ClaudeProcess {
         Self::configure_agent_mode(&mut command, &config);
         Self::configure_system_prompt(&mut command, &config);
         Self::configure_ephemeral_mode(&mut command, &config);
+        Self::configure_tools_override(&mut command, &config);
         Self::configure_mcp_servers(&mut command, &config);
         Self::log_command(&command);
 
@@ -409,6 +414,15 @@ impl ClaudeProcess {
         if config.ephemeral {
             tracing::info!("Spawning Claude in ephemeral mode (haiku, no session persistence)");
             command.arg("--model").arg("haiku");
+        }
+    }
+
+    /// Configure tools override if specified.
+    /// When set to Some(""), passes `--tools ""` to disable all built-in tools.
+    fn configure_tools_override(command: &mut Command, config: &SpawnConfig) {
+        if let Some(ref tools) = config.tools_override {
+            tracing::info!("Spawning Claude with tools override: {:?}", tools);
+            command.arg("--tools").arg(tools);
         }
     }
 
