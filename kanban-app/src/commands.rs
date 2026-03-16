@@ -89,6 +89,34 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     Ok(json!(list))
 }
 
+/// Close a board, removing it from the open set.
+///
+/// If `path` is omitted, closes the currently active board.
+/// If the closed board was active, switches to another open board (or none).
+/// Emits `board-changed` so the frontend refreshes.
+#[tauri::command]
+pub async fn close_board(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<Value, String> {
+    let target = match path {
+        Some(p) => PathBuf::from(&p),
+        None => {
+            let active = state.active_board.read().await;
+            active
+                .clone()
+                .ok_or_else(|| "No active board to close".to_string())?
+        }
+    };
+
+    state.close_board(&target).await?;
+
+    let _ = app.emit("board-changed", ());
+
+    Ok(json!({ "closed": target.display().to_string() }))
+}
+
 /// Set the active board to the specified path.
 #[tauri::command]
 pub async fn set_active_board(state: State<'_, AppState>, path: String) -> Result<Value, String> {

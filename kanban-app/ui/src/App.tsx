@@ -24,14 +24,13 @@ import { ViewsProvider, useViews } from "@/lib/views-context";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import type {
   BoardData, OpenBoard, Entity, EntityBag,
-  BoardDataResponse, EntityListResponse,
 } from "@/types/kanban";
-import { entityFromBag, parseBoardData, getStr } from "@/types/kanban";
+import { entityFromBag, getStr } from "@/types/kanban";
+import { refreshBoards } from "@/lib/refresh";
 import { QuickCapture } from "@/components/quick-capture";
 
 /** Detect if this window instance is the quick-capture popup. */
-const IS_QUICK_CAPTURE = new URLSearchParams(window.location.search).has("window") &&
-  new URLSearchParams(window.location.search).get("window") === "quick-capture";
+const IS_QUICK_CAPTURE = new URLSearchParams(window.location.search).get("window") === "quick-capture";
 
 // Mark <html> so CSS can make the quick-capture window fully transparent.
 if (IS_QUICK_CAPTURE) {
@@ -116,23 +115,20 @@ function App() {
   }, []);
 
   const refresh = useCallback(async () => {
-    try {
-      const [boardData, openData, taskData, actorData] = await Promise.all([
-        invoke<BoardDataResponse>("get_board_data"),
-        invoke<OpenBoard[]>("list_open_boards"),
-        invoke<EntityListResponse>("list_entities", { entityType: "task" }),
-        invoke<EntityListResponse>("list_entities", { entityType: "actor" }),
-      ]);
-      setBoard(parseBoardData(boardData));
-      setOpenBoards(openData);
-      setEntitiesByType({
-        task: taskData.entities.map(entityFromBag),
-        tag: boardData.tags.map(entityFromBag),
-        actor: actorData.entities.map(entityFromBag),
-      });
-    } catch (error) {
-      console.error("Failed to load board data:", error);
+    const result = await refreshBoards();
+    // Open boards always update — even if board data failed.
+    setOpenBoards(result.openBoards);
+    if (result.openBoards.length === 0) {
+      // All boards closed — clear stale state so the placeholder shows.
+      setBoard(null);
+      setEntitiesByType({});
+      return;
     }
+    // Update board data and entities atomically. If board data arrives
+    // but entities fail, clear entities rather than leaving stale data
+    // from a previous board.
+    setBoard(result.boardData);
+    setEntitiesByType(result.entitiesByType ?? {});
   }, []);
 
   useEffect(() => {
@@ -313,9 +309,13 @@ function App() {
         </>
       ) : (
         <main className="flex-1 flex items-center justify-center">
-          <p className="text-muted-foreground">
-            No board loaded. Open a board to get started.
-          </p>
+          <div className="text-center space-y-3">
+            <p className="text-muted-foreground text-lg">No board loaded</p>
+            <div className="text-sm text-muted-foreground/70 space-y-1">
+              <p><kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">Cmd+N</kbd> New Board</p>
+              <p><kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">Cmd+O</kbd> Open Board</p>
+            </div>
+          </div>
         </main>
       )}
       <ModeIndicator />
