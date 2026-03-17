@@ -12,7 +12,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::chain::output::LinkOutput;
-use crate::chain::{ChainContext, ChainLink, ChainResult, VALIDATOR_BLOCK_EXIT_CODE};
+use crate::chain::{
+    ChainContext, ChainLink, ChainResult, CTX_FILE_DIFFS, VALIDATOR_BLOCK_EXIT_CODE,
+};
 use crate::context::AvpContext;
 use crate::turn::TurnStateManager;
 use crate::types::HookType;
@@ -274,9 +276,18 @@ where
             }
         };
 
+        // Enrich the context: strip bloated fields, embed diffs as text
+        let diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
+        let context_value = crate::turn::prepare_validator_context(input_json, diffs.as_deref());
+
         let results = self
             .context
-            .execute_rulesets(&rulesets, hook_type, &input_json, changed_files.as_deref())
+            .execute_rulesets(
+                &rulesets,
+                hook_type,
+                &context_value,
+                changed_files.as_deref(),
+            )
             .await;
 
         self.handle_ruleset_results(&results, hook_type, ctx)

@@ -88,11 +88,19 @@ impl TurnStateManager {
     ///
     /// Content of `None` means the file did not exist before the tool ran.
     pub fn stash_content(&self, tool_use_id: &str, path: PathBuf, content: Option<Vec<u8>>) {
-        if let Ok(mut cache) = self.content_cache.lock() {
-            cache
-                .entry(tool_use_id.to_string())
-                .or_default()
-                .insert(path, content);
+        match self.content_cache.lock() {
+            Ok(mut cache) => {
+                cache
+                    .entry(tool_use_id.to_string())
+                    .or_default()
+                    .insert(path, content);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tool_use_id,
+                    "Content cache mutex poisoned in stash_content, content dropped: {e}"
+                );
+            }
         }
     }
 
@@ -100,10 +108,16 @@ impl TurnStateManager {
     ///
     /// Returns the map of path -> pre-content, or `None` if no content was stashed.
     pub fn take_content(&self, tool_use_id: &str) -> Option<HashMap<PathBuf, Option<Vec<u8>>>> {
-        self.content_cache
-            .lock()
-            .ok()
-            .and_then(|mut cache| cache.remove(tool_use_id))
+        match self.content_cache.lock() {
+            Ok(mut cache) => cache.remove(tool_use_id),
+            Err(e) => {
+                tracing::warn!(
+                    tool_use_id,
+                    "Content cache mutex poisoned in take_content, returning None: {e}"
+                );
+                None
+            }
+        }
     }
 
     /// Load turn state, creating empty state if none exists.
@@ -190,8 +204,11 @@ impl TurnStateManager {
     /// is ignored - clears the single project-wide state file.
     pub fn clear(&self, _session_id: &str) -> Result<(), AvpError> {
         // Clear in-memory content cache
-        if let Ok(mut cache) = self.content_cache.lock() {
-            cache.clear();
+        match self.content_cache.lock() {
+            Ok(mut cache) => cache.clear(),
+            Err(e) => {
+                tracing::warn!("Content cache mutex poisoned in clear, cache not cleared: {e}");
+            }
         }
 
         let state_path = self.state_path();

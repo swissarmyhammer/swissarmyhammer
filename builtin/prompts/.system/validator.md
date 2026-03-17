@@ -13,7 +13,7 @@ parameters:
     description: The rule instructions (markdown body) or RuleSet context
     required: true
   - name: hook_context
-    description: The hook event context as JSON
+    description: The hook event context (pre-formatted as YAML or diff blocks)
     required: true
   - name: hook_type
     description: The type of hook event (PreToolUse, PostToolUse, etc.)
@@ -41,9 +41,7 @@ This RuleSet contains {{ rule_count }} rule(s) that will be evaluated sequential
 
 ## Hook Event Context
 
-```json
 {{ hook_context }}
-```
 
 {% if changed_files %}
 ## Files Changed This Turn
@@ -77,7 +75,7 @@ Once you have completed your analysis (including any tool calls), respond with v
 ```json
 {
   "status": "passed",
-  "message": "Brief explanation of why validation passed"
+  "message": "Very brief explanation of why validation passed"
 }
 ```
 

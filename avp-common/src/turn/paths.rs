@@ -17,40 +17,37 @@ const KNOWN_FILE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"
 /// For unknown tools:
 /// - Falls back to recursive scanning with filesystem validation
 ///
-/// All candidates must pass `is_path_like()` and filesystem checks:
+/// All candidates must pass `is_path_structural()` and filesystem checks:
 /// the file must exist, or its parent directory must exist (for new files).
 pub fn extract_tool_paths(tool_name: &str, tool_input: &serde_json::Value) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
     if KNOWN_FILE_TOOLS.contains(&tool_name) {
-        // Top-level scan only for known tools
-        if let serde_json::Value::Object(obj) = tool_input {
-            for val in obj.values() {
-                if let serde_json::Value::String(s) = val {
-                    if let Some(path) = validate_path_candidate(s) {
-                        if !paths.contains(&path) {
-                            paths.push(path);
-                        }
-                    }
-                }
-            }
-        }
+        extract_top_level_paths(tool_input, &mut paths);
     } else {
-        // Recursive scan for unknown tools
         extract_validated_recursive(tool_input, &mut paths);
     }
 
     paths
 }
 
-/// Extract file paths from a JSON value by recursively scanning all string values.
+/// Extract validated paths from top-level string values of a JSON object only.
 ///
-/// This is the original extraction function kept for backward compatibility.
-/// Prefer `extract_tool_paths()` for tool-aware extraction with filesystem validation.
-pub fn extract_paths(value: &serde_json::Value) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    extract_paths_recursive(value, &mut paths);
-    paths
+/// Used for known file-modifying tools where content fields should not be scanned.
+fn extract_top_level_paths(value: &serde_json::Value, paths: &mut Vec<PathBuf>) {
+    let serde_json::Value::Object(obj) = value else {
+        return;
+    };
+    for val in obj.values() {
+        let serde_json::Value::String(s) = val else {
+            continue;
+        };
+        if let Some(path) = validate_path_candidate(s) {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
 }
 
 /// Check if a string looks like a path AND exists on the filesystem.
@@ -58,7 +55,7 @@ pub fn extract_paths(value: &serde_json::Value) -> Vec<PathBuf> {
 /// Returns `Some(PathBuf)` if the whole string is path-like and either the file
 /// exists or its parent directory exists (covering Write-new-file).
 fn validate_path_candidate(s: &str) -> Option<PathBuf> {
-    if !is_path_like(s) {
+    if !is_path_structural(s) {
         return None;
     }
     let path = Path::new(s);
@@ -69,11 +66,15 @@ fn validate_path_candidate(s: &str) -> Option<PathBuf> {
     }
 }
 
-/// Check if a string looks like a filesystem path (structural check only).
+/// Check if a string looks like a filesystem path using structural rules only.
 ///
-/// This is stricter than `is_likely_path` — it requires the whole string to be
-/// a path-like value, filtering out multiline content and URLs.
-fn is_path_like(s: &str) -> bool {
+/// Requires the whole string to look like a path by itself, rejecting multiline
+/// strings (which are likely file content) and URL schemes. Does **not** consult
+/// the filesystem.
+///
+/// Use this as a conservative syntactic gate before doing an expensive filesystem
+/// check.
+fn is_path_structural(s: &str) -> bool {
     if s.is_empty() || s.contains('\n') || s.contains("://") {
         return false;
     }
@@ -126,262 +127,10 @@ fn extract_validated_recursive(value: &serde_json::Value, paths: &mut Vec<PathBu
     }
 }
 
-fn extract_paths_recursive(value: &serde_json::Value, paths: &mut Vec<PathBuf>) {
-    match value {
-        serde_json::Value::String(s) => {
-            if is_likely_path(s) {
-                let path = PathBuf::from(s);
-                if !paths.contains(&path) {
-                    paths.push(path);
-                }
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for item in arr {
-                extract_paths_recursive(item, paths);
-            }
-        }
-        serde_json::Value::Object(obj) => {
-            for (_key, val) in obj {
-                extract_paths_recursive(val, paths);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Determine if a string is likely a file path.
-///
-/// This uses heuristics to identify path-like strings:
-/// - Starts with `/` (absolute Unix path)
-/// - Starts with `./` or `../` (relative path)
-/// - Starts with a drive letter like `C:\` (Windows absolute path)
-fn is_likely_path(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
-    }
-
-    // Absolute Unix paths
-    if s.starts_with('/') {
-        // Filter out things that are clearly not file paths:
-        // - URLs: contain "://"
-        // - Comments: "// " (two slashes followed by space)
-        // - Too short to be useful
-        // - Contains newlines (likely multi-line content)
-        if s.contains("://") || s.starts_with("// ") || s.len() <= 1 || s.contains('\n') {
-            return false;
-        }
-        return true;
-    }
-
-    // Relative paths
-    if s.starts_with("./") || s.starts_with("../") {
-        // Also filter out multi-line content
-        return !s.contains('\n');
-    }
-
-    // Windows absolute paths (C:\, D:\, etc.)
-    if s.len() >= 3 {
-        let chars: Vec<char> = s.chars().take(3).collect();
-        if chars.len() == 3
-            && chars[0].is_ascii_alphabetic()
-            && chars[1] == ':'
-            && (chars[2] == '\\' || chars[2] == '/')
-        {
-            // Filter out multi-line content
-            return !s.contains('\n');
-        }
-    }
-
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn test_extract_paths_simple_object() {
-        let value = json!({
-            "file_path": "/path/to/file.rs",
-            "other": "not a path"
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], PathBuf::from("/path/to/file.rs"));
-    }
-
-    #[test]
-    fn test_extract_paths_nested_object() {
-        let value = json!({
-            "outer": {
-                "inner": {
-                    "path": "/deeply/nested/file.txt"
-                }
-            }
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], PathBuf::from("/deeply/nested/file.txt"));
-    }
-
-    #[test]
-    fn test_extract_paths_array() {
-        let value = json!({
-            "files": [
-                "/path/one.rs",
-                "/path/two.rs",
-                "not a path"
-            ]
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 2);
-        assert!(paths.contains(&PathBuf::from("/path/one.rs")));
-        assert!(paths.contains(&PathBuf::from("/path/two.rs")));
-    }
-
-    #[test]
-    fn test_extract_paths_relative() {
-        let value = json!({
-            "path1": "./relative/path.rs",
-            "path2": "../parent/path.rs"
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 2);
-        assert!(paths.contains(&PathBuf::from("./relative/path.rs")));
-        assert!(paths.contains(&PathBuf::from("../parent/path.rs")));
-    }
-
-    #[test]
-    fn test_extract_paths_windows() {
-        let value = json!({
-            "path": "C:\\Users\\test\\file.rs"
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], PathBuf::from("C:\\Users\\test\\file.rs"));
-    }
-
-    #[test]
-    fn test_extract_paths_no_duplicates() {
-        let value = json!({
-            "path1": "/same/path.rs",
-            "path2": "/same/path.rs"
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 1);
-    }
-
-    #[test]
-    fn test_extract_paths_mixed_content() {
-        let value = json!({
-            "file_path": "/path/to/file.rs",
-            "content": "some text content",
-            "number": 42,
-            "boolean": true,
-            "null_val": null,
-            "nested": {
-                "another_path": "/another/path.txt"
-            }
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 2);
-    }
-
-    #[test]
-    fn test_extract_paths_empty_string() {
-        let value = json!({
-            "path": ""
-        });
-
-        let paths = extract_paths(&value);
-        assert!(paths.is_empty());
-    }
-
-    #[test]
-    fn test_extract_paths_url_not_path() {
-        let value = json!({
-            "url": "https://example.com/path"
-        });
-
-        let paths = extract_paths(&value);
-        assert!(paths.is_empty());
-    }
-
-    #[test]
-    fn test_is_likely_path() {
-        // Absolute Unix paths
-        assert!(is_likely_path("/path/to/file.rs"));
-        assert!(is_likely_path("/a"));
-
-        // Relative paths
-        assert!(is_likely_path("./path/to/file.rs"));
-        assert!(is_likely_path("../path/to/file.rs"));
-
-        // Windows paths
-        assert!(is_likely_path("C:\\path\\to\\file.rs"));
-        assert!(is_likely_path("D:/path/to/file.rs"));
-
-        // Not paths
-        assert!(!is_likely_path(""));
-        assert!(!is_likely_path("just some text"));
-        assert!(!is_likely_path("https://example.com"));
-        assert!(!is_likely_path("/")); // Root alone is not useful
-    }
-
-    #[test]
-    fn test_extract_paths_edit_tool_input() {
-        // Simulates actual Edit tool input structure
-        let value = json!({
-            "file_path": "/Users/test/project/src/main.rs",
-            "old_string": "fn old() {}",
-            "new_string": "fn new() {}"
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], PathBuf::from("/Users/test/project/src/main.rs"));
-    }
-
-    #[test]
-    fn test_extract_paths_write_tool_input() {
-        // Simulates actual Write tool input structure
-        let value = json!({
-            "file_path": "/Users/test/project/src/new_file.rs",
-            "content": "// New file content\nfn main() {}"
-        });
-
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 1);
-        assert_eq!(
-            paths[0],
-            PathBuf::from("/Users/test/project/src/new_file.rs")
-        );
-    }
-
-    #[test]
-    fn test_extract_paths_bash_with_paths() {
-        // Simulates Bash tool input that happens to contain paths
-        let value = json!({
-            "command": "cat /etc/passwd",
-            "working_dir": "/home/user/project"
-        });
-
-        let paths = extract_paths(&value);
-        // Should find /etc/passwd in the command string and /home/user/project
-        // Actually, "cat /etc/passwd" is a single string, not a path
-        // Only /home/user/project should be detected
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], PathBuf::from("/home/user/project"));
-    }
 
     // --- extract_tool_paths tests ---
 
@@ -432,7 +181,7 @@ mod tests {
         });
 
         let paths = extract_tool_paths("Write", &value);
-        // Only file_path, not content (content has newlines, fails is_path_like)
+        // Only file_path, not content (content has newlines, fails is_path_structural)
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], file_path);
     }
@@ -469,14 +218,14 @@ mod tests {
     }
 
     #[test]
-    fn test_is_path_like() {
-        assert!(is_path_like("/usr/bin/test"));
-        assert!(is_path_like("./relative"));
-        assert!(is_path_like("../parent"));
-        assert!(!is_path_like(""));
-        assert!(!is_path_like("just text"));
-        assert!(!is_path_like("/"));
-        assert!(!is_path_like("line1\nline2"));
-        assert!(!is_path_like("https://example.com"));
+    fn test_is_path_structural() {
+        assert!(is_path_structural("/usr/bin/test"));
+        assert!(is_path_structural("./relative"));
+        assert!(is_path_structural("../parent"));
+        assert!(!is_path_structural(""));
+        assert!(!is_path_structural("just text"));
+        assert!(!is_path_structural("/"));
+        assert!(!is_path_structural("line1\nline2"));
+        assert!(!is_path_structural("https://example.com"));
     }
 }

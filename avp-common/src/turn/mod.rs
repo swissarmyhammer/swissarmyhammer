@@ -14,7 +14,10 @@ mod hash;
 mod paths;
 mod state;
 
-pub use diff::{compute_diff, format_diffs_fenced, FileDiff};
-pub use hash::{hash_file, hash_files};
-pub use paths::{extract_paths, extract_tool_paths};
+pub use diff::{
+    compute_diff, format_diffs_fenced, prepare_validator_context, render_hook_context, FileDiff,
+    DIFF_TEXT_KEY,
+};
+pub use hash::{hash_bytes, hash_file, hash_files};
+pub use paths::extract_tool_paths;
 pub use state::{TurnState, TurnStateManager};

@@ -2,6 +2,9 @@
 fail-fast = false
 # Warn every 5s, hard-kill after 60 periods (5 minutes)
 slow-timeout = { period = "5s", terminate-after = 60 }
+# Exclude embedding integration tests — they require HuggingFace model files.
+# Run them with: cargo nextest run --profile embedding-models
+default-filter = "not package(swissarmyhammer-embedding)"
 
 # Limit concurrency for heavy LLM-based tests
 # Use test-threads to limit overall parallelism, or use test-groups for finer control
@@ -45,3 +48,14 @@ filter = "package(swissarmyhammer-treesitter) & test(duplicate)"
 test-group = "treesitter-embedding"
 # Warn every 60s, kill after 8 periods (~8 minutes)
 slow-timeout = { period = "60s", terminate-after = 8 }
+
+# Profile for running embedding integration tests (requires HF models on disk).
+# Usage: cargo nextest run --profile embedding-models
+[profile.embedding-models]
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.embedding-models.overrides]]
+filter = "package(swissarmyhammer-embedding)"
+test-group = "llama-embedding-serial"
+slow-timeout = { period = "120s", terminate-after = 3 }

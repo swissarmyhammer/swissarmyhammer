@@ -22,7 +22,7 @@ parameters:
     description: The full rule instructions (markdown body)
     required: true
   - name: hook_context
-    description: The hook event context (JSON) being validated
+    description: The hook event context (pre-formatted as YAML or diff blocks)
     required: false
 ---
 
@@ -34,9 +34,7 @@ parameters:
 {% if hook_context %}
 ## Hook Context
 
-```json
 {{ hook_context }}
-```
 {% endif %}
 
 {{ rule_body }}
@@ -53,7 +51,7 @@ Respond with valid JSON ONLY:
 ```json
 {
   "status": "passed",
-  "message": "Brief explanation of why validation passed"
+  "message": "Very brief explanation of why validation passed"
 }
 ```
 
