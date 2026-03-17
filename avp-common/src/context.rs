@@ -6,7 +6,7 @@
 //! - `.gitignore` - Excludes log files from version control
 //!
 //! Logging is handled by `tracing` — the CLI sets up a file layer that writes
-//! to `.avp/avp.log` at info level so all tracing output from every crate
+//! to `.avp/log` at info level so all tracing output from every crate
 //! (agents, validators, hooks) flows into the log automatically.
 //!
 //! User-level validators can be placed in `$XDG_DATA_HOME/avp/validators/ (defaults to ~/.local/share/avp/validators/)`.

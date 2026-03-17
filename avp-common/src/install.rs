@@ -280,7 +280,7 @@ files with YAML frontmatter that define validation rules.
 ```
 .avp/
 ├── README.md           # This file
-├── avp.log             # Hook event log (auto-generated, gitignored)
+├── log                 # Hook event log (auto-generated, gitignored)
 └── validators/         # Your validator files
 ```
 
