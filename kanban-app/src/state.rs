@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use swissarmyhammer_commands::{
     builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
@@ -198,6 +199,17 @@ pub(crate) struct RecentBoard {
     pub(crate) last_opened: DateTime<Utc>,
 }
 
+/// Saved geometry for a window (position + size + maximized state).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct WindowGeometry {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    #[serde(default)]
+    pub(crate) maximized: bool,
+}
+
 /// Persisted app configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct AppConfig {
@@ -215,6 +227,27 @@ pub(crate) struct AppConfig {
     /// Restored on startup so multi-board sessions survive reloads.
     #[serde(default)]
     pub(crate) open_boards: Vec<PathBuf>,
+    /// Window label → board path + geometry for restoring secondary windows.
+    #[serde(default)]
+    pub(crate) window_boards: HashMap<String, WindowBoardEntry>,
+    /// Main window geometry — saved on move/resize, restored in setup().
+    #[serde(default)]
+    pub(crate) main_window: Option<WindowGeometry>,
+}
+
+/// Persisted state for a secondary window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct WindowBoardEntry {
+    pub(crate) board_path: PathBuf,
+    /// Window position and size, saved on window close or periodic flush.
+    #[serde(default)]
+    pub(crate) x: Option<i32>,
+    #[serde(default)]
+    pub(crate) y: Option<i32>,
+    #[serde(default)]
+    pub(crate) width: Option<u32>,
+    #[serde(default)]
+    pub(crate) height: Option<u32>,
 }
 
 fn default_keymap_mode() -> String {
@@ -261,6 +294,29 @@ impl AppConfig {
     }
 }
 
+/// Active drag session for cross-window drag coordination.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DragSession {
+    /// Unique session ID (ULID)
+    pub(crate) session_id: String,
+    /// Board path the task originates from
+    pub(crate) source_board_path: String,
+    /// Tauri window label of the source window
+    pub(crate) source_window_label: String,
+    /// The task ID being dragged
+    pub(crate) task_id: String,
+    /// Serialized task fields for ghost preview in target windows
+    pub(crate) task_fields: serde_json::Value,
+    /// Whether Alt/Option was held (copy mode)
+    pub(crate) copy_mode: bool,
+    /// When the session was started (epoch millis for serialization)
+    #[serde(default)]
+    pub(crate) started_at_ms: u64,
+}
+
+/// Maximum age of a drag session before it is considered stale (30 seconds).
+pub(crate) const DRAG_SESSION_MAX_AGE_MS: u64 = 30_000;
+
 /// The shared application state, managed by Tauri.
 pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
@@ -279,6 +335,11 @@ pub(crate) struct AppState {
     pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
     /// Current focus scope chain stored by `set_focus`.
     pub(crate) focus_scope_chain: RwLock<Vec<String>>,
+    /// Active cross-window drag session, if any.
+    pub(crate) drag_session: RwLock<Option<DragSession>>,
+    /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
+    /// The Destroyed handler uses this to distinguish mid-session close from app quit.
+    pub(crate) shutting_down: AtomicBool,
 }
 
 impl AppState {
@@ -295,6 +356,8 @@ impl AppState {
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             focus_scope_chain: RwLock::new(Vec::new()),
+            drag_session: RwLock::new(None),
+            shutting_down: AtomicBool::new(false),
         }
     }
 
@@ -398,6 +461,36 @@ impl AppState {
                     }
                 } else {
                     tracing::info!(path = %path.display(), "auto_open_board: persisted board no longer exists, skipping");
+                }
+            }
+        }
+
+        // Also open any boards referenced in window_boards that aren't already open.
+        // This handles the case where a secondary window shows a different board
+        // than the ones in open_boards.
+        {
+            let config = self.config.read().await;
+            let wb_paths: Vec<PathBuf> = config
+                .window_boards
+                .values()
+                .map(|e| e.board_path.clone())
+                .collect();
+            drop(config);
+
+            let boards = self.boards.read().await;
+            let already_open: HashSet<PathBuf> = boards.keys().cloned().collect();
+            drop(boards);
+
+            for path in wb_paths {
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if already_open.contains(&canonical) {
+                    continue;
+                }
+                if path.is_dir() {
+                    tracing::info!(path = %path.display(), "auto_open_board: restoring board from window_boards");
+                    if let Err(e) = self.open_board(&path, None).await {
+                        tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore window_boards board");
+                    }
                 }
             }
         }
@@ -980,5 +1073,384 @@ mod tests {
         // Different usernames should (usually) get different colors
         // Not guaranteed but very likely with a 15-color palette
         assert_ne!(c1, c2);
+    }
+
+    // =========================================================================
+    // Drag session tests
+    // =========================================================================
+
+    fn make_drag_session(task_id: &str, board_path: &str) -> DragSession {
+        DragSession {
+            session_id: ulid::Ulid::new().to_string(),
+            source_board_path: board_path.to_string(),
+            source_window_label: "main".to_string(),
+            task_id: task_id.to_string(),
+            task_fields: serde_json::json!({"title": "Test task"}),
+            copy_mode: false,
+            started_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_drag_session_start_and_cancel() {
+        let state = AppState::new();
+        assert!(state.drag_session.read().await.is_none());
+
+        // Start session
+        let session = make_drag_session("task-1", "/board/a");
+        *state.drag_session.write().await = Some(session);
+        assert!(state.drag_session.read().await.is_some());
+
+        // Cancel session
+        let taken = state.drag_session.write().await.take();
+        assert!(taken.is_some());
+        assert_eq!(taken.unwrap().task_id, "task-1");
+        assert!(state.drag_session.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_drag_session_double_take_returns_none() {
+        let state = AppState::new();
+        *state.drag_session.write().await = Some(make_drag_session("task-1", "/board/a"));
+
+        // First take succeeds
+        let first = state.drag_session.write().await.take();
+        assert!(first.is_some());
+
+        // Second take returns None (session already consumed)
+        let second = state.drag_session.write().await.take();
+        assert!(second.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_drag_session_replaced_by_new_start() {
+        let state = AppState::new();
+        let session1 = make_drag_session("task-1", "/board/a");
+        let id1 = session1.session_id.clone();
+        *state.drag_session.write().await = Some(session1);
+
+        // Replace with new session
+        let session2 = make_drag_session("task-2", "/board/b");
+        let id2 = session2.session_id.clone();
+        *state.drag_session.write().await = Some(session2);
+
+        let current = state.drag_session.read().await;
+        assert_eq!(current.as_ref().unwrap().session_id, id2);
+        assert_ne!(id1, id2);
+        assert_eq!(current.as_ref().unwrap().task_id, "task-2");
+    }
+
+    #[test]
+    fn test_drag_session_stale_detection() {
+        let mut session = make_drag_session("task-1", "/board/a");
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // Session just started — not stale
+        session.started_at_ms = now_ms;
+        assert!(now_ms.saturating_sub(session.started_at_ms) <= DRAG_SESSION_MAX_AGE_MS);
+
+        // Session 31 seconds ago — stale
+        session.started_at_ms = now_ms - 31_000;
+        assert!(now_ms.saturating_sub(session.started_at_ms) > DRAG_SESSION_MAX_AGE_MS);
+    }
+
+    #[test]
+    fn test_drag_session_serialization() {
+        let session = make_drag_session("task-1", "/board/a");
+        let json = serde_json::to_value(&session).unwrap();
+        assert_eq!(json["task_id"], "task-1");
+        assert_eq!(json["source_board_path"], "/board/a");
+        assert_eq!(json["source_window_label"], "main");
+        assert_eq!(json["copy_mode"], false);
+        assert!(json["started_at_ms"].as_u64().unwrap() > 0);
+    }
+
+    // =========================================================================
+    // Window-board mapping tests
+    // =========================================================================
+
+    fn make_window_entry(board_path: &str) -> WindowBoardEntry {
+        WindowBoardEntry {
+            board_path: PathBuf::from(board_path),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    fn make_window_entry_with_pos(
+        board_path: &str,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    ) -> WindowBoardEntry {
+        WindowBoardEntry {
+            board_path: PathBuf::from(board_path),
+            x: Some(x),
+            y: Some(y),
+            width: Some(w),
+            height: Some(h),
+        }
+    }
+
+    #[test]
+    fn test_window_boards_persists_through_serialization() {
+        let mut config = AppConfig::default();
+        config.window_boards.insert(
+            "board-01abc".to_string(),
+            make_window_entry("/boards/project-a/.kanban"),
+        );
+        config.window_boards.insert(
+            "board-02def".to_string(),
+            make_window_entry("/boards/project-b/.kanban"),
+        );
+
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.window_boards.len(), 2);
+        assert_eq!(
+            restored
+                .window_boards
+                .get("board-01abc")
+                .unwrap()
+                .board_path,
+            PathBuf::from("/boards/project-a/.kanban")
+        );
+        assert_eq!(
+            restored
+                .window_boards
+                .get("board-02def")
+                .unwrap()
+                .board_path,
+            PathBuf::from("/boards/project-b/.kanban")
+        );
+    }
+
+    #[test]
+    fn test_window_boards_persists_geometry() {
+        let mut config = AppConfig::default();
+        config.window_boards.insert(
+            "board-01abc".to_string(),
+            make_window_entry_with_pos("/boards/a/.kanban", 100, 200, 1200, 800),
+        );
+
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+
+        let entry = restored.window_boards.get("board-01abc").unwrap();
+        assert_eq!(entry.x, Some(100));
+        assert_eq!(entry.y, Some(200));
+        assert_eq!(entry.width, Some(1200));
+        assert_eq!(entry.height, Some(800));
+    }
+
+    #[test]
+    fn test_window_boards_geometry_defaults_to_none() {
+        let mut config = AppConfig::default();
+        config.window_boards.insert(
+            "board-01abc".to_string(),
+            make_window_entry("/boards/a/.kanban"),
+        );
+
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+
+        let entry = restored.window_boards.get("board-01abc").unwrap();
+        assert_eq!(entry.x, None);
+        assert_eq!(entry.y, None);
+        assert_eq!(entry.width, None);
+        assert_eq!(entry.height, None);
+    }
+
+    #[test]
+    fn test_window_boards_defaults_to_empty() {
+        // Simulate loading config that predates window_boards field
+        let json = r#"{"recent_boards":[],"keymap_mode":"cua"}"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(config.window_boards.is_empty());
+    }
+
+    #[test]
+    fn test_window_boards_remove_by_board_path() {
+        let mut config = AppConfig::default();
+        let board_a = PathBuf::from("/boards/a/.kanban");
+
+        config
+            .window_boards
+            .insert("win-1".to_string(), make_window_entry("/boards/a/.kanban"));
+        config
+            .window_boards
+            .insert("win-2".to_string(), make_window_entry("/boards/b/.kanban"));
+        config
+            .window_boards
+            .insert("win-3".to_string(), make_window_entry("/boards/a/.kanban"));
+
+        // Remove all windows pointing to board A
+        config
+            .window_boards
+            .retain(|_, entry| entry.board_path != board_a);
+
+        assert_eq!(config.window_boards.len(), 1);
+        assert!(config.window_boards.contains_key("win-2"));
+    }
+
+    #[test]
+    fn test_window_label_is_ulid_based() {
+        // Verify the label format matches what create_window generates
+        let label = format!("board-{}", ulid::Ulid::new().to_string().to_lowercase());
+        assert!(label.starts_with("board-"));
+        // ULID is 26 chars, so label is "board-" (6) + 26 = 32
+        assert_eq!(label.len(), 32);
+    }
+
+    #[test]
+    fn test_window_boards_save_and_load_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("config.json");
+
+        // Create config with window_boards including geometry
+        let mut config = AppConfig::default();
+        config.window_boards.insert(
+            "board-01abc".to_string(),
+            make_window_entry_with_pos("/test/.kanban", 50, 100, 1400, 900),
+        );
+
+        // Save
+        let content = serde_json::to_string_pretty(&config).unwrap();
+        std::fs::write(&config_path, &content).unwrap();
+
+        // Load
+        let loaded_content = std::fs::read_to_string(&config_path).unwrap();
+        let loaded: AppConfig = serde_json::from_str(&loaded_content).unwrap();
+
+        assert_eq!(loaded.window_boards.len(), 1);
+        let entry = loaded.window_boards.get("board-01abc").unwrap();
+        assert_eq!(entry.board_path, PathBuf::from("/test/.kanban"));
+        assert_eq!(entry.x, Some(50));
+        assert_eq!(entry.y, Some(100));
+        assert_eq!(entry.width, Some(1400));
+        assert_eq!(entry.height, Some(900));
+    }
+
+    /// Full lifecycle test: create window entry → update geometry → save →
+    /// reload → verify position restores. This is the exact sequence that
+    /// create_window + on_window_event + restore_windows must execute.
+    #[test]
+    fn test_window_lifecycle_create_move_restart_restore() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("config.json");
+
+        // Step 1: Simulate create_window — save entry with no geometry
+        let label = format!("board-{}", ulid::Ulid::new().to_string().to_lowercase());
+        let board_path = PathBuf::from("/projects/my-board/.kanban");
+        {
+            let mut config = AppConfig::default();
+            config.open_boards = vec![board_path.clone()];
+            config.window_boards.insert(
+                label.clone(),
+                WindowBoardEntry {
+                    board_path: board_path.clone(),
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
+                },
+            );
+            let content = serde_json::to_string_pretty(&config).unwrap();
+            std::fs::write(&config_path, &content).unwrap();
+        }
+
+        // Step 2: Simulate on_window_event Moved/Resized — update geometry
+        {
+            let content = std::fs::read_to_string(&config_path).unwrap();
+            let mut config: AppConfig = serde_json::from_str(&content).unwrap();
+            let entry = config.window_boards.get_mut(&label).unwrap();
+            entry.x = Some(300);
+            entry.y = Some(150);
+            entry.width = Some(1400);
+            entry.height = Some(900);
+            let content = serde_json::to_string_pretty(&config).unwrap();
+            std::fs::write(&config_path, &content).unwrap();
+        }
+
+        // Step 3: Simulate app restart — load config, verify entry survives
+        {
+            let content = std::fs::read_to_string(&config_path).unwrap();
+            let config: AppConfig = serde_json::from_str(&content).unwrap();
+
+            // open_boards must survive
+            assert_eq!(config.open_boards.len(), 1);
+            assert_eq!(config.open_boards[0], board_path);
+
+            // window_boards must survive with geometry
+            assert_eq!(config.window_boards.len(), 1);
+            let entry = config.window_boards.get(&label).unwrap();
+            assert_eq!(entry.board_path, board_path);
+            assert_eq!(entry.x, Some(300));
+            assert_eq!(entry.y, Some(150));
+            assert_eq!(entry.width, Some(1400));
+            assert_eq!(entry.height, Some(900));
+        }
+
+        // Step 4: Simulate open_board updating open_boards (must NOT clobber window_boards)
+        {
+            let content = std::fs::read_to_string(&config_path).unwrap();
+            let mut config: AppConfig = serde_json::from_str(&content).unwrap();
+            // open_board writes open_boards but should preserve window_boards
+            config.open_boards = vec![board_path.clone()];
+            let content = serde_json::to_string_pretty(&config).unwrap();
+            std::fs::write(&config_path, &content).unwrap();
+        }
+
+        // Step 5: Verify window_boards still intact after open_board save
+        {
+            let content = std::fs::read_to_string(&config_path).unwrap();
+            let config: AppConfig = serde_json::from_str(&content).unwrap();
+            assert_eq!(
+                config.window_boards.len(),
+                1,
+                "window_boards was clobbered!"
+            );
+            let entry = config.window_boards.get(&label).unwrap();
+            assert_eq!(entry.x, Some(300), "geometry was lost!");
+        }
+    }
+
+    /// Test that close_board removes the right window_boards entries
+    #[test]
+    fn test_close_board_cleans_window_boards() {
+        let mut config = AppConfig::default();
+        let board_a = PathBuf::from("/boards/a/.kanban");
+        let board_b = PathBuf::from("/boards/b/.kanban");
+
+        config.window_boards.insert(
+            "win-1".to_string(),
+            make_window_entry_with_pos("/boards/a/.kanban", 100, 200, 1200, 800),
+        );
+        config.window_boards.insert(
+            "win-2".to_string(),
+            make_window_entry_with_pos("/boards/b/.kanban", 500, 300, 1200, 800),
+        );
+
+        // Close board A — should remove win-1 but keep win-2
+        config
+            .window_boards
+            .retain(|_, entry| entry.board_path != board_a);
+
+        assert_eq!(config.window_boards.len(), 1);
+        assert!(config.window_boards.contains_key("win-2"));
+        assert_eq!(
+            config.window_boards.get("win-2").unwrap().board_path,
+            board_b
+        );
     }
 }

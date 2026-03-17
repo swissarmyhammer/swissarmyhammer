@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -29,6 +29,8 @@ function defaultTaskTitle(_columnName: string): string {
 import { useFieldUpdate } from "@/lib/field-update-context";
 import { moniker } from "@/lib/moniker";
 import { useInspect } from "@/lib/inspect-context";
+import { useDragSession } from "@/lib/drag-session-context";
+import { CrossWindowDropOverlay } from "@/components/cross-window-drop-overlay";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getNum } from "@/types/kanban";
 
@@ -52,6 +54,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   boardPathRef.current = boardPath;
   const { setFocus } = useEntityFocus();
   const inspectEntity = useInspect();
+  const { startSession, cancelSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
   const boardCommands = useMemo(() => [
     {
@@ -120,6 +123,17 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   const currentLayout = virtualLayout ?? baseLayout;
   const currentColumnOrder = virtualColumnOrder ?? columnIdList;
 
+  // Cancel backend drag session on Escape during an active task drag
+  useEffect(() => {
+    if (dragTypeRef.current !== "task") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && dragTypeRef.current === "task") {
+        cancelSession();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeTask, cancelSession]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -165,9 +179,14 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         for (const [k, v] of baseLayout) clone.set(k, [...v]);
         setVirtualLayout(clone);
         activeColumnRef.current = task ? getStr(task, "position_column") || null : null;
+
+        // Start a backend drag session for cross-window coordination
+        if (task) {
+          startSession(task.id, task.fields, false);
+        }
       }
     },
-    [taskMap, baseLayout, columnMap, columnIdList]
+    [taskMap, baseLayout, columnMap, columnIdList, startSession]
   );
 
   /** Resolve any ID (task, drop zone, or column) to a column ID */
@@ -284,6 +303,10 @@ export function BoardView({ board, tasks }: BoardViewProps) {
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
+      // Cancel backend drag session — same-window drops are handled by @dnd-kit.
+      // Only for task drags (column drags never start a session).
+      if (dragTypeRef.current === "task") cancelSession();
+
       if (dragTypeRef.current === "column") {
         const colOrder = virtualColumnOrder ?? columnIdList;
         setActiveColumn(null);
@@ -370,7 +393,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await persistMove(activeId, targetColumn, draggedTask, { before: overId });
       }
     },
-    [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList, persistMove]
+    [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList, persistMove, cancelSession]
   );
 
   const { updateField } = useFieldUpdate();
@@ -400,7 +423,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   );
 
   return (
-    <FocusScope moniker={boardMoniker} commands={boardCommands} className="flex flex-col flex-1 min-h-0">
+    <FocusScope moniker={boardMoniker} commands={boardCommands} className="flex flex-col flex-1 min-h-0 relative">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -444,6 +467,11 @@ export function BoardView({ board, tasks }: BoardViewProps) {
           ) : null}
         </DragOverlay>
       </DndContext>
+      {/* Cross-window drop overlay — shown when another window is dragging */}
+      <CrossWindowDropOverlay
+        columns={columns}
+        tasksByColumn={currentLayout}
+      />
     </FocusScope>
   );
 }

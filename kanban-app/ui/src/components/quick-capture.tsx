@@ -179,9 +179,9 @@ export function QuickCapture() {
 
   return (
     <div className="h-screen w-screen flex items-start justify-center p-2" style={{ background: "transparent" }}>
-      <div ref={cardRef} className="w-full rounded-xl bg-background animate-in fade-in zoom-in-95 duration-150">
+      <div ref={cardRef} className="w-full rounded-xl bg-background border border-border shadow-xl animate-in fade-in zoom-in-95 duration-150">
         {/* Header — draggable, shows icon and keyboard hints */}
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30" data-tauri-drag-region>
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 rounded-t-xl" data-tauri-drag-region>
           <img src={appIcon} alt="" className="h-4 w-4 shrink-0" />
           <span className="text-xs font-medium text-muted-foreground/70">Quick Capture</span>
           <span className="ml-auto text-[10px] text-muted-foreground/40">

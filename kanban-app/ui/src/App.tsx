@@ -22,6 +22,7 @@ import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import { ViewsProvider, useViews } from "@/lib/views-context";
 import { CommandScopeProvider, ActiveBoardPathProvider, type CommandDef } from "@/lib/command-scope";
+import { DragSessionProvider } from "@/lib/drag-session-context";
 import type {
   BoardData, OpenBoard, Entity, EntityBag,
 } from "@/types/kanban";
@@ -37,6 +38,16 @@ const IS_QUICK_CAPTURE = URL_PARAMS.get("window") === "quick-capture";
 
 /** Initial board path from URL (set when opening a new window for a specific board). */
 const INITIAL_BOARD_PATH = URL_PARAMS.get("board") ?? undefined;
+
+/** localStorage key for persisting active board path across hot reloads. */
+const BOARD_PATH_STORAGE_KEY = "active-board-path";
+
+/** Restore board path: URL param > localStorage > undefined (will pick from backend). */
+function getInitialBoardPath(): string | undefined {
+  if (INITIAL_BOARD_PATH) return INITIAL_BOARD_PATH;
+  const stored = localStorage.getItem(BOARD_PATH_STORAGE_KEY);
+  return stored ?? undefined;
+}
 
 // Mark <html> so CSS can make the quick-capture window fully transparent.
 if (IS_QUICK_CAPTURE) {
@@ -88,9 +99,18 @@ function App() {
   );
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
   /** Per-window active board path. Each window independently selects which board to display. */
-  const [activeBoardPath, setActiveBoardPath] = useState<string | undefined>(INITIAL_BOARD_PATH);
+  const [activeBoardPath, setActiveBoardPath] = useState<string | undefined>(getInitialBoardPath);
   const activeBoardPathRef = useRef(activeBoardPath);
   activeBoardPathRef.current = activeBoardPath;
+
+  // Persist board path to localStorage for hot-reload recovery
+  useEffect(() => {
+    if (activeBoardPath) {
+      localStorage.setItem(BOARD_PATH_STORAGE_KEY, activeBoardPath);
+    } else {
+      localStorage.removeItem(BOARD_PATH_STORAGE_KEY);
+    }
+  }, [activeBoardPath]);
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
@@ -158,6 +178,21 @@ function App() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Restore secondary windows from persisted window→board mapping.
+  // Only the main window does this, and only once on mount.
+  // The backend recreates windows with saved labels and applies
+  // persisted position/size from config.window_boards.
+  const windowsRestoredRef = useRef(false);
+  useEffect(() => {
+    if (INITIAL_BOARD_PATH || windowsRestoredRef.current) return;
+    if (openBoards.length === 0) return;
+    windowsRestoredRef.current = true;
+
+    invoke("restore_windows").catch((error) => {
+      console.error("Failed to restore windows:", error);
+    });
+  }, [openBoards]);
 
   // Restore inspector stack from persisted config after initial data loads.
   // Validates each moniker against loaded entities — drops missing ones.
@@ -266,10 +301,51 @@ function App() {
             });
         }
       }),
-      // Keep board-changed for structural operations (open/switch board).
-      // refresh() handles open boards list + active board fallback in one pass.
-      listen("board-changed", () => {
-        refresh();
+      // board-opened: emitted only to the window that initiated the open.
+      // Switch this window to the newly opened board.
+      listen<{ path: string }>("board-opened", async (event) => {
+        const newPath = event.payload.path;
+        setActiveBoardPath(newPath);
+        activeBoardPathRef.current = newPath;
+        const result = await refreshBoards(newPath);
+        setOpenBoards(result.openBoards);
+        setBoard(result.boardData);
+        setEntitiesByType(result.entitiesByType ?? {});
+      }),
+      // board-changed: structural change (open/close/switch). All windows
+      // refresh their open boards list. If this window's board was closed,
+      // fall back to another open board.
+      listen("board-changed", async () => {
+        let boards: OpenBoard[] = [];
+        try {
+          boards = await invoke<OpenBoard[]>("list_open_boards");
+        } catch { /* ignore */ }
+        setOpenBoards(boards);
+
+        if (boards.length === 0) {
+          setBoard(null);
+          setEntitiesByType({});
+          setActiveBoardPath(undefined);
+          return;
+        }
+
+        // If this window's board is still open, keep it and refresh data
+        const currentPath = activeBoardPathRef.current;
+        const stillOpen = currentPath && boards.some((b) => b.path === currentPath);
+        if (stillOpen) {
+          const result = await refreshBoards(currentPath);
+          setBoard(result.boardData);
+          setEntitiesByType(result.entitiesByType ?? {});
+          return;
+        }
+
+        // Board was closed — fall back to another open board
+        const fallback = boards.find((b) => b.is_active) ?? boards[0];
+        setActiveBoardPath(fallback.path);
+        activeBoardPathRef.current = fallback.path;
+        const result = await refreshBoards(fallback.path);
+        setBoard(result.boardData);
+        setEntitiesByType(result.entitiesByType ?? {});
       }),
     ];
     return () => {
@@ -308,6 +384,7 @@ function App() {
     <UndoStackProvider>
     <InspectProvider onInspect={inspectEntity} onDismiss={dismissTopPanel}>
     <AppShell openBoards={openBoards} onSwitchBoard={handleSwitchBoard}>
+    <DragSessionProvider>
     <ViewsProvider>
     <ViewCommandScope>
     <div className="h-screen bg-background text-foreground flex flex-col">
@@ -366,6 +443,7 @@ function App() {
     </div>
     </ViewCommandScope>
     </ViewsProvider>
+    </DragSessionProvider>
     </AppShell>
     </InspectProvider>
     </UndoStackProvider>

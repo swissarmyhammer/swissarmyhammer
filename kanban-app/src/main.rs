@@ -14,8 +14,8 @@ pub use tauri_reporter::TauriReporter;
 use clap::Parser;
 use cli::Cli;
 use state::AppState;
+use std::sync::atomic::Ordering;
 use tauri::Manager;
-use tauri_plugin_window_state::{StateFlags, WindowExt};
 use tracing_subscriber::prelude::*;
 
 fn main() {
@@ -49,11 +49,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(
-            tauri_plugin_window_state::Builder::default()
-                .with_state_flags(StateFlags::all())
-                .build(),
-        )
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::log_command,
@@ -84,6 +79,11 @@ fn main() {
             commands::rebuild_menu_from_manifest,
             commands::list_views,
             commands::create_window,
+            commands::start_drag_session,
+            commands::cancel_drag_session,
+            commands::complete_drag_session,
+            commands::restore_windows,
+            commands::save_window_geometry,
         ])
         .setup(|app| {
             // Build initial menu with OS chrome only — the frontend will
@@ -115,26 +115,27 @@ fn main() {
             tauri::async_runtime::block_on(state.start_watchers(app_handle));
 
             // The window starts hidden (visible: false in tauri.conf.json).
-            // Explicitly restore saved position/size/monitor, then show.
-            // The plugin's on_window_ready also calls restore_state, but
-            // calling it again here is harmless and ensures it happens.
+            // Restore saved geometry from our own config, then show.
             if let Some(win) = app.get_webview_window("main") {
-                let _ = win.restore_state(StateFlags::all());
+                if let Some(ref geo) = config.main_window {
+                    let _ = win.set_position(tauri::PhysicalPosition::new(geo.x, geo.y));
+                    let _ = win.set_size(tauri::PhysicalSize::new(geo.width, geo.height));
+                    if geo.maximized {
+                        let _ = win.maximize();
+                    }
+                }
                 let _ = win.show();
                 let _ = win.set_focus();
             }
 
             // The quick-capture window must always start hidden — it is shown
-            // only by the global hotkey toggle.  The window-state plugin may
-            // have restored it as visible (if it was open last session), so
-            // force-hide it here.
+            // only by the global hotkey toggle.
             //
             // We also explicitly disable the window shadow at runtime.  The
             // shadow config in tauri.conf.json handles the initial state, but
             // calling set_shadow(false) here ensures the platform chrome is
-            // suppressed even if the window-state plugin or OS restores it.
-            // Without this, macOS renders a visible shadow/border artifact
-            // around the transparent region of the undecorated window.
+            // suppressed on macOS. Without this, macOS renders a visible
+            // shadow/border artifact around the transparent region.
             if let Some(win) = app.get_webview_window("quick-capture") {
                 let _ = win.set_shadow(false);
 
@@ -186,7 +187,69 @@ fn main() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            use tauri::WindowEvent;
+            let label = window.label().to_string();
+
+            match event {
+                // Save geometry on move/resize for all windows except quick-capture.
+                WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                    if label == "quick-capture" {
+                        return;
+                    }
+                    if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                        let maximized = window.is_maximized().unwrap_or(false);
+                        let app_handle = window.app_handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            let state = app_handle.state::<AppState>();
+                            let mut config = state.config.write().await;
+                            if label == "main" {
+                                config.main_window = Some(crate::state::WindowGeometry {
+                                    x: pos.x,
+                                    y: pos.y,
+                                    width: size.width,
+                                    height: size.height,
+                                    maximized,
+                                });
+                            } else if let Some(entry) = config.window_boards.get_mut(&label) {
+                                entry.x = Some(pos.x);
+                                entry.y = Some(pos.y);
+                                entry.width = Some(size.width);
+                                entry.height = Some(size.height);
+                            }
+                            let _ = config.save();
+                        });
+                    }
+                }
+                // Mid-session close: remove window_boards entry so it doesn't resurrect.
+                // On app quit (shutting_down=true) we preserve entries for restore.
+                WindowEvent::Destroyed => {
+                    if label == "main" || label == "quick-capture" {
+                        return;
+                    }
+                    let app_handle = window.app_handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = app_handle.state::<AppState>();
+                        if state.shutting_down.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        let mut config = state.config.write().await;
+                        if config.window_boards.remove(&label).is_some() {
+                            tracing::info!(label = %label, "removed window_boards entry on mid-session close");
+                            let _ = config.save();
+                        }
+                    });
+                }
+                _ => {}
+            }
+        })
         .on_menu_event(menu::handle_menu_event)
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state = app_handle.state::<AppState>();
+                state.shutting_down.store(true, Ordering::SeqCst);
+            }
+        });
 }

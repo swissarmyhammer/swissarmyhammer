@@ -38,10 +38,10 @@ sha2 = { workspace = true }
 tracing-oslog = "0.3"
 tauri-plugin-deep-link = "2"
 tauri-plugin-global-shortcut = "2"
-tauri-plugin-window-state = "2.4.1"
 urlencoding = { workspace = true }
 whoami = "1"
 base64 = { workspace = true }
+ulid = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

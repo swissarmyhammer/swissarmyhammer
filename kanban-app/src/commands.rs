@@ -5,7 +5,6 @@ use crate::state::{AppState, BoardHandle};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use swissarmyhammer_kanban::{
     board::GetBoard,
@@ -16,8 +15,10 @@ use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 
-/// Counter for dynamically created window labels.
-static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
+/// Generate a unique window label using ULID.
+fn new_window_label() -> String {
+    format!("board-{}", ulid::Ulid::new().to_string().to_lowercase())
+}
 
 /// Resolve a board handle — by explicit path or falling back to active board.
 ///
@@ -69,7 +70,14 @@ pub async fn open_board(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<Value, String> {
-    let canonical = state.open_board(&PathBuf::from(&path), Some(app)).await?;
+    let canonical = state
+        .open_board(&PathBuf::from(&path), Some(app.clone()))
+        .await?;
+
+    // Notify all windows to refresh their open boards list.
+    // The calling window switches itself using the returned path —
+    // no board-opened event needed for the command path.
+    let _ = app.emit("board-changed", ());
 
     // Return the board data
     let handle = state
@@ -142,6 +150,16 @@ pub async fn close_board(
     };
 
     state.close_board(&target).await?;
+
+    // Clean up window→board mapping for the closed board
+    {
+        let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
+        let mut config = state.config.write().await;
+        config
+            .window_boards
+            .retain(|_, entry| entry.board_path != canonical);
+        let _ = config.save();
+    }
 
     let _ = app.emit("board-changed", ());
 
@@ -673,22 +691,19 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
 
 /// Reset saved window positions/sizes and exit.
 ///
-/// Deletes the plugin's `.window-state.json` then hard-exits via
-/// `std::process::exit` so the plugin's shutdown hook can't re-save.
-/// The user needs to relaunch — `app.restart()` would trigger the
-/// plugin's save-on-exit, recreating the file we just deleted.
+/// Clear all saved window geometry (main + secondary) and restart.
 #[tauri::command]
-pub async fn reset_windows(app: AppHandle) -> Result<(), String> {
-    if let Ok(config_dir) = app.path().app_config_dir() {
-        let state_file = config_dir.join(".window-state.json");
-        if state_file.exists() {
-            std::fs::remove_file(&state_file)
-                .map_err(|e| format!("Failed to remove window state: {e}"))?;
-            tracing::info!(?state_file, "Removed window state file");
-        }
+#[allow(unreachable_code)]
+pub async fn reset_windows(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut config = state.config.write().await;
+        config.main_window = None;
+        config.window_boards.clear();
+        let _ = config.save();
+        tracing::info!("Cleared main_window and window_boards geometry");
     }
-    // Hard-exit — bypasses plugin shutdown hooks that would re-save the state.
-    std::process::exit(0);
+    app.restart();
+    Ok(())
 }
 
 /// Open a folder picker to create a new board.
@@ -706,20 +721,32 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
 }
 
 /// Create a new window, optionally opening a specific board.
+///
+/// If `board_path` is not provided, uses the currently active board.
+/// The window label and board path are persisted to `window_boards`
+/// so the window can be restored at the same position on restart.
 #[tauri::command]
-pub async fn create_window(app: AppHandle, board_path: Option<String>) -> Result<Value, String> {
-    // Increment past any labels that already exist (e.g. restored by
-    // tauri-plugin-window-state from a previous session).
-    let label = loop {
-        let n = WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = format!("board-{}", n);
-        if app.get_webview_window(&candidate).is_none() {
-            break candidate;
-        }
+pub async fn create_window(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    board_path: Option<String>,
+) -> Result<Value, String> {
+    let label = new_window_label();
+    tracing::info!(board_path = ?board_path, label = %label, "create_window called");
+
+    // Resolve board path: explicit > active board
+    let resolved_path = match board_path {
+        Some(bp) => Some(bp),
+        None => state
+            .active_board
+            .read()
+            .await
+            .as_ref()
+            .map(|p| p.display().to_string()),
     };
 
     let mut url = String::from("index.html?window=board");
-    if let Some(ref bp) = board_path {
+    if let Some(ref bp) = resolved_path {
         url.push_str("&board=");
         url.push_str(&urlencoding::encode(bp));
     }
@@ -733,10 +760,128 @@ pub async fn create_window(app: AppHandle, board_path: Option<String>) -> Result
 
     let _ = window.set_focus();
 
+    // Persist window→board mapping so we can restore with the same label and position
+    if let Some(ref bp) = resolved_path {
+        let mut config = state.config.write().await;
+        let entry = crate::state::WindowBoardEntry {
+            board_path: PathBuf::from(bp),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+        };
+        tracing::info!(
+            label = %label,
+            board_path = %bp,
+            "persisting window→board mapping"
+        );
+        config.window_boards.insert(label.clone(), entry);
+        let _ = config.save();
+    }
+
     Ok(json!({
         "label": label,
-        "board_path": board_path,
+        "board_path": resolved_path,
     }))
+}
+
+/// Restore secondary windows from persisted window→board mapping.
+///
+/// Called by the main window on mount. For each saved window label that
+/// doesn't already exist, creates a new window with the same label and
+/// applies saved position/size from `config.window_boards`.
+///
+/// Returns the list of restored window labels.
+#[tauri::command]
+pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    let config = state.config.read().await;
+    let window_boards = config.window_boards.clone();
+    drop(config);
+
+    tracing::info!(
+        count = window_boards.len(),
+        labels = ?window_boards.keys().collect::<Vec<_>>(),
+        "restore_windows: found {} saved window entries",
+        window_boards.len()
+    );
+
+    let mut restored: Vec<String> = Vec::new();
+
+    for (label, entry) in &window_boards {
+        // Skip if window already exists
+        if app.get_webview_window(label).is_some() {
+            continue;
+        }
+
+        // Skip the main window and quick-capture
+        if label == "main" || label == "quick-capture" {
+            continue;
+        }
+
+        // Verify the board is actually open
+        {
+            let boards = state.boards.read().await;
+            if !boards.contains_key(&entry.board_path) {
+                continue;
+            }
+        }
+
+        let bp = entry.board_path.display().to_string();
+        let mut url = String::from("index.html?window=board&board=");
+        url.push_str(&urlencoding::encode(&bp));
+
+        // Build at default size first — we apply saved physical geometry after
+        // creation because the builder takes logical coordinates while we store
+        // physical pixels from outer_position()/outer_size().
+        let builder = WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))
+            .title("SwissArmyHammer")
+            .inner_size(1200.0, 800.0)
+            .resizable(true);
+
+        match builder.build() {
+            Ok(window) => {
+                // Apply saved physical geometry (matches what on_window_event saves).
+                if let (Some(w), Some(h)) = (entry.width, entry.height) {
+                    let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+                }
+                if let (Some(x), Some(y)) = (entry.x, entry.y) {
+                    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                }
+                let _ = window.set_focus();
+                restored.push(label.clone());
+                tracing::info!(label = %label, board = %bp, x = ?entry.x, y = ?entry.y, "restored secondary window");
+            }
+            Err(e) => {
+                tracing::warn!(label = %label, error = %e, "failed to restore secondary window");
+            }
+        }
+    }
+
+    Ok(json!({ "restored": restored }))
+}
+
+/// Save a secondary window's position and size to config.
+///
+/// Called by secondary windows on move/resize so their geometry
+/// persists across restarts and hot reloads.
+#[tauri::command]
+pub async fn save_window_geometry(
+    state: State<'_, AppState>,
+    window_label: String,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let mut config = state.config.write().await;
+    if let Some(entry) = config.window_boards.get_mut(&window_label) {
+        entry.x = Some(x);
+        entry.y = Some(y);
+        entry.width = Some(width);
+        entry.height = Some(height);
+        let _ = config.save();
+    }
+    Ok(())
 }
 
 /// List all view definitions, returning a JSON array.
@@ -895,70 +1040,9 @@ pub async fn dispatch_command(
     // For undoable commands (data mutations), scan entity files for changes
     // and emit granular entity-level events. This also updates the watcher
     // cache so the file watcher won't double-fire for our own writes.
-    //
-    // Events are enriched with the full entity state (including computed
-    // fields like tags derived from body) by re-reading through the entity
-    // context after detecting raw file changes.
     if undoable {
         if let Some(ref handle) = active_handle {
-            let kanban_root = handle.ctx.root().to_path_buf();
-            let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
-
-            // Enrich events with full entity state (including computed fields
-            // like tags derived from body, progress, etc.) by re-reading
-            // through the entity context.
-            if let Ok(ectx) = handle.ctx.entity_context().await {
-                for evt in &mut events {
-                    match evt {
-                        crate::watcher::WatchEvent::EntityCreated {
-                            entity_type,
-                            id,
-                            fields,
-                        } => {
-                            if let Ok(entity) = ectx.read(entity_type, id).await {
-                                *fields = entity
-                                    .fields
-                                    .into_iter()
-                                    .map(|(k, v)| (k.to_string(), v))
-                                    .collect();
-                            }
-                        }
-                        crate::watcher::WatchEvent::EntityFieldChanged {
-                            entity_type,
-                            id,
-                            fields,
-                            ..
-                        } => {
-                            if let Ok(entity) = ectx.read(entity_type, id).await {
-                                *fields = Some(
-                                    entity
-                                        .fields
-                                        .into_iter()
-                                        .map(|(k, v)| (k.to_string(), v))
-                                        .collect(),
-                                );
-                            }
-                        }
-                        crate::watcher::WatchEvent::EntityRemoved { .. } => {}
-                    }
-                }
-            }
-
-            // Update search index and emit events
-            {
-                let mut search_idx = handle.search_index.write().await;
-                for evt in events {
-                    crate::watcher::sync_search_index(&mut search_idx, &evt);
-                    let event_name = match &evt {
-                        crate::watcher::WatchEvent::EntityCreated { .. } => "entity-created",
-                        crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
-                        crate::watcher::WatchEvent::EntityFieldChanged { .. } => {
-                            "entity-field-changed"
-                        }
-                    };
-                    let _ = app.emit(event_name, &evt);
-                }
-            }
+            flush_and_emit_for_handle(&app, handle).await;
         }
     }
 
@@ -1028,6 +1112,407 @@ pub async fn list_available_commands(
 // ---------------------------------------------------------------------------
 // show_context_menu — generic native context menu
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Drag session commands — cross-window drag coordination
+// ---------------------------------------------------------------------------
+
+/// Start a cross-window drag session.
+///
+/// Called when a drag begins in any window. Stores the session in AppState
+/// and broadcasts a `drag-session-active` event to all windows.
+///
+/// If a stale session exists (older than 30 seconds), it is silently replaced.
+#[tauri::command]
+pub async fn start_drag_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+    task_fields: Value,
+    board_path: String,
+    source_window_label: String,
+    copy_mode: bool,
+) -> Result<Value, String> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // Auto-cancel stale sessions (>30s old)
+    {
+        let mut guard = state.drag_session.write().await;
+        if let Some(ref existing) = *guard {
+            if now_ms.saturating_sub(existing.started_at_ms) > crate::state::DRAG_SESSION_MAX_AGE_MS
+            {
+                tracing::info!(
+                    session_id = %existing.session_id,
+                    "auto-cancelling stale drag session"
+                );
+                let _ = app.emit(
+                    "drag-session-cancelled",
+                    json!({ "session_id": existing.session_id }),
+                );
+                *guard = None;
+            }
+        }
+    }
+
+    let session = crate::state::DragSession {
+        session_id: ulid::Ulid::new().to_string(),
+        source_board_path: board_path,
+        source_window_label,
+        task_id,
+        task_fields,
+        copy_mode,
+        started_at_ms: now_ms,
+    };
+    let session_id = session.session_id.clone();
+    let payload = serde_json::to_value(&session).map_err(|e| e.to_string())?;
+    *state.drag_session.write().await = Some(session);
+    let _ = app.emit("drag-session-active", &payload);
+    Ok(json!({ "session_id": session_id }))
+}
+
+/// Cancel the active drag session.
+///
+/// Called when a drag is cancelled (Escape, pointer released outside windows).
+/// Clears the session and broadcasts `drag-session-cancelled`.
+#[tauri::command]
+pub async fn cancel_drag_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let session = state.drag_session.write().await.take();
+    match session {
+        Some(s) => {
+            let _ = app.emit(
+                "drag-session-cancelled",
+                json!({ "session_id": s.session_id }),
+            );
+            Ok(json!({ "cancelled": true, "session_id": s.session_id }))
+        }
+        None => Ok(json!({ "cancelled": false })),
+    }
+}
+
+/// Complete the active drag session by dropping in a target window.
+///
+/// Resolves whether this is a same-board move or cross-board transfer/copy,
+/// then executes the appropriate backend operation. Emits `drag-session-completed`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn complete_drag_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_board_path: String,
+    target_column: String,
+    drop_index: Option<u64>,
+    before_id: Option<String>,
+    after_id: Option<String>,
+    copy_mode: bool,
+) -> Result<Value, String> {
+    let session = state
+        .drag_session
+        .write()
+        .await
+        .take()
+        .ok_or_else(|| "No active drag session".to_string())?;
+
+    let result = if session.source_board_path == target_board_path {
+        // Same board — use existing task.move via internal dispatch
+        let mut args = serde_json::Map::new();
+        args.insert("id".into(), json!(session.task_id));
+        args.insert("column".into(), json!(target_column));
+        if let Some(idx) = drop_index {
+            args.insert("drop_index".into(), json!(idx));
+        }
+        if let Some(ref bid) = before_id {
+            args.insert("before_id".into(), json!(bid));
+        }
+        if let Some(ref aid) = after_id {
+            args.insert("after_id".into(), json!(aid));
+        }
+        invoke_dispatch(
+            &app,
+            &state,
+            "task.move",
+            Value::Object(args),
+            Some(session.source_board_path.clone()),
+        )
+        .await
+    } else {
+        // Cross-board: transfer or copy
+        cross_board_transfer(
+            &app,
+            &state,
+            &session.source_board_path,
+            &session.task_id,
+            &target_board_path,
+            &target_column,
+            drop_index,
+            copy_mode || session.copy_mode,
+        )
+        .await
+    };
+
+    let _ = app.emit(
+        "drag-session-completed",
+        json!({
+            "session_id": session.session_id,
+            "success": result.is_ok(),
+        }),
+    );
+
+    result
+}
+
+/// Helper: invoke a command internally, reusing the dispatch logic.
+async fn invoke_dispatch(
+    app: &AppHandle,
+    state: &AppState,
+    cmd: &str,
+    args: Value,
+    board_path: Option<String>,
+) -> Result<Value, String> {
+    let cmd_impl = state
+        .command_impls
+        .get(cmd)
+        .ok_or_else(|| format!("No implementation for command: {}", cmd))?;
+
+    let args_map: HashMap<String, Value> = match args {
+        Value::Object(map) => map.into_iter().collect(),
+        _ => HashMap::new(),
+    };
+    let mut ctx =
+        swissarmyhammer_commands::CommandContext::new(cmd.to_string(), vec![], None, args_map);
+    ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
+
+    let active_handle = resolve_handle(state, board_path).await.ok();
+    if let Some(ref handle) = active_handle {
+        ctx.set_extension(Arc::clone(&handle.ctx));
+    }
+
+    if !cmd_impl.available(&ctx) {
+        return Err(format!("Command not available: {}", cmd));
+    }
+
+    let result = cmd_impl
+        .execute(&ctx)
+        .await
+        .map_err(|e| format!("Command failed: {}", e))?;
+
+    // Flush entity changes and emit events
+    if let Some(ref handle) = active_handle {
+        flush_and_emit_for_handle(app, handle).await;
+    }
+
+    Ok(json!({ "result": result, "undoable": true }))
+}
+
+/// Transfer or copy a task between boards.
+///
+/// 1. Reads the source task from the source board
+/// 2. Creates a new task on the target board with copied fields
+/// 3. If not copy mode, deletes the source task
+#[allow(clippy::too_many_arguments)]
+async fn cross_board_transfer(
+    app: &AppHandle,
+    state: &AppState,
+    source_board_path: &str,
+    task_id: &str,
+    target_board_path: &str,
+    target_column: &str,
+    drop_index: Option<u64>,
+    copy_mode: bool,
+) -> Result<Value, String> {
+    use swissarmyhammer_kanban::types::Ordinal;
+
+    let source_handle = resolve_handle(state, Some(source_board_path.to_string())).await?;
+    let target_handle = resolve_handle(state, Some(target_board_path.to_string())).await?;
+
+    // Read source task
+    let source_ectx = source_handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let source_task = source_ectx
+        .read("task", task_id)
+        .await
+        .map_err(|e| format!("Failed to read source task: {}", e))?;
+
+    // Compute ordinal in target column
+    let target_ectx = target_handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let ordinal = {
+        let all_tasks = target_ectx.list("task").await.map_err(|e| e.to_string())?;
+        if let Some(idx) = drop_index {
+            let mut col_tasks: Vec<_> = all_tasks
+                .into_iter()
+                .filter(|t| t.get_str("position_column") == Some(target_column))
+                .collect();
+            col_tasks.sort_by(|a, b| {
+                let oa = a.get_str("position_ordinal").unwrap_or("a0");
+                let ob = b.get_str("position_ordinal").unwrap_or("a0");
+                oa.cmp(ob)
+            });
+            swissarmyhammer_kanban::task_helpers::compute_ordinal_for_drop(&col_tasks, idx as usize)
+        } else {
+            let mut last_ord: Option<Ordinal> = None;
+            for t in &all_tasks {
+                if t.get_str("position_column") == Some(target_column) {
+                    let ord = Ordinal::from_string(t.get_str("position_ordinal").unwrap_or("a0"));
+                    last_ord = Some(match last_ord {
+                        None => ord,
+                        Some(ref o) if ord > *o => ord,
+                        Some(o) => o,
+                    });
+                }
+            }
+            match last_ord {
+                Some(last) => Ordinal::after(&last),
+                None => Ordinal::first(),
+            }
+        }
+    };
+
+    // Create new task entity on target board
+    let new_id = ulid::Ulid::new().to_string();
+    let mut new_task = swissarmyhammer_entity::Entity::new("task", new_id.as_str());
+
+    // Copy fields from source
+    let copy_fields = [
+        "title",
+        "body",
+        "assignees",
+        "depends_on",
+        "priority",
+        "estimate",
+        "due_date",
+        "color",
+    ];
+    for field in copy_fields {
+        if let Some(val) = source_task.get(field) {
+            new_task.set(field, val.clone());
+        }
+    }
+
+    // Strip tags that don't exist in the target board
+    if let Some(tags_val) = source_task.get("tags") {
+        if let Some(tags_arr) = tags_val.as_array() {
+            let target_tags = target_ectx.list("tag").await.unwrap_or_default();
+            let target_tag_names: std::collections::HashSet<String> = target_tags
+                .iter()
+                .filter_map(|t| t.get_str("tag_name").map(|s| s.to_string()))
+                .collect();
+            let filtered: Vec<Value> = tags_arr
+                .iter()
+                .filter(|t| {
+                    t.as_str()
+                        .map(|s| target_tag_names.contains(s))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            if !filtered.is_empty() {
+                new_task.set("tags", json!(filtered));
+            }
+        }
+    }
+
+    // Set position on target board
+    new_task.set("position_column", json!(target_column));
+    new_task.set("position_ordinal", json!(ordinal.as_str()));
+
+    // Write to target board
+    target_ectx
+        .write(&new_task)
+        .await
+        .map_err(|e| format!("Failed to write target task: {}", e))?;
+
+    // If transfer (not copy), delete source task before flushing either board.
+    // This ensures both writes succeed before any events are emitted, avoiding
+    // a state where the task appears duplicated if the delete fails.
+    if !copy_mode {
+        source_ectx
+            .delete("task", task_id)
+            .await
+            .map_err(|e| format!("Failed to delete source task: {}", e))?;
+    }
+
+    // Flush both boards after all writes succeed
+    flush_and_emit_for_handle(app, &target_handle).await;
+    if !copy_mode {
+        flush_and_emit_for_handle(app, &source_handle).await;
+    }
+
+    Ok(json!({
+        "result": {
+            "id": new_id,
+            "source_id": task_id,
+            "transferred": !copy_mode,
+            "copied": copy_mode,
+        },
+        "undoable": true,
+    }))
+}
+
+/// Flush entity changes for a board handle and emit events.
+async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
+    let kanban_root = handle.ctx.root().to_path_buf();
+    let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
+    if let Ok(ectx) = handle.ctx.entity_context().await {
+        for evt in &mut events {
+            match evt {
+                crate::watcher::WatchEvent::EntityCreated {
+                    entity_type,
+                    id,
+                    fields,
+                } => {
+                    if let Ok(entity) = ectx.read(entity_type, id).await {
+                        *fields = entity
+                            .fields
+                            .into_iter()
+                            .map(|(k, v)| (k.to_string(), v))
+                            .collect();
+                    }
+                }
+                crate::watcher::WatchEvent::EntityFieldChanged {
+                    entity_type,
+                    id,
+                    fields,
+                    ..
+                } => {
+                    if let Ok(entity) = ectx.read(entity_type, id).await {
+                        *fields = Some(
+                            entity
+                                .fields
+                                .into_iter()
+                                .map(|(k, v)| (k.to_string(), v))
+                                .collect(),
+                        );
+                    }
+                }
+                crate::watcher::WatchEvent::EntityRemoved { .. } => {}
+            }
+        }
+    }
+    {
+        let mut search_idx = handle.search_index.write().await;
+        for evt in events {
+            crate::watcher::sync_search_index(&mut search_idx, &evt);
+            let event_name = match &evt {
+                crate::watcher::WatchEvent::EntityCreated { .. } => "entity-created",
+                crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
+                crate::watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+            };
+            let _ = app.emit(event_name, &evt);
+        }
+    }
+}
 
 /// A single item in a generic context menu.
 #[derive(serde::Deserialize)]

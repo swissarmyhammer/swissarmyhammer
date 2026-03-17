@@ -215,11 +215,13 @@ pub fn trigger_open_board(app: &AppHandle) {
 /// File > New Board: pick a folder, init the board, then open it.
 fn handle_new_board(app: &AppHandle) {
     let handle = app.clone();
+    let source_window = focused_window_label(app);
     app.dialog().file().pick_folder(move |folder| {
         if let Some(folder_path) = folder {
             let Ok(path) = folder_path.into_path() else {
                 return;
             };
+            let sw = source_window.clone();
             tauri::async_runtime::spawn(async move {
                 // Derive board name from folder
                 let name = path
@@ -241,7 +243,7 @@ fn handle_new_board(app: &AppHandle) {
                     }
                 }
 
-                open_and_notify(&handle, &path).await;
+                open_and_notify(&handle, &path, sw.as_deref()).await;
             });
         }
     });
@@ -250,13 +252,16 @@ fn handle_new_board(app: &AppHandle) {
 /// File > Open Board...: pick a folder and open an existing board.
 fn handle_open_board(app: &AppHandle) {
     let handle = app.clone();
+    // Capture the focused window BEFORE the dialog steals focus
+    let source_window = focused_window_label(app);
     app.dialog().file().pick_folder(move |folder| {
         if let Some(folder_path) = folder {
             let Ok(path) = folder_path.into_path() else {
                 return;
             };
+            let sw = source_window.clone();
             tauri::async_runtime::spawn(async move {
-                open_and_notify(&handle, &path).await;
+                open_and_notify(&handle, &path, sw.as_deref()).await;
             });
         }
     });
@@ -265,19 +270,41 @@ fn handle_open_board(app: &AppHandle) {
 /// File > Open Recent > <board>: open a board from the MRU list.
 fn handle_open_recent(app: &AppHandle, path: PathBuf) {
     let handle = app.clone();
+    let source_window = focused_window_label(app);
     tauri::async_runtime::spawn(async move {
-        open_and_notify(&handle, &path).await;
+        open_and_notify(&handle, &path, source_window.as_deref()).await;
     });
 }
 
-/// Open a board and emit a frontend event.
+/// Get the label of the currently focused window, if any.
+fn focused_window_label(app: &AppHandle) -> Option<String> {
+    app.webview_windows()
+        .values()
+        .find(|w| w.is_focused().unwrap_or(false))
+        .map(|w| w.label().to_string())
+}
+
+/// Open a board and emit frontend events.
 ///
-/// The frontend listens for `board-changed` and will rebuild the native
-/// menu via `syncMenuToNative` (which calls `rebuild_menu_from_manifest`).
-async fn open_and_notify(handle: &AppHandle, path: &Path) {
+/// Emits `board-opened` to the source window (the one that initiated
+/// the open) so only that window switches. Broadcasts `board-changed`
+/// to all windows so they refresh their open boards list.
+async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: Option<&str>) {
+    use serde_json::json;
+    use tauri::Emitter;
+
     let state = handle.state::<AppState>();
     match state.open_board(path, Some(handle.clone())).await {
-        Ok(_) => {
+        Ok(canonical) => {
+            let payload = json!({ "path": canonical.display().to_string() });
+
+            // Emit board-opened to the source window only
+            if let Some(label) = source_window_label {
+                if let Some(window) = handle.get_webview_window(label) {
+                    let _ = window.emit("board-opened", &payload);
+                }
+            }
+
             let _ = handle.emit("board-changed", ());
         }
         Err(e) => {
