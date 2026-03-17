@@ -257,6 +257,7 @@ include_dir = "0.7"
 lru = "0.12"
 rquickjs = { version = "0.11", features = ["futures", "loader"] }
 diffy = "0.4.2"
+similar = "2"
 zstd = "0.13"
 memmap2 = "0.9"
 rayon = "1.8"

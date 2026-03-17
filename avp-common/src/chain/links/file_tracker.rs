@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::chain::{ChainContext, ChainLink, ChainResult};
-use crate::turn::{extract_paths, hash_files, TurnStateManager};
+use crate::chain::{ChainContext, ChainLink, ChainResult, CTX_FILE_DIFFS};
+use crate::turn::{compute_diff, extract_tool_paths, hash_files, FileDiff, TurnStateManager};
 use crate::types::{
     PostToolUseInput, PreToolUseInput, SessionEndInput, SessionStartInput, StopInput,
 };
@@ -77,8 +77,8 @@ impl PreToolUseFileTracker {
 #[async_trait(?Send)]
 impl ChainLink<PreToolUseInput> for PreToolUseFileTracker {
     async fn process(&self, input: &PreToolUseInput, _ctx: &mut ChainContext) -> ChainResult {
-        // Extract paths from tool input
-        let paths = extract_paths(&input.tool_input);
+        // Extract paths from tool input using tool-aware strategy
+        let paths = extract_tool_paths(&input.tool_name, &input.tool_input);
 
         if paths.is_empty() {
             tracing::trace!(
@@ -107,7 +107,14 @@ impl ChainLink<PreToolUseInput> for PreToolUseFileTracker {
         // Hash files before tool execution
         let hashes = hash_files(&paths);
 
-        // Store in turn state
+        // Stash file content in memory for diff computation
+        for path in &paths {
+            let content = std::fs::read(path).ok();
+            self.turn_state
+                .stash_content(tool_use_id, path.clone(), content);
+        }
+
+        // Store hashes in turn state on disk
         let session_id = input.common.session_id.as_deref().unwrap_or_default();
         match self.turn_state.load(session_id) {
             Ok(mut state) => {
@@ -143,10 +150,13 @@ impl PostToolUseFileTracker {
 
 #[async_trait(?Send)]
 impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
-    async fn process(&self, input: &PostToolUseInput, _ctx: &mut ChainContext) -> ChainResult {
+    async fn process(&self, input: &PostToolUseInput, ctx: &mut ChainContext) -> ChainResult {
         let Some(tool_use_id) = &input.tool_use_id else {
             return ChainResult::continue_empty();
         };
+
+        // Take pre-content from in-memory cache (always, to clean up)
+        let pre_contents = self.turn_state.take_content(tool_use_id);
 
         let session_id = input.common.session_id.as_deref().unwrap_or_default();
         let mut state = match self.turn_state.load(session_id) {
@@ -166,12 +176,14 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
             return ChainResult::continue_empty();
         };
 
-        // Compare hashes
+        // Compare hashes and compute diffs
         let mut changed_count = 0;
-        for (path, pre_hash) in pre_hashes {
-            let post_hash = crate::turn::hash_file(&path);
+        let mut diffs: Vec<FileDiff> = Vec::new();
 
-            if pre_hash != post_hash {
+        for (path, pre_hash) in &pre_hashes {
+            let post_hash = crate::turn::hash_file(path);
+
+            if *pre_hash != post_hash {
                 tracing::debug!(
                     "PostToolUseFileTracker: File changed: {} (pre: {:?}, post: {:?})",
                     path.display(),
@@ -179,9 +191,20 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
                     post_hash
                 );
 
-                if !state.changed.contains(&path) {
-                    state.changed.push(path);
+                if !state.changed.contains(path) {
+                    state.changed.push(path.clone());
                     changed_count += 1;
+                }
+
+                // Compute diff if we have pre-content and the file exists post-tool
+                if let Ok(new_content) = std::fs::read(path) {
+                    let old_content = pre_contents
+                        .as_ref()
+                        .and_then(|m| m.get(path))
+                        .and_then(|c| c.as_ref());
+
+                    let diff = compute_diff(path, old_content.map(|v| v.as_slice()), &new_content);
+                    diffs.push(diff);
                 }
             }
         }
@@ -192,6 +215,11 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
                 changed_count,
                 input.tool_name
             );
+        }
+
+        // Put diffs into ChainContext for PostToolUse validators
+        if !diffs.is_empty() {
+            ctx.set(CTX_FILE_DIFFS, &diffs);
         }
 
         // Save updated state
@@ -496,5 +524,87 @@ mod tests {
         // Check change was detected (None -> Some)
         let state = turn_state.load("session-1").unwrap();
         assert!(state.changed.contains(&test_file));
+    }
+
+    #[tokio::test]
+    async fn test_post_tool_use_produces_diffs_in_context() {
+        let (turn_state, temp_dir) = create_test_turn_state();
+
+        let test_file = temp_dir.path().join("diff_test.txt");
+        std::fs::write(&test_file, "line 1\nline 2\nline 3\n").unwrap();
+
+        // PreToolUse
+        let pre_tracker = PreToolUseFileTracker::new(turn_state.clone());
+        let pre_input = create_pre_tool_use_input(
+            "session-1",
+            "Edit",
+            "tool-diff",
+            serde_json::json!({ "file_path": test_file.to_string_lossy() }),
+        );
+        let mut ctx = ChainContext::new();
+        pre_tracker.process(&pre_input, &mut ctx).await;
+
+        // Modify file
+        std::fs::write(&test_file, "line 1\nline 2 changed\nline 3\n").unwrap();
+
+        // PostToolUse
+        let post_tracker = PostToolUseFileTracker::new(turn_state.clone());
+        let post_input = create_post_tool_use_input(
+            "session-1",
+            "Edit",
+            "tool-diff",
+            serde_json::json!({ "file_path": test_file.to_string_lossy() }),
+        );
+        post_tracker.process(&post_input, &mut ctx).await;
+
+        // Check diffs in ChainContext
+        let diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
+        assert!(diffs.is_some(), "Diffs should be in ChainContext");
+        let diffs = diffs.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, test_file);
+        assert!(!diffs[0].is_new_file);
+        assert!(!diffs[0].is_binary);
+        assert!(diffs[0].diff_text.contains("-line 2"));
+        assert!(diffs[0].diff_text.contains("+line 2 changed"));
+    }
+
+    #[tokio::test]
+    async fn test_new_file_diff_shows_all_additions() {
+        let (turn_state, temp_dir) = create_test_turn_state();
+
+        let test_file = temp_dir.path().join("brand_new.txt");
+
+        // PreToolUse (file doesn't exist)
+        let pre_tracker = PreToolUseFileTracker::new(turn_state.clone());
+        let pre_input = create_pre_tool_use_input(
+            "session-1",
+            "Write",
+            "tool-new",
+            serde_json::json!({ "file_path": test_file.to_string_lossy() }),
+        );
+        let mut ctx = ChainContext::new();
+        pre_tracker.process(&pre_input, &mut ctx).await;
+
+        // Create file
+        std::fs::write(&test_file, "hello world\n").unwrap();
+
+        // PostToolUse
+        let post_tracker = PostToolUseFileTracker::new(turn_state.clone());
+        let post_input = create_post_tool_use_input(
+            "session-1",
+            "Write",
+            "tool-new",
+            serde_json::json!({ "file_path": test_file.to_string_lossy() }),
+        );
+        post_tracker.process(&post_input, &mut ctx).await;
+
+        let diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
+        assert!(diffs.is_some());
+        let diffs = diffs.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert!(diffs[0].is_new_file);
+        assert!(diffs[0].diff_text.contains("/dev/null"));
+        assert!(diffs[0].diff_text.contains("+hello world"));
     }
 }

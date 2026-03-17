@@ -42,10 +42,10 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// - 1: Server encountered warnings or stopped unexpectedly
 /// - 2: Server failed to start or encountered critical errors
 pub async fn handle_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
-    // Extract global --agent flag from root matches
+    // Extract global --model flag from root matches
     let model_override = cli_context
         .matches
-        .get_one::<String>("agent")
+        .get_one::<String>("model")
         .map(|s| s.to_string());
 
     // Check for HTTP subcommand

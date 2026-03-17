@@ -9,10 +9,12 @@
 //! When multiple hook processes attempt to modify the same state file simultaneously,
 //! they acquire an exclusive lock on a separate `.lock` file to prevent race conditions.
 
+mod diff;
 mod hash;
 mod paths;
 mod state;
 
+pub use diff::{compute_diff, format_diffs_fenced, FileDiff};
 pub use hash::{hash_file, hash_files};
-pub use paths::extract_paths;
+pub use paths::{extract_paths, extract_tool_paths};
 pub use state::{TurnState, TurnStateManager};

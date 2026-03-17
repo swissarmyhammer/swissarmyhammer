@@ -13,7 +13,7 @@ mod starters;
 /// This code (2) indicates that a validator has blocked the operation,
 /// distinct from success (0) and general failure (1).
 pub const VALIDATOR_BLOCK_EXIT_CODE: i32 = 2;
-pub use context::ChainContext;
+pub use context::{ChainContext, CTX_FILE_DIFFS};
 pub use executor::{Chain, ChainBuilder};
 pub use factory::ChainFactory;
 pub use link::{

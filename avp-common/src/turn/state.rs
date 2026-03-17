@@ -13,6 +13,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// Pre-execution file content cache: tool_use_id -> (path -> optional content).
+/// `None` content means the file did not exist before the tool ran.
+type ContentCache = HashMap<String, HashMap<PathBuf, Option<Vec<u8>>>>;
 
 /// State tracked during a turn for file change detection.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -61,6 +66,9 @@ const TURN_STATE_LOCK: &str = "turn_state.yaml.lock";
 pub struct TurnStateManager {
     /// Directory for turn state file (.avp/).
     state_dir: PathBuf,
+    /// In-memory content cache for pre-tool file contents.
+    /// This cache is never serialized to disk.
+    content_cache: Mutex<ContentCache>,
 }
 
 impl TurnStateManager {
@@ -70,7 +78,32 @@ impl TurnStateManager {
     /// * `cwd` - The current working directory (project root).
     pub fn new(cwd: &Path) -> Self {
         let state_dir = cwd.join(".avp");
-        Self { state_dir }
+        Self {
+            state_dir,
+            content_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Stash pre-execution file content for a tool_use_id and path.
+    ///
+    /// Content of `None` means the file did not exist before the tool ran.
+    pub fn stash_content(&self, tool_use_id: &str, path: PathBuf, content: Option<Vec<u8>>) {
+        if let Ok(mut cache) = self.content_cache.lock() {
+            cache
+                .entry(tool_use_id.to_string())
+                .or_default()
+                .insert(path, content);
+        }
+    }
+
+    /// Take (remove) all stashed content for a tool_use_id.
+    ///
+    /// Returns the map of path -> pre-content, or `None` if no content was stashed.
+    pub fn take_content(&self, tool_use_id: &str) -> Option<HashMap<PathBuf, Option<Vec<u8>>>> {
+        self.content_cache
+            .lock()
+            .ok()
+            .and_then(|mut cache| cache.remove(tool_use_id))
     }
 
     /// Load turn state, creating empty state if none exists.
@@ -156,6 +189,11 @@ impl TurnStateManager {
     /// Note: The session_id parameter is kept for API compatibility but
     /// is ignored - clears the single project-wide state file.
     pub fn clear(&self, _session_id: &str) -> Result<(), AvpError> {
+        // Clear in-memory content cache
+        if let Ok(mut cache) = self.content_cache.lock() {
+            cache.clear();
+        }
+
         let state_path = self.state_path();
         let lock_path = self.lock_path();
 
@@ -351,5 +389,44 @@ mod tests {
         // Load from "session-1" - should see both files
         let loaded = manager.load("session-1").unwrap();
         assert_eq!(loaded.changed.len(), 2);
+    }
+
+    #[test]
+    fn test_stash_and_take_content() {
+        let (manager, _temp_dir) = setup_test_manager();
+
+        let path = PathBuf::from("/test/file.rs");
+        let content = b"fn main() {}".to_vec();
+
+        manager.stash_content("tool-1", path.clone(), Some(content.clone()));
+
+        let taken = manager.take_content("tool-1");
+        assert!(taken.is_some());
+        let map = taken.unwrap();
+        assert_eq!(map.get(&path).unwrap().as_ref().unwrap(), &content);
+
+        // Second take returns None (consumed)
+        assert!(manager.take_content("tool-1").is_none());
+    }
+
+    #[test]
+    fn test_stash_content_none_for_new_file() {
+        let (manager, _temp_dir) = setup_test_manager();
+
+        let path = PathBuf::from("/test/new_file.rs");
+        manager.stash_content("tool-1", path.clone(), None);
+
+        let taken = manager.take_content("tool-1").unwrap();
+        assert!(taken.get(&path).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_clear_clears_content_cache() {
+        let (manager, _temp_dir) = setup_test_manager();
+
+        manager.stash_content("tool-1", PathBuf::from("/file.rs"), Some(vec![1, 2, 3]));
+        manager.clear("any").unwrap();
+
+        assert!(manager.take_content("tool-1").is_none());
     }
 }

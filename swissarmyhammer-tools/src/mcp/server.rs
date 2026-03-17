@@ -822,10 +822,7 @@ impl McpServer {
 
         let validator_registry_arc = Arc::new(RwLock::new(validator_registry));
 
-        tracing::debug!(
-            "Created validator tool registry with {} tools",
-            validator_registry_arc.blocking_read().len()
-        );
+        tracing::debug!("Created validator tool registry with 2 validator tools");
 
         // Clone the tool context but replace its registry with the validator-only one.
         // This prevents validator tools from calling non-validator tools via context.call_tool().
