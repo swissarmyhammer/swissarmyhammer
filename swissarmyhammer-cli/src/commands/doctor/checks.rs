@@ -572,17 +572,19 @@ mod tests {
     fn test_lsp_servers_check_empty_dir() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        let mut checks = Vec::new();
-        let result = check_lsp_servers(&mut checks);
+        {
+            std::env::set_current_dir(temp_dir.path()).unwrap();
+            let mut checks = Vec::new();
+            let result = check_lsp_servers(&mut checks);
 
-        std::env::set_current_dir(original_dir).unwrap();
+            assert!(result.is_ok());
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0].name, "LSP Servers");
+            assert!(checks[0].message.contains("No project types detected"));
+        }
 
-        assert!(result.is_ok());
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].name, "LSP Servers");
-        assert!(checks[0].message.contains("No project types detected"));
+        let _ = std::env::set_current_dir(&original_dir);
     }
 
     #[test]

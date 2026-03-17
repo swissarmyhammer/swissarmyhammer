@@ -14,9 +14,13 @@ use swissarmyhammer_doctor::DoctorRunner;
 // Re-export types from submodules
 pub use types::*;
 
+/// Check implementations for installation, PATH, Claude config, AVP, and LSP.
 pub mod checks;
+/// Display formatting for doctor check results.
 pub mod display;
+/// Type definitions and re-exports for the doctor module.
 pub mod types;
+/// Utility helpers shared across doctor checks.
 pub mod utils;
 
 /// Help text for the doctor command
@@ -90,6 +94,8 @@ impl Doctor {
         checks::check_in_path(&mut self.checks)?;
         checks::check_file_permissions(&mut self.checks)?;
         checks::check_lsp_servers(&mut self.checks)?;
+        checks::check_avp_in_path(&mut self.checks)?;
+        checks::check_avp_hooks(&mut self.checks)?;
         Ok(())
     }
 
@@ -146,50 +152,14 @@ impl Doctor {
             fix: None,
         });
 
-        // Check directory permissions
-        match std::fs::metadata(&swissarmyhammer_dir) {
-            Ok(metadata) => {
-                if metadata.is_dir() {
-                    self.checks.push(Check {
-                        name: "Directory Access".to_string(),
-                        status: CheckStatus::Ok,
-                        message: "Directory is accessible".to_string(),
-                        fix: None,
-                    });
+        self.check_directory_access(&swissarmyhammer_dir);
+        Ok(())
+    }
 
-                    // Check if directory is writable by trying to create a test file
-                    let test_file = swissarmyhammer_dir.join(".doctor_test");
-                    match std::fs::write(&test_file, "test") {
-                        Ok(_) => {
-                            let _ = std::fs::remove_file(&test_file); // Clean up
-                            self.checks.push(Check {
-                                name: "Directory Write Access".to_string(),
-                                status: CheckStatus::Ok,
-                                message: "Directory is writable".to_string(),
-                                fix: None,
-                            });
-                        }
-                        Err(_) => {
-                            self.checks.push(Check {
-                                name: "Directory Write Access".to_string(),
-                                status: CheckStatus::Warning,
-                                message: "Directory may not be writable".to_string(),
-                                fix: Some("Check directory permissions".to_string()),
-                            });
-                        }
-                    }
-                } else {
-                    self.checks.push(Check {
-                        name: "Directory Type".to_string(),
-                        status: CheckStatus::Error,
-                        message: ".sah exists but is not a directory".to_string(),
-                        fix: Some(
-                            "Remove the file and let SwissArmyHammer recreate it as a directory"
-                                .to_string(),
-                        ),
-                    });
-                }
-            }
+    /// Check directory access permissions and writability.
+    fn check_directory_access(&mut self, dir: &std::path::Path) {
+        let metadata = match std::fs::metadata(dir) {
+            Ok(m) => m,
             Err(e) => {
                 self.checks.push(Check {
                     name: "Directory Access".to_string(),
@@ -197,10 +167,53 @@ impl Doctor {
                     message: format!("Cannot access .sah directory: {}", e),
                     fix: Some("Check file permissions and ownership".to_string()),
                 });
+                return;
             }
+        };
+
+        if !metadata.is_dir() {
+            self.checks.push(Check {
+                name: "Directory Type".to_string(),
+                status: CheckStatus::Error,
+                message: ".sah exists but is not a directory".to_string(),
+                fix: Some(
+                    "Remove the file and let SwissArmyHammer recreate it as a directory"
+                        .to_string(),
+                ),
+            });
+            return;
         }
 
-        Ok(())
+        self.checks.push(Check {
+            name: "Directory Access".to_string(),
+            status: CheckStatus::Ok,
+            message: "Directory is accessible".to_string(),
+            fix: None,
+        });
+
+        self.checks.push(check_directory_writability(dir));
+    }
+}
+
+/// Check if a directory is writable by creating and removing a test file.
+fn check_directory_writability(dir: &std::path::Path) -> Check {
+    let test_file = dir.join(".doctor_test");
+    match std::fs::write(&test_file, "test") {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&test_file);
+            Check {
+                name: "Directory Write Access".to_string(),
+                status: CheckStatus::Ok,
+                message: "Directory is writable".to_string(),
+                fix: None,
+            }
+        }
+        Err(_) => Check {
+            name: "Directory Write Access".to_string(),
+            status: CheckStatus::Warning,
+            message: "Directory may not be writable".to_string(),
+            fix: Some("Check directory permissions".to_string()),
+        },
     }
 }
 

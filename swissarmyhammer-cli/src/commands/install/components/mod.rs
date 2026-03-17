@@ -24,7 +24,6 @@ pub fn register_all(registry: &mut InitRegistry, global: bool, remove_directory:
     registry.register(SkillDeployment::new(global));
     registry.register(AgentDeployment::new(global));
     registry.register(LockfileCleanup);
-    registry.register(AvpHooks);
 }
 
 // ── McpRegistration (priority 10) ────────────────────────────────────
@@ -35,20 +34,24 @@ pub struct McpRegistration {
 }
 
 impl McpRegistration {
+    /// Create a new McpRegistration component.
     pub fn new(global: bool) -> Self {
         Self { global }
     }
 }
 
 impl Initializable for McpRegistration {
+    /// The component name for MCP server registration.
     fn name(&self) -> &str {
         "mcp-registration"
     }
 
+    /// Component category: configuration tasks.
     fn category(&self) -> &str {
         "configuration"
     }
 
+    /// Component priority: 10 (runs early, before other configuration).
     fn priority(&self) -> i32 {
         10
     }
@@ -76,40 +79,8 @@ impl Initializable for McpRegistration {
 
         let mut installed_count = 0;
         for agent in &agents {
-            if let Some(mcp_def) = &agent.def.mcp_config {
-                let config_path = if self.global {
-                    mirdan::agents::agent_global_mcp_config(&agent.def)
-                } else {
-                    mirdan::agents::agent_project_mcp_config(&agent.def)
-                };
-                if let Some(config_path) = config_path {
-                    match mirdan::mcp_config::register_mcp_server(
-                        &config_path,
-                        &mcp_def.servers_key,
-                        "sah",
-                        &entry,
-                    ) {
-                        Ok(()) => {
-                            reporter.emit(&InitEvent::Action {
-                                verb: "Installed".to_string(),
-                                message: format!(
-                                    "MCP server for {} ({})",
-                                    agent.def.name,
-                                    config_path.display()
-                                ),
-                            });
-                            installed_count += 1;
-                        }
-                        Err(e) => {
-                            reporter.emit(&InitEvent::Warning {
-                                message: format!(
-                                    "failed to install MCP for {}: {}",
-                                    agent.def.name, e
-                                ),
-                            });
-                        }
-                    }
-                }
+            if register_agent_mcp(&agent.def, &entry, self.global, reporter) {
+                installed_count += 1;
             }
         }
 
@@ -143,40 +114,8 @@ impl Initializable for McpRegistration {
 
         let mut removed_count = 0;
         for agent in &agents {
-            if let Some(mcp_def) = &agent.def.mcp_config {
-                let config_path = if self.global {
-                    mirdan::agents::agent_global_mcp_config(&agent.def)
-                } else {
-                    mirdan::agents::agent_project_mcp_config(&agent.def)
-                };
-                if let Some(config_path) = config_path {
-                    match mirdan::mcp_config::unregister_mcp_server(
-                        &config_path,
-                        &mcp_def.servers_key,
-                        "sah",
-                    ) {
-                        Ok(true) => {
-                            reporter.emit(&InitEvent::Action {
-                                verb: "Removed".to_string(),
-                                message: format!(
-                                    "MCP server from {} ({})",
-                                    agent.def.name,
-                                    config_path.display()
-                                ),
-                            });
-                            removed_count += 1;
-                        }
-                        Ok(false) => {}
-                        Err(e) => {
-                            reporter.emit(&InitEvent::Warning {
-                                message: format!(
-                                    "failed to remove MCP from {}: {}",
-                                    agent.def.name, e
-                                ),
-                            });
-                        }
-                    }
-                }
+            if unregister_agent_mcp(&agent.def, self.global, reporter) {
+                removed_count += 1;
             }
         }
 
@@ -191,6 +130,83 @@ impl Initializable for McpRegistration {
             self.name(),
             format!("MCP server unregistered from {} agents", removed_count),
         )]
+    }
+}
+
+/// Register the sah MCP server for a single agent. Returns true if installed.
+fn register_agent_mcp(
+    def: &mirdan::agents::AgentDef,
+    entry: &mirdan::mcp_config::McpServerEntry,
+    global: bool,
+    reporter: &dyn InitReporter,
+) -> bool {
+    let mcp_def = match &def.mcp_config {
+        Some(m) => m,
+        None => return false,
+    };
+    let config_path = if global {
+        mirdan::agents::agent_global_mcp_config(def)
+    } else {
+        mirdan::agents::agent_project_mcp_config(def)
+    };
+    let config_path = match config_path {
+        Some(p) => p,
+        None => return false,
+    };
+
+    match mirdan::mcp_config::register_mcp_server(&config_path, &mcp_def.servers_key, "sah", entry)
+    {
+        Ok(()) => {
+            reporter.emit(&InitEvent::Action {
+                verb: "Installed".to_string(),
+                message: format!("MCP server for {} ({})", def.name, config_path.display()),
+            });
+            true
+        }
+        Err(e) => {
+            reporter.emit(&InitEvent::Warning {
+                message: format!("failed to install MCP for {}: {}", def.name, e),
+            });
+            false
+        }
+    }
+}
+
+/// Unregister the sah MCP server from a single agent. Returns true if removed.
+fn unregister_agent_mcp(
+    def: &mirdan::agents::AgentDef,
+    global: bool,
+    reporter: &dyn InitReporter,
+) -> bool {
+    let mcp_def = match &def.mcp_config {
+        Some(m) => m,
+        None => return false,
+    };
+    let config_path = if global {
+        mirdan::agents::agent_global_mcp_config(def)
+    } else {
+        mirdan::agents::agent_project_mcp_config(def)
+    };
+    let config_path = match config_path {
+        Some(p) => p,
+        None => return false,
+    };
+
+    match mirdan::mcp_config::unregister_mcp_server(&config_path, &mcp_def.servers_key, "sah") {
+        Ok(true) => {
+            reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: format!("MCP server from {} ({})", def.name, config_path.display()),
+            });
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            reporter.emit(&InitEvent::Warning {
+                message: format!("failed to remove MCP from {}: {}", def.name, e),
+            });
+            false
+        }
     }
 }
 
@@ -228,12 +244,7 @@ fn uninstall_project_legacy(reporter: &dyn InitReporter) -> Result<(), String> {
 
     let mut mcp_settings = settings::read_settings(&path)?;
     let changed = settings::remove_mcp_server(&mut mcp_settings);
-
-    if let Some(mcp_servers) = mcp_settings.get("mcpServers").and_then(|m| m.as_object()) {
-        if mcp_servers.is_empty() {
-            mcp_settings.as_object_mut().unwrap().remove("mcpServers");
-        }
-    }
+    cleanup_empty_mcp_servers(&mut mcp_settings);
 
     if mcp_settings == serde_json::json!({}) {
         fs::remove_file(&path)
@@ -264,18 +275,22 @@ fn uninstall_project_legacy(reporter: &dyn InitReporter) -> Result<(), String> {
 pub struct ClaudeLocalScope;
 
 impl Initializable for ClaudeLocalScope {
+    /// The component name for Claude Code local scope configuration.
     fn name(&self) -> &str {
         "claude-local-scope"
     }
 
+    /// Component category: configuration tasks.
     fn category(&self) -> &str {
         "configuration"
     }
 
+    /// Component priority: 11 (runs after global MCP registration).
     fn priority(&self) -> i32 {
         11
     }
 
+    /// Only applicable to local scope installations.
     fn is_applicable(&self, scope: &InitScope) -> bool {
         matches!(scope, InitScope::Local)
     }
@@ -341,21 +356,7 @@ impl Initializable for ClaudeLocalScope {
             Err(e) => return vec![InitResult::error(self.name(), e)],
         };
 
-        let changed = if let Some(projects) = root.get_mut("projects") {
-            if let Some(entry) = projects.get_mut(&key) {
-                let changed = settings::remove_mcp_server(entry);
-                if let Some(mcp_servers) = entry.get("mcpServers").and_then(|m| m.as_object()) {
-                    if mcp_servers.is_empty() {
-                        entry.as_object_mut().unwrap().remove("mcpServers");
-                    }
-                }
-                changed
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let changed = remove_mcp_from_project_entry(&mut root, &key);
 
         if changed {
             if let Err(e) = settings::write_settings(&path, &root) {
@@ -387,24 +388,54 @@ impl Initializable for ClaudeLocalScope {
     }
 }
 
+/// Remove the MCP server from a specific project entry in `~/.claude.json`.
+///
+/// Returns true if the server was found and removed.
+fn remove_mcp_from_project_entry(root: &mut serde_json::Value, key: &str) -> bool {
+    let entry = match root.get_mut("projects").and_then(|p| p.get_mut(key)) {
+        Some(e) => e,
+        None => return false,
+    };
+
+    let changed = settings::remove_mcp_server(entry);
+
+    // Clean up empty mcpServers object
+    let should_remove = entry
+        .get("mcpServers")
+        .and_then(|m| m.as_object())
+        .map(|m| m.is_empty())
+        .unwrap_or(false);
+    if should_remove {
+        if let Some(obj) = entry.as_object_mut() {
+            obj.remove("mcpServers");
+        }
+    }
+
+    changed
+}
+
 // ── DenyBash (priority 15) ───────────────────────────────────────────
 
 /// Manages the "Bash" deny rule in `.claude/settings.json`.
 pub struct DenyBash;
 
 impl Initializable for DenyBash {
+    /// The component name for Bash denial rule configuration.
     fn name(&self) -> &str {
         "deny-bash"
     }
 
+    /// Component category: configuration tasks.
     fn category(&self) -> &str {
         "configuration"
     }
 
+    /// Component priority: 15 (runs after global MCP registration).
     fn priority(&self) -> i32 {
         15
     }
 
+    /// This component only applies in user (global) scope.
     fn is_applicable(&self, scope: &InitScope) -> bool {
         matches!(scope, InitScope::Project | InitScope::Local)
     }
@@ -467,24 +498,29 @@ pub struct ProjectStructure {
 }
 
 impl ProjectStructure {
+    /// Create a new ProjectStructure component.
     pub fn new(remove_directory: bool) -> Self {
         Self { remove_directory }
     }
 }
 
 impl Initializable for ProjectStructure {
+    /// The component name for project structure creation/removal.
     fn name(&self) -> &str {
         "project-structure"
     }
 
+    /// Component category: structural setup tasks.
     fn category(&self) -> &str {
         "structure"
     }
 
+    /// Component priority: 20 (runs after configuration setup).
     fn priority(&self) -> i32 {
         20
     }
 
+    /// Only applicable to project and local scope installations.
     fn is_applicable(&self, scope: &InitScope) -> bool {
         matches!(scope, InitScope::Project | InitScope::Local)
     }
@@ -595,165 +631,37 @@ pub struct SkillDeployment {
 }
 
 impl SkillDeployment {
+    /// Create a new SkillDeployment component.
     pub fn new(global: bool) -> Self {
         Self { global }
     }
 }
 
 impl Initializable for SkillDeployment {
+    /// The component name for skill deployment.
     fn name(&self) -> &str {
         "skill-deployment"
     }
 
+    /// Component category: deployment tasks.
     fn category(&self) -> &str {
         "deployment"
     }
 
+    /// Component priority: 30 (runs after structure setup).
     fn priority(&self) -> i32 {
         30
     }
 
     /// Install builtin skills via mirdan's deploy + lockfile.
     ///
-    /// 1. Write each builtin to a temp dir (they're embedded in the binary)
-    /// 2. Call `deploy_skill_to_agents()` for each -- handles store copy + symlinks
-    /// 3. Write lockfile entries via `Lockfile`
-    ///
     /// Skill instructions are rendered through the prompt library's Liquid template
     /// engine before writing to disk, so `{% include %}` partials are expanded.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        use swissarmyhammer_skills::SkillResolver;
-
-        let resolver = SkillResolver::new();
-        let skills = resolver.resolve_builtins();
-
-        let prompt_library = PromptLibrary::default();
-        let template_context = TemplateContext::new();
-
-        let project_root = match std::env::current_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to get current directory: {}", e),
-                )];
-            }
-        };
-        let mut lockfile = match mirdan::lockfile::Lockfile::load(&project_root) {
-            Ok(l) => l,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to load lockfile: {}", e),
-                )];
-            }
-        };
-
-        let mut installed_count = 0;
-        let mut installed_names: Vec<String> = Vec::new();
-        let mut agent_names: Vec<String> = Vec::new();
-        for (name, skill) in &skills {
-            let temp_dir = match tempfile::tempdir() {
-                Ok(d) => d,
-                Err(e) => {
-                    return vec![InitResult::error(
-                        self.name(),
-                        format!("Failed to create temp dir: {}", e),
-                    )];
-                }
-            };
-            let skill_dir = temp_dir.path().join(name);
-            if let Err(e) = fs::create_dir_all(&skill_dir) {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to create temp skill dir: {}", e),
-                )];
-            }
-
-            // Render instructions through the prompt library's Liquid engine
-            let rendered_skill =
-                render_skill_instructions(skill, &prompt_library, &template_context, reporter);
-
-            let skill_md_path = skill_dir.join("SKILL.md");
-            let content = format_skill_md(&rendered_skill);
-            if let Err(e) = fs::write(&skill_md_path, &content) {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to write {}: {}", skill_md_path.display(), e),
-                )];
-            }
-
-            // Write any additional resource files
-            for (filename, file_content) in &skill.resources.files {
-                let file_path = skill_dir.join(filename);
-                if let Err(e) = fs::write(&file_path, file_content) {
-                    return vec![InitResult::error(
-                        self.name(),
-                        format!("Failed to write {}: {}", file_path.display(), e),
-                    )];
-                }
-            }
-
-            // Deploy via mirdan: store copy + agent symlinks
-            let targets = match mirdan::install::deploy_skill_to_agents(
-                name,
-                &skill_dir,
-                None,
-                self.global,
-            ) {
-                Ok(t) => t,
-                Err(e) => {
-                    return vec![InitResult::error(
-                        self.name(),
-                        format!("Failed to deploy skill '{}': {}", name, e),
-                    )];
-                }
-            };
-
-            // Collect agent names from first skill (same for all)
-            if agent_names.is_empty() {
-                agent_names = targets.clone();
-            }
-
-            // Record in lockfile
-            let version = skill
-                .metadata
-                .get("version")
-                .cloned()
-                .unwrap_or_else(|| "0.0.0".to_string());
-            lockfile.add_package(
-                name.clone(),
-                mirdan::lockfile::LockedPackage {
-                    package_type: mirdan::package_type::PackageType::Skill,
-                    version,
-                    resolved: "builtin".to_string(),
-                    integrity: String::new(),
-                    installed_at: chrono::Utc::now().to_rfc3339(),
-                    targets,
-                },
-            );
-
-            installed_names.push(name.clone());
-            installed_count += 1;
+        match deploy_all_skills(self.global, reporter) {
+            Ok(msg) => vec![InitResult::ok(self.name(), msg)],
+            Err(e) => vec![InitResult::error(self.name(), e)],
         }
-
-        if installed_count > 0 {
-            if let Err(e) = lockfile.save(&project_root) {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to save lockfile: {}", e),
-                )];
-            }
-            reporter.emit(&InitEvent::Action {
-                verb: "Installed".to_string(),
-                message: format!("{} skills → {}", installed_count, agent_names.join(", ")),
-            });
-        }
-
-        vec![InitResult::ok(
-            self.name(),
-            format!("Deployed {} builtin skills", installed_count),
-        )]
     }
 
     /// Remove builtin skill symlinks from agent directories and clean up the .skills/ store.
@@ -815,6 +723,102 @@ impl Initializable for SkillDeployment {
 
         vec![InitResult::ok(self.name(), "Builtin skills removed")]
     }
+}
+
+/// Deploy a single builtin skill to a temp dir and then to agents.
+///
+/// Returns the list of agent targets on success, or an error message.
+fn deploy_single_skill(
+    name: &str,
+    skill: &swissarmyhammer_skills::Skill,
+    prompt_library: &PromptLibrary,
+    template_context: &TemplateContext,
+    global: bool,
+    reporter: &dyn InitReporter,
+) -> Result<Vec<String>, String> {
+    if !is_safe_name(name) {
+        return Err(format!("Unsafe skill name: {:?}", name));
+    }
+
+    let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    let skill_dir = temp_dir.path().join(name);
+    fs::create_dir_all(&skill_dir)
+        .map_err(|e| format!("Failed to create temp skill dir: {}", e))?;
+
+    let rendered_skill =
+        render_skill_instructions(skill, prompt_library, template_context, reporter);
+
+    let skill_md_path = skill_dir.join("SKILL.md");
+    let content = format_skill_md(&rendered_skill);
+    fs::write(&skill_md_path, &content)
+        .map_err(|e| format!("Failed to write {}: {}", skill_md_path.display(), e))?;
+
+    for (filename, file_content) in &skill.resources.files {
+        if !is_safe_name(filename) {
+            return Err(format!("Unsafe resource filename: {:?}", filename));
+        }
+        let file_path = skill_dir.join(filename);
+        fs::write(&file_path, file_content)
+            .map_err(|e| format!("Failed to write {}: {}", file_path.display(), e))?;
+    }
+
+    mirdan::install::deploy_skill_to_agents(name, &skill_dir, None, global)
+        .map_err(|e| format!("Failed to deploy skill '{}': {}", name, e))
+}
+
+/// Deploy all builtin skills, update lockfile, and report results.
+fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String, String> {
+    use swissarmyhammer_skills::SkillResolver;
+
+    let resolver = SkillResolver::new();
+    let skills = resolver.resolve_builtins();
+
+    let prompt_library = PromptLibrary::default();
+    let template_context = TemplateContext::new();
+
+    let project_root =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
+        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+
+    let mut installed_count = 0;
+    let mut skill_targets: Vec<String> = Vec::new();
+
+    for (name, skill) in &skills {
+        let targets = deploy_single_skill(
+            name,
+            skill,
+            &prompt_library,
+            &template_context,
+            global,
+            reporter,
+        )?;
+        if skill_targets.is_empty() {
+            skill_targets = targets.clone();
+        }
+        lockfile.add_package(
+            name.clone(),
+            mirdan::lockfile::LockedPackage {
+                package_type: mirdan::package_type::PackageType::Skill,
+                version: "0.0.0".to_string(),
+                resolved: "builtin".to_string(),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets,
+            },
+        );
+        installed_count += 1;
+    }
+
+    save_lockfile_and_report(
+        &lockfile,
+        &project_root,
+        installed_count,
+        "skills",
+        &skill_targets,
+        reporter,
+    )?;
+    Ok(format!("Deployed {} builtin skills", installed_count))
 }
 
 /// Render skill instructions through the prompt library's Liquid template engine.
@@ -885,156 +889,37 @@ pub struct AgentDeployment {
 }
 
 impl AgentDeployment {
+    /// Create a new AgentDeployment component.
     pub fn new(global: bool) -> Self {
         Self { global }
     }
 }
 
 impl Initializable for AgentDeployment {
+    /// The component name for agent deployment.
     fn name(&self) -> &str {
         "agent-deployment"
     }
 
+    /// Component category: deployment tasks.
     fn category(&self) -> &str {
         "deployment"
     }
 
+    /// Component priority: 31 (runs after skill deployment).
     fn priority(&self) -> i32 {
         31
     }
 
     /// Install builtin agents via mirdan's deploy + lockfile.
     ///
-    /// 1. Write each builtin agent to a temp dir (they're embedded in the binary)
-    /// 2. Call `deploy_agent_to_agents()` for each -- handles store copy + symlinks
-    /// 3. Write lockfile entries via `Lockfile`
-    ///
     /// Agent instructions are rendered through the prompt library's Liquid template
     /// engine before writing to disk, so `{% include %}` partials are expanded.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        use swissarmyhammer_agents::AgentResolver;
-
-        let resolver = AgentResolver::new();
-        let agents = resolver.resolve_builtins();
-
-        let prompt_library = PromptLibrary::default();
-        let template_context = TemplateContext::new();
-
-        let project_root = match std::env::current_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to get current directory: {}", e),
-                )];
-            }
-        };
-        let mut lockfile = match mirdan::lockfile::Lockfile::load(&project_root) {
-            Ok(l) => l,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to load lockfile: {}", e),
-                )];
-            }
-        };
-
-        let mut installed_count = 0;
-        let mut agent_targets: Vec<String> = Vec::new();
-        for (name, agent) in &agents {
-            let temp_dir = match tempfile::tempdir() {
-                Ok(d) => d,
-                Err(e) => {
-                    return vec![InitResult::error(
-                        self.name(),
-                        format!("Failed to create temp dir: {}", e),
-                    )];
-                }
-            };
-            let agent_dir = temp_dir.path().join(name);
-            if let Err(e) = fs::create_dir_all(&agent_dir) {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to create temp agent dir: {}", e),
-                )];
-            }
-
-            // Render instructions through the prompt library's Liquid engine
-            let rendered_instructions = match prompt_library
-                .render_text(&agent.instructions, &template_context)
-            {
-                Ok(rendered) => rendered,
-                Err(e) => {
-                    reporter.emit(&InitEvent::Warning {
-                        message: format!("failed to render partials for agent '{}': {}", name, e),
-                    });
-                    agent.instructions.clone()
-                }
-            };
-
-            let agent_md_path = agent_dir.join("AGENT.md");
-            let content = format_agent_md(agent, &rendered_instructions);
-            if let Err(e) = fs::write(&agent_md_path, &content) {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to write {}: {}", agent_md_path.display(), e),
-                )];
-            }
-
-            // Deploy via mirdan: store copy + coding agent symlinks
-            let targets = match mirdan::install::deploy_agent_to_agents(
-                name,
-                &agent_dir,
-                None,
-                self.global,
-            ) {
-                Ok(t) => t,
-                Err(e) => {
-                    return vec![InitResult::error(
-                        self.name(),
-                        format!("Failed to deploy agent '{}': {}", name, e),
-                    )];
-                }
-            };
-
-            // Collect agent targets from first deploy (same for all)
-            if agent_targets.is_empty() {
-                agent_targets = targets.clone();
-            }
-
-            // Record in lockfile
-            lockfile.add_package(
-                name.clone(),
-                mirdan::lockfile::LockedPackage {
-                    package_type: mirdan::package_type::PackageType::Agent,
-                    version: "0.0.0".to_string(),
-                    resolved: "builtin".to_string(),
-                    integrity: String::new(),
-                    installed_at: chrono::Utc::now().to_rfc3339(),
-                    targets,
-                },
-            );
-
-            installed_count += 1;
+        match init_all_agents(self.global, reporter) {
+            Ok(msg) => vec![InitResult::ok(self.name(), msg)],
+            Err(e) => vec![InitResult::error(self.name(), e)],
         }
-
-        if installed_count > 0 {
-            if let Err(e) = lockfile.save(&project_root) {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to save lockfile: {}", e),
-                )];
-            }
-            reporter.emit(&InitEvent::Action {
-                verb: "Installed".to_string(),
-                message: format!("{} agents → {}", installed_count, agent_targets.join(", ")),
-            });
-        }
-
-        vec![InitResult::ok(
-            self.name(),
-            format!("Deployed {} builtin agents", installed_count),
-        )]
     }
 
     /// Remove builtin agent symlinks from coding agent directories and clean up the .agents/ store.
@@ -1097,6 +982,101 @@ impl Initializable for AgentDeployment {
     }
 }
 
+/// Deploy a single builtin agent to a temp dir and then to coding agents.
+///
+/// Returns the list of agent targets on success, or an error message.
+fn deploy_single_agent(
+    name: &str,
+    agent: &swissarmyhammer_agents::Agent,
+    prompt_library: &PromptLibrary,
+    template_context: &TemplateContext,
+    global: bool,
+    reporter: &dyn InitReporter,
+) -> Result<Vec<String>, String> {
+    if !is_safe_name(name) {
+        return Err(format!("Unsafe agent name: {:?}", name));
+    }
+
+    let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    let agent_dir = temp_dir.path().join(name);
+    fs::create_dir_all(&agent_dir)
+        .map_err(|e| format!("Failed to create temp agent dir: {}", e))?;
+
+    let rendered_instructions =
+        match prompt_library.render_text(&agent.instructions, template_context) {
+            Ok(rendered) => rendered,
+            Err(e) => {
+                reporter.emit(&InitEvent::Warning {
+                    message: format!("failed to render partials for agent '{}': {}", name, e),
+                });
+                agent.instructions.clone()
+            }
+        };
+
+    let agent_md_path = agent_dir.join("AGENT.md");
+    let content = format_agent_md(agent, &rendered_instructions);
+    fs::write(&agent_md_path, &content)
+        .map_err(|e| format!("Failed to write {}: {}", agent_md_path.display(), e))?;
+
+    mirdan::install::deploy_agent_to_agents(name, &agent_dir, None, global)
+        .map_err(|e| format!("Failed to deploy agent '{}': {}", name, e))
+}
+
+/// Deploy all builtin agents, update lockfile, and report results.
+fn init_all_agents(global: bool, reporter: &dyn InitReporter) -> Result<String, String> {
+    use swissarmyhammer_agents::AgentResolver;
+
+    let resolver = AgentResolver::new();
+    let agents = resolver.resolve_builtins();
+
+    let prompt_library = PromptLibrary::default();
+    let template_context = TemplateContext::new();
+
+    let project_root =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
+        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+
+    let mut installed_count = 0;
+    let mut agent_targets: Vec<String> = Vec::new();
+
+    for (name, agent) in &agents {
+        let targets = deploy_single_agent(
+            name,
+            agent,
+            &prompt_library,
+            &template_context,
+            global,
+            reporter,
+        )?;
+        if agent_targets.is_empty() {
+            agent_targets = targets.clone();
+        }
+        lockfile.add_package(
+            name.clone(),
+            mirdan::lockfile::LockedPackage {
+                package_type: mirdan::package_type::PackageType::Agent,
+                version: "0.0.0".to_string(),
+                resolved: "builtin".to_string(),
+                integrity: String::new(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+                targets,
+            },
+        );
+        installed_count += 1;
+    }
+
+    save_lockfile_and_report(
+        &lockfile,
+        &project_root,
+        installed_count,
+        "agents",
+        &agent_targets,
+        reporter,
+    )?;
+    Ok(format!("Deployed {} builtin agents", installed_count))
+}
+
 /// Format an Agent back into AGENT.md content (frontmatter + rendered body).
 fn format_agent_md(agent: &swissarmyhammer_agents::Agent, rendered_instructions: &str) -> String {
     let mut content = String::from("---\n");
@@ -1149,20 +1129,24 @@ fn format_agent_md(agent: &swissarmyhammer_agents::Agent, rendered_instructions:
 pub struct LockfileCleanup;
 
 impl Initializable for LockfileCleanup {
+    /// The component name for lockfile cleanup.
     fn name(&self) -> &str {
         "lockfile-cleanup"
     }
 
+    /// Component category: deployment tasks.
     fn category(&self) -> &str {
         "deployment"
     }
 
+    /// Component priority: 32 (runs after skill and agent deployment).
     fn priority(&self) -> i32 {
         32
     }
 
+    /// Lockfile entries are written by SkillDeployment and AgentDeployment during their init phases.
+    /// This component does not need to do anything during initialization.
     fn init(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
-        // Lockfile entries are written by SkillDeployment and AgentDeployment
         vec![]
     }
 
@@ -1221,86 +1205,61 @@ impl Initializable for LockfileCleanup {
     }
 }
 
-// ── AvpHooks (priority 35) ───────────────────────────────────────────
+// ── Shared helpers ───────────────────────────────────────────────────
 
-/// Installs/removes AVP (Agent Validator Protocol) hooks in Claude Code settings.
-///
-/// Delegates to `avp_common::install` — the same logic used by `avp init`.
-pub struct AvpHooks;
-
-impl Initializable for AvpHooks {
-    fn name(&self) -> &str {
-        "avp-hooks"
-    }
-
-    fn category(&self) -> &str {
-        "configuration"
-    }
-
-    fn priority(&self) -> i32 {
-        35
-    }
-
-    /// AVP hooks are project-scoped — installing them at User scope would register
-    /// hooks for every project, which is not the intended use. Use `avp init --user`
-    /// directly if global installation is explicitly desired.
-    fn is_applicable(&self, scope: &InitScope) -> bool {
-        matches!(scope, InitScope::Project | InitScope::Local)
-    }
-
-    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let cwd = match std::env::current_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to get current directory: {}", e),
-                )];
-            }
-        };
-
-        match avp_common::install::install(*scope, &cwd) {
-            Ok(()) => {
-                reporter.emit(&InitEvent::Action {
-                    verb: "Installed".to_string(),
-                    message: "AVP hooks in Claude Code settings".to_string(),
-                });
-                vec![InitResult::ok(self.name(), "AVP hooks installed")]
-            }
-            Err(e) => vec![InitResult::error(self.name(), e)],
-        }
-    }
-
-    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let cwd = match std::env::current_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to get current directory: {}", e),
-                )];
-            }
-        };
-
-        match avp_common::install::uninstall(*scope, &cwd) {
-            Ok(()) => {
-                reporter.emit(&InitEvent::Action {
-                    verb: "Removed".to_string(),
-                    message: "AVP hooks from Claude Code settings".to_string(),
-                });
-                vec![InitResult::ok(self.name(), "AVP hooks removed")]
-            }
-            Err(e) => vec![InitResult::error(self.name(), e)],
+/// Remove the `mcpServers` key from a JSON value if it is an empty object.
+fn cleanup_empty_mcp_servers(settings: &mut serde_json::Value) {
+    let is_empty = settings
+        .get("mcpServers")
+        .and_then(|m| m.as_object())
+        .map(|m| m.is_empty())
+        .unwrap_or(false);
+    if is_empty {
+        if let Some(obj) = settings.as_object_mut() {
+            obj.remove("mcpServers");
         }
     }
 }
 
-// ── Shared helpers ───────────────────────────────────────────────────
+/// Save lockfile and emit a reporter event if any packages were installed.
+fn save_lockfile_and_report(
+    lockfile: &mirdan::lockfile::Lockfile,
+    project_root: &std::path::Path,
+    count: usize,
+    kind: &str,
+    targets: &[String],
+    reporter: &dyn InitReporter,
+) -> Result<(), String> {
+    if count > 0 {
+        lockfile
+            .save(project_root)
+            .map_err(|e| format!("Failed to save lockfile: {}", e))?;
+        reporter.emit(&InitEvent::Action {
+            verb: "Installed".to_string(),
+            message: format!("{} {} → {}", count, kind, targets.join(", ")),
+        });
+    }
+    Ok(())
+}
+
+/// Validate that a name is safe to use as a filesystem path component.
+///
+/// Rejects names containing path separators, parent-directory references,
+/// or absolute paths to prevent path traversal attacks.
+fn is_safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && !std::path::Path::new(name).is_absolute()
+}
 
 /// Remove named entries from a store directory and their symlinks from link directories.
 ///
 /// This is the shared filesystem logic for both skill and agent uninstall.
 /// The caller resolves names and directories, this function does the filesystem work.
+/// Names are validated to prevent path traversal — any name containing `/`, `\`, or `..`
+/// is skipped with a warning.
 pub(crate) fn remove_store_entries(
     store_dir: &std::path::Path,
     names: &[String],
@@ -1310,29 +1269,14 @@ pub(crate) fn remove_store_entries(
     reporter: &dyn InitReporter,
 ) {
     for name in names {
-        let store_path = store_dir.join(name);
-
-        // Remove symlinks from each link directory
-        for (dir, policy) in link_dirs.iter().zip(symlink_policies.iter()) {
-            let link_name = mirdan::store::symlink_name(name, policy);
-            let link_path = dir.join(&link_name);
-            remove_if_symlink(&link_path, reporter);
+        if !is_safe_name(name) {
+            reporter.emit(&InitEvent::Warning {
+                message: format!("skipping unsafe {} name: {:?}", kind, name),
+            });
+            continue;
         }
 
-        // Remove entry from the store
-        if store_path.exists() {
-            if let Err(e) = fs::remove_dir_all(&store_path) {
-                reporter.emit(&InitEvent::Warning {
-                    message: format!(
-                        "failed to remove store entry {}: {}",
-                        store_path.display(),
-                        e
-                    ),
-                });
-            } else {
-                tracing::debug!("Removed {} store: {}", kind, store_path.display());
-            }
-        }
+        remove_single_store_entry(store_dir, name, link_dirs, symlink_policies, kind, reporter);
     }
 
     // Remove the store directory if empty
@@ -1341,6 +1285,38 @@ pub(crate) fn remove_store_entries(
             if entries.count() == 0 {
                 let _ = fs::remove_dir(store_dir);
             }
+        }
+    }
+}
+
+/// Remove a single named entry from the store and its symlinks from link directories.
+fn remove_single_store_entry(
+    store_dir: &std::path::Path,
+    name: &str,
+    link_dirs: &[std::path::PathBuf],
+    symlink_policies: &[mirdan::agents::SymlinkPolicy],
+    kind: &str,
+    reporter: &dyn InitReporter,
+) {
+    let store_path = store_dir.join(name);
+
+    for (dir, policy) in link_dirs.iter().zip(symlink_policies.iter()) {
+        let link_name = mirdan::store::symlink_name(name, policy);
+        let link_path = dir.join(&link_name);
+        remove_if_symlink(&link_path, reporter);
+    }
+
+    if store_path.exists() {
+        if let Err(e) = fs::remove_dir_all(&store_path) {
+            reporter.emit(&InitEvent::Warning {
+                message: format!(
+                    "failed to remove store entry {}: {}",
+                    store_path.display(),
+                    e
+                ),
+            });
+        } else {
+            tracing::debug!("Removed {} store: {}", kind, store_path.display());
         }
     }
 }
@@ -1369,27 +1345,14 @@ pub(crate) fn remove_if_symlink(path: &std::path::Path, reporter: &dyn InitRepor
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer_common::lifecycle::InitScope;
 
     #[test]
-    fn test_avp_hooks_applicable_project() {
-        assert!(AvpHooks.is_applicable(&InitScope::Project));
-    }
-
-    #[test]
-    fn test_avp_hooks_applicable_local() {
-        assert!(AvpHooks.is_applicable(&InitScope::Local));
-    }
-
-    #[test]
-    fn test_avp_hooks_not_applicable_user() {
-        assert!(!AvpHooks.is_applicable(&InitScope::User));
-    }
-
-    #[test]
-    fn test_avp_hooks_metadata() {
-        assert_eq!(AvpHooks.name(), "avp-hooks");
-        assert_eq!(AvpHooks.category(), "configuration");
-        assert_eq!(AvpHooks.priority(), 35);
+    fn test_is_safe_name() {
+        assert!(is_safe_name("my-skill"));
+        assert!(is_safe_name("agent_v2"));
+        assert!(!is_safe_name("../escape"));
+        assert!(!is_safe_name("foo/bar"));
+        assert!(!is_safe_name("foo\\bar"));
+        assert!(!is_safe_name(""));
     }
 }
