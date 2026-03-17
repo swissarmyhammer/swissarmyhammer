@@ -21,7 +21,7 @@ pub mod doctor;
 pub mod schema;
 pub mod watcher;
 
-use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
+use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry, ValidatorTool};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::{CallToolResult, Content};
@@ -691,6 +691,10 @@ impl McpTool for CodeContextTool {
         Some("code_context")
     }
 
+    fn is_validator_tool(&self) -> bool {
+        true
+    }
+
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
         let ops: &[&'static dyn Operation] = &CODE_CONTEXT_OPERATIONS;
         // SAFETY: CODE_CONTEXT_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
@@ -745,6 +749,8 @@ impl McpTool for CodeContextTool {
         }
     }
 }
+
+impl ValidatorTool for CodeContextTool {}
 
 // ---------------------------------------------------------------------------
 // Helper: open workspace from context

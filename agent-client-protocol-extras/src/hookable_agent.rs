@@ -121,6 +121,59 @@ pub enum HookEvent {
         notification: Box<SessionNotification>,
         cwd: PathBuf,
     },
+    /// Fires when MCP server requests user input.
+    Elicitation {
+        session_id: String,
+        mcp_server_name: Option<String>,
+        message: Option<String>,
+        mode: String,
+        requested_schema: serde_json::Value,
+        cwd: PathBuf,
+    },
+    /// Fires when user responds to MCP elicitation.
+    ElicitationResult {
+        session_id: String,
+        mcp_server_name: String,
+        action: Option<String>,
+        content: serde_json::Value,
+        elicitation_id: String,
+        cwd: PathBuf,
+    },
+    /// Fires when CLAUDE.md or rules files are loaded.
+    InstructionsLoaded {
+        file_path: Option<String>,
+        load_reason: String,
+        cwd: PathBuf,
+    },
+    /// Fires when config files change.
+    ConfigChange {
+        session_id: String,
+        source: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires when a worktree is created.
+    WorktreeCreate {
+        worktree_path: Option<String>,
+        branch_name: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires when a worktree is removed.
+    WorktreeRemove { worktree_path: String, cwd: PathBuf },
+    /// Fires after context compaction.
+    PostCompact { session_id: String, cwd: PathBuf },
+    /// Fires when an agent teammate goes idle.
+    TeammateIdle {
+        session_id: String,
+        teammate_id: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires when a task is marked complete.
+    TaskCompleted {
+        session_id: String,
+        task_id: Option<String>,
+        task_title: Option<String>,
+        cwd: PathBuf,
+    },
 }
 
 /// Which category of event a hook registration matches.
@@ -133,6 +186,15 @@ pub enum HookEventKind {
     PostToolUseFailure,
     Stop,
     Notification,
+    PostCompact,
+    TeammateIdle,
+    TaskCompleted,
+    Elicitation,
+    ElicitationResult,
+    InstructionsLoaded,
+    ConfigChange,
+    WorktreeCreate,
+    WorktreeRemove,
 }
 
 impl HookEvent {
@@ -146,6 +208,15 @@ impl HookEvent {
             Self::PostToolUseFailure { .. } => HookEventKind::PostToolUseFailure,
             Self::Stop { .. } => HookEventKind::Stop,
             Self::Notification { .. } => HookEventKind::Notification,
+            Self::Elicitation { .. } => HookEventKind::Elicitation,
+            Self::ElicitationResult { .. } => HookEventKind::ElicitationResult,
+            Self::InstructionsLoaded { .. } => HookEventKind::InstructionsLoaded,
+            Self::ConfigChange { .. } => HookEventKind::ConfigChange,
+            Self::WorktreeCreate { .. } => HookEventKind::WorktreeCreate,
+            Self::WorktreeRemove { .. } => HookEventKind::WorktreeRemove,
+            Self::PostCompact { .. } => HookEventKind::PostCompact,
+            Self::TeammateIdle { .. } => HookEventKind::TeammateIdle,
+            Self::TaskCompleted { .. } => HookEventKind::TaskCompleted,
         }
     }
 
@@ -163,6 +234,19 @@ impl HookEvent {
             Self::Notification { notification, .. } => {
                 Some(notification_update_name(&notification.update))
             }
+            Self::Elicitation {
+                mcp_server_name, ..
+            } => mcp_server_name.as_deref(),
+            Self::ElicitationResult {
+                mcp_server_name, ..
+            } => Some(mcp_server_name.as_str()),
+            Self::InstructionsLoaded { file_path, .. } => file_path.as_deref(),
+            Self::ConfigChange { source, .. } => source.as_deref(),
+            Self::WorktreeCreate { .. }
+            | Self::WorktreeRemove { .. }
+            | Self::PostCompact { .. }
+            | Self::TeammateIdle { .. }
+            | Self::TaskCompleted { .. } => None,
         }
     }
 
@@ -277,6 +361,141 @@ impl HookEvent {
                 });
                 if let Ok(update_value) = serde_json::to_value(&notification.update) {
                     obj["notification"] = update_value;
+                }
+                obj
+            }
+            Self::Elicitation {
+                session_id,
+                mcp_server_name,
+                message,
+                mode,
+                requested_schema,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "Elicitation",
+                    "mode": mode,
+                    "requested_schema": requested_schema,
+                });
+                if let Some(name) = mcp_server_name {
+                    obj["mcp_server_name"] = serde_json::Value::String(name.clone());
+                }
+                if let Some(msg) = message {
+                    obj["message"] = serde_json::Value::String(msg.clone());
+                }
+                obj
+            }
+            Self::ElicitationResult {
+                session_id,
+                mcp_server_name,
+                action,
+                content,
+                elicitation_id,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "ElicitationResult",
+                    "mcp_server_name": mcp_server_name,
+                    "content": content,
+                    "elicitation_id": elicitation_id,
+                });
+                if let Some(a) = action {
+                    obj["action"] = serde_json::Value::String(a.clone());
+                }
+                obj
+            }
+            Self::InstructionsLoaded {
+                file_path,
+                load_reason,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "InstructionsLoaded",
+                    "load_reason": load_reason,
+                });
+                if let Some(fp) = file_path {
+                    obj["file_path"] = serde_json::Value::String(fp.clone());
+                }
+                obj
+            }
+            Self::ConfigChange {
+                session_id,
+                source,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "ConfigChange",
+                });
+                if let Some(src) = source {
+                    obj["source"] = serde_json::Value::String(src.clone());
+                }
+                obj
+            }
+            Self::WorktreeCreate {
+                worktree_path,
+                branch_name,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "WorktreeCreate",
+                });
+                if let Some(wp) = worktree_path {
+                    obj["worktree_path"] = serde_json::Value::String(wp.clone());
+                }
+                if let Some(bn) = branch_name {
+                    obj["branch_name"] = serde_json::Value::String(bn.clone());
+                }
+                obj
+            }
+            Self::WorktreeRemove { worktree_path, cwd } => serde_json::json!({
+                "cwd": cwd.display().to_string(),
+                "hook_event_name": "WorktreeRemove",
+                "worktree_path": worktree_path,
+            }),
+            Self::PostCompact { session_id, cwd } => serde_json::json!({
+                "session_id": session_id,
+                "cwd": cwd.display().to_string(),
+                "hook_event_name": "PostCompact",
+            }),
+            Self::TeammateIdle {
+                session_id,
+                teammate_id,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "TeammateIdle",
+                });
+                if let Some(id) = teammate_id {
+                    obj["teammate_id"] = serde_json::Value::String(id.clone());
+                }
+                obj
+            }
+            Self::TaskCompleted {
+                session_id,
+                task_id,
+                task_title,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "TaskCompleted",
+                });
+                if let Some(id) = task_id {
+                    obj["task_id"] = serde_json::Value::String(id.clone());
+                }
+                if let Some(title) = task_title {
+                    obj["task_title"] = serde_json::Value::String(title.clone());
                 }
                 obj
             }
@@ -603,6 +822,15 @@ impl HookableAgent {
             .get(session_id)
             .cloned()
             .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// Fire an arbitrary hook event and return all decisions.
+    ///
+    /// This is the public entry point for callers (CLI, MCP proxy, etc.) to
+    /// fire hook events that don't correspond to an ACP Agent trait method —
+    /// e.g. `TeammateIdle`, `TaskCompleted`, `PostCompact`, `ConfigChange`.
+    pub async fn fire_event(&self, event: &HookEvent) -> Vec<HookDecision> {
+        self.run_hooks(event).await
     }
 
     /// Run all matching hooks for an event in parallel, returning collected decisions.
@@ -1039,6 +1267,15 @@ mod tests {
             HookDecision::ShouldContinue {
                 reason: self.reason.clone(),
             }
+        }
+    }
+
+    struct AllowHook;
+
+    #[async_trait::async_trait]
+    impl HookHandler for AllowHook {
+        async fn handle(&self, _event: &HookEvent) -> HookDecision {
+            HookDecision::Allow
         }
     }
 
@@ -1716,6 +1953,202 @@ mod tests {
         assert_eq!(event.matcher_value(), Some("Bash"));
     }
 
+    // -- New hook event kind and matcher tests --
+
+    #[test]
+    fn test_elicitation_kind_and_matcher() {
+        let event = HookEvent::Elicitation {
+            session_id: "s1".into(),
+            mcp_server_name: Some("sah".into()),
+            message: Some("pick".into()),
+            mode: "blocking".into(),
+            requested_schema: serde_json::json!({}),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::Elicitation);
+        assert_eq!(event.matcher_value(), Some("sah"));
+    }
+
+    #[test]
+    fn test_elicitation_kind_and_matcher_none() {
+        let event = HookEvent::Elicitation {
+            session_id: "s1".into(),
+            mcp_server_name: None,
+            message: None,
+            mode: "blocking".into(),
+            requested_schema: serde_json::json!({}),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::Elicitation);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
+    fn test_elicitation_result_kind_and_matcher() {
+        let event = HookEvent::ElicitationResult {
+            session_id: "s1".into(),
+            mcp_server_name: "sah".into(),
+            action: Some("submit".into()),
+            content: serde_json::json!({}),
+            elicitation_id: "e1".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::ElicitationResult);
+        assert_eq!(event.matcher_value(), Some("sah"));
+    }
+
+    #[test]
+    fn test_instructions_loaded_kind_and_matcher() {
+        let event = HookEvent::InstructionsLoaded {
+            file_path: Some("/project/CLAUDE.md".into()),
+            load_reason: "startup".into(),
+            cwd: PathBuf::from("/project"),
+        };
+        assert_eq!(event.kind(), HookEventKind::InstructionsLoaded);
+        assert_eq!(event.matcher_value(), Some("/project/CLAUDE.md"));
+    }
+
+    #[test]
+    fn test_instructions_loaded_kind_and_matcher_none() {
+        let event = HookEvent::InstructionsLoaded {
+            file_path: None,
+            load_reason: "startup".into(),
+            cwd: PathBuf::from("/project"),
+        };
+        assert_eq!(event.kind(), HookEventKind::InstructionsLoaded);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
+    fn test_config_change_kind_and_matcher() {
+        let event = HookEvent::ConfigChange {
+            session_id: "s1".into(),
+            source: Some("user_settings".into()),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::ConfigChange);
+        assert_eq!(event.matcher_value(), Some("user_settings"));
+    }
+
+    #[test]
+    fn test_config_change_kind_and_matcher_none() {
+        let event = HookEvent::ConfigChange {
+            session_id: "s1".into(),
+            source: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::ConfigChange);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
+    fn test_worktree_create_kind_and_matcher() {
+        let event = HookEvent::WorktreeCreate {
+            worktree_path: Some("/tmp/wt".into()),
+            branch_name: Some("feat".into()),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::WorktreeCreate);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
+    fn test_worktree_remove_kind_and_matcher() {
+        let event = HookEvent::WorktreeRemove {
+            worktree_path: "/tmp/wt".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::WorktreeRemove);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
+    fn test_post_compact_kind_and_matcher() {
+        let event = HookEvent::PostCompact {
+            session_id: "s1".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::PostCompact);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
+    fn test_teammate_idle_kind_and_matcher() {
+        let event = HookEvent::TeammateIdle {
+            session_id: "s1".into(),
+            teammate_id: Some("agent-2".into()),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::TeammateIdle);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
+    fn test_task_completed_kind_and_matcher() {
+        let event = HookEvent::TaskCompleted {
+            session_id: "s1".into(),
+            task_id: Some("t1".into()),
+            task_title: Some("Fix".into()),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert_eq!(event.kind(), HookEventKind::TaskCompleted);
+        assert_eq!(event.matcher_value(), None);
+    }
+
+    #[test]
+    fn test_elicitation_registration_matches_with_matcher() {
+        let reg = HookRegistration::new(
+            vec![HookEventKind::Elicitation],
+            Some(regex::Regex::new("^sah$").unwrap()),
+            Arc::new(AllowHook),
+        );
+
+        let matching_event = HookEvent::Elicitation {
+            session_id: "s1".into(),
+            mcp_server_name: Some("sah".into()),
+            message: Some("pick".into()),
+            mode: "blocking".into(),
+            requested_schema: serde_json::json!({}),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert!(
+            reg.matches(&matching_event),
+            "Should match mcp_server_name=sah"
+        );
+
+        let non_matching_event = HookEvent::Elicitation {
+            session_id: "s1".into(),
+            mcp_server_name: Some("other-server".into()),
+            message: Some("pick".into()),
+            mode: "blocking".into(),
+            requested_schema: serde_json::json!({}),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert!(
+            !reg.matches(&non_matching_event),
+            "Should NOT match mcp_server_name=other-server"
+        );
+
+        // Wrong event kind should not match
+        let wrong_kind = HookEvent::Notification {
+            notification: Box::new(agent_client_protocol::SessionNotification::new(
+                agent_client_protocol::SessionId::from("s1"),
+                agent_client_protocol::SessionUpdate::AgentMessageChunk(
+                    agent_client_protocol::ContentChunk::new(
+                        agent_client_protocol::ContentBlock::Text(
+                            agent_client_protocol::TextContent::new("hi"),
+                        ),
+                    ),
+                ),
+            )),
+            cwd: PathBuf::from("/tmp"),
+        };
+        assert!(
+            !reg.matches(&wrong_kind),
+            "Elicitation registration should NOT match Notification events"
+        );
+    }
+
     // -- Decision routing intent tests --
 
     /// A hook returning AllowWithUpdatedInput should not prevent prompt execution
@@ -1916,5 +2349,83 @@ mod tests {
         assert!(result.is_err());
         assert!(!called.load(Ordering::SeqCst));
         assert!(result.unwrap_err().message.contains("Cancelled"));
+    }
+
+    #[tokio::test]
+    async fn test_fire_event_runs_matching_hooks() {
+        let fired = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        struct CountHook(Arc<std::sync::atomic::AtomicU32>);
+
+        #[async_trait::async_trait]
+        impl HookHandler for CountHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                HookDecision::Allow
+            }
+        }
+
+        let (mock, _called) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock))
+            .with_hook(
+                &[HookEventKind::TeammateIdle],
+                None,
+                CountHook(fired.clone()),
+            )
+            .with_hook(
+                &[HookEventKind::TaskCompleted],
+                None,
+                CountHook(fired.clone()),
+            );
+
+        // Fire TeammateIdle — only the first hook matches
+        let event = HookEvent::TeammateIdle {
+            session_id: "s1".into(),
+            teammate_id: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let decisions = agent.fire_event(&event).await;
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+
+        // Fire TaskCompleted — only the second hook matches
+        let event = HookEvent::TaskCompleted {
+            session_id: "s1".into(),
+            task_id: None,
+            task_title: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let decisions = agent.fire_event(&event).await;
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(fired.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_fire_event_returns_block_decision() {
+        struct BlockHook;
+
+        #[async_trait::async_trait]
+        impl HookHandler for BlockHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                HookDecision::Block {
+                    reason: "blocked by test".into(),
+                }
+            }
+        }
+
+        let (mock, _called) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+            &[HookEventKind::PostCompact],
+            None,
+            BlockHook,
+        );
+
+        let event = HookEvent::PostCompact {
+            session_id: "s1".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let decisions = agent.fire_event(&event).await;
+        assert_eq!(decisions.len(), 1);
+        assert!(matches!(decisions[0], HookDecision::Block { .. }));
     }
 }

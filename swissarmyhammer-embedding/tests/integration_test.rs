@@ -3,6 +3,12 @@
 //! These tests exercise the full pipeline: resolve model name → download from
 //! HuggingFace (cached) → load backend → embed text. They hit the network on
 //! first run and use the HF cache thereafter.
+//!
+//! Run with the `embedding-models` nextest profile to include these tests:
+//!   cargo nextest run --profile embedding-models
+//!
+//! They are excluded from the default profile because they require model files
+//! to be present on disk (downloaded from HuggingFace).
 
 use model_embedding::TextEmbedder;
 use swissarmyhammer_embedding::Embedder;
@@ -85,7 +91,8 @@ fn qwen_embedding_similarity() {
             .expect("embed failed");
 
         let sim_code = cosine_similarity(rust_result.embedding(), python_result.embedding());
-        let sim_unrelated = cosine_similarity(rust_result.embedding(), unrelated_result.embedding());
+        let sim_unrelated =
+            cosine_similarity(rust_result.embedding(), unrelated_result.embedding());
 
         assert!(
             sim_code > sim_unrelated,

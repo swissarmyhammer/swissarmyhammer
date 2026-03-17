@@ -1,6 +1,6 @@
 ---
 name: code-context
-description: Code intelligence using the unified code context index. Use this skill when exploring a codebase, finding symbols, tracing call graphs, assessing blast radius, or searching code by pattern. This is the primary tool for understanding code structure and relationships. Agents should prefer this over raw file reads when navigating unfamiliar code.
+description: Use this tool first when you need to understand code structure, find symbols, trace dependencies, or assess the impact of changes. It is faster and more accurate than grepping files or reading directory trees.
 metadata:
   author: "swissarmyhammer"
   version: "1.0"
@@ -9,8 +9,6 @@ metadata:
 # Code Context
 
 The `code_context` tool provides code intelligence powered by tree-sitter parsing, LSP symbol indexing, and call graph analysis. It is the primary tool for exploring and understanding a codebase.
-
-**Use this tool first** when you need to understand code structure, find implementations, trace dependencies, or assess the impact of changes. It is faster and more accurate than grepping files or reading directory trees.
 
 ## Operations
 

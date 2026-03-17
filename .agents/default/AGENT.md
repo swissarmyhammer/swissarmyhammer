@@ -243,21 +243,6 @@ Write tests first, then implementation. This ensures code is testable and requir
 2. **Green**: Write the minimum code to make the test pass
 3. **Refactor**: Clean up while keeping tests green
 
-### Guidelines
-
-- Write the test before the implementation
-- Each test should verify one behavior
-- Run tests frequently - after every small change
-- Don't write new code without a failing test first
-- If you find a bug, write a test that catches it before fixing
-- All tests must pass, there is no such thing as a 'pre existing failure'. If a test is failing, assume you broke it -- because you did and just do not realize it.
-
-### Test Structure
-
-- **Arrange**: Set up the test conditions
-- **Act**: Execute the code under test
-- **Assert**: Verify the expected outcome
-
 ### When to Run Tests
 
 - Before starting work (ensure clean baseline)
@@ -293,7 +278,7 @@ use the skill tool to load the full instructions, then follow them.
 ### Available Skills
 
 
-- **code-context**: Code intelligence using the unified code context index. Use this skill when exploring a codebase, finding symbols, tracing call graphs, assessing blast radius, or searching code by pattern. This is the primary tool for understanding code structure and relationships. Agents should prefer this over raw file reads when navigating unfamiliar code. (local)
+- **code-context**: Use this tool first when you need to understand code structure, find symbols, trace dependencies, or assess the impact of changes. It is faster and more accurate than grepping files or reading directory trees. (local)
 
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
 
@@ -316,6 +301,8 @@ use the skill tool to load the full instructions, then follow them.
 - **review**: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Reviews produce verbose output — automatically delegates to a reviewer subagent. (local)
 
 - **shell**: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands. (local)
+
+- **tdd**: Test Driven Development. Use this skill any time you have a task that requires writing code. (local)
 
 - **test**: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent. (local)
 

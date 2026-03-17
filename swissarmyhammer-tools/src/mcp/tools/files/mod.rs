@@ -17,7 +17,7 @@ pub mod schema;
 pub mod shared_utils;
 pub mod write;
 
-use crate::mcp::tool_registry::{AgentTool, McpTool, ToolContext, ToolRegistry};
+use crate::mcp::tool_registry::{AgentTool, McpTool, ToolContext, ToolRegistry, ValidatorTool};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -48,13 +48,49 @@ static FILE_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     ]
 });
 
-/// Unified file operations tool providing read, write, edit, glob, and grep
-#[derive(Default)]
-pub struct FilesTool;
+static READ_ONLY_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
+    vec![
+        &*READ_FILE as &dyn Operation,
+        &*GLOB_FILES as &dyn Operation,
+        &*GREP_FILES as &dyn Operation,
+    ]
+});
+
+/// Defines which file operations are available
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOperationSubset {
+    /// All operations (read, write, edit, glob, grep) — default behavior
+    All,
+    /// Read-only operations (read, glob, grep) — for validators
+    ReadOnly,
+}
+
+/// Unified file operations tool providing read, write, edit, glob, and grep.
+///
+/// Can be configured with an operation subset to restrict available operations.
+pub struct FilesTool {
+    operations: FileOperationSubset,
+}
+
+impl Default for FilesTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl FilesTool {
+    /// Create a FilesTool with all operations (default, backward compatible)
     pub fn new() -> Self {
-        Self
+        Self {
+            operations: FileOperationSubset::All,
+        }
+    }
+
+    /// Create a read-only FilesTool (read, glob, grep only) for validators
+    pub fn read_only() -> Self {
+        Self {
+            operations: FileOperationSubset::ReadOnly,
+        }
     }
 }
 
@@ -65,11 +101,19 @@ impl McpTool for FilesTool {
     }
 
     fn description(&self) -> &'static str {
-        include_str!("description.md")
+        match self.operations {
+            FileOperationSubset::All => include_str!("description.md"),
+            FileOperationSubset::ReadOnly => "Read-only file operations: read file contents, glob for file patterns, and grep for content search. Write and edit operations are not available.",
+        }
     }
 
     fn schema(&self) -> serde_json::Value {
-        schema::generate_files_mcp_schema(&FILE_OPERATIONS)
+        match self.operations {
+            FileOperationSubset::All => schema::generate_files_mcp_schema(&FILE_OPERATIONS),
+            FileOperationSubset::ReadOnly => {
+                schema::generate_files_mcp_schema(&READ_ONLY_OPERATIONS)
+            }
+        }
     }
 
     fn cli_category(&self) -> Option<&'static str> {
@@ -77,7 +121,13 @@ impl McpTool for FilesTool {
     }
 
     fn is_agent_tool(&self) -> bool {
-        true
+        // Read-only variant is NOT agent-only — validators need it even without agent mode
+        self.operations == FileOperationSubset::All
+    }
+
+    fn is_validator_tool(&self) -> bool {
+        // Only the read-only variant is available to validators
+        self.operations == FileOperationSubset::ReadOnly
     }
 
     async fn execute(
@@ -91,6 +141,22 @@ impl McpTool for FilesTool {
         let mut args = arguments.clone();
         args.remove("op");
 
+        // Reject disallowed operations in read-only mode
+        if self.operations == FileOperationSubset::ReadOnly {
+            match op_str {
+                "write file" | "edit file" => {
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "Operation '{}' is not available in read-only mode. Only 'read file', 'glob files', and 'grep files' are available.",
+                            op_str
+                        ),
+                        None,
+                    ));
+                }
+                _ => {}
+            }
+        }
+
         match op_str {
             "read file" => read::execute_read(args, context).await,
             "write file" => write::execute_write(args, context).await,
@@ -99,11 +165,31 @@ impl McpTool for FilesTool {
             "grep files" => grep::execute_grep(args, context).await,
             "" => {
                 // Infer operation from present keys
-                if arguments.contains_key("old_string") || arguments.contains_key("new_string") {
+                if self.operations == FileOperationSubset::ReadOnly {
+                    // In read-only mode, only infer read operations
+                    if arguments.contains_key("pattern")
+                        && arguments.contains_key("case_insensitive")
+                    {
+                        grep::execute_grep(args, context).await
+                    } else if arguments.contains_key("pattern") {
+                        glob::execute_glob(args, context).await
+                    } else if arguments.contains_key("path") {
+                        read::execute_read(args, context).await
+                    } else {
+                        Err(McpError::invalid_params(
+                            "Cannot determine operation. Provide 'op' field (\"read file\", \"glob files\", or \"grep files\").",
+                            None,
+                        ))
+                    }
+                } else if arguments.contains_key("old_string")
+                    || arguments.contains_key("new_string")
+                {
                     edit::execute_edit(args, context).await
                 } else if arguments.contains_key("content") {
                     write::execute_write(args, context).await
-                } else if arguments.contains_key("pattern") && arguments.contains_key("case_insensitive") {
+                } else if arguments.contains_key("pattern")
+                    && arguments.contains_key("case_insensitive")
+                {
                     grep::execute_grep(args, context).await
                 } else if arguments.contains_key("pattern") {
                     glob::execute_glob(args, context).await
@@ -118,8 +204,13 @@ impl McpTool for FilesTool {
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'read file', 'write file', 'edit file', 'glob files', 'grep files'",
-                    other
+                    "Unknown operation '{}'. Valid operations: {}",
+                    other,
+                    if self.operations == FileOperationSubset::ReadOnly {
+                        "'read file', 'glob files', 'grep files'"
+                    } else {
+                        "'read file', 'write file', 'edit file', 'glob files', 'grep files'"
+                    }
                 ),
                 None,
             )),
@@ -129,6 +220,8 @@ impl McpTool for FilesTool {
 
 #[async_trait]
 impl AgentTool for FilesTool {}
+
+impl ValidatorTool for FilesTool {}
 
 impl swissarmyhammer_common::lifecycle::Initializable for FilesTool {
     fn name(&self) -> &str {
@@ -352,6 +445,115 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), serde_json::json!("grep files"));
         args.insert("pattern".to_string(), serde_json::json!("hello"));
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(temp_dir.path().to_string_lossy()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Read-only mode tests
+    // =========================================================================
+
+    #[test]
+    fn test_read_only_schema_has_3_ops() {
+        let tool = FilesTool::read_only();
+        let schema = tool.schema();
+
+        let op_enum = schema["properties"]["op"]["enum"]
+            .as_array()
+            .expect("op should have enum");
+        assert_eq!(op_enum.len(), 3);
+        assert!(op_enum.contains(&serde_json::json!("read file")));
+        assert!(op_enum.contains(&serde_json::json!("glob files")));
+        assert!(op_enum.contains(&serde_json::json!("grep files")));
+        assert!(!op_enum.contains(&serde_json::json!("write file")));
+        assert!(!op_enum.contains(&serde_json::json!("edit file")));
+    }
+
+    #[test]
+    fn test_read_only_is_not_agent_tool() {
+        let tool = FilesTool::read_only();
+        assert!(!tool.is_agent_tool());
+    }
+
+    #[test]
+    fn test_all_is_agent_tool() {
+        let tool = FilesTool::new();
+        assert!(tool.is_agent_tool());
+    }
+
+    #[tokio::test]
+    async fn test_read_only_rejects_write() {
+        let tool = FilesTool::read_only();
+        let context = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("write file"));
+        args.insert("file_path".to_string(), serde_json::json!("/tmp/test.txt"));
+        args.insert("content".to_string(), serde_json::json!("test"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not available in read-only mode"));
+    }
+
+    #[tokio::test]
+    async fn test_read_only_rejects_edit() {
+        let tool = FilesTool::read_only();
+        let context = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("edit file"));
+        args.insert("file_path".to_string(), serde_json::json!("/tmp/test.txt"));
+        args.insert("old_string".to_string(), serde_json::json!("old"));
+        args.insert("new_string".to_string(), serde_json::json!("new"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not available in read-only mode"));
+    }
+
+    #[tokio::test]
+    async fn test_read_only_allows_read() {
+        let tool = FilesTool::read_only();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        std::fs::write(&test_file, "hello world").unwrap();
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("read file"));
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_read_only_allows_glob() {
+        let tool = FilesTool::read_only();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("glob files"));
+        args.insert("pattern".to_string(), serde_json::json!("*.rs"));
         args.insert(
             "path".to_string(),
             serde_json::json!(temp_dir.path().to_string_lossy()),

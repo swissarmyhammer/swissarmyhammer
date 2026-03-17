@@ -12,7 +12,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::chain::output::LinkOutput;
-use crate::chain::{ChainContext, ChainLink, ChainResult, VALIDATOR_BLOCK_EXIT_CODE};
+use crate::chain::{
+    ChainContext, ChainLink, ChainResult, CTX_FILE_DIFFS, VALIDATOR_BLOCK_EXIT_CODE,
+};
 use crate::context::AvpContext;
 use crate::turn::TurnStateManager;
 use crate::types::HookType;
@@ -101,6 +103,12 @@ impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
                         | HookType::SubagentStart
                         | HookType::PreCompact
                         | HookType::Setup
+                        | HookType::Elicitation
+                        | HookType::ElicitationResult
+                        | HookType::ConfigChange
+                        | HookType::WorktreeCreate
+                        | HookType::TeammateIdle
+                        | HookType::TaskCompleted
                 );
                 if uses_stderr_only {
                     ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
@@ -162,7 +170,7 @@ macro_rules! impl_validator_match_info {
                 self.tool_input.get("file_path").and_then(|v| v.as_str())
             }
             fn session_id(&self) -> &str {
-                &self.common.session_id
+                self.common.session_id.as_deref().unwrap_or_default()
             }
         }
     };
@@ -179,7 +187,7 @@ macro_rules! impl_validator_match_info {
                 None
             }
             fn session_id(&self) -> &str {
-                &self.common.session_id
+                self.common.session_id.as_deref().unwrap_or_default()
             }
         }
     };
@@ -209,6 +217,32 @@ impl_validator_match_info!(crate::types::SubagentStartInput, SubagentStart);
 impl_validator_match_info!(crate::types::SubagentStopInput, SubagentStop);
 impl_validator_match_info!(crate::types::PreCompactInput, PreCompact);
 impl_validator_match_info!(crate::types::SetupInput, Setup);
+
+// New hook types with validator support (no tool fields)
+impl_validator_match_info!(
+    crate::strategy::claude::input::ElicitationInput,
+    Elicitation
+);
+impl_validator_match_info!(
+    crate::strategy::claude::input::ElicitationResultInput,
+    ElicitationResult
+);
+impl_validator_match_info!(
+    crate::strategy::claude::input::ConfigChangeInput,
+    ConfigChange
+);
+impl_validator_match_info!(
+    crate::strategy::claude::input::WorktreeCreateInput,
+    WorktreeCreate
+);
+impl_validator_match_info!(
+    crate::strategy::claude::input::TeammateIdleInput,
+    TeammateIdle
+);
+impl_validator_match_info!(
+    crate::strategy::claude::input::TaskCompletedInput,
+    TaskCompleted
+);
 
 #[async_trait(?Send)]
 impl<I> ChainLink<I> for ValidatorExecutorLink<I>
@@ -242,9 +276,18 @@ where
             }
         };
 
+        // Enrich the context: strip bloated fields, embed diffs as text
+        let diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
+        let context_value = crate::turn::prepare_validator_context(input_json, diffs.as_deref());
+
         let results = self
             .context
-            .execute_rulesets(&rulesets, hook_type, &input_json, changed_files.as_deref())
+            .execute_rulesets(
+                &rulesets,
+                hook_type,
+                &context_value,
+                changed_files.as_deref(),
+            )
             .await;
 
         self.handle_ruleset_results(&results, hook_type, ctx)

@@ -1,0 +1,130 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": { "readTextFile": false, "writeTextFile": false },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": { "streaming": true },
+          "loadSession": true,
+          "mcpCapabilities": { "http": true, "sse": false },
+          "promptCapabilities": {
+            "_meta": { "streaming": true },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent (Playback)",
+          "version": "0.1.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/tmp",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "test-session-validator-tools"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "validator prompt with tool instructions",
+            "type": "text"
+          }
+        ],
+        "sessionId": "test-session-validator-tools"
+      },
+      "response": {
+        "_meta": {
+          "claude_response": "{\"status\": \"failed\", \"message\": \"Found unsafe block at line 5 in src/main.rs. The function `process_data` uses `unsafe { ptr::read(raw) }` which bypasses Rust's safety guarantees. Use safe alternatives like slice::from_raw_parts with proper bounds checking.\"}",
+          "processed": true,
+          "session_messages": 5,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "test-session-validator-tools",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCall": {
+              "callId": "call-mcp-files-001",
+              "toolName": "mcp__swissarmyhammer__files",
+              "status": "in_progress"
+            }
+          }
+        },
+        {
+          "sessionId": "test-session-validator-tools",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "callId": "call-mcp-files-001",
+            "status": "completed",
+            "content": [
+              {
+                "text": "     1\tuse std::ptr;\n     2\t\n     3\tfn process_data(raw: *const u8) -> u8 {\n     4\t    // UNSAFE: reading from raw pointer\n     5\t    unsafe { ptr::read(raw) }\n     6\t}\n     7\t\n     8\tfn main() {\n     9\t    let data: u8 = 42;\n    10\t    let result = process_data(&data as *const u8);\n    11\t    println!(\"Result: {}\", result);\n    12\t}\n",
+                "type": "text"
+              }
+            ]
+          }
+        },
+        {
+          "sessionId": "test-session-validator-tools",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCall": {
+              "callId": "call-mcp-code-context-001",
+              "toolName": "mcp__swissarmyhammer__code_context",
+              "status": "in_progress"
+            }
+          }
+        },
+        {
+          "sessionId": "test-session-validator-tools",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "callId": "call-mcp-code-context-001",
+            "status": "completed",
+            "content": [
+              {
+                "text": "{\"symbols\": [{\"name\": \"process_data\", \"kind\": \"function\", \"file\": \"src/main.rs\", \"start_line\": 3, \"end_line\": 6}]}",
+                "type": "text"
+              }
+            ]
+          }
+        },
+        {
+          "sessionId": "test-session-validator-tools",
+          "update": {
+            "content": {
+              "text": "{\"status\": \"failed\", \"message\": \"Found unsafe block at line 5 in src/main.rs. The function `process_data` uses `unsafe { ptr::read(raw) }` which bypasses Rust's safety guarantees. Use safe alternatives like slice::from_raw_parts with proper bounds checking.\"}",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

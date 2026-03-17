@@ -361,21 +361,6 @@ mod tests {
         e
     }
 
-    /// Make a task with a specific ordinal index (0, 1, 2, ...).
-    /// Generates distinct ordinals using Ordinal::after chain.
-    fn make_task_at(id: &str, title: &str, column: &str, ordinal_idx: usize) -> Entity {
-        let mut ord = Ordinal::first();
-        for _ in 0..ordinal_idx {
-            ord = Ordinal::after(&ord);
-        }
-        let mut e = Entity::new("task", id);
-        e.set("title", json!(title));
-        e.set("body", json!(""));
-        e.set("position_column", json!(column));
-        e.set("position_ordinal", json!(ord.as_str()));
-        e
-    }
-
     /// Make a task with pre-computed fields (as ComputeEngine would populate).
     fn make_task_computed(
         id: &str,

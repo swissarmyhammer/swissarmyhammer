@@ -117,7 +117,10 @@ impl AvpDoctor {
         let mut installed_at: Vec<String> = Vec::new();
 
         for (target, name) in &targets {
-            let path = settings_path(*target);
+            let path = match settings_path(*target) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
             if path.exists() {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {

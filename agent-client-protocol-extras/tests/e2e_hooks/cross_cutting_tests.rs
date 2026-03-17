@@ -34,14 +34,14 @@ async fn unexpected_exit_code_allows() {
     );
 }
 
-/// The all_event_kinds helper should return exactly 7 variants.
+/// The all_event_kinds helper should return exactly 16 variants.
 #[test]
 fn all_event_kinds_is_exhaustive() {
     let kinds = helpers::all_event_kinds();
     assert_eq!(
         kinds.len(),
-        7,
-        "Expected 7 HookEventKind variants, got {}. \
+        16,
+        "Expected 16 HookEventKind variants, got {}. \
          If you added a new variant, update all_event_kinds() and add e2e tests.",
         kinds.len()
     );

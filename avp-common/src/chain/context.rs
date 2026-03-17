@@ -6,6 +6,9 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::error::ValidationError;
 
+/// ChainContext key for per-tool-call file diffs (Vec<FileDiff>).
+pub const CTX_FILE_DIFFS: &str = "file_diffs";
+
 /// Context passed through the chain for state sharing between links.
 #[derive(Debug, Default)]
 pub struct ChainContext {

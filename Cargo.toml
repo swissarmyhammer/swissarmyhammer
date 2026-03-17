@@ -61,6 +61,7 @@ members = [
     "swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
+    "heb",
 ]
 resolver = "2"
 
@@ -217,6 +218,9 @@ model-loader = { path = "model-loader" }
 # Leader election
 swissarmyhammer-leader-election = { path = "swissarmyhammer-leader-election" }
 
+# ZMQ for pub/sub bus
+zmq = "0.10"
+
 # LSP
 swissarmyhammer-lsp = { path = "swissarmyhammer-lsp" }
 lsp-types = "0.97"
@@ -253,6 +257,7 @@ include_dir = "0.7"
 lru = "0.12"
 rquickjs = { version = "0.11", features = ["futures", "loader"] }
 diffy = "0.4.2"
+similar = "2"
 zstd = "0.13"
 memmap2 = "0.9"
 rayon = "1.8"

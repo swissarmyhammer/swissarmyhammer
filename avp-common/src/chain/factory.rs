@@ -7,6 +7,10 @@
 use std::sync::Arc;
 
 use crate::context::AvpContext;
+use crate::strategy::claude::input::{
+    ConfigChangeInput, ElicitationInput, ElicitationResultInput, TaskCompletedInput,
+    TeammateIdleInput, WorktreeCreateInput,
+};
 use crate::turn::TurnStateManager;
 use crate::types::{
     PostToolUseInput, PreToolUseInput, SessionEndInput, SessionStartInput, StopInput,
@@ -113,6 +117,54 @@ impl ChainFactory {
         Chain::new(ValidatorContextStarter::new())
             .add_link(self.validator_link())
             .add_link(StopCleanup::new(self.turn_state.clone()))
+    }
+
+    /// Create a chain for Elicitation hooks.
+    ///
+    /// Elicitation requests user input on behalf of an MCP server. Validators
+    /// can inspect or block elicitation requests.
+    pub fn elicitation_chain(&self) -> Chain<ElicitationInput> {
+        Chain::new(ValidatorContextStarter::new()).add_link(self.validator_link())
+    }
+
+    /// Create a chain for ElicitationResult hooks.
+    ///
+    /// ElicitationResult fires when the user responds to an MCP elicitation.
+    /// Validators can inspect or block based on the user's response.
+    pub fn elicitation_result_chain(&self) -> Chain<ElicitationResultInput> {
+        Chain::new(ValidatorContextStarter::new()).add_link(self.validator_link())
+    }
+
+    /// Create a chain for ConfigChange hooks.
+    ///
+    /// ConfigChange fires when user or project configuration files change.
+    /// Validators can inspect or block configuration changes.
+    pub fn config_change_chain(&self) -> Chain<ConfigChangeInput> {
+        Chain::new(ValidatorContextStarter::new()).add_link(self.validator_link())
+    }
+
+    /// Create a chain for WorktreeCreate hooks.
+    ///
+    /// WorktreeCreate fires when a git worktree is created. Validators can
+    /// inspect or block worktree creation based on branch names or paths.
+    pub fn worktree_create_chain(&self) -> Chain<WorktreeCreateInput> {
+        Chain::new(ValidatorContextStarter::new()).add_link(self.validator_link())
+    }
+
+    /// Create a chain for TeammateIdle hooks.
+    ///
+    /// TeammateIdle fires when an agent teammate goes idle. Validators can
+    /// inspect or block based on which teammate became idle.
+    pub fn teammate_idle_chain(&self) -> Chain<TeammateIdleInput> {
+        Chain::new(ValidatorContextStarter::new()).add_link(self.validator_link())
+    }
+
+    /// Create a chain for TaskCompleted hooks.
+    ///
+    /// TaskCompleted fires when a task is marked complete. Validators can
+    /// inspect or block based on task identity.
+    pub fn task_completed_chain(&self) -> Chain<TaskCompletedInput> {
+        Chain::new(ValidatorContextStarter::new()).add_link(self.validator_link())
     }
 
     /// Get the turn state manager for external access.

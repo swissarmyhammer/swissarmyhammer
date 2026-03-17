@@ -4,18 +4,23 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Hash bytes in memory using SHA-256.
+///
+/// Returns a "sha256:" prefixed hex string.
+pub fn hash_bytes(contents: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(contents);
+    let hash = hasher.finalize();
+    format!("sha256:{:x}", hash)
+}
+
 /// Hash a file's contents using SHA-256.
 ///
 /// Returns `None` if the file doesn't exist or can't be read.
 /// Returns `Some(hash)` with a "sha256:" prefixed hex string if successful.
 pub fn hash_file(path: &Path) -> Option<String> {
     match std::fs::read(path) {
-        Ok(contents) => {
-            let mut hasher = Sha256::new();
-            hasher.update(&contents);
-            let hash = hasher.finalize();
-            Some(format!("sha256:{:x}", hash))
-        }
+        Ok(contents) => Some(hash_bytes(&contents)),
         Err(e) => {
             tracing::trace!("Could not hash file '{}': {}", path.display(), e);
             None
