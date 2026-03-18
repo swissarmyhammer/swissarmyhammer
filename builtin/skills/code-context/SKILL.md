@@ -3,7 +3,7 @@ name: code-context
 description: Use this tool first when you need to understand code structure, find symbols, trace dependencies, or assess the impact of changes. It is faster and more accurate than grepping files or reading directory trees.
 metadata:
   author: "swissarmyhammer"
-  version: "1.0"
+  version: "{{version}}"
 ---
 
 # Code Context

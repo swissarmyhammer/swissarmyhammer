@@ -54,7 +54,8 @@ async fn render_skill_instructions(
     prompt_library: &Arc<RwLock<PromptLibrary>>,
 ) -> Value {
     if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
-        let template_context = TemplateContext::new();
+        let mut template_context = TemplateContext::new();
+        template_context.set("version".to_string(), serde_json::json!(crate::VERSION));
         let prompt_lib = prompt_library.read().await;
         match prompt_lib.render_text(instructions, &template_context) {
             Ok(rendered) => {

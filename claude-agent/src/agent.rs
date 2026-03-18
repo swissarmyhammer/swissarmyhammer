@@ -442,7 +442,11 @@ impl ClaudeAgent {
         agent_library.load_defaults();
 
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::new();
-        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let mut template_context = swissarmyhammer_config::TemplateContext::new();
+        template_context.set(
+            "version".to_string(),
+            serde_json::json!(env!("CARGO_PKG_VERSION")),
+        );
         let mut agents = Vec::new();
         let mut sah_modes = self.sah_modes.write().await;
 

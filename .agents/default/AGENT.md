@@ -302,8 +302,6 @@ use the skill tool to load the full instructions, then follow them.
 
 - **shell**: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands. (local)
 
-- **tdd**: Test Driven Development. Use this skill any time you have a task that requires writing code. (local)
-
 - **test**: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent. (local)
 
 - **test-driven-development**: Use this skill whenever you are about to write or edit source code. Load it before making any code changes — it defines the required workflow of writing a failing test first, then making it pass, then refactoring. No exceptions. (local)

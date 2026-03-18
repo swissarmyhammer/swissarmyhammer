@@ -774,7 +774,11 @@ fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String
     let skills = resolver.resolve_builtins();
 
     let prompt_library = PromptLibrary::default();
-    let template_context = TemplateContext::new();
+    let mut template_context = TemplateContext::new();
+    template_context.set(
+        "version".to_string(),
+        serde_json::json!(env!("CARGO_PKG_VERSION")),
+    );
 
     let project_root =
         std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
@@ -821,10 +825,10 @@ fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String
     Ok(format!("Deployed {} builtin skills", installed_count))
 }
 
-/// Render skill instructions through the prompt library's Liquid template engine.
+/// Render skill instructions and metadata through the prompt library's Liquid template engine.
 ///
-/// This expands `{% include %}` partials so the installed SKILL.md contains
-/// the full rendered content rather than raw Liquid tags.
+/// This expands `{% include %}` partials and `{{version}}` variables so the
+/// installed SKILL.md contains the full rendered content rather than raw Liquid tags.
 fn render_skill_instructions(
     skill: &swissarmyhammer_skills::Skill,
     prompt_library: &PromptLibrary,
@@ -847,6 +851,16 @@ fn render_skill_instructions(
 
     let mut rendered = skill.clone();
     rendered.instructions = rendered_instructions;
+
+    // Render template variables in metadata values (e.g., version: "{{version}}")
+    for value in rendered.metadata.values_mut() {
+        if value.contains("{{") {
+            if let Ok(rendered_value) = prompt_library.render_text(value, template_context) {
+                *value = rendered_value;
+            }
+        }
+    }
+
     rendered
 }
 
@@ -1013,8 +1027,18 @@ fn deploy_single_agent(
             }
         };
 
+    // Render template variables in metadata values (e.g., version: "{{version}}")
+    let mut rendered_agent = agent.clone();
+    for value in rendered_agent.metadata.values_mut() {
+        if value.contains("{{") {
+            if let Ok(rendered_value) = prompt_library.render_text(value, template_context) {
+                *value = rendered_value;
+            }
+        }
+    }
+
     let agent_md_path = agent_dir.join("AGENT.md");
-    let content = format_agent_md(agent, &rendered_instructions);
+    let content = format_agent_md(&rendered_agent, &rendered_instructions);
     fs::write(&agent_md_path, &content)
         .map_err(|e| format!("Failed to write {}: {}", agent_md_path.display(), e))?;
 
@@ -1030,7 +1054,11 @@ fn init_all_agents(global: bool, reporter: &dyn InitReporter) -> Result<String, 
     let agents = resolver.resolve_builtins();
 
     let prompt_library = PromptLibrary::default();
-    let template_context = TemplateContext::new();
+    let mut template_context = TemplateContext::new();
+    template_context.set(
+        "version".to_string(),
+        serde_json::json!(env!("CARGO_PKG_VERSION")),
+    );
 
     let project_root =
         std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
@@ -1111,6 +1139,15 @@ fn format_agent_md(agent: &swissarmyhammer_agents::Agent, rendered_instructions:
 
     if agent.background {
         content.push_str("background: true\n");
+    }
+
+    if !agent.metadata.is_empty() {
+        content.push_str("metadata:\n");
+        let mut keys: Vec<_> = agent.metadata.keys().collect();
+        keys.sort();
+        for key in keys {
+            content.push_str(&format!("  {}: \"{}\"\n", key, agent.metadata[key]));
+        }
     }
 
     content.push_str("---\n\n");

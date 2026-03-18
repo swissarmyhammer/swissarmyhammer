@@ -3,7 +3,7 @@ name: test-loop
 description: Continuously run tests, create failure cards, and delegate fixes to /implement until the suite is fully green. Uses ralph to prevent stopping between iterations.
 metadata:
   author: "swissarmyhammer"
-  version: "1.0"
+  version: "0.9.2"
 ---
 
 # Test Loop
