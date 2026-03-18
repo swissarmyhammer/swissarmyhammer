@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
-  closestCorners,
+  pointerWithin,
   PointerSensor,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -47,6 +48,63 @@ interface BoardViewProps {
 type ColumnLayout = Map<string, string[]>;
 
 type DragType = "task" | "column";
+
+/**
+ * Custom collision detection for Kanban boards.
+ *
+ * All targeting is driven purely by pointer position — never by the dragged
+ * element's bounding rect. This ensures the drop target, column highlight,
+ * and drag ghost all agree: wherever the cursor is, that's the target.
+ *
+ * 1. pointerWithin finds every droppable whose rect contains the pointer.
+ * 2. If the pointer is inside a column drop zone AND a task item, the task
+ *    wins (gives us before/after positioning).
+ * 3. If only inside a column zone (empty area), the column wins (append).
+ * 4. For column-to-column drags, pointerWithin on the column sortables
+ *    determines reorder position.
+ * 5. Fallback: find the closest droppable to the pointer (not the rect).
+ */
+const kanbanCollisionDetection: CollisionDetection = (args) => {
+  // pointerWithin checks which droppable rects contain the pointer
+  const pointerCollisions = pointerWithin(args);
+
+  if (pointerCollisions.length > 0) {
+    // Prefer task-level collisions over column-level ones for positioning
+    const taskCollision = pointerCollisions.find(
+      (c) => typeof c.id === "string" && !c.id.startsWith("drop:"),
+    );
+    if (taskCollision) return [taskCollision];
+
+    // Otherwise return whatever the pointer is over (column zone, sortable column)
+    return pointerCollisions;
+  }
+
+  // Pointer isn't inside any droppable — find the closest one by measuring
+  // distance from the pointer to each droppable's center. This uses the
+  // pointer position (not the dragged rect) so it stays consistent.
+  if (!args.pointerCoordinates) return [];
+
+  const { pointerCoordinates, droppableContainers, droppableRects } = args;
+  let closest: { id: string; distance: number } | null = null;
+
+  for (const container of droppableContainers) {
+    const id = container.id as string;
+    const rect = droppableRects.get(id);
+    if (!rect) continue;
+
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const dx = pointerCoordinates.x - centerX;
+    const dy = pointerCoordinates.y - centerY;
+    const distance = dx * dx + dy * dy;
+
+    if (!closest || distance < closest.distance) {
+      closest = { id, distance };
+    }
+  }
+
+  return closest ? [{ id: closest.id }] : [];
+};
 
 export function BoardView({ board, tasks }: BoardViewProps) {
   const boardPath = useActiveBoardPath();
@@ -426,7 +484,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     <FocusScope moniker={boardMoniker} commands={boardCommands} className="flex flex-col flex-1 min-h-0 relative">
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
+        collisionDetection={kanbanCollisionDetection}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
