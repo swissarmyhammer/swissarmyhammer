@@ -81,3 +81,13 @@ async fn render_skill_instructions(
     }
     value
 }
+
+/// Test-only entry point for `render_skill_instructions`.
+#[cfg(test)]
+pub async fn render_skill_instructions_for_test(
+    value: Value,
+    prompt_library: &Arc<RwLock<PromptLibrary>>,
+    arguments: Option<&str>,
+) -> Value {
+    render_skill_instructions(value, prompt_library, arguments).await
+}

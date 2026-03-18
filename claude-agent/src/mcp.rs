@@ -285,7 +285,7 @@ impl McpServerManager {
                 },
                 "clientInfo": {
                     "name": "claude-agent",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": crate::VERSION
                 }
             }
         });
@@ -509,7 +509,7 @@ impl McpServerManager {
                 },
                 "clientInfo": {
                     "name": "claude-agent",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": crate::VERSION
                 }
             }
         });
@@ -878,7 +878,7 @@ impl McpServerManager {
                 },
                 "clientInfo": {
                     "name": "claude-agent",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": crate::VERSION
                 }
             }
         });

@@ -623,7 +623,7 @@ impl EnhancedMcpServerManager {
                 },
                 "clientInfo": {
                     "name": "claude-agent",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": crate::VERSION
                 }
             }
         });
@@ -928,7 +928,7 @@ impl EnhancedMcpServerManager {
                 },
                 "clientInfo": {
                     "name": "claude-agent",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": crate::VERSION
                 }
             }
         });
