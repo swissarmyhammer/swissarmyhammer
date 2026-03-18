@@ -298,11 +298,9 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
         Ok(canonical) => {
             let payload = json!({ "path": canonical.display().to_string() });
 
-            // Emit board-opened to the source window only
+            // Emit board-opened to the source window only (emit_to scopes to one window)
             if let Some(label) = source_window_label {
-                if let Some(window) = handle.get_webview_window(label) {
-                    let _ = window.emit("board-opened", &payload);
-                }
+                let _ = handle.emit_to(label, "board-opened", &payload);
             }
 
             let _ = handle.emit("board-changed", ());

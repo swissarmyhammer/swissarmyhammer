@@ -1,8 +1,8 @@
 ---
 assignees:
 - assistant
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffe480
 title: Remove tauri-plugin-window-state and add main window geometry persistence
 ---
 ## What

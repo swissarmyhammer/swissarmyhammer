@@ -3,8 +3,8 @@ assignees:
 - assistant
 depends_on:
 - 01KKYR690S88SENAN2HVB6X5BJ
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffe580
 title: Add shutdown-aware window close handler
 ---
 ## What

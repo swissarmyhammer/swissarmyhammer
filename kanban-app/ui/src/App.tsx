@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
@@ -62,6 +63,7 @@ interface EntityCreatedEvent {
   entity_type: string;
   id: string;
   fields: Record<string, unknown>;
+  board_path?: string;
 }
 
 /** Payload for entity-removed Tauri event. */
@@ -69,6 +71,7 @@ interface EntityRemovedEvent {
   kind: "entity-removed";
   entity_type: string;
   id: string;
+  board_path?: string;
 }
 
 /** Payload for entity-field-changed Tauri event. */
@@ -80,6 +83,7 @@ interface EntityFieldChangedEvent {
   /** Full entity state including computed fields. Present for own-command
    *  events; absent for external file-watcher events. */
   fields?: Record<string, unknown>;
+  board_path?: string;
 }
 
 /** A panel entry is just an entity reference — entity type + id. */
@@ -238,7 +242,8 @@ function App() {
   useEffect(() => {
     const unlisteners = [
       listen<EntityCreatedEvent>("entity-created", (event) => {
-        const { entity_type, id } = event.payload;
+        const { entity_type, id, board_path } = event.payload;
+        if (board_path && activeBoardPathRef.current && board_path !== activeBoardPathRef.current) return;
         if (entity_type === "column" || entity_type === "swimlane") {
           refresh();
           return;
@@ -262,7 +267,8 @@ function App() {
           });
       }),
       listen<EntityRemovedEvent>("entity-removed", (event) => {
-        const { entity_type, id } = event.payload;
+        const { entity_type, id, board_path } = event.payload;
+        if (board_path && activeBoardPathRef.current && board_path !== activeBoardPathRef.current) return;
         if (entity_type === "column" || entity_type === "swimlane") {
           refresh();
         } else {
@@ -270,7 +276,8 @@ function App() {
         }
       }),
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        const { entity_type, id, fields: fullFields } = event.payload;
+        const { entity_type, id, fields: fullFields, board_path } = event.payload;
+        if (board_path && activeBoardPathRef.current && board_path !== activeBoardPathRef.current) return;
 
         const applyEntity = (entity: Entity) => {
           const replaceById = (entities: Entity[]) =>
@@ -301,9 +308,9 @@ function App() {
             });
         }
       }),
-      // board-opened: emitted only to the window that initiated the open.
-      // Switch this window to the newly opened board.
-      listen<{ path: string }>("board-opened", async (event) => {
+      // board-opened: emitted only to the window that initiated the open (via emit_to).
+      // Use window-scoped listen for defense-in-depth.
+      getCurrentWindow().listen<{ path: string }>("board-opened", async (event: { payload: { path: string } }) => {
         const newPath = event.payload.path;
         setActiveBoardPath(newPath);
         activeBoardPathRef.current = newPath;
@@ -350,7 +357,7 @@ function App() {
     ];
     return () => {
       for (const p of unlisteners) {
-        p.then((fn) => fn());
+        p.then((fn: () => void) => fn());
       }
     };
   }, [refresh]);

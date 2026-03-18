@@ -1501,6 +1501,7 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         }
     }
     {
+        let board_path_str = kanban_root.display().to_string();
         let mut search_idx = handle.search_index.write().await;
         for evt in events {
             crate::watcher::sync_search_index(&mut search_idx, &evt);
@@ -1509,7 +1510,11 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                 crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
                 crate::watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
             };
-            let _ = app.emit(event_name, &evt);
+            let wrapped = crate::watcher::BoardWatchEvent {
+                event: evt,
+                board_path: board_path_str.clone(),
+            };
+            let _ = app.emit(event_name, &wrapped);
         }
     }
 }

@@ -1,8 +1,8 @@
 ---
 assignees:
 - assistant
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffe680
 title: Fix frontend restore_windows gating
 ---
 ## What

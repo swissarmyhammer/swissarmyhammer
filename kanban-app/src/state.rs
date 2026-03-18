@@ -157,6 +157,7 @@ impl BoardHandle {
         let kanban_root = self.ctx.root().to_path_buf();
         let cache = self.entity_cache.clone();
         let search_index = self.search_index.clone();
+        let board_path_str = kanban_root.display().to_string();
 
         match watcher::start_watching(kanban_root.clone(), cache, move |evt| {
             use tauri::Emitter;
@@ -171,7 +172,11 @@ impl BoardHandle {
                 watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
                 watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
             };
-            let _ = app_handle.emit(event_name, &evt);
+            let wrapped = watcher::BoardWatchEvent {
+                event: evt,
+                board_path: board_path_str.clone(),
+            };
+            let _ = app_handle.emit(event_name, &wrapped);
         }) {
             Ok(w) => {
                 tracing::info!(
