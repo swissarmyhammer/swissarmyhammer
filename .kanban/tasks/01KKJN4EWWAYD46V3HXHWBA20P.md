@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffff8480
+position_ordinal: ffffffc780
 title: '[blocker] `LeaderElection` uses MD5 for path hashing — collision risk for lock-file uniqueness'
 ---
 **File:** `swissarmyhammer-leader-election/src/election.rs` line 142\n**Severity:** blocker\n\n`hash_path` uses MD5 and truncates to 12 hex characters (48 bits). MD5 is cryptographically broken and, more practically, the 12-character truncation means only 48 bits of the digest are used. Two different workspace paths that collide in those 48 bits would share a lock file, silently serialising unrelated processes or preventing either from becoming leader.\n\nMD5 is also not in the workspace's standard dependency set — it was likely pulled in just for this. The standard library's `DefaultHasher` is not stable across processes/versions, but `std::hash` + `seahash` or `xxhash` (already common in Rust ecosystems) would be better choices, or simply hex-encode a longer SHA-256 prefix via `sha2`.\n\n**Fix:** Replace with a non-cryptographic hash with better avalanche properties and use at least 16 hex chars, or use the full 32-char MD5 hex digest instead of truncating." #review-finding

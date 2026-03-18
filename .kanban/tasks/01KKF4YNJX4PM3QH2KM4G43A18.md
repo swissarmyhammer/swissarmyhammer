@@ -3,7 +3,7 @@ depends_on:
 - 01KKF4XH1HH7S14DYTYXSPZ3N5
 - 01KKF4Y930C9DWTYJC8NF0X57C
 position_column: done
-position_ordinal: ed80
+position_ordinal: ff9f80
 title: Wire semantic diffs into review flow for range-based reviews
 ---
 **Files**: `builtin/skills/review/SKILL.md`, possibly `swissarmyhammer-tools/src/mcp/tools/git/changes/mod.rs`

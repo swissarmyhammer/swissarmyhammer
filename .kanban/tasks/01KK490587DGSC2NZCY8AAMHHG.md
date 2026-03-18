@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffab80
+position_ordinal: ffffe080
 title: Wire @actor into EditableMarkdown and remark display
 ---
 Wire @actor (and all mentionable entity types) into EditableMarkdown and remark display.

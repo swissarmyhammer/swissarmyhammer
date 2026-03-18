@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: c9
+position_ordinal: e680
 title: Extract ProjectStructure as Initializable component
 ---
 ## What

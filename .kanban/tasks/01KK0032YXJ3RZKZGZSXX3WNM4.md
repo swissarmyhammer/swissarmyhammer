@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: fff180
+position_ordinal: ffffa780
 title: 'Migrate React to event-driven rendering: replace refresh() with event listeners'
 ---
 Rewrite React's state management to be event-driven. React maintains a local entity mirror updated by Rust events instead of polling via `refresh()`.

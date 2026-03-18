@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: d4
+position_ordinal: f680
 title: 'Bug: kanban update task does not persist depends_on'
 ---
 ## What

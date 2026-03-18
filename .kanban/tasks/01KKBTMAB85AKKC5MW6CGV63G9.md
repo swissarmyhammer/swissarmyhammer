@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: b4
+position_ordinal: c280
 title: 'SHELL-3: Permit/deny evaluation engine with permit-first semantics'
 ---
 ## What

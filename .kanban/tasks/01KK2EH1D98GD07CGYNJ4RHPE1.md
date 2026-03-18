@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ffff8b80
+position_ordinal: ffffc080
 title: Create builtin tasks-grid.yaml view definition
 ---

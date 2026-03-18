@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: e780
+position_ordinal: ff9780
 title: Add list_entities and get_entity Tauri commands
 ---
 Add generic list_entities and get_entity commands to commands.rs with task enrichment

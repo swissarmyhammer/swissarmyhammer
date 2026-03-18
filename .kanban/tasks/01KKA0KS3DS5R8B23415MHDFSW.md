@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: a2
+position_ordinal: a480
 title: Fix triple-initialization race condition
 ---
 ## What

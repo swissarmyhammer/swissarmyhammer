@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: b2
+position_ordinal: be80
 title: Gate query operations on indexing readiness
 ---
 ## What

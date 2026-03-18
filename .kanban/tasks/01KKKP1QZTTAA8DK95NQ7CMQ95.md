@@ -2,7 +2,7 @@
 depends_on:
 - 01KKKP1BTZ4GZXMC18WSHZXBHZ
 position_column: done
-position_ordinal: f3
+position_ordinal: ffa880
 title: Remove js tool usage from test skill
 ---
 ## What

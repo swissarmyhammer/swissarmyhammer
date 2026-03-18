@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKM7RX9ZTK4VKMB6P9NPWHWW
 position_column: done
-position_ordinal: ffffff9c80
+position_ordinal: ffffffe080
 title: Update swissarmyhammer-common directory alias and all consumers
 ---
 ## What

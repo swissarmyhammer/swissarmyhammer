@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKSW5P87FEMVWSN21EHVRV8D
 position_column: done
-position_ordinal: ffffffb280
+position_ordinal: fffffff780
 title: Add percent_complete computed field to board entity
 ---
 ## What

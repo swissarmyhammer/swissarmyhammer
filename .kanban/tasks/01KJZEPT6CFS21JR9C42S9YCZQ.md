@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffb880
+position_ordinal: ffed80
 title: Vim ':' keybinding no longer opens command palette
 ---
 In vim mode, typing `:` no longer opens the command palette, though `Cmd+Shift+P` still works fine.\n\nThe binding table has `\":\" -> \"app.command\"` and `normalizeKeyEvent` correctly produces `\":\"` for Shift+;. The global keydown handler at the document level should match this.\n\nSuspected causes:\n1. DOM focus may be landing in an editable element (EditableMarkdown title input) after clicking a card via FocusScope, and the input captures `:` before the global handler\n2. The editable element may have a keydown handler with stopPropagation\n3. The global handler doesn't skip regular inputs (only `.cm-editor`), so there may be a conflict\n\nFiles: `ui/src/lib/keybindings.ts`, `ui/src/components/focus-scope.tsx`, `ui/src/components/editable-markdown.tsx`\n\n- [ ] Investigate where DOM focus lands after clicking a card with FocusScope\n- [ ] Check if EditableMarkdown or other editable components intercept single-character keydown events\n- [ ] Add input/textarea/select skip logic to the global keydown handler for non-modifier bindings in vim mode\n- [ ] Test: click card, then press `:` — palette should open\n- [ ] Test: while editing a title, `:` should type normally (not open palette)\n- [ ] Run tests to verify no regressions #bug

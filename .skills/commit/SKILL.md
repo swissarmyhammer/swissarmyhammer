@@ -84,6 +84,9 @@ Create a git commit with a well-crafted conventional commit message.
 
 ## Process
 
+- **Detect project types** using `code_context` → `detect projects` to identify formatters and linters
+- **Run formatters** for each detected project type before staging (e.g., `cargo fmt` for Rust, `go fmt ./...` for Go, `npx prettier --write .` for Node.js)
+- **Run linters** if the project has them (e.g., `cargo clippy -- -D warnings` for Rust)
 - Evaluate the current `git status`, determine which files need to be added
 - Clean up your scratch and temporary files
 - Look for files that were modified and need to be part of the commit

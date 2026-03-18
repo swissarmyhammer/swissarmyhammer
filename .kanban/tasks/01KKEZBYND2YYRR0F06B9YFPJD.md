@@ -5,7 +5,7 @@ depends_on:
 - 01KKEZAWBW9NMJWNPA0JY7PYTJ
 - 01KKEZBH4FK62AN2Z3BT0MCMY8
 position_column: done
-position_ordinal: d680
+position_ordinal: fb80
 title: Refactor statusline to use LSP registry instead of raw SQL
 ---
 ## What

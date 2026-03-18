@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffec80
+position_ordinal: ffffa280
 title: File watcher for concurrent access with hash-based change detection
 ---
 Watch the `.kanban/` directory for external file changes and feed them through the same event system as user actions.

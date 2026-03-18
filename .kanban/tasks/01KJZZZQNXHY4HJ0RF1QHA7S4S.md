@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffd380
+position_ordinal: ffff8980
 title: Create swissarmyhammer-commands crate with Command trait and CommandContext
 ---
 Create the new `swissarmyhammer-commands` crate that depends on `swissarmyhammer-entity`.
