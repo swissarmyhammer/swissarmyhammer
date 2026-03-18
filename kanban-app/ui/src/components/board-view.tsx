@@ -361,9 +361,14 @@ export function BoardView({ board, tasks }: BoardViewProps) {
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
-      // Cancel backend drag session — same-window drops are handled by @dnd-kit.
-      // Only for task drags (column drags never start a session).
-      if (dragTypeRef.current === "task") cancelSession();
+      // For task drags with a valid drop target, cancel the drag session —
+      // the intra-window @dnd-kit drop handles the move directly.
+      // If there's NO drop target (pointer left the window), do NOT cancel —
+      // the OS drag or target window may still complete the cross-window drop.
+      // The session auto-cancels when the OS drag ends without a drop.
+      if (dragTypeRef.current === "task" && event.over) {
+        cancelSession();
+      }
 
       if (dragTypeRef.current === "column") {
         const colOrder = virtualColumnOrder ?? columnIdList;

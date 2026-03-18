@@ -64,6 +64,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
         <div
           ref={ref}
           style={style}
+          data-entity-card={entity.id}
           className={`rounded-md bg-card px-3 py-2 text-sm border border-border hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 overflow-hidden ${
             isBlocked ? "opacity-50" : ""
           }`}
