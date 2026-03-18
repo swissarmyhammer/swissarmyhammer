@@ -406,7 +406,11 @@ impl AppState {
         {
             let boards = self.boards.read().await;
             if !boards.is_empty() {
-                tracing::info!(count = boards.len(), "auto_open_board: restored {} board(s) from config", boards.len());
+                tracing::info!(
+                    count = boards.len(),
+                    "auto_open_board: restored {} board(s) from config",
+                    boards.len()
+                );
                 return;
             }
         }
@@ -532,9 +536,7 @@ impl AppState {
     /// If the closed board was the active board, switches to another open board
     /// (if any) or sets active to None.
     pub async fn close_board(&self, path: &Path) -> Result<(), String> {
-        let canonical = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         // Collect remaining board paths inside the write lock, then drop it
         // before touching config. This avoids the lock-ordering hazard where

@@ -310,8 +310,8 @@ impl HookInputBuilder {
     /// Build a CommonInput struct with given session and hook type.
     pub fn common_input(session_id: &str, hook_type: HookType) -> CommonInput {
         CommonInput {
-            session_id: session_id.to_string(),
-            transcript_path: "/tmp/transcript.jsonl".to_string(),
+            session_id: Some(session_id.to_string()),
+            transcript_path: Some("/tmp/transcript.jsonl".to_string()),
             cwd: "/tmp".to_string(),
             permission_mode: "default".to_string(),
             hook_event_name: hook_type,

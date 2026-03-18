@@ -1,0 +1,6 @@
+# Shell runtime data
+# This file is automatically created by swissarmyhammer-directory
+
+# Ignore everything except this gitignore
+*
+!.gitignore

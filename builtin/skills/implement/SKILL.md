@@ -5,7 +5,7 @@ context: fork
 agent: implementer
 metadata:
   author: swissarmyhammer
-  version: "3.0"
+  version: "{{version}}"
 ---
 
 {% include "_partials/detected-projects" %}

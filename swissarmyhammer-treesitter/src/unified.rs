@@ -62,7 +62,7 @@ enum WorkspaceMode {
         /// The database for persistent storage (internally thread-safe)
         db: Arc<IndexDatabase>,
         /// Guard that holds the leader lock (released on drop)
-        _guard: LeaderGuard,
+        _guard: Box<LeaderGuard>,
     },
     /// This process reads from the database only
     Reader {
@@ -1152,6 +1152,7 @@ fn tree_sitter_query_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_leader_election::NullMessage;
     use tempfile::TempDir;
 
     /// High similarity threshold for duplicate detection tests
@@ -2420,7 +2421,7 @@ fn transform_items(values: &[i32]) -> Vec<i32> {
         let _workspace = open_and_wait(dir.path()).await;
 
         // Should be able to become leader again (lock released)
-        let election = LeaderElection::new(dir.path());
+        let election: LeaderElection<NullMessage> = LeaderElection::new(dir.path());
         let result = election.try_become_leader();
         assert!(
             result.is_ok(),

@@ -4,6 +4,7 @@ description: Subagent for running tests and analyzing results. Delegate test exe
 model: default
 tools: "*"
 max-turns: 25
+version: "{{version}}"
 ---
 
 You are a test execution subagent. Your job is to run the test suite and type checks, then report results concisely.

@@ -13,7 +13,7 @@ parameters:
     description: The rule instructions (markdown body) or RuleSet context
     required: true
   - name: hook_context
-    description: The hook event context as JSON
+    description: The hook event context (pre-formatted as YAML or diff blocks)
     required: true
   - name: hook_type
     description: The type of hook event (PreToolUse, PostToolUse, etc.)
@@ -41,9 +41,7 @@ This RuleSet contains {{ rule_count }} rule(s) that will be evaluated sequential
 
 ## Hook Event Context
 
-```json
 {{ hook_context }}
-```
 
 {% if changed_files %}
 ## Files Changed This Turn
@@ -60,7 +58,12 @@ Analyze this hook event against the validator instructions above.
 
 ## Analysis Process
 
-**Use tools as needed during your analysis.** Many validators specify MCP tools to use (like treesitter_duplicates for code quality checks). Call these tools before making your decision.
+**Use tools as needed during your analysis.** You may have access to the following MCP tools:
+
+- **files** (read-only): Read file contents (`op: "read file"`), search by pattern (`op: "glob files"`), or search file contents (`op: "grep files"`). Use this to inspect source code mentioned in the hook context.
+- **code_context**: Look up symbols (`op: "get symbol"`), search symbols (`op: "search symbol"`), trace call graphs (`op: "get callgraph"`), analyze blast radius (`op: "get blastradius"`), and grep indexed code (`op: "grep code"`). Use this for deeper code analysis.
+
+When a validator's instructions reference specific files or code patterns, use these tools to verify the actual code before making your decision. Do NOT guess about file contents — read them.
 
 After completing your analysis with any required tool calls, provide your final decision.
 
@@ -72,7 +75,7 @@ Once you have completed your analysis (including any tool calls), respond with v
 ```json
 {
   "status": "passed",
-  "message": "Brief explanation of why validation passed"
+  "message": "Very brief explanation of why validation passed"
 }
 ```
 

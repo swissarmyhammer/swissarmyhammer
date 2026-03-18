@@ -3,7 +3,7 @@ name: plan
 description: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban cards as the plan artifact.
 metadata:
   author: "swissarmyhammer"
-  version: "1.2"
+  version: "0.9.2"
 ---
 
 ## Project Detection
@@ -70,49 +70,26 @@ Write tests first, then implementation. This ensures code is testable and requir
 
 # Plan
 
-Use this skill whenever you enter Plan Mode or the user asks you to plan work. The output of planning is a kanban board with cards and subtasks — NOT a markdown plan file.
+Use this skill whenever you enter Plan Mode or the user asks you to plan work.
 
-## The Rule: Plans Are Kanban Cards
+## Goals
 
-Do NOT write a plan as a markdown document. Do NOT use built-in task tools (TodoWrite, TaskCreate, TaskUpdate). Every planned work item becomes a kanban card with subtasks. The kanban board IS the plan.
+1. **Understand the work** — research the codebase deeply enough to know what needs to change and what will be affected.
+2. **Produce a kanban board** — the plan artifact is kanban cards with subtasks. Not a markdown document, not built-in task tools (TodoWrite, TaskCreate, TaskUpdate).
+3. **Right-size the cards** — each card is a single focused unit of work that can be independently implemented and verified.
+4. **Collaborate with the user** — present cards, discuss, iterate, and refine until the user is satisfied with the plan.
+5. **Hand off cleanly** — when planning is complete, remind the user they can execute with `/implement-loop` (autonomous) or `/implement` (one card at a time).
 
-When asking the user to review or approve the plan, present the kanban cards as the plan summary. Each card's title and description should clearly communicate the work to be done, and the subtasks should break it down into actionable steps. Expect the user to provide feedback on the cards themselves — they might ask you to add more detail to a card, split a card into two, or rearrange dependencies. This is how the plan evolves.
+## Constraints
 
-There is no need for a plan markdown file — the kanban cards ARE the plan.
+### Plans are kanban cards
+Every planned work item becomes a kanban card. The kanban board IS the plan. No markdown plan files. When presenting the plan, show the cards.
 
-## How to Execute in Claude Code Plan Mode
+### Research before cards
+Use `code_context` as the primary research tool. Always check blast radius (`op: "get blastradius"`) on files you expect to change — this is how you discover downstream work you'd otherwise miss. Use symbol search, call graphs, and text search (Glob/Grep/Read) to fill in the picture.
 
-When you enter Plan Mode (via EnterPlanMode), follow these steps:
-
-### 1. Ensure the kanban board exists
-
-Use `kanban` with `op: "init board"`, `name: "<workspace name>"` — name it for the overall workspace or repository, not for the specific feature being planned. If the board already exists, this is a no-op; don't worry about it, just move on to research.
-
-### 2. Read the spec (if provided)
-
-If the user provided a file path (e.g., `/plan my-spec.md`), read that file first. It contains the requirements, goals, or context for the plan. Parse it thoroughly before exploring the codebase — the spec tells you what to look for.
-
-If no file was provided, the user's message or conversation context IS the spec. Proceed with what you know, and use the `question` tool to ask clarifying questions if the goal is unclear.
-
-### 3. Research the codebase
-
-Explore thoroughly using `code_context` as your primary research tool. Follow this sequence:
-
-1. **Check index health** — `code_context` with `op: "get status"`. If indexing is incomplete, wait or trigger a build.
-2. **Find relevant symbols** — `code_context` with `op: "search symbol"` using domain keywords from the spec. Use `op: "get symbol"` to read implementations.
-3. **Map the blast radius** — for each file or symbol you expect to change, run `code_context` with `op: "get blastradius"` to discover what depends on it. This is how you find work you'd otherwise miss — the blast radius reveals callers, downstream consumers, and tests that will be affected.
-4. **Trace call chains** — `code_context` with `op: "get callgraph"` and `direction: "inbound"` on key symbols to understand who depends on them, and `direction: "outbound"` to understand what they depend on.
-5. **Fill gaps with text search** — use Glob, Grep, and Read for string literals, config files, or patterns that aren't captured by symbol indexing.
-
-The blast radius is the most important research step. It turns a vague "this file needs to change" into a concrete map of every symbol and file that could be affected. Use it to size cards accurately and to avoid missing downstream work.
-
-### 4. Create kanban cards as you discover work
-
-As you identify each work item, create a kanban card immediately. Don't wait until you have a complete picture — each discovery becomes a card.
-
-For each work item: use `kanban` with `op: "add task"`, `title: "<what to implement>"`, `description: "<detailed context, affected files, approach>"`
-
-**Every card description MUST include these sections:**
+### Every card must be actionable
+Card descriptions MUST include:
 
 ```
 ## What
@@ -120,47 +97,15 @@ For each work item: use `kanban` with `op: "add task"`, `title: "<what to implem
 
 ## Acceptance Criteria
 - [ ] <observable outcome that proves the work is done>
-- [ ] <another criterion>
 
 ## Tests
 - [ ] <specific test to write or update, with file path>
 - [ ] <test command to run and expected result>
 ```
 
-A card without acceptance criteria and tests is not a valid card. These sections ensure that when the card is picked up for implementation, the definition of "done" is unambiguous and verifiable.
+A card without acceptance criteria and tests is not a valid card. Include enough context that someone reading only the card (not the spec) can implement it.
 
-Subtasks go in the card's `description` as GitHub Flavored Markdown checklists (`- [ ]` items). Include them when creating the card, or use `op: "update task"` to add them later. There is no separate "add subtask" API — subtasks live in the description.
-
-Set dependencies between cards: use `kanban` with `op: "update task"`, `id: "<task-id>"`, `depends_on: ["<blocker-task-id>"]`
-
-### 5. Present the plan and discuss
-
-When you believe the initial plan is complete, present a summary to the user. List each card with its title, a one-line description of what it covers, and any dependencies. This gives the user a clear picture of the planned work.
-
-**Stay conversational.** After presenting the summary, invite the user to discuss, ask questions, and iterate. They might want to:
-- Add more detail to a card or split it into multiple cards
-- Merge cards that feel too granular
-- Rearrange dependencies or reorder work
-- Add cards you missed or remove ones that aren't needed
-- Ask clarifying questions about your approach
-
-Update the kanban cards based on their feedback. The planning conversation continues until the user is satisfied — do NOT call ExitPlanMode yourself. Let the user decide when the plan is ready. If they ask to proceed, approve the plan, or start implementation, then you can exit plan mode.
-
-## How to Execute as an Autonomous Agent
-
-Follow the planning process described in the `PLANNING_GUIDE.md` resource file bundled with this skill. As you work through each phase, add kanban cards for the work items you discover.
-
-## Updating an Existing Plan
-
-If the user asks to revise or extend the plan, update the kanban cards directly:
-- Add new cards for new work
-- Update existing cards with `op: "update task"`
-- Remove obsolete cards with `op: "delete task"`
-- Reorder dependencies as needed
-
-## Card Sizing
-
-A card should represent a single, focused unit of work. Use these limits to keep cards right-sized:
+### Card sizing limits
 
 | Dimension | Target | Split when |
 |-----------|--------|------------|
@@ -169,25 +114,32 @@ A card should represent a single, focused unit of work. Use these limits to keep
 | Subtasks | 3–5 per card | > 5 subtasks |
 | Concerns | 1 per card | Multiple distinct concerns |
 
-### Why these limits matter
+The subtask cap is the most important constraint. More than 5 subtasks means the card bundles multiple concerns — split along natural seams (different files, layers, or concerns) and link with `depends_on`. Two small cards with a dependency beat one mega-card.
 
-- **Subtask cap is the most important lever.** If a card needs more than 5 subtasks, it is bundling multiple concerns. Extract groups of related subtasks into their own cards with dependencies between them.
-- **A subtask is a single code change** — add a function, modify a struct, update a test file. If a subtask itself feels like a project, it should be its own card.
-- **Small cards are fine.** Some cards are legitimately 50–100 lines (add a field, wire a dependency). The floor is not a target — only the ceiling matters.
-- **When in doubt, split.** Two small cards with a dependency are always better than one mega-card with a long checklist.
+### Subtasks are checklist items in the description
+Subtasks go in the card's `description` as GFM checklists (`- [ ]` items). There is no separate "add subtask" API.
 
-### How to split an oversized card
+### Board naming
+Name the board for the workspace/repository, not the specific feature being planned.
 
-1. Look for natural seam lines: different files, different layers (data model vs. API vs. UI), different concerns (validation vs. persistence vs. rendering).
-2. Extract each group into its own card with a clear title and description.
-3. Add `depends_on` links so execution order is preserved.
-4. Each resulting card should independently pass tests when complete.
+### User controls plan mode exit
+Do NOT call ExitPlanMode yourself. The user decides when the plan is ready.
 
-## Guidelines
+### No auto-implementation on exit
+When the user exits plan mode or approves the plan, do NOT begin implementing. Instead, remind them:
+- Use `/implement-loop` to implement all cards autonomously
+- Use `/implement` to implement one card at a time
 
-- Subtasks should be concrete and verifiable — "add error handling to parse_config" not "improve code"
-- Include enough context in task descriptions that someone (or the kanban skill) can execute without re-reading the spec
-- Order tasks so foundational changes come first (data models, types) and dependent work follows
-- Each task's subtasks should include running tests as the final step
-- Every card MUST have acceptance criteria and tests in its description — a card without these is incomplete
-- It's fine to rearrange, split, or merge cards as the plan evolves — the board is a living document
+### Ordering
+Foundational changes come first (data models, types, configuration), then core logic, then integration, then tests, then cleanup. Use `depends_on` to encode ordering constraints between cards.
+
+### Specificity
+Use specific file paths, function names, and type names — not vague descriptions. "Add Result return type to parse_config and propagate errors to callers in main.rs and cli.rs" not "improve error handling."
+
+## Autonomous Agent Mode
+
+When operating as an autonomous agent (no Plan Mode UI), follow the `PLANNING_GUIDE.md` resource file bundled with this skill.
+
+## Updating an Existing Plan
+
+Update kanban cards directly — add new cards, update existing ones with `op: "update task"`, remove obsolete ones with `op: "delete task"`, and reorder dependencies as needed. The board is a living document.

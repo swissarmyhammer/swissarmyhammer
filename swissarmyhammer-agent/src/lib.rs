@@ -247,6 +247,9 @@ pub struct CreateAgentOptions {
     /// Use ephemeral mode (haiku model, no session persistence).
     /// Ideal for quick, stateless operations like scaffold generation.
     pub ephemeral: bool,
+    /// Override for Claude's built-in tools. When set to Some(""), disables all built-in tools.
+    /// This is used for validator agents that should only have MCP-provided tools.
+    pub tools_override: Option<String>,
 }
 
 /// Create an ACP agent based on model configuration
@@ -281,7 +284,12 @@ pub async fn create_agent_with_options(
 ) -> AcpResult<AcpAgentHandle> {
     let (agent_name, handle) = match config.executor_type() {
         ModelExecutorType::ClaudeCode => {
-            let handle = create_claude_agent(mcp_config, options.ephemeral).await?;
+            let handle = create_claude_agent(
+                mcp_config,
+                options.ephemeral,
+                options.tools_override.clone(),
+            )
+            .await?;
             ("Claude", handle)
         }
         ModelExecutorType::LlamaAgent => {
@@ -319,6 +327,7 @@ pub async fn create_agent_with_options(
 async fn create_claude_agent(
     mcp_config: Option<McpServerConfig>,
     ephemeral: bool,
+    tools_override: Option<String>,
 ) -> AcpResult<AcpAgentHandle> {
     // Check if Claude CLI is available (claude-agent requires this)
     if which::which("claude").is_err() {
@@ -351,6 +360,7 @@ async fn create_claude_agent(
     };
 
     agent_config.claude.ephemeral = ephemeral;
+    agent_config.claude.tools_override = tools_override;
 
     // Create the Claude agent
     let (agent, notification_rx) =
@@ -1042,7 +1052,10 @@ mod tests {
 
     #[test]
     fn test_create_agent_options_enables_ephemeral_mode() {
-        let options = CreateAgentOptions { ephemeral: true };
+        let options = CreateAgentOptions {
+            ephemeral: true,
+            ..Default::default()
+        };
         assert!(options.ephemeral);
     }
 

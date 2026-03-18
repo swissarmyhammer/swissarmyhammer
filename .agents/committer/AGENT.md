@@ -233,7 +233,7 @@ use the skill tool to load the full instructions, then follow them.
 ### Available Skills
 
 
-- **code-context**: Code intelligence using the unified code context index. Use this skill when exploring a codebase, finding symbols, tracing call graphs, assessing blast radius, or searching code by pattern. This is the primary tool for understanding code structure and relationships. Agents should prefer this over raw file reads when navigating unfamiliar code. (local)
+- **code-context**: Use this tool first when you need to understand code structure, find symbols, trace dependencies, or assess the impact of changes. It is faster and more accurate than grepping files or reading directory trees. (local)
 
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
 

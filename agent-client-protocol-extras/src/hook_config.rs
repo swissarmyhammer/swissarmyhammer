@@ -86,6 +86,20 @@ pub enum HookEventKindConfig {
     SessionEnd,
     TeammateIdle,
     TaskCompleted,
+    /// Forward-compatible: MCP elicitation request.
+    Elicitation,
+    /// Forward-compatible: MCP elicitation response.
+    ElicitationResult,
+    /// Forward-compatible: instructions/rules files loaded.
+    InstructionsLoaded,
+    /// Forward-compatible: config files changed.
+    ConfigChange,
+    /// Forward-compatible: worktree created.
+    WorktreeCreate,
+    /// Forward-compatible: worktree removed.
+    WorktreeRemove,
+    /// Forward-compatible: after context compaction.
+    PostCompact,
 }
 
 /// Error returned when a config event kind has no ACP equivalent.
@@ -112,14 +126,21 @@ impl TryFrom<HookEventKindConfig> for HookEventKind {
             HookEventKindConfig::PostToolUseFailure => Ok(HookEventKind::PostToolUseFailure),
             HookEventKindConfig::Stop => Ok(HookEventKind::Stop),
             HookEventKindConfig::Notification => Ok(HookEventKind::Notification),
+            HookEventKindConfig::PostCompact => Ok(HookEventKind::PostCompact),
+            HookEventKindConfig::TeammateIdle => Ok(HookEventKind::TeammateIdle),
+            HookEventKindConfig::TaskCompleted => Ok(HookEventKind::TaskCompleted),
+            HookEventKindConfig::Elicitation => Ok(HookEventKind::Elicitation),
+            HookEventKindConfig::ElicitationResult => Ok(HookEventKind::ElicitationResult),
+            HookEventKindConfig::InstructionsLoaded => Ok(HookEventKind::InstructionsLoaded),
+            HookEventKindConfig::ConfigChange => Ok(HookEventKind::ConfigChange),
+            HookEventKindConfig::WorktreeCreate => Ok(HookEventKind::WorktreeCreate),
+            HookEventKindConfig::WorktreeRemove => Ok(HookEventKind::WorktreeRemove),
             HookEventKindConfig::PermissionRequest
             | HookEventKindConfig::SubagentStart
             | HookEventKindConfig::SubagentStop
             | HookEventKindConfig::PreCompact
             | HookEventKindConfig::Setup
-            | HookEventKindConfig::SessionEnd
-            | HookEventKindConfig::TeammateIdle
-            | HookEventKindConfig::TaskCompleted => Err(UnsupportedEventKind),
+            | HookEventKindConfig::SessionEnd => Err(UnsupportedEventKind),
         }
     }
 }
@@ -1935,8 +1956,6 @@ hooks:
             HookEventKindConfig::PreCompact,
             HookEventKindConfig::Setup,
             HookEventKindConfig::SessionEnd,
-            HookEventKindConfig::TeammateIdle,
-            HookEventKindConfig::TaskCompleted,
         ];
 
         for kind in &unsupported_kinds {
@@ -1966,6 +1985,36 @@ hooks:
             (
                 HookEventKindConfig::Notification,
                 HookEventKind::Notification,
+            ),
+            (HookEventKindConfig::PostCompact, HookEventKind::PostCompact),
+            (
+                HookEventKindConfig::TeammateIdle,
+                HookEventKind::TeammateIdle,
+            ),
+            (
+                HookEventKindConfig::TaskCompleted,
+                HookEventKind::TaskCompleted,
+            ),
+            (HookEventKindConfig::Elicitation, HookEventKind::Elicitation),
+            (
+                HookEventKindConfig::ElicitationResult,
+                HookEventKind::ElicitationResult,
+            ),
+            (
+                HookEventKindConfig::InstructionsLoaded,
+                HookEventKind::InstructionsLoaded,
+            ),
+            (
+                HookEventKindConfig::ConfigChange,
+                HookEventKind::ConfigChange,
+            ),
+            (
+                HookEventKindConfig::WorktreeCreate,
+                HookEventKind::WorktreeCreate,
+            ),
+            (
+                HookEventKindConfig::WorktreeRemove,
+                HookEventKind::WorktreeRemove,
             ),
         ];
 
@@ -2111,5 +2160,97 @@ hooks:
 
         let decision = interpret_output(&output, HookEventKind::PreToolUse);
         assert!(matches!(decision, HookDecision::Block { .. }));
+    }
+
+    // -- New hook event config tests --
+
+    #[test]
+    fn test_new_config_variants_serde_round_trip() {
+        let variants = vec![
+            HookEventKindConfig::Elicitation,
+            HookEventKindConfig::ElicitationResult,
+            HookEventKindConfig::InstructionsLoaded,
+            HookEventKindConfig::ConfigChange,
+            HookEventKindConfig::WorktreeCreate,
+            HookEventKindConfig::WorktreeRemove,
+            HookEventKindConfig::PostCompact,
+        ];
+        for variant in &variants {
+            let json = serde_json::to_string(variant).unwrap();
+            let deserialized: HookEventKindConfig = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                std::mem::discriminant(&deserialized),
+                std::mem::discriminant(variant),
+                "round-trip failed for {:?}",
+                variant
+            );
+        }
+    }
+
+    #[test]
+    fn test_new_config_variants_in_hook_config() {
+        let names = [
+            "Elicitation",
+            "ElicitationResult",
+            "InstructionsLoaded",
+            "ConfigChange",
+            "WorktreeCreate",
+            "WorktreeRemove",
+            "PostCompact",
+        ];
+        for name in &names {
+            let json = format!(
+                r#"{{"hooks":{{"{}":[{{"hooks":[{{"type":"command","command":"./check.sh"}}]}}]}}}}"#,
+                name
+            );
+            let config: HookConfig = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("Failed to parse HookConfig with {}: {}", name, e));
+            assert_eq!(config.hooks.len(), 1, "Expected 1 entry for {}", name);
+        }
+    }
+
+    #[test]
+    fn test_try_from_new_active_variants() {
+        // PostCompact, TeammateIdle, TaskCompleted should map successfully
+        let result: Result<HookEventKind, _> = HookEventKindConfig::PostCompact.try_into();
+        assert!(result.is_ok(), "PostCompact should be supported");
+        assert!(matches!(result.unwrap(), HookEventKind::PostCompact));
+
+        let result: Result<HookEventKind, _> = HookEventKindConfig::TeammateIdle.try_into();
+        assert!(result.is_ok(), "TeammateIdle should be supported");
+        assert!(matches!(result.unwrap(), HookEventKind::TeammateIdle));
+
+        let result: Result<HookEventKind, _> = HookEventKindConfig::TaskCompleted.try_into();
+        assert!(result.is_ok(), "TaskCompleted should be supported");
+        assert!(matches!(result.unwrap(), HookEventKind::TaskCompleted));
+    }
+
+    #[test]
+    fn test_try_from_new_event_kinds_succeed() {
+        // These 6 are now fully supported with their own HookEventKind variants
+        assert!(matches!(
+            HookEventKind::try_from(HookEventKindConfig::Elicitation),
+            Ok(HookEventKind::Elicitation)
+        ));
+        assert!(matches!(
+            HookEventKind::try_from(HookEventKindConfig::ElicitationResult),
+            Ok(HookEventKind::ElicitationResult)
+        ));
+        assert!(matches!(
+            HookEventKind::try_from(HookEventKindConfig::InstructionsLoaded),
+            Ok(HookEventKind::InstructionsLoaded)
+        ));
+        assert!(matches!(
+            HookEventKind::try_from(HookEventKindConfig::ConfigChange),
+            Ok(HookEventKind::ConfigChange)
+        ));
+        assert!(matches!(
+            HookEventKind::try_from(HookEventKindConfig::WorktreeCreate),
+            Ok(HookEventKind::WorktreeCreate)
+        ));
+        assert!(matches!(
+            HookEventKind::try_from(HookEventKindConfig::WorktreeRemove),
+            Ok(HookEventKind::WorktreeRemove)
+        ));
     }
 }

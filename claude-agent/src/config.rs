@@ -78,6 +78,10 @@ pub struct ClaudeConfig {
     /// Ideal for validators and quick, stateless operations
     #[serde(default)]
     pub ephemeral: bool,
+    /// Override for Claude's built-in tools. When set to Some(""), disables all built-in tools.
+    /// This is used for validator agents that should only have MCP-provided tools.
+    #[serde(default)]
+    pub tools_override: Option<String>,
 }
 
 /// Server configuration options  
@@ -575,6 +579,7 @@ impl Default for AgentConfig {
                 stream_format: StreamFormat::StreamJson,
                 mode: ClaudeAgentMode::default(),
                 ephemeral: false,
+                tools_override: None,
             },
             server: ServerConfig {
                 port: None,

@@ -1,0 +1,25 @@
+[package]
+name = "heb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Hook Event Bus — real-time event pub/sub with SQLite durability"
+
+[dependencies]
+swissarmyhammer-leader-election = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+md5 = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

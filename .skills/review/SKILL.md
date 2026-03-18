@@ -3,7 +3,7 @@ name: review
 description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Reviews produce verbose output — automatically delegates to a reviewer subagent.
 metadata:
   author: "swissarmyhammer"
-  version: "3.0"
+  version: "0.9.2"
 ---
 
 ## Project Detection

@@ -32,6 +32,15 @@ pub(crate) fn all_event_kinds() -> Vec<HookEventKind> {
         HookEventKind::PostToolUseFailure,
         HookEventKind::Stop,
         HookEventKind::Notification,
+        HookEventKind::PostCompact,
+        HookEventKind::TeammateIdle,
+        HookEventKind::TaskCompleted,
+        HookEventKind::Elicitation,
+        HookEventKind::ElicitationResult,
+        HookEventKind::InstructionsLoaded,
+        HookEventKind::ConfigChange,
+        HookEventKind::WorktreeCreate,
+        HookEventKind::WorktreeRemove,
     ] {
         // Exhaustive match — compiler error if a new variant is added.
         match kind {
@@ -41,7 +50,16 @@ pub(crate) fn all_event_kinds() -> Vec<HookEventKind> {
             | HookEventKind::PostToolUse
             | HookEventKind::PostToolUseFailure
             | HookEventKind::Stop
-            | HookEventKind::Notification => kinds.push(kind),
+            | HookEventKind::Notification
+            | HookEventKind::PostCompact
+            | HookEventKind::TeammateIdle
+            | HookEventKind::TaskCompleted
+            | HookEventKind::Elicitation
+            | HookEventKind::ElicitationResult
+            | HookEventKind::InstructionsLoaded
+            | HookEventKind::ConfigChange
+            | HookEventKind::WorktreeCreate
+            | HookEventKind::WorktreeRemove => kinds.push(kind),
         }
     }
     kinds

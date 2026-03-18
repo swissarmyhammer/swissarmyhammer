@@ -3,7 +3,7 @@ name: double-check
 description: Double check your work by reviewing changes, asking clarifying questions, and verifying correctness before proceeding. Use when the user says "double check", "verify", "sanity check", or wants validation of recent work.
 metadata:
   author: "swissarmyhammer"
-  version: "1.0"
+  version: "0.9.2"
 ---
 
 ## Project Detection

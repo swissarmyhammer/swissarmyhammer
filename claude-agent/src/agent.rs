@@ -442,7 +442,11 @@ impl ClaudeAgent {
         agent_library.load_defaults();
 
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::new();
-        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let mut template_context = swissarmyhammer_config::TemplateContext::new();
+        template_context.set(
+            "version".to_string(),
+            serde_json::json!(env!("CARGO_PKG_VERSION")),
+        );
         let mut agents = Vec::new();
         let mut sah_modes = self.sah_modes.write().await;
 
@@ -1280,6 +1284,7 @@ impl ClaudeAgent {
             .mcp_servers(self.config.mcp_servers.clone())
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
+            .tools_override(self.config.claude.tools_override.clone())
             .build();
 
         match self
@@ -1687,6 +1692,7 @@ impl ClaudeAgent {
             .agent_mode(agent_mode)
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
+            .tools_override(self.config.claude.tools_override.clone())
             .build()
     }
 

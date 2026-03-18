@@ -283,7 +283,6 @@ mod tests {
                 lsp_indexed   INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE ts_chunks (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_path    TEXT NOT NULL REFERENCES indexed_files(file_path) ON DELETE CASCADE,
                 start_byte   INTEGER NOT NULL,
                 end_byte     INTEGER NOT NULL,

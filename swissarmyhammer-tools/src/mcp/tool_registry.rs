@@ -842,6 +842,19 @@ pub trait McpTool:
     fn is_agent_tool(&self) -> bool {
         false
     }
+
+    /// Whether this tool should be available to validator agents.
+    ///
+    /// Validator tools are served on the `/mcp/validator` endpoint, which
+    /// provides a locked-down subset for AVP validators. Only `code_context`
+    /// and `files` (read-only) return true.
+    ///
+    /// # Default
+    ///
+    /// Returns false — most tools are not available to validators.
+    fn is_validator_tool(&self) -> bool {
+        false
+    }
 }
 
 /// Marker trait for tools that provide base agent behavior.
@@ -866,6 +879,23 @@ pub trait McpTool:
 /// fn is_agent_tool(&self) -> bool { true }
 /// ```
 pub trait AgentTool: McpTool {}
+
+/// Marker trait for tools available to validator agents.
+///
+/// Validator tools are the minimal, locked-down subset of tools that
+/// AVP validators can access. Only `code_context` and `files` (read-only)
+/// should implement this trait.
+///
+/// The `/mcp/validator` endpoint serves only tools tagged with this trait.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// impl ValidatorTool for CodeContextTool {}
+/// // and in the McpTool impl:
+/// fn is_validator_tool(&self) -> bool { true }
+/// ```
+pub trait ValidatorTool: McpTool {}
 
 /// Macro to implement Doctorable for tools that don't have health checks
 ///

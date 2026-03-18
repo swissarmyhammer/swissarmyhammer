@@ -191,6 +191,9 @@ impl BuiltinGenerator {
                 };
                 self.collect_files(&path, &new_prefix, code);
             } else if self.matches_extension(&path) {
+                // Tell Cargo to rerun if this file changes
+                println!("cargo:rerun-if-changed={}", path.display());
+
                 // Generate the resource name
                 let resource_name = self.extract_name(&path, prefix);
 

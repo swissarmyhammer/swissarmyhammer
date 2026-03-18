@@ -6,16 +6,32 @@ use std::io;
 #[derive(Debug, thiserror::Error)]
 pub enum ElectionError {
     /// Failed to create lock file
-    #[error("Failed to create lock file: {0}")]
+    #[error("failed to create lock file: {0}")]
     LockFileCreation(#[source] io::Error),
 
     /// Lock is held by another process
-    #[error("Lock is held by another process")]
+    #[error("lock is held by another process")]
     LockHeld,
 
     /// Failed to acquire lock
-    #[error("Failed to acquire lock: {0}")]
+    #[error("failed to acquire lock: {0}")]
     LockAcquisition(#[source] io::Error),
+
+    /// Discovery file I/O error
+    #[error("discovery file error: {0}")]
+    Discovery(#[source] io::Error),
+
+    /// ZMQ bus error
+    #[error("bus error: {0}")]
+    Bus(#[source] zmq::Error),
+
+    /// Message serialization/deserialization error (preserves source chain)
+    #[error("serialization error: {0}")]
+    Serialization(#[source] serde_json::Error),
+
+    /// Protocol or channel error (no underlying source)
+    #[error("message error: {0}")]
+    Message(String),
 }
 
 /// Result type for election operations
@@ -29,11 +45,11 @@ mod tests {
     #[test]
     fn test_election_error_display() {
         let err = ElectionError::LockHeld;
-        assert_eq!(format!("{}", err), "Lock is held by another process");
+        assert_eq!(format!("{}", err), "lock is held by another process");
 
         let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
         let err = ElectionError::LockFileCreation(io_err);
-        assert!(format!("{}", err).contains("Failed to create lock file"));
+        assert!(format!("{}", err).contains("failed to create lock file"));
     }
 
     #[test]

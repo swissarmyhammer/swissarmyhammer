@@ -23,6 +23,14 @@ use crate::validator::{
 /// Length of the markdown JSON code fence marker "```json".
 const JSON_CODE_FENCE_LEN: usize = 7;
 
+/// Render a hook context value as a formatted string for validator prompts.
+///
+/// Delegates to `render_hook_context` which produces YAML (not JSON) and
+/// appends diff blocks for edit tools.
+fn extract_hook_context_string(value: &serde_json::Value) -> String {
+    crate::turn::render_hook_context(value)
+}
+
 /// Length of the markdown code fence marker "```".
 const CODE_FENCE_LEN: usize = 3;
 
@@ -107,9 +115,7 @@ impl<'a, P: PartialLoader + Clone + 'static> ValidatorRenderContext<'a, P> {
         );
         template_context.set(
             "hook_context".to_string(),
-            serde_json::to_string_pretty(self.hook_context)
-                .unwrap_or_else(|_| self.hook_context.to_string())
-                .into(),
+            extract_hook_context_string(self.hook_context).into(),
         );
         template_context.set("hook_type".to_string(), self.hook_type.to_string().into());
 
@@ -171,9 +177,7 @@ fn render_rule_prompt(
         if let Some(hc) = hook_context {
             ctx.set(
                 "hook_context".to_string(),
-                serde_json::to_string_pretty(hc)
-                    .unwrap_or_else(|_| hc.to_string())
-                    .into(),
+                extract_hook_context_string(hc).into(),
             );
         }
 
@@ -184,12 +188,7 @@ fn render_rule_prompt(
 
     // Fallback if template is unavailable
     let context_section = hook_context
-        .map(|hc| {
-            format!(
-                "\n\n## Hook Context\n\n```json\n{}\n```",
-                serde_json::to_string_pretty(hc).unwrap_or_else(|_| hc.to_string())
-            )
-        })
+        .map(|hc| format!("\n\n## Hook Context\n\n{}", extract_hook_context_string(hc)))
         .unwrap_or_default();
 
     format!(
@@ -771,12 +770,10 @@ impl<'a> RuleSetSessionContext<'a> {
             self.ruleset.rules.len().to_string().into(),
         );
 
-        // Hook context
+        // Hook context — rendered as YAML with optional diff blocks
         template_context.set(
             "hook_context".to_string(),
-            serde_json::to_string_pretty(self.hook_context)
-                .unwrap_or_else(|_| self.hook_context.to_string())
-                .into(),
+            extract_hook_context_string(self.hook_context).into(),
         );
         template_context.set("hook_type".to_string(), self.hook_type.to_string().into());
 
@@ -1519,6 +1516,130 @@ Some text after
             rendered.contains("cargo build"),
             "Rendered prompt should contain the command from hook_context: {}",
             rendered
+        );
+    }
+
+    // =========================================================================
+    // Hook Context Rendering Format Tests
+    //
+    // These test the ACTUAL code path that renders hook context into validator
+    // prompts — including the fallback path in render_rule_prompt.
+    // =========================================================================
+
+    #[test]
+    fn test_render_rule_prompt_produces_yaml_not_json() {
+        // This tests the fallback path in render_rule_prompt, which is the
+        // code path that actually executes in production.
+        let hook_context = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": "cargo test" },
+            "cwd": "/project",
+            "session_id": "abc-123"
+        });
+
+        let output = render_rule_prompt(
+            "safe-commands",
+            "Check command safety",
+            "error",
+            "Validate the command is safe.",
+            Some(&hook_context),
+        );
+
+        eprintln!("=== RULE PROMPT OUTPUT ===\n{}\n=== END ===", output);
+
+        // Must contain YAML, not JSON for hook context
+        assert!(
+            output.contains("```yaml"),
+            "Rule prompt should contain ```yaml fence:\n{}",
+            output
+        );
+        assert!(
+            output.contains("tool_name: Bash"),
+            "Should have YAML key format:\n{}",
+            output
+        );
+        // The Hook Context section must not use ```json
+        // (```json in the response format instructions is fine)
+        let hook_section = output
+            .split("## Hook Context")
+            .nth(1)
+            .and_then(|s| s.split("## ").next())
+            .unwrap_or("");
+        assert!(
+            !hook_section.contains("```json"),
+            "Hook Context section should NOT contain ```json.\nFull output:\n{}",
+            output
+        );
+        assert!(
+            hook_section.contains("```yaml"),
+            "Hook Context section should contain ```yaml.\nFull output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_render_rule_prompt_edit_with_diffs_produces_diff_block() {
+        // Simulate an Edit tool context that has been prepared with diffs
+        // (i.e., prepare_validator_context was called upstream).
+        let mut hook_context = serde_json::json!({
+            "tool_name": "Edit",
+            "tool_input": { "file_path": "/project/src/main.rs" },
+            "cwd": "/project",
+            "session_id": "abc-123"
+        });
+
+        // Add _diff_text as prepare_validator_context would
+        hook_context.as_object_mut().unwrap().insert(
+            crate::turn::DIFF_TEXT_KEY.to_string(),
+            serde_json::Value::String(
+                "```diff\n--- /project/src/main.rs\n+++ /project/src/main.rs\n@@ -1 +1 @@\n-old\n+new\n```\n".to_string()
+            ),
+        );
+
+        let output = render_rule_prompt(
+            "code-quality",
+            "Check code quality",
+            "warn",
+            "Review the change.",
+            Some(&hook_context),
+        );
+
+        eprintln!("=== EDIT RULE PROMPT OUTPUT ===\n{}\n=== END ===", output);
+
+        // Check the Hook Context section specifically
+        let hook_section = output
+            .split("## Hook Context")
+            .nth(1)
+            .and_then(|s| s.split("## ").next())
+            .unwrap_or("");
+
+        // Must have YAML header
+        assert!(
+            hook_section.contains("```yaml"),
+            "Hook section should contain ```yaml.\nFull output:\n{}",
+            output
+        );
+        // Must have diff block
+        assert!(
+            hook_section.contains("```diff"),
+            "Hook section should contain ```diff block.\nFull output:\n{}",
+            output
+        );
+        assert!(
+            hook_section.contains("-old"),
+            "Should contain removed line.\nFull output:\n{}",
+            output
+        );
+        assert!(
+            hook_section.contains("+new"),
+            "Should contain added line.\nFull output:\n{}",
+            output
+        );
+        // Must NOT have JSON in hook section
+        assert!(
+            !hook_section.contains("```json"),
+            "Hook section should NOT contain ```json.\nFull output:\n{}",
+            output
         );
     }
 

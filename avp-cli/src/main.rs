@@ -65,7 +65,7 @@ async fn main() {
         .with_writer(std::io::stderr)
         .with_filter(stderr_filter);
 
-    // File layer: info level, writes to .avp/avp.log (if in a git repo)
+    // File layer: info level, writes to .avp/log (if in a git repo)
     let file_layer = open_avp_log().map(|log_file| {
         tracing_subscriber::fmt::layer()
             .with_target(true)
@@ -196,12 +196,12 @@ async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
     Ok(exit_code)
 }
 
-/// Try to open `.avp/avp.log` for appending.
+/// Try to open `.avp/log` for appending.
 ///
 /// Returns `None` if we're not in a git repo or the file can't be opened.
 fn open_avp_log() -> Option<Arc<Mutex<std::fs::File>>> {
     let git_root = swissarmyhammer_common::utils::find_git_repository_root()?;
-    let log_path = git_root.join(".avp").join("avp.log");
+    let log_path = git_root.join(".avp").join("log");
     // Only open if the .avp directory already exists (avp init creates it)
     if !log_path.parent()?.exists() {
         return None;

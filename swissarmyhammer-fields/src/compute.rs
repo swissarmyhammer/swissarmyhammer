@@ -29,11 +29,8 @@ pub type DeriveFn = Box<
 /// This avoids depending on the entity crate — the caller constructs a closure
 /// over `EntityContext::list()` at the call site.
 pub type EntityQueryFn = Box<
-    dyn Fn(
-            &str,
-        ) -> Pin<
-            Box<dyn Future<Output = Vec<HashMap<String, serde_json::Value>>> + Send>,
-        > + Send
+    dyn Fn(&str) -> Pin<Box<dyn Future<Output = Vec<HashMap<String, serde_json::Value>>> + Send>>
+        + Send
         + Sync,
 >;
 

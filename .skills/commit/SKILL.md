@@ -3,7 +3,7 @@ name: commit
 description: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly.
 metadata:
   author: "swissarmyhammer"
-  version: "1.0"
+  version: "0.9.2"
 ---
 
 ## Project Detection

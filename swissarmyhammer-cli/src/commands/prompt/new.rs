@@ -120,7 +120,10 @@ async fn generate_ai_scaffold(
     );
 
     let config = context.template_context.get_agent_config(None);
-    let options = swissarmyhammer_agent::CreateAgentOptions { ephemeral: true };
+    let options = swissarmyhammer_agent::CreateAgentOptions {
+        ephemeral: true,
+        ..Default::default()
+    };
     let mut agent =
         swissarmyhammer_agent::create_agent_with_options(&config, None, options).await?;
 

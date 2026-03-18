@@ -515,7 +515,10 @@ pub async fn search_entities(
 /// computed count fields injected. Tasks are NOT included (use `list_entities`
 /// for that). A summary object provides aggregate counts.
 #[tauri::command]
-pub async fn get_board_data(state: State<'_, AppState>, board_path: Option<String>) -> Result<Value, String> {
+pub async fn get_board_data(
+    state: State<'_, AppState>,
+    board_path: Option<String>,
+) -> Result<Value, String> {
     let handle = resolve_handle(&state, board_path).await?;
     let ectx = handle
         .ctx
@@ -638,7 +641,10 @@ pub async fn get_board_data(state: State<'_, AppState>, board_path: Option<Strin
         .len();
 
     // Extract percent_complete from the board entity's computed field
-    let pc = board.get("percent_complete").cloned().unwrap_or(json!(null));
+    let pc = board
+        .get("percent_complete")
+        .cloned()
+        .unwrap_or(json!(null));
     let done_tasks = pc.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
     let percent_complete = pc.get("percent").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -701,10 +707,7 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
 
 /// Create a new window, optionally opening a specific board.
 #[tauri::command]
-pub async fn create_window(
-    app: AppHandle,
-    board_path: Option<String>,
-) -> Result<Value, String> {
+pub async fn create_window(app: AppHandle, board_path: Option<String>) -> Result<Value, String> {
     // Increment past any labels that already exist (e.g. restored by
     // tauri-plugin-window-state from a previous session).
     let label = loop {
@@ -738,7 +741,10 @@ pub async fn create_window(
 
 /// List all view definitions, returning a JSON array.
 #[tauri::command]
-pub async fn list_views(state: State<'_, AppState>, board_path: Option<String>) -> Result<Value, String> {
+pub async fn list_views(
+    state: State<'_, AppState>,
+    board_path: Option<String>,
+) -> Result<Value, String> {
     let handle = resolve_handle(&state, board_path).await?;
     let views_lock = handle.ctx.views().ok_or("Views not initialized")?;
     let views = views_lock.read().await;

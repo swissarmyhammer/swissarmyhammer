@@ -12,9 +12,11 @@ use crate::types::HookType;
 
 // Import Claude-specific types from sibling modules
 use super::input::{
-    NotificationInput, PermissionRequestInput, PostToolUseFailureInput, PostToolUseInput,
-    PreCompactInput, PreToolUseInput, SessionEndInput, SessionStartInput, SetupInput, StopInput,
-    SubagentStartInput, SubagentStopInput, UserPromptSubmitInput,
+    ConfigChangeInput, ElicitationInput, ElicitationResultInput, InstructionsLoadedInput,
+    NotificationInput, PermissionRequestInput, PostCompactInput, PostToolUseFailureInput,
+    PostToolUseInput, PreCompactInput, PreToolUseInput, SessionEndInput, SessionStartInput,
+    SetupInput, StopInput, SubagentStartInput, SubagentStopInput, TaskCompletedInput,
+    TeammateIdleInput, UserPromptSubmitInput, WorktreeCreateInput, WorktreeRemoveInput,
 };
 use super::output::{
     HookOutput, HookSpecificOutput, PermissionBehavior, PermissionDecision,
@@ -426,6 +428,96 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
                     .await
                     .map_err(AvpError::Chain)
             }
+            // Elicitation: an MCP server is requesting user input — validators can block/deny
+            HookType::Elicitation => {
+                let typed: ElicitationInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                self.chain_factory
+                    .elicitation_chain()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            // ElicitationResult: user responded to MCP elicitation — validators can block/deny
+            HookType::ElicitationResult => {
+                let typed: ElicitationResultInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                self.chain_factory
+                    .elicitation_result_chain()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            // InstructionsLoaded: observe-only — CLAUDE.md files have already been read,
+            // nothing to block; validators receive the event for informational purposes only.
+            HookType::InstructionsLoaded => {
+                let typed: InstructionsLoadedInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            // ConfigChange: config file changed — validators can block/deny
+            HookType::ConfigChange => {
+                let typed: ConfigChangeInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                self.chain_factory
+                    .config_change_chain()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            // WorktreeCreate: a git worktree is being created — validators can block/deny
+            HookType::WorktreeCreate => {
+                let typed: WorktreeCreateInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                self.chain_factory
+                    .worktree_create_chain()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            // WorktreeRemove: observe-only — the worktree is already being removed by the time
+            // this hook fires; validators cannot prevent removal, only observe it.
+            HookType::WorktreeRemove => {
+                let typed: WorktreeRemoveInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            // PostCompact: observe-only — context compaction has already completed;
+            // validators cannot undo it, only observe the post-compaction state.
+            HookType::PostCompact => {
+                let typed: PostCompactInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                Chain::success()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            // TeammateIdle: an agent teammate went idle — validators can block/deny further action
+            HookType::TeammateIdle => {
+                let typed: TeammateIdleInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                self.chain_factory
+                    .teammate_idle_chain()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
+            // TaskCompleted: a task was marked complete — validators can block/deny
+            HookType::TaskCompleted => {
+                let typed: TaskCompletedInput =
+                    serde_json::from_value(input).map_err(AvpError::Json)?;
+                self.chain_factory
+                    .task_completed_chain()
+                    .execute(&typed)
+                    .await
+                    .map_err(AvpError::Chain)
+            }
         };
 
         // Log the hook event based on chain result
@@ -603,6 +695,139 @@ mod tests {
             names.contains(&"command-safety"),
             "command-safety should match PreToolUse + Bash"
         );
+    }
+
+    /// Test that all 6 new blockable hook types route to a validator chain
+    /// (i.e., they are processed without panicking and return success when no
+    /// validators block them).
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_new_blockable_hooks_process_via_validator_chain() {
+        let (_temp, strategy) = create_test_strategy();
+
+        let blockable_hooks = vec![
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "Elicitation",
+                "mcp_server_name": "test-server",
+                "message": "Choose an option"
+            }),
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "ElicitationResult",
+                "mcp_server_name": "test-server",
+                "action": "submit"
+            }),
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "ConfigChange",
+                "source": "user_settings"
+            }),
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "WorktreeCreate",
+                "worktree_path": "/tmp/worktree",
+                "branch_name": "feature/test"
+            }),
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "TeammateIdle",
+                "teammate_id": "agent-1"
+            }),
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "TaskCompleted",
+                "task_id": "task-1",
+                "task_title": "Implement feature"
+            }),
+        ];
+
+        for input in blockable_hooks {
+            let hook_name = input["hook_event_name"].as_str().unwrap().to_string();
+            let (output, exit_code) = strategy
+                .process(input)
+                .await
+                .unwrap_or_else(|e| panic!("Hook {} failed: {}", hook_name, e));
+            assert!(
+                output.continue_execution,
+                "Hook {} should allow by default (no blocking validators)",
+                hook_name
+            );
+            assert_eq!(
+                exit_code, 0,
+                "Hook {} should return exit 0 by default",
+                hook_name
+            );
+        }
+    }
+
+    /// Test that observe-only hook types process correctly via Chain::success().
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_observe_only_hooks_always_succeed() {
+        let (_temp, strategy) = create_test_strategy();
+
+        let observe_only_hooks = vec![
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "InstructionsLoaded",
+                "file_path": "/project/CLAUDE.md"
+            }),
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "WorktreeRemove",
+                "worktree_path": "/tmp/old-worktree"
+            }),
+            serde_json::json!({
+                "session_id": "test",
+                "transcript_path": "/path",
+                "cwd": "/home",
+                "permission_mode": "default",
+                "hook_event_name": "PostCompact"
+            }),
+        ];
+
+        for input in observe_only_hooks {
+            let hook_name = input["hook_event_name"].as_str().unwrap().to_string();
+            let (output, exit_code) = strategy
+                .process(input)
+                .await
+                .unwrap_or_else(|e| panic!("Hook {} failed: {}", hook_name, e));
+            assert!(
+                output.continue_execution,
+                "Observe-only hook {} should always succeed",
+                hook_name
+            );
+            assert_eq!(
+                exit_code, 0,
+                "Observe-only hook {} should return exit 0",
+                hook_name
+            );
+        }
     }
 
     #[test]
