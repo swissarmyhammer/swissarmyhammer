@@ -1,7 +1,7 @@
 ---
 assignees:
 - claude-code
-position_column: todo
+position_column: doing
 position_ordinal: '80'
 title: 'Inconsistent version source: use crate::VERSION vs env!(\"CARGO_PKG_VERSION\")'
 ---

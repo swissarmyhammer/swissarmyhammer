@@ -21,18 +21,25 @@ pub async fn execute_use(
         .and_then(|v| v.as_str())
         .ok_or_else(|| McpError::invalid_params("Missing required field: 'name'", None))?;
 
+    let skill_arguments = arguments
+        .get("arguments")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     let ctx = SkillContext::new(library.clone());
     let op = UseSkill::new(name);
 
     match op.execute(&ctx).await {
         ExecutionResult::Unlogged { value } => {
-            let value = render_skill_instructions(value, prompt_library).await;
+            let value =
+                render_skill_instructions(value, prompt_library, skill_arguments.as_deref()).await;
             Ok(BaseToolImpl::create_success_response(
                 serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
             ))
         }
         ExecutionResult::Logged { value, .. } => {
-            let value = render_skill_instructions(value, prompt_library).await;
+            let value =
+                render_skill_instructions(value, prompt_library, skill_arguments.as_deref()).await;
             Ok(BaseToolImpl::create_success_response(
                 serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
             ))
@@ -48,14 +55,19 @@ pub async fn execute_use(
 ///
 /// This enables skills to use `{% include %}` partials from the prompt library
 /// (e.g., `{% include "_partials/detected-projects" %}`), rendering them as if
-/// they were prompts.
+/// they were prompts. When `arguments` is provided, it is available as
+/// `{{arguments}}` in the template.
 async fn render_skill_instructions(
     mut value: Value,
     prompt_library: &Arc<RwLock<PromptLibrary>>,
+    arguments: Option<&str>,
 ) -> Value {
     if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
         let mut template_context = TemplateContext::new();
         template_context.set("version".to_string(), serde_json::json!(crate::VERSION));
+        if let Some(args) = arguments {
+            template_context.set("arguments".to_string(), serde_json::json!(args));
+        }
         let prompt_lib = prompt_library.read().await;
         match prompt_lib.render_text(instructions, &template_context) {
             Ok(rendered) => {
