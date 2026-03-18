@@ -1,5 +1,7 @@
 //! Shell tool for MCP — virtual shell with history, process management, and semantic search.
 //!
+//! ## Operations
+//!
 //! Dispatches between six operations:
 //! - `execute command`: Run a shell command with timeout and output capture
 //! - `list processes`: Show all commands with status, timing, exit codes
@@ -7,6 +9,33 @@
 //! - `search history`: Semantic search across command output
 //! - `grep history`: Regex pattern match across command output
 //! - `get lines`: Retrieve specific lines from a command's output
+//!
+//! ## Architecture
+//!
+//! Commands execute in isolated child processes via `tokio::process::Command`.
+//! Each process is wrapped in an [`AsyncProcessGuard`](process::AsyncProcessGuard)
+//! that kills and reaps the process on drop, preventing orphans and zombies even
+//! when a timeout or cancellation occurs.
+//!
+//! Output is streamed through an [`OutputBuffer`](infrastructure::OutputBuffer) that
+//! enforces size limits (10 MB default), detects binary content, and truncates at
+//! line boundaries. All output is stored in [`ShellState`](state::ShellState) for
+//! later retrieval via `get lines`, `grep history`, or `search history`.
+//!
+//! ## Security
+//!
+//! Every command passes through `swissarmyhammer_shell` security validation before
+//! execution: blocked command patterns, path traversal prevention, environment
+//! variable sanitization, and command length limits. See
+//! [`execute_command`] for the validation pipeline.
+//!
+//! ## Module Layout
+//!
+//! - [`infrastructure`]: Types, output buffer, error types
+//! - [`process`]: Process spawning, streaming, guard
+//! - [`state`]: Command history, output log, embedding search
+//! - [`execute_command`], [`list_processes`], [`kill_process`],
+//!   [`search_history`], [`grep_history`], [`get_lines`]: Per-operation modules
 
 pub mod execute_command;
 pub mod get_lines;
@@ -140,37 +169,30 @@ impl McpTool for ShellExecuteTool {
 
         match op_str {
             "execute command" | "" => {
-                return execute_command::execute_execute_command(
-                    args,
-                    self.state.clone(),
-                    _context,
-                )
-                .await;
+                execute_command::run(args, self.state.clone(), _context).await
             }
             "list processes" => {
-                return list_processes::execute_list_processes(self.state.clone()).await;
+                list_processes::execute_list_processes(self.state.clone()).await
             }
             "kill process" => {
-                return kill_process::execute_kill_process(&args, self.state.clone()).await;
+                kill_process::execute_kill_process(&args, self.state.clone()).await
             }
             "search history" => {
-                return search_history::execute_search_history(&args, self.state.clone()).await;
+                search_history::execute_search_history(&args, self.state.clone()).await
             }
             "grep history" => {
-                return grep_history::execute_grep_history(&args, self.state.clone()).await;
+                grep_history::execute_grep_history(&args, self.state.clone()).await
             }
             "get lines" => {
-                return get_lines::execute_get_lines(&args, self.state.clone()).await;
+                get_lines::execute_get_lines(&args, self.state.clone()).await
             }
-            other => {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "Unknown operation '{}'. Valid operations: execute command, list processes, kill process, search history, grep history, get lines",
-                        other
-                    ),
-                    None,
-                ));
-            }
+            other => Err(McpError::invalid_params(
+                format!(
+                    "Unknown operation '{}'. Valid operations: execute command, list processes, kill process, search history, grep history, get lines",
+                    other
+                ),
+                None,
+            )),
         }
     }
 }

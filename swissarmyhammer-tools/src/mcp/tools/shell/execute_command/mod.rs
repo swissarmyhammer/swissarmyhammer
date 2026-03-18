@@ -24,7 +24,7 @@ use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
 #[derive(Debug, Default)]
 pub struct ExecuteCommand;
 
-pub(crate) static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
+static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("command")
         .description("The shell command to execute")
         .param_type(ParamType::String)
@@ -73,7 +73,7 @@ impl Operation for ExecuteCommand {
 /// # Returns
 ///
 /// A `CallToolResult` with the command output, or an `McpError` on failure.
-pub async fn execute_execute_command(
+pub async fn run(
     args: serde_json::Map<String, serde_json::Value>,
     state: Arc<Mutex<ShellState>>,
     context: &ToolContext,
@@ -164,7 +164,7 @@ pub async fn execute_execute_command(
 
             // Apply max_lines capping to combined stdout+stderr
             // -1 means unlimited (all lines), 0 means status-only, positive means cap
-            let raw_max_lines = request.max_lines.unwrap_or(32);
+            let raw_max_lines = request.max_lines.unwrap_or(200);
             if raw_max_lines == 0 {
                 // Status-only response
                 let duration = result.execution_time_ms;
@@ -229,7 +229,7 @@ pub async fn execute_execute_command(
 /// # Returns
 ///
 /// `Ok(())` if valid, or an `McpError` describing the validation failure.
-pub(crate) fn validate_shell_request(request: &ShellExecuteRequest) -> Result<(), McpError> {
+fn validate_shell_request(request: &ShellExecuteRequest) -> Result<(), McpError> {
     McpValidation::validate_not_empty(&request.command, "shell command")
         .map_err(|e| McpErrorHandler::handle_error(e, "validate shell command"))?;
 
@@ -270,7 +270,7 @@ pub(crate) fn validate_shell_request(request: &ShellExecuteRequest) -> Result<()
 ///
 /// `Ok(Some(map))` if a string was provided and parsed successfully,
 /// `Ok(None)` if no string was provided, or an `McpError` on parse/validation failure.
-pub(crate) fn parse_environment_variables(
+fn parse_environment_variables(
     env_str: Option<&str>,
 ) -> Result<Option<HashMap<String, String>>, McpError> {
     if let Some(env_str) = env_str {
@@ -324,9 +324,7 @@ async fn send_start_notification(context: &ToolContext, command: &str) {
 /// # Returns
 ///
 /// `Ok(CallToolResult)` with the serialized JSON, or an `McpError` if serialization fails.
-pub(crate) fn format_success_result(
-    result: ShellExecutionResult,
-) -> Result<CallToolResult, McpError> {
+fn format_success_result(result: ShellExecutionResult) -> Result<CallToolResult, McpError> {
     let is_error = result.exit_code != 0;
     let json_response = serde_json::to_string_pretty(&result).map_err(|e| {
         tracing::error!("Failed to serialize shell result: {}", e);
@@ -361,7 +359,7 @@ pub(crate) fn format_success_result(
 ///
 /// `Ok(CallToolResult::error(...))` — the outer `Ok` indicates the MCP call
 /// succeeded (we have a result to return), but the inner content signals failure.
-pub(crate) fn format_error_result(shell_error: ShellError) -> Result<CallToolResult, McpError> {
+fn format_error_result(shell_error: ShellError) -> Result<CallToolResult, McpError> {
     let error_message = format!("Shell execution failed: {shell_error}");
     tracing::error!("{}", error_message);
 

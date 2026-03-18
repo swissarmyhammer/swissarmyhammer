@@ -3,8 +3,6 @@
 //! This module provides common test fixtures, builders, and assertion helpers
 //! used across shell tool tests.
 
-#![cfg(test)]
-
 use crate::mcp::tool_registry::{McpTool, ToolContext};
 use crate::test_utils::create_test_context;
 use rmcp::model::CallToolResult;

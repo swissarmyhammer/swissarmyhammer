@@ -23,8 +23,8 @@ use super::infrastructure::{OutputBuffer, OutputLimits, ShellError, ShellExecuti
 /// Unlike the sync ProcessGuard in test_utils.rs, this version works with tokio::process::Child
 /// and provides async methods for graceful termination with timeouts.
 pub struct AsyncProcessGuard {
-    pub(crate) child: Option<Child>,
-    pub(crate) command: String,
+    pub(super) child: Option<Child>,
+    pub(super) command: String,
 }
 
 impl AsyncProcessGuard {
@@ -510,7 +510,7 @@ async fn stream_output_until_complete(
 ///
 /// Handles the streaming capture of stdout and stderr from a child process
 /// with configurable size limits, binary detection, and intelligent truncation.
-pub(crate) async fn process_child_output_with_limits(
+pub(super) async fn process_child_output_with_limits(
     child: &mut Child,
     output_limits: &OutputLimits,
     peer: Option<&Arc<Peer<RoleServer>>>,
@@ -557,7 +557,7 @@ pub(crate) async fn process_child_output_with_limits(
 }
 
 /// Validate and prepare working directory
-pub(crate) fn prepare_working_directory(
+pub(super) fn prepare_working_directory(
     working_directory: Option<PathBuf>,
 ) -> Result<PathBuf, ShellError> {
     let work_dir = working_directory
@@ -573,9 +573,9 @@ pub(crate) fn prepare_working_directory(
 }
 
 /// Prepare shell command for execution
-pub(crate) fn prepare_shell_command(
+pub(super) fn prepare_shell_command(
     command: &str,
-    work_dir: &PathBuf,
+    work_dir: &Path,
     environment: Option<&std::collections::HashMap<String, String>>,
 ) -> Command {
     let (program, args) = if cfg!(target_os = "windows") {
@@ -601,7 +601,7 @@ pub(crate) fn prepare_shell_command(
 }
 
 /// Spawn command process with error handling
-pub(crate) fn spawn_command_process(
+pub(super) fn spawn_command_process(
     mut cmd: Command,
     command: &str,
     work_dir: &Path,
@@ -622,7 +622,7 @@ pub(crate) fn spawn_command_process(
 }
 
 /// Send completion progress notification
-pub(crate) async fn send_completion_notification(
+pub(super) async fn send_completion_notification(
     context: &ToolContext,
     line_count: u32,
     exit_code: i32,
@@ -641,7 +641,7 @@ pub(crate) async fn send_completion_notification(
 }
 
 /// Format execution result from output buffer
-pub(crate) fn format_execution_result(
+pub(super) fn format_execution_result(
     command_id: usize,
     command: String,
     work_dir: PathBuf,
@@ -690,7 +690,7 @@ pub(crate) fn format_execution_result(
 
 /// Spawn a shell command and return the guard (with PID available) and working dir.
 /// The guard owns the child process — if dropped, it kills the process.
-pub(crate) fn spawn_shell_command(
+pub(super) fn spawn_shell_command(
     command: &str,
     working_directory: Option<PathBuf>,
     environment: Option<&std::collections::HashMap<String, String>>,
@@ -704,7 +704,7 @@ pub(crate) fn spawn_shell_command(
 
 /// Execute using an already-spawned process guard. The guard retains child ownership,
 /// so if this future is cancelled (e.g., by timeout), the guard's Drop kills the process.
-pub(crate) async fn execute_with_guard(
+pub(super) async fn execute_with_guard(
     process_guard: &mut AsyncProcessGuard,
     command_id: usize,
     command: String,
