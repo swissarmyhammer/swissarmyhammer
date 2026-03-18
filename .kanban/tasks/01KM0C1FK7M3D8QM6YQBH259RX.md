@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM0C0X4KT5C8CVW71VWRE9ZK
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffec80
 title: Implement OS-level drag initiation from Rust
 ---
 ## What

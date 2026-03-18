@@ -28,6 +28,7 @@ serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tokio = { workspace = true }
 dirs = { workspace = true }
+drag = { version = "2.1", features = ["serde"] }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -37,6 +38,7 @@ notify = { workspace = true }
 sha2 = { workspace = true }
 tracing-oslog = "0.3"
 tauri-plugin-deep-link = "2"
+tauri-plugin-drag = "2"
 tauri-plugin-global-shortcut = "2"
 urlencoding = { workspace = true }
 whoami = "1"

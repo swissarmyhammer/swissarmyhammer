@@ -47,6 +47,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(app_state)
@@ -82,6 +83,7 @@ fn main() {
             commands::start_drag_session,
             commands::cancel_drag_session,
             commands::complete_drag_session,
+            commands::start_os_drag,
             commands::restore_windows,
             commands::save_window_geometry,
         ])
