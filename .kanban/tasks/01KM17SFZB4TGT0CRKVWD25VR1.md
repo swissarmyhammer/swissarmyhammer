@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 8a80
+position_column: done
+position_ordinal: ffffffd980
 title: '[WARNING] PLANNING_GUIDE.md partial replaces a slightly different "What" description line'
 ---
 ## What

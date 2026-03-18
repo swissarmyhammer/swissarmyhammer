@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffd480
 title: Codebase mapping skill with Mermaid diagrams
 ---
 New `/map` skill that uses our code-context (treesitter chunks, symbols, call edges) to generate a rich, visual overview of a codebase.

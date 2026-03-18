@@ -305,6 +305,37 @@ async fn test_skill_test_returns_body_content() {
 }
 
 #[tokio::test]
+async fn test_use_skill_with_arguments_renders_in_output() {
+    let (server, client) = setup(true).await;
+
+    // Invoke the card skill with arguments — the card skill uses {% if arguments %}
+    let result = client
+        .call_tool(skill_params(serde_json::json!({
+            "op": "use skill",
+            "name": "card",
+            "arguments": "fix the login bug"
+        })))
+        .await
+        .expect("use skill with arguments should succeed");
+
+    let content_text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .unwrap_or("");
+
+    // The arguments string should appear in the rendered output
+    assert!(
+        content_text.contains("fix the login bug"),
+        "Rendered skill output should contain the arguments string, got: {}",
+        &content_text[..content_text.len().min(500)]
+    );
+
+    teardown(server, client).await;
+}
+
+#[tokio::test]
 async fn test_skill_invoke_via_shorthand() {
     let (server, client) = setup(true).await;
 

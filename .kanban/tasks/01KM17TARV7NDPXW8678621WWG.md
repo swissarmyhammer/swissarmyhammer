@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 8c80
+position_column: done
+position_ordinal: ffffffdb80
 title: '[NIT] card/SKILL.md: "detected-projects" partial included but card skill may run outside a coding context'
 ---
 ## What
