@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffffd280
+position_ordinal: ffffffff80
 title: 'warning: avp-common/src/context.rs doc comment still refers to old ~/.avp path instead of XDG'
 ---
 `avp-common/src/context.rs:7-17` — module doc comment\n\nThe module-level doc comment says:\n```\n// User-level validators can be placed in `~/<AVP_DIR>/validators/`.\n```\nand the struct doc at line 104 says:\n```\n// - User: `~/<AVP_DIR>/` in home directory\n```\n\nBut after this change the user path is `$XDG_DATA_HOME/avp/` (defaults to `~/.local/share/avp/`), not `~/.avp/`. The comment using `<AVP_DIR>` as a placeholder is also confusing — `AvpConfig::DIR_NAME` is `.avp` but the XDG path uses `AvpConfig::XDG_NAME` which is `avp` (no dot).\n\nSimilarly, `avp-common/src/validator/loader.rs` lines 5-7 say:\n```\n// 2. User validators (~/<AVP_DIR>/validators)\n// 3. Project validators (./<AVP_DIR>/validators)\n```\nwhich are stale.\n\nSuggestion: Update all doc comments that mention `~/<AVP_DIR>/` to say `$XDG_DATA_HOME/avp/` (defaults to `~/.local/share/avp/`). #review-finding

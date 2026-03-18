@@ -2,7 +2,7 @@
 depends_on:
 - 01KKPM7NJR5C0279ATM51B6KGR
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffffffd080
 title: Wire bus into LeaderGuard and FollowerGuard
 ---
 ## What

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffffa780
+position_ordinal: ffffffb780
 title: 'FollowerGuard: comment says "Open (not create)" but uses File::create'
 ---
 swissarmyhammer-leader-election/src/election.rs:280\n\n`try_promote()` has a comment reading \"Open (not create) — the file already exists from the original election\" but the implementation calls `File::create(&self.lock_path)`. `File::create` truncates-or-creates. If the file was removed (e.g. by the outgoing leader's Drop impl, which now deletes the lock file), a follower calling `try_promote()` would silently create a fresh 0-byte lock file and immediately win the lock — even with no prior leader. This is a correctness issue: the comment and the code disagree, and there is a real race between `LeaderGuard::drop` removing the lock file and a follower calling `File::create` to re-create it.\n\nSuggestion: decide on one of two approaches:\n1. Don't delete the lock file in `LeaderGuard::drop` — keep it as a stable sentinel file, and both `try_acquire_lock` and `try_promote` open it with `File::create` (current create-or-truncate semantics are fine).\n2. Use `OpenOptions::new().write(true).create(false).open(...)` in `try_promote` and return `Ok(None)` on `NotFound` — treat a missing lock file the same as a free lock. Fix the comment to match.\n\nCurrently option 1 is effectively what the code does, so the comment should be removed/corrected.", 

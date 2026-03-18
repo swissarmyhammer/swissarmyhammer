@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0DC89WJ5A3ZAE4YYM1WATR
 position_column: done
-position_ordinal: ffffffff9780
+position_ordinal: ffffffffc180
 title: Extract grep_history operation
 ---
 Move GrepHistory struct + impl Operation + handler into `execute/grep_history/mod.rs`.

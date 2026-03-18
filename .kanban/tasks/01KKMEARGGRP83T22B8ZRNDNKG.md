@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: ffffff9b80
+position_ordinal: ffffffab80
 title: 'Fix flaky test: test_lsp_reindexing_after_file_change'
 ---
 ## What

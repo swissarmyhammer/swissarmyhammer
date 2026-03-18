@@ -9,7 +9,7 @@ depends_on:
 - 01KM0DD5TW9ZTE13TAV1XMK1CP
 - 01KM0DDAVRGRXDHR9115PMAB6Q
 position_column: done
-position_ordinal: ffffffff9a80
+position_ordinal: ffffffffc480
 title: Final cleanup and verification
 ---
 - Ensure `execute/mod.rs` is <200 lines: just module decls, re-exports, SHELL_OPERATIONS, ShellExecuteTool with thin match dispatcher

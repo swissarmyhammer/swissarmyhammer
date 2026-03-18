@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: ffffffdf80
+position_ordinal: ffffffff8d80
 title: Make ralph a proper subsystem with DirectoryConfig, ManagedDirectory, and .ralph/
 ---
 ## What

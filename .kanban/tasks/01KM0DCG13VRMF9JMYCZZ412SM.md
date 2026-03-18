@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0DC89WJ5A3ZAE4YYM1WATR
 position_column: done
-position_ordinal: ffffffff9280
+position_ordinal: ffffffffbe80
 title: Extract list_processes operation
 ---
 Move ListProcesses struct + impl Operation + handler into `execute/list_processes/mod.rs`.

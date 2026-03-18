@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKS49YPTJEAZYX34ABQ4JVET
 position_column: done
-position_ordinal: ffffffb880
+position_ordinal: ffffffd080
 title: 'Quick Capture: auto-enter vim insert mode on show'
 ---
 ## What

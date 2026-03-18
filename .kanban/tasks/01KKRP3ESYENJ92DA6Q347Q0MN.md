@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffc80
+position_ordinal: ffffff8480
 title: 'swissarmyhammer-leader-election/election.rs: FollowerGuard::subscribe() creates a new ZMQ context per call'
 ---
 swissarmyhammer-leader-election/src/election.rs:450-453

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffff280
+position_ordinal: ffffffffa080
 title: Fix Enter/Escape in quick-capture text input
 ---
 ## What

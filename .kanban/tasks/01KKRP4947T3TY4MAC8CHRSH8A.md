@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffff8180
+position_ordinal: ffffff8d80
 title: 'avp-common/types/common.rs: CommonInput session_id/transcript_path silently default to empty string'
 ---
 avp-common/src/types/common.rs (CommonInput struct, new `#[serde(default)]` on session_id and transcript_path)

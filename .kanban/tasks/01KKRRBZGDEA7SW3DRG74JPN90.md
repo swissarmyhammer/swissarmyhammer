@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffef80
+position_ordinal: ffffffff9d80
 title: Clean up duplicate strip_frontmatter in test files
 ---
 ## What

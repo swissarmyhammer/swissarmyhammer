@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0DBV4WE1N98MN80MTNZQPB
 position_column: done
-position_ordinal: ffffffff9080
+position_ordinal: ffffffffbc80
 title: Extract shared infrastructure
 ---
 Move shared types into `infrastructure.rs` and `process.rs`, test helpers into `test_helpers.rs`. Re-export from mod.rs. No operations move yet. All files under `shell/` (flattened, no `execute/` subfolder).

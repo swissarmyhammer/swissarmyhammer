@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffb380
+position_ordinal: ffffffc780
 title: Add --tools flag support to ClaudeProcess spawn config
 ---
 ## What\nAdd a `tools_override: Option<String>` field to `SpawnConfig` in `claude-agent/src/claude_process.rs` that maps to `--tools <value>` on the Claude CLI command line.\n\nFor validators, we pass `--tools \"\"` to disable ALL built-in Claude tools (Read, Write, Bash, Edit, etc.). Combined with `--strict-mcp-config` (already implemented), this means the validator agent has ONLY the MCP tools we provide — nothing else.\n\n**Files:**\n- `claude-agent/src/claude_process.rs` — add `tools_override` to `SpawnConfig`, add `configure_tools` method\n- `claude-agent/src/config.rs` — add `tools_override: Option<String>` to `ClaudeConfig`\n- `claude-agent/src/agent.rs` — propagate the field from `AgentConfig` to `SpawnConfig`\n\n**Approach:**\n- Add `tools_override: Option<String>` to `SpawnConfig`\n- In `ClaudeProcess::spawn()`, if `tools_override` is `Some(val)`, add `--tools <val>` to args\n- Thread it through from `AgentConfig` → `ClaudeConfig` → `SpawnConfig`\n\n## Acceptance Criteria\n- [ ] `SpawnConfig.tools_override = Some(\"\".to_string())` produces `--tools \"\"` in CLI args\n- [ ] `SpawnConfig.tools_override = None` adds no --tools flag (backward compat)\n- [ ] Field propagates from AgentConfig through to the spawn command\n\n## Tests\n- [ ] Unit test: spawn config with tools_override produces correct args\n- [ ] Unit test: spawn config without tools_override has no --tools flag\n- [ ] `cargo test -p claude-agent`

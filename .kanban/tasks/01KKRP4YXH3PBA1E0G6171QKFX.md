@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffff8480
+position_ordinal: ffffff9280
 title: 'heb/context.rs: test_context() function duplicates open() logic — test helper not testing the real code path'
 ---
 heb/src/context.rs:109-125

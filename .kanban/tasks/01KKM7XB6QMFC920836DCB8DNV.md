@@ -5,7 +5,7 @@ depends_on:
 - 01KKM7RX9ZTK4VKMB6P9NPWHWW
 - 01KKM7SG4QPRPNWJSZ8M1BB5H1
 position_column: done
-position_ordinal: ffffff9c80
+position_ordinal: ffffffac80
 title: Eliminate hardcoded home_dir paths in agents, mirdan/AVP, and prompts
 ---
 ## What

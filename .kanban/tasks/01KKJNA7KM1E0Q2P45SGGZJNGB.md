@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ffffffd880
+position_ordinal: ffffffff8680
 title: Verify with cargo check and nextest
 ---

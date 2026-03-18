@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffcc80
+position_ordinal: fffffff880
 title: Remove AvpHooks component from sah init
 ---
 ## What
