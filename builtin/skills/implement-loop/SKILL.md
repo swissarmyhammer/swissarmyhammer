@@ -25,7 +25,7 @@ Independent cards run in parallel. Dependent cards wait for their dependencies t
 2. **Query ready cards**: call `kanban` with `op: "list tasks"` and `ready: true` to get all cards with no incomplete dependencies.
 3. **Implement the batch**:
    - **1 ready card**: Run `/implement` directly (sequential, same as before).
-   - **2-4 ready cards**: Spawn parallel `Agent` subagents, one per card. Each agent runs `/implement` for a specific card. Use `isolation: "worktree"` so agents don't conflict on files. Send all Agent tool calls in a **single message** so they run concurrently.
+   - **2-4 ready cards**: Spawn parallel `Agent` subagents, one per card. Each agent runs `/implement` for a specific card.  Send all Agent tool calls in a **single message** so they run concurrently.
    - **5+ ready cards**: Spawn the first 4 in parallel. When any complete, spawn the next. Do not exceed 4 concurrent agents.
 4. **Run `/test`** — after each batch completes, verify all tests pass.
 5. **Check for remaining cards**: query `kanban` with `op: "list tasks"` and `ready: true`.
