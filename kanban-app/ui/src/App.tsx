@@ -40,15 +40,8 @@ const IS_QUICK_CAPTURE = URL_PARAMS.get("window") === "quick-capture";
 /** Initial board path from URL (set when opening a new window for a specific board). */
 const INITIAL_BOARD_PATH = URL_PARAMS.get("board") ?? undefined;
 
-/** localStorage key for persisting active board path across hot reloads. */
-const BOARD_PATH_STORAGE_KEY = "active-board-path";
-
-/** Restore board path: URL param > localStorage > undefined (will pick from backend). */
-function getInitialBoardPath(): string | undefined {
-  if (INITIAL_BOARD_PATH) return INITIAL_BOARD_PATH;
-  const stored = localStorage.getItem(BOARD_PATH_STORAGE_KEY);
-  return stored ?? undefined;
-}
+/** Window label for per-window state persistence. */
+const WINDOW_LABEL = getCurrentWindow().label;
 
 // Mark <html> so CSS can make the quick-capture window fully transparent.
 if (IS_QUICK_CAPTURE) {
@@ -102,23 +95,14 @@ function App() {
     [],
   );
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
-  /** Per-window active board path. Each window independently selects which board to display. */
-  const [activeBoardPath, setActiveBoardPath] = useState<string | undefined>(getInitialBoardPath);
+  /** Per-window active board path. Secondary windows get it from URL; main restores from backend. */
+  const [activeBoardPath, setActiveBoardPath] = useState<string | undefined>(INITIAL_BOARD_PATH);
   const activeBoardPathRef = useRef(activeBoardPath);
   activeBoardPathRef.current = activeBoardPath;
 
-  // Persist board path to localStorage for hot-reload recovery
-  useEffect(() => {
-    if (activeBoardPath) {
-      localStorage.setItem(BOARD_PATH_STORAGE_KEY, activeBoardPath);
-    } else {
-      localStorage.removeItem(BOARD_PATH_STORAGE_KEY);
-    }
-  }, [activeBoardPath]);
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
-  const inspectorRestoredRef = useRef(false);
 
   /** Open an inspector for any entity. Replaces the stack for primary entities, pushes for secondary. */
   const inspectEntity = useCallback((entityType: string, entityId: string) => {
@@ -179,59 +163,62 @@ function App() {
     setEntitiesByType(result.entitiesByType ?? {});
   }, []);
 
+  // Restore window state from backend on mount.
+  // For main window: reads board_path + inspector_stack from config.
+  // For secondary windows: board comes from URL param, this restores inspector.
   useEffect(() => {
-    refresh();
+    let cancelled = false;
+    (async () => {
+      // Restore board path from backend config (main window only — secondary gets it from URL)
+      if (!INITIAL_BOARD_PATH) {
+        try {
+          const ctx = await invoke<{ board_path: string | null; inspector_stack: string[] }>(
+            "get_ui_context",
+            { windowLabel: WINDOW_LABEL },
+          );
+          if (cancelled) return;
+          if (ctx.board_path) {
+            // Open board idempotently, then load data
+            await invoke("open_board", { path: ctx.board_path });
+            if (cancelled) return;
+            setActiveBoardPath(ctx.board_path);
+            activeBoardPathRef.current = ctx.board_path;
+          }
+          // Restore inspector stack
+          if (ctx.inspector_stack?.length > 0) {
+            const validated: PanelEntry[] = [];
+            for (const moniker of ctx.inspector_stack) {
+              const sep = moniker.indexOf(":");
+              if (sep < 0) continue;
+              validated.push({ entityType: moniker.slice(0, sep), entityId: moniker.slice(sep + 1) });
+            }
+            if (validated.length > 0) setPanelStack(validated);
+          }
+        } catch {
+          // No saved state — will fall through to refresh below
+        }
+      }
+      if (cancelled) return;
+      await refresh();
+      if (cancelled) return;
+
+      // Main window restores secondary windows once boards are loaded
+      if (!INITIAL_BOARD_PATH) {
+        invoke("restore_windows").catch(() => {});
+      }
+    })();
+    return () => { cancelled = true; };
   }, [refresh]);
 
-  // Restore secondary windows from persisted window→board mapping.
-  // Only the main window does this, and only once on mount.
-  // The backend recreates windows with saved labels and applies
-  // persisted position/size from config.window_boards.
-  const windowsRestoredRef = useRef(false);
+  // Persist inspector stack whenever it changes (after initial mount)
+  const inspectorInitialized = useRef(false);
   useEffect(() => {
-    if (INITIAL_BOARD_PATH || windowsRestoredRef.current) return;
-    if (openBoards.length === 0) return;
-    windowsRestoredRef.current = true;
-
-    invoke("restore_windows").catch((error) => {
-      console.error("Failed to restore windows:", error);
-    });
-  }, [openBoards]);
-
-  // Restore inspector stack from persisted config after initial data loads.
-  // Validates each moniker against loaded entities — drops missing ones.
-  useEffect(() => {
-    if (inspectorRestoredRef.current) return;
-    const allEntities = Object.values(entitiesByType).flat();
-    if (allEntities.length === 0) return;
-    inspectorRestoredRef.current = true;
-
-    invoke<{ inspector_stack: string[] }>("get_ui_context")
-      .then(({ inspector_stack }) => {
-        if (!inspector_stack || inspector_stack.length === 0) return;
-        const validated: PanelEntry[] = [];
-        for (const moniker of inspector_stack) {
-          const sep = moniker.indexOf(":");
-          if (sep < 0) continue;
-          const entityType = moniker.slice(0, sep);
-          const entityId = moniker.slice(sep + 1);
-          // Validate entity still exists
-          if (allEntities.some((e) => e.entity_type === entityType && e.id === entityId)) {
-            validated.push({ entityType, entityId });
-          }
-        }
-        if (validated.length > 0) {
-          setPanelStack(validated);
-        }
-      })
-      .catch(() => {});
-  }, [entitiesByType]);
-
-  // Persist inspector stack whenever it changes
-  useEffect(() => {
-    if (!inspectorRestoredRef.current) return;
+    if (!inspectorInitialized.current) {
+      inspectorInitialized.current = true;
+      return;
+    }
     const monikers = panelStack.map((e) => `${e.entityType}:${e.entityId}`);
-    invoke("set_inspector_stack", { stack: monikers }).catch(() => {});
+    invoke("set_inspector_stack", { stack: monikers, windowLabel: WINDOW_LABEL }).catch(() => {});
   }, [panelStack]);
 
   // ---------------------------------------------------------------------------
@@ -362,12 +349,13 @@ function App() {
     };
   }, [refresh]);
 
-  /** Switch this window's active board. Updates local state + backend "last-used" default. */
+  /** Switch this window's active board. Persists via backend switch_board command. */
   const handleSwitchBoard = useCallback(async (path: string) => {
     setActiveBoardPath(path);
     activeBoardPathRef.current = path;
-    // Update backend's global active board (for commands that don't pass board_path)
-    try { await invoke("set_active_board", { path }); } catch { /* ignore */ }
+    try {
+      await invoke("switch_board", { windowLabel: WINDOW_LABEL, path });
+    } catch { /* ignore */ }
     refresh();
   }, [refresh]);
 

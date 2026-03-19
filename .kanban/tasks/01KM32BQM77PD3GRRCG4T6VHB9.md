@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM32B3GRRPSW685JTMQAMPF3
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: fffffff980
 title: Wire view switching through command dispatch and palette
 ---
 ## What

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM32AES07EG43SA1872HCY0D
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: fffffff880
 title: 'Frontend: strip localStorage/refs, restore state from commands on mount'
 ---
 ## What

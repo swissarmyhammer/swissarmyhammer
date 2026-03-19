@@ -156,7 +156,7 @@ pub async fn close_board(
         let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
         let mut config = state.config.write().await;
         config
-            .window_boards
+            .windows
             .retain(|_, entry| entry.board_path != canonical);
         let _ = config.save();
     }
@@ -184,6 +184,45 @@ pub async fn set_active_board(state: State<'_, AppState>, path: String) -> Resul
     Ok(json!({
         "path": canonical.display().to_string(),
         "active": true,
+    }))
+}
+
+/// Switch a window to a different board.
+///
+/// Opens the board idempotently (no-op if already open), updates the
+/// backend active_board, and persists the window→board mapping in config.
+/// The frontend should call this instead of `set_active_board` for
+/// per-window board switching.
+#[tauri::command]
+pub async fn switch_board(
+    state: State<'_, AppState>,
+    window_label: Option<String>,
+    path: String,
+) -> Result<Value, String> {
+    let board_path = PathBuf::from(&path);
+
+    // Open the board idempotently (sets active_board on the backend)
+    state
+        .open_board(&board_path, None)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Persist the window→board mapping
+    let label = window_label.as_deref().unwrap_or("main");
+    let canonical = board_path
+        .canonicalize()
+        .unwrap_or_else(|_| board_path.clone());
+    let mut config = state.config.write().await;
+    let ws = config
+        .windows
+        .entry(label.to_string())
+        .or_insert_with(|| crate::state::WindowState::new(canonical.clone()));
+    ws.board_path = canonical.clone();
+    config.save().map_err(|e| e.to_string())?;
+
+    Ok(json!({
+        "path": canonical.display().to_string(),
+        "window_label": label,
     }))
 }
 
@@ -215,35 +254,62 @@ pub async fn set_keymap_mode(state: State<'_, AppState>, mode: String) -> Result
     Ok(json!({ "keymap_mode": mode }))
 }
 
-/// Get the persisted UI context (active view + inspector stack).
+/// Get the persisted window state (board path, active view, inspector stack).
 ///
 /// The frontend calls this on mount to restore state across hot reloads.
 #[tauri::command]
-pub async fn get_ui_context(state: State<'_, AppState>) -> Result<Value, String> {
+pub async fn get_ui_context(state: State<'_, AppState>, window_label: Option<String>) -> Result<Value, String> {
     let config = state.config.read().await;
-    Ok(json!({
-        "active_view_id": config.active_view_id,
-        "inspector_stack": config.inspector_stack,
-    }))
+    let label = window_label.as_deref().unwrap_or("main");
+    if let Some(ws) = config.windows.get(label) {
+        Ok(json!({
+            "board_path": ws.board_path.display().to_string(),
+            "active_view_id": ws.active_view_id,
+            "inspector_stack": ws.inspector_stack,
+        }))
+    } else {
+        Ok(json!({
+            "board_path": null,
+            "active_view_id": null,
+            "inspector_stack": [],
+        }))
+    }
 }
 
-/// Persist the active view ID to config.
+/// Persist the active view ID to the window's config entry.
+///
+/// Creates the window entry on demand if it doesn't exist yet.
 #[tauri::command]
-pub async fn set_active_view(state: State<'_, AppState>, view_id: String) -> Result<Value, String> {
+pub async fn set_active_view(state: State<'_, AppState>, view_id: String, window_label: Option<String>) -> Result<Value, String> {
     let mut config = state.config.write().await;
-    config.active_view_id = Some(view_id.clone());
+    let label = window_label.as_deref().unwrap_or("main");
+    let active_board = state.active_board.read().await;
+    let ws = config.windows.entry(label.to_string()).or_insert_with(|| {
+        crate::state::WindowState::new(active_board.clone().unwrap_or_default())
+    });
+    ws.active_view_id = Some(view_id.clone());
+    drop(active_board);
     config.save().map_err(|e| e.to_string())?;
     Ok(json!({ "active_view_id": view_id }))
 }
 
-/// Persist the inspector panel stack to config.
+/// Persist the inspector panel stack to the window's config entry.
+///
+/// Creates the window entry on demand if it doesn't exist yet.
 #[tauri::command]
 pub async fn set_inspector_stack(
     state: State<'_, AppState>,
     stack: Vec<String>,
+    window_label: Option<String>,
 ) -> Result<Value, String> {
     let mut config = state.config.write().await;
-    config.inspector_stack = stack.clone();
+    let label = window_label.as_deref().unwrap_or("main");
+    let active_board = state.active_board.read().await;
+    let ws = config.windows.entry(label.to_string()).or_insert_with(|| {
+        crate::state::WindowState::new(active_board.clone().unwrap_or_default())
+    });
+    ws.inspector_stack = stack.clone();
+    drop(active_board);
     config.save().map_err(|e| e.to_string())?;
     Ok(json!({ "inspector_stack": stack }))
 }
@@ -697,10 +763,9 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
 pub async fn reset_windows(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     {
         let mut config = state.config.write().await;
-        config.main_window = None;
-        config.window_boards.clear();
+        config.windows.clear();
         let _ = config.save();
-        tracing::info!("Cleared main_window and window_boards geometry");
+        tracing::info!("Cleared all window state");
     }
     app.restart();
     Ok(())
@@ -723,7 +788,7 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
 /// Create a new window, optionally opening a specific board.
 ///
 /// If `board_path` is not provided, uses the currently active board.
-/// The window label and board path are persisted to `window_boards`
+/// The window label and board path are persisted to `windows`
 /// so the window can be restored at the same position on restart.
 #[tauri::command]
 pub async fn create_window(
@@ -764,19 +829,13 @@ pub async fn create_window(
     // Persist window→board mapping so we can restore with the same label and position
     if let Some(ref bp) = resolved_path {
         let mut config = state.config.write().await;
-        let entry = crate::state::WindowBoardEntry {
-            board_path: PathBuf::from(bp),
-            x: None,
-            y: None,
-            width: None,
-            height: None,
-        };
+        let entry = crate::state::WindowState::new(PathBuf::from(bp));
         tracing::info!(
             label = %label,
             board_path = %bp,
-            "persisting window→board mapping"
+            "persisting window state"
         );
-        config.window_boards.insert(label.clone(), entry);
+        config.windows.insert(label.clone(), entry);
         let _ = config.save();
     }
 
@@ -786,29 +845,29 @@ pub async fn create_window(
     }))
 }
 
-/// Restore secondary windows from persisted window→board mapping.
+/// Restore secondary windows from persisted window state.
 ///
 /// Called by the main window on mount. For each saved window label that
 /// doesn't already exist, creates a new window with the same label and
-/// applies saved position/size from `config.window_boards`.
+/// applies saved position/size from `config.windows`.
 ///
 /// Returns the list of restored window labels.
 #[tauri::command]
 pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     let config = state.config.read().await;
-    let window_boards = config.window_boards.clone();
+    let saved_windows = config.windows.clone();
     drop(config);
 
     tracing::info!(
-        count = window_boards.len(),
-        labels = ?window_boards.keys().collect::<Vec<_>>(),
+        count = saved_windows.len(),
+        labels = ?saved_windows.keys().collect::<Vec<_>>(),
         "restore_windows: found {} saved window entries",
-        window_boards.len()
+        saved_windows.len()
     );
 
     let mut restored: Vec<String> = Vec::new();
 
-    for (label, entry) in &window_boards {
+    for (label, entry) in &saved_windows {
         // Skip if window already exists
         if app.get_webview_window(label).is_some() {
             continue;
@@ -876,7 +935,7 @@ pub async fn save_window_geometry(
     height: u32,
 ) -> Result<(), String> {
     let mut config = state.config.write().await;
-    if let Some(entry) = config.window_boards.get_mut(&window_label) {
+    if let Some(entry) = config.windows.get_mut(&window_label) {
         entry.x = Some(x);
         entry.y = Some(y);
         entry.width = Some(width);

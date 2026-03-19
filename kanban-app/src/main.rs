@@ -60,6 +60,7 @@ fn main() {
             commands::close_board,
             commands::list_open_boards,
             commands::set_active_board,
+            commands::switch_board,
             commands::get_recent_boards,
             commands::get_keymap_mode,
             commands::set_keymap_mode,
@@ -117,10 +118,14 @@ fn main() {
             // The window starts hidden (visible: false in tauri.conf.json).
             // Restore saved geometry from our own config, then show.
             if let Some(win) = app.get_webview_window("main") {
-                if let Some(ref geo) = config.main_window {
-                    let _ = win.set_position(tauri::PhysicalPosition::new(geo.x, geo.y));
-                    let _ = win.set_size(tauri::PhysicalSize::new(geo.width, geo.height));
-                    if geo.maximized {
+                if let Some(ref main_state) = config.windows.get("main") {
+                    if let (Some(x), Some(y)) = (main_state.x, main_state.y) {
+                        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+                    }
+                    if let (Some(w), Some(h)) = (main_state.width, main_state.height) {
+                        let _ = win.set_size(tauri::PhysicalSize::new(w, h));
+                    }
+                    if main_state.maximized {
                         let _ = win.maximize();
                     }
                 }
@@ -203,25 +208,21 @@ fn main() {
                         tauri::async_runtime::spawn(async move {
                             let state = app_handle.state::<AppState>();
                             let mut config = state.config.write().await;
-                            if label == "main" {
-                                config.main_window = Some(crate::state::WindowGeometry {
-                                    x: pos.x,
-                                    y: pos.y,
-                                    width: size.width,
-                                    height: size.height,
-                                    maximized,
-                                });
-                            } else if let Some(entry) = config.window_boards.get_mut(&label) {
-                                entry.x = Some(pos.x);
-                                entry.y = Some(pos.y);
-                                entry.width = Some(size.width);
-                                entry.height = Some(size.height);
-                            }
+                            let active_board = state.active_board.read().await;
+                            let entry = config.windows.entry(label.clone()).or_insert_with(|| {
+                                crate::state::WindowState::new(active_board.clone().unwrap_or_default())
+                            });
+                            drop(active_board);
+                            entry.x = Some(pos.x);
+                            entry.y = Some(pos.y);
+                            entry.width = Some(size.width);
+                            entry.height = Some(size.height);
+                            entry.maximized = maximized;
                             let _ = config.save();
                         });
                     }
                 }
-                // Mid-session close: remove window_boards entry so it doesn't resurrect.
+                // Mid-session close: remove windows entry so it doesn't resurrect.
                 // On app quit (shutting_down=true) we preserve entries for restore.
                 WindowEvent::Destroyed => {
                     if label == "main" || label == "quick-capture" {
@@ -234,8 +235,8 @@ fn main() {
                             return;
                         }
                         let mut config = state.config.write().await;
-                        if config.window_boards.remove(&label).is_some() {
-                            tracing::info!(label = %label, "removed window_boards entry on mid-session close");
+                        if config.windows.remove(&label).is_some() {
+                            tracing::info!(label = %label, "removed windows entry on mid-session close");
                             let _ = config.save();
                         }
                     });

@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useMemo } from "react";
+import { forwardRef, memo, useCallback, useMemo } from "react";
 import { GripVertical, Info } from "lucide-react";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { SubtaskProgress } from "@/components/subtask-progress";
@@ -179,7 +179,7 @@ function truncate(s: string, maxLen: number): string {
  * blocked_by pills are orange (warning), blocks pills are muted.
  * Renders nothing if there are no dependencies.
  */
-function DependencyPills({
+const DependencyPills = memo(function DependencyPills({
   entity,
   getEntity,
   onInspect,
@@ -231,4 +231,4 @@ function DependencyPills({
       })}
     </div>
   );
-}
+});

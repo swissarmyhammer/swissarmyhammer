@@ -205,47 +205,30 @@ pub(crate) struct RecentBoard {
     pub(crate) last_opened: DateTime<Utc>,
 }
 
-/// Saved geometry for a window (position + size + maximized state).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct WindowGeometry {
-    pub(crate) x: i32,
-    pub(crate) y: i32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    #[serde(default)]
-    pub(crate) maximized: bool,
-}
-
 /// Persisted app configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct AppConfig {
     pub(crate) recent_boards: Vec<RecentBoard>,
     #[serde(default = "default_keymap_mode")]
     pub(crate) keymap_mode: String,
-    /// Last active view ID — restored on reload, falls back to first view if invalid.
-    #[serde(default)]
-    pub(crate) active_view_id: Option<String>,
-    /// Inspector panel stack as monikers (e.g. ["task:01XYZ"]) — restored on reload,
-    /// entries that no longer resolve are silently dropped.
-    #[serde(default)]
-    pub(crate) inspector_stack: Vec<String>,
     /// Paths of boards that were open when the app last ran.
     /// Restored on startup so multi-board sessions survive reloads.
     #[serde(default)]
     pub(crate) open_boards: Vec<PathBuf>,
-    /// Window label → board path + geometry for restoring secondary windows.
-    #[serde(default)]
-    pub(crate) window_boards: HashMap<String, WindowBoardEntry>,
-    /// Main window geometry — saved on move/resize, restored in setup().
-    #[serde(default)]
-    pub(crate) main_window: Option<WindowGeometry>,
+    /// Per-window state: board path, active view, inspector stack, geometry.
+    /// Keyed by window label ("main" for the primary window).
+    #[serde(default, alias = "window_boards")]
+    pub(crate) windows: HashMap<String, WindowState>,
 }
 
-/// Persisted state for a secondary window.
+/// Persisted state for a window (main or secondary).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct WindowBoardEntry {
+pub(crate) struct WindowState {
     pub(crate) board_path: PathBuf,
-    /// Window position and size, saved on window close or periodic flush.
+    #[serde(default)]
+    pub(crate) active_view_id: Option<String>,
+    #[serde(default)]
+    pub(crate) inspector_stack: Vec<String>,
     #[serde(default)]
     pub(crate) x: Option<i32>,
     #[serde(default)]
@@ -254,6 +237,24 @@ pub(crate) struct WindowBoardEntry {
     pub(crate) width: Option<u32>,
     #[serde(default)]
     pub(crate) height: Option<u32>,
+    #[serde(default)]
+    pub(crate) maximized: bool,
+}
+
+impl WindowState {
+    /// Create a new WindowState with the given board path and default values.
+    pub(crate) fn new(board_path: PathBuf) -> Self {
+        Self {
+            board_path,
+            active_view_id: None,
+            inspector_stack: Vec::new(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            maximized: false,
+        }
+    }
 }
 
 fn default_keymap_mode() -> String {
@@ -481,13 +482,13 @@ impl AppState {
             }
         }
 
-        // Also open any boards referenced in window_boards that aren't already open.
+        // Also open any boards referenced in windows that aren't already open.
         // This handles the case where a secondary window shows a different board
         // than the ones in open_boards.
         {
             let config = self.config.read().await;
             let wb_paths: Vec<PathBuf> = config
-                .window_boards
+                .windows
                 .values()
                 .map(|e| e.board_path.clone())
                 .collect();
@@ -503,9 +504,9 @@ impl AppState {
                     continue;
                 }
                 if path.is_dir() {
-                    tracing::info!(path = %path.display(), "auto_open_board: restoring board from window_boards");
+                    tracing::info!(path = %path.display(), "auto_open_board: restoring board from windows");
                     if let Err(e) = self.open_board(&path, None).await {
-                        tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore window_boards board");
+                        tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore windows board");
                     }
                 }
             }
@@ -1204,13 +1205,16 @@ mod tests {
     // Window-board mapping tests
     // =========================================================================
 
-    fn make_window_entry(board_path: &str) -> WindowBoardEntry {
-        WindowBoardEntry {
+    fn make_window_entry(board_path: &str) -> WindowState {
+        WindowState {
             board_path: PathBuf::from(board_path),
+            active_view_id: None,
+            inspector_stack: Vec::new(),
             x: None,
             y: None,
             width: None,
             height: None,
+            maximized: false,
         }
     }
 
@@ -1220,24 +1224,27 @@ mod tests {
         y: i32,
         w: u32,
         h: u32,
-    ) -> WindowBoardEntry {
-        WindowBoardEntry {
+    ) -> WindowState {
+        WindowState {
             board_path: PathBuf::from(board_path),
+            active_view_id: None,
+            inspector_stack: Vec::new(),
             x: Some(x),
             y: Some(y),
             width: Some(w),
             height: Some(h),
+            maximized: false,
         }
     }
 
     #[test]
-    fn test_window_boards_persists_through_serialization() {
+    fn test_windows_persists_through_serialization() {
         let mut config = AppConfig::default();
-        config.window_boards.insert(
+        config.windows.insert(
             "board-01abc".to_string(),
             make_window_entry("/boards/project-a/.kanban"),
         );
-        config.window_boards.insert(
+        config.windows.insert(
             "board-02def".to_string(),
             make_window_entry("/boards/project-b/.kanban"),
         );
@@ -1245,10 +1252,10 @@ mod tests {
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
 
-        assert_eq!(restored.window_boards.len(), 2);
+        assert_eq!(restored.windows.len(), 2);
         assert_eq!(
             restored
-                .window_boards
+                .windows
                 .get("board-01abc")
                 .unwrap()
                 .board_path,
@@ -1256,7 +1263,7 @@ mod tests {
         );
         assert_eq!(
             restored
-                .window_boards
+                .windows
                 .get("board-02def")
                 .unwrap()
                 .board_path,
@@ -1265,9 +1272,9 @@ mod tests {
     }
 
     #[test]
-    fn test_window_boards_persists_geometry() {
+    fn test_windows_persists_geometry() {
         let mut config = AppConfig::default();
-        config.window_boards.insert(
+        config.windows.insert(
             "board-01abc".to_string(),
             make_window_entry_with_pos("/boards/a/.kanban", 100, 200, 1200, 800),
         );
@@ -1275,7 +1282,7 @@ mod tests {
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
 
-        let entry = restored.window_boards.get("board-01abc").unwrap();
+        let entry = restored.windows.get("board-01abc").unwrap();
         assert_eq!(entry.x, Some(100));
         assert_eq!(entry.y, Some(200));
         assert_eq!(entry.width, Some(1200));
@@ -1283,9 +1290,9 @@ mod tests {
     }
 
     #[test]
-    fn test_window_boards_geometry_defaults_to_none() {
+    fn test_windows_geometry_defaults_to_none() {
         let mut config = AppConfig::default();
-        config.window_boards.insert(
+        config.windows.insert(
             "board-01abc".to_string(),
             make_window_entry("/boards/a/.kanban"),
         );
@@ -1293,7 +1300,7 @@ mod tests {
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
 
-        let entry = restored.window_boards.get("board-01abc").unwrap();
+        let entry = restored.windows.get("board-01abc").unwrap();
         assert_eq!(entry.x, None);
         assert_eq!(entry.y, None);
         assert_eq!(entry.width, None);
@@ -1301,35 +1308,35 @@ mod tests {
     }
 
     #[test]
-    fn test_window_boards_defaults_to_empty() {
-        // Simulate loading config that predates window_boards field
+    fn test_windows_defaults_to_empty() {
+        // Simulate loading config that predates windows field
         let yaml = "recent_boards: []\nkeymap_mode: cua\n";
         let config: AppConfig = serde_yaml_ng::from_str(yaml).unwrap();
-        assert!(config.window_boards.is_empty());
+        assert!(config.windows.is_empty());
     }
 
     #[test]
-    fn test_window_boards_remove_by_board_path() {
+    fn test_windows_remove_by_board_path() {
         let mut config = AppConfig::default();
         let board_a = PathBuf::from("/boards/a/.kanban");
 
         config
-            .window_boards
+            .windows
             .insert("win-1".to_string(), make_window_entry("/boards/a/.kanban"));
         config
-            .window_boards
+            .windows
             .insert("win-2".to_string(), make_window_entry("/boards/b/.kanban"));
         config
-            .window_boards
+            .windows
             .insert("win-3".to_string(), make_window_entry("/boards/a/.kanban"));
 
         // Remove all windows pointing to board A
         config
-            .window_boards
+            .windows
             .retain(|_, entry| entry.board_path != board_a);
 
-        assert_eq!(config.window_boards.len(), 1);
-        assert!(config.window_boards.contains_key("win-2"));
+        assert_eq!(config.windows.len(), 1);
+        assert!(config.windows.contains_key("win-2"));
     }
 
     #[test]
@@ -1342,13 +1349,13 @@ mod tests {
     }
 
     #[test]
-    fn test_window_boards_save_and_load_roundtrip() {
+    fn test_windows_save_and_load_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let config_path = tmp.path().join("config.yaml");
 
-        // Create config with window_boards including geometry
+        // Create config with windows including geometry
         let mut config = AppConfig::default();
-        config.window_boards.insert(
+        config.windows.insert(
             "board-01abc".to_string(),
             make_window_entry_with_pos("/test/.kanban", 50, 100, 1400, 900),
         );
@@ -1361,8 +1368,8 @@ mod tests {
         let loaded_content = std::fs::read_to_string(&config_path).unwrap();
         let loaded: AppConfig = serde_yaml_ng::from_str(&loaded_content).unwrap();
 
-        assert_eq!(loaded.window_boards.len(), 1);
-        let entry = loaded.window_boards.get("board-01abc").unwrap();
+        assert_eq!(loaded.windows.len(), 1);
+        let entry = loaded.windows.get("board-01abc").unwrap();
         assert_eq!(entry.board_path, PathBuf::from("/test/.kanban"));
         assert_eq!(entry.x, Some(50));
         assert_eq!(entry.y, Some(100));
@@ -1384,14 +1391,17 @@ mod tests {
         {
             let mut config = AppConfig::default();
             config.open_boards = vec![board_path.clone()];
-            config.window_boards.insert(
+            config.windows.insert(
                 label.clone(),
-                WindowBoardEntry {
+                WindowState {
                     board_path: board_path.clone(),
+                    active_view_id: None,
+                    inspector_stack: Vec::new(),
                     x: None,
                     y: None,
                     width: None,
                     height: None,
+                    maximized: false,
                 },
             );
             let content = serde_yaml_ng::to_string(&config).unwrap();
@@ -1402,7 +1412,7 @@ mod tests {
         {
             let content = std::fs::read_to_string(&config_path).unwrap();
             let mut config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
-            let entry = config.window_boards.get_mut(&label).unwrap();
+            let entry = config.windows.get_mut(&label).unwrap();
             entry.x = Some(300);
             entry.y = Some(150);
             entry.width = Some(1400);
@@ -1420,9 +1430,9 @@ mod tests {
             assert_eq!(config.open_boards.len(), 1);
             assert_eq!(config.open_boards[0], board_path);
 
-            // window_boards must survive with geometry
-            assert_eq!(config.window_boards.len(), 1);
-            let entry = config.window_boards.get(&label).unwrap();
+            // windows must survive with geometry
+            assert_eq!(config.windows.len(), 1);
+            let entry = config.windows.get(&label).unwrap();
             assert_eq!(entry.board_path, board_path);
             assert_eq!(entry.x, Some(300));
             assert_eq!(entry.y, Some(150));
@@ -1430,68 +1440,64 @@ mod tests {
             assert_eq!(entry.height, Some(900));
         }
 
-        // Step 4: Simulate open_board updating open_boards (must NOT clobber window_boards)
+        // Step 4: Simulate open_board updating open_boards (must NOT clobber windows)
         {
             let content = std::fs::read_to_string(&config_path).unwrap();
             let mut config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
-            // open_board writes open_boards but should preserve window_boards
+            // open_board writes open_boards but should preserve windows
             config.open_boards = vec![board_path.clone()];
             let content = serde_yaml_ng::to_string(&config).unwrap();
             std::fs::write(&config_path, &content).unwrap();
         }
 
-        // Step 5: Verify window_boards still intact after open_board save
+        // Step 5: Verify windows still intact after open_board save
         {
             let content = std::fs::read_to_string(&config_path).unwrap();
             let config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
             assert_eq!(
-                config.window_boards.len(),
+                config.windows.len(),
                 1,
-                "window_boards was clobbered!"
+                "windows was clobbered!"
             );
-            let entry = config.window_boards.get(&label).unwrap();
+            let entry = config.windows.get(&label).unwrap();
             assert_eq!(entry.x, Some(300), "geometry was lost!");
         }
     }
 
-    /// Test that close_board removes the right window_boards entries
+    /// Test that close_board removes the right windows entries
     #[test]
-    fn test_close_board_cleans_window_boards() {
+    fn test_close_board_cleans_windows() {
         let mut config = AppConfig::default();
         let board_a = PathBuf::from("/boards/a/.kanban");
         let board_b = PathBuf::from("/boards/b/.kanban");
 
-        config.window_boards.insert(
+        config.windows.insert(
             "win-1".to_string(),
             make_window_entry_with_pos("/boards/a/.kanban", 100, 200, 1200, 800),
         );
-        config.window_boards.insert(
+        config.windows.insert(
             "win-2".to_string(),
             make_window_entry_with_pos("/boards/b/.kanban", 500, 300, 1200, 800),
         );
 
         // Close board A — should remove win-1 but keep win-2
         config
-            .window_boards
+            .windows
             .retain(|_, entry| entry.board_path != board_a);
 
-        assert_eq!(config.window_boards.len(), 1);
-        assert!(config.window_boards.contains_key("win-2"));
+        assert_eq!(config.windows.len(), 1);
+        assert!(config.windows.contains_key("win-2"));
         assert_eq!(
-            config.window_boards.get("win-2").unwrap().board_path,
+            config.windows.get("win-2").unwrap().board_path,
             board_b
         );
     }
 
-    /// Verify that AppConfig::load() migrates a legacy JSON config to YAML.
+    /// Verify that legacy JSON config with `window_boards` key migrates to `windows`.
     #[test]
     fn test_config_json_migration() {
-        let tmp = TempDir::new().unwrap();
-        let config_dir = tmp.path().join(CONFIG_APP_SUBDIR);
-        std::fs::create_dir_all(&config_dir).unwrap();
-
-        // Write a legacy JSON config (no config.yaml exists)
-        let json_path = config_dir.join(CONFIG_FILE_NAME_LEGACY);
+        // Legacy JSON uses "window_boards" (old field name) — the serde alias
+        // maps it to the new "windows" field.
         let json_content = serde_json::json!({
             "recent_boards": [],
             "keymap_mode": "vim",
@@ -1506,28 +1512,71 @@ mod tests {
                 }
             }
         });
-        std::fs::write(&json_path, serde_json::to_string_pretty(&json_content).unwrap()).unwrap();
-
-        // Load using the JSON path directly (since we can't override config_file_path in tests,
-        // test the deserialization path: JSON content → serde_json::from_str → AppConfig)
-        let content = std::fs::read_to_string(&json_path).unwrap();
-        let config: AppConfig = serde_json::from_str(&content).unwrap();
+        let config: AppConfig =
+            serde_json::from_str(&serde_json::to_string(&json_content).unwrap()).unwrap();
 
         assert_eq!(config.keymap_mode, "vim");
         assert_eq!(config.open_boards.len(), 1);
-        assert_eq!(config.window_boards.len(), 1);
-        let entry = config.window_boards.get("board-01abc").unwrap();
+        assert_eq!(config.windows.len(), 1);
+        let entry = config.windows.get("board-01abc").unwrap();
         assert_eq!(entry.board_path, PathBuf::from("/boards/test/.kanban"));
         assert_eq!(entry.x, Some(100));
+        // New fields default correctly
+        assert_eq!(entry.active_view_id, None);
+        assert!(entry.inspector_stack.is_empty());
 
-        // Verify the migrated config can be saved as YAML and loaded back
+        // Verify roundtrip through YAML
         let yaml_content = serde_yaml_ng::to_string(&config).unwrap();
         let restored: AppConfig = serde_yaml_ng::from_str(&yaml_content).unwrap();
-        assert_eq!(restored.keymap_mode, "vim");
-        assert_eq!(restored.window_boards.len(), 1);
-        assert_eq!(
-            restored.window_boards.get("board-01abc").unwrap().x,
-            Some(100)
+        assert_eq!(restored.windows.len(), 1);
+        assert_eq!(restored.windows.get("board-01abc").unwrap().x, Some(100));
+    }
+
+    /// Roundtrip test with all WindowState fields populated.
+    #[test]
+    fn test_window_state_full_roundtrip() {
+        let mut config = AppConfig::default();
+        config.windows.insert(
+            "main".to_string(),
+            WindowState {
+                board_path: PathBuf::from("/boards/main/.kanban"),
+                active_view_id: Some("board-view".to_string()),
+                inspector_stack: vec!["task:01ABC".to_string(), "tag:01DEF".to_string()],
+                x: Some(100),
+                y: Some(200),
+                width: Some(1400),
+                height: Some(900),
+                maximized: true,
+            },
         );
+        config.windows.insert(
+            "board-secondary".to_string(),
+            WindowState {
+                board_path: PathBuf::from("/boards/other/.kanban"),
+                active_view_id: Some("grid-view".to_string()),
+                inspector_stack: Vec::new(),
+                x: Some(500),
+                y: Some(100),
+                width: Some(1200),
+                height: Some(800),
+                maximized: false,
+            },
+        );
+
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+
+        assert_eq!(restored.windows.len(), 2);
+
+        let main = restored.windows.get("main").unwrap();
+        assert_eq!(main.board_path, PathBuf::from("/boards/main/.kanban"));
+        assert_eq!(main.active_view_id.as_deref(), Some("board-view"));
+        assert_eq!(main.inspector_stack, vec!["task:01ABC", "tag:01DEF"]);
+        assert_eq!(main.maximized, true);
+
+        let secondary = restored.windows.get("board-secondary").unwrap();
+        assert_eq!(secondary.active_view_id.as_deref(), Some("grid-view"));
+        assert!(secondary.inspector_stack.is_empty());
+        assert_eq!(secondary.maximized, false);
     }
 }
