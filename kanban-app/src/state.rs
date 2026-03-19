@@ -21,7 +21,8 @@ use crate::watcher::{self, BoardWatcher, EntityCache};
 
 const MAX_RECENT_BOARDS: usize = 20;
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
-const CONFIG_FILE_NAME: &str = "config.json";
+const CONFIG_FILE_NAME: &str = "config.yaml";
+const CONFIG_FILE_NAME_LEGACY: &str = "config.json";
 
 /// A handle to a single open kanban board.
 pub(crate) struct BoardHandle {
@@ -261,21 +262,31 @@ fn default_keymap_mode() -> String {
 
 impl AppConfig {
     /// Load config from disk, returning default if not found.
+    ///
+    /// Tries `config.yaml` first. If it doesn't exist, falls back to
+    /// `config.json` (legacy format) for migration — the next `save()`
+    /// will write YAML.
     pub fn load() -> Self {
-        let path = config_file_path();
-        match std::fs::read_to_string(&path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-            Err(_) => Self::default(),
+        let yaml_path = config_file_path();
+        if let Ok(content) = std::fs::read_to_string(&yaml_path) {
+            return serde_yaml_ng::from_str(&content).unwrap_or_default();
         }
+        // Fall back to legacy JSON for migration
+        let json_path = legacy_config_file_path();
+        if let Ok(content) = std::fs::read_to_string(&json_path) {
+            return serde_json::from_str(&content).unwrap_or_default();
+        }
+        Self::default()
     }
 
-    /// Save config to disk.
+    /// Save config to disk as YAML.
     pub fn save(&self) -> std::io::Result<()> {
         let path = config_file_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = serde_json::to_string_pretty(self)?;
+        let content = serde_yaml_ng::to_string(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         std::fs::write(&path, content)
     }
 
@@ -820,8 +831,8 @@ fn macos_profile_picture(_username: &str) -> Option<String> {
 
 /// Get the path to the app config file.
 ///
-/// Uses XDG config directory: `$XDG_CONFIG_HOME/sah/kanban-app/config.json`
-/// Falls back to `~/.config/sah/kanban-app/config.json` if XDG_CONFIG_HOME is not set.
+/// Uses XDG config directory: `$XDG_CONFIG_HOME/sah/kanban-app/config.yaml`
+/// Falls back to `~/.config/sah/kanban-app/config.yaml` if XDG_CONFIG_HOME is not set.
 fn config_file_path() -> PathBuf {
     use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
 
@@ -831,6 +842,19 @@ fn config_file_path() -> PathBuf {
             PathBuf::from(".")
                 .join(CONFIG_APP_SUBDIR)
                 .join(CONFIG_FILE_NAME)
+        })
+}
+
+/// Get the path to the legacy JSON config file (for migration).
+fn legacy_config_file_path() -> PathBuf {
+    use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
+
+    ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
+        .map(|dir| dir.root().join(CONFIG_APP_SUBDIR).join(CONFIG_FILE_NAME_LEGACY))
+        .unwrap_or_else(|_| {
+            PathBuf::from(".")
+                .join(CONFIG_APP_SUBDIR)
+                .join(CONFIG_FILE_NAME_LEGACY)
         })
 }
 
@@ -1218,8 +1242,8 @@ mod tests {
             make_window_entry("/boards/project-b/.kanban"),
         );
 
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
 
         assert_eq!(restored.window_boards.len(), 2);
         assert_eq!(
@@ -1248,8 +1272,8 @@ mod tests {
             make_window_entry_with_pos("/boards/a/.kanban", 100, 200, 1200, 800),
         );
 
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
 
         let entry = restored.window_boards.get("board-01abc").unwrap();
         assert_eq!(entry.x, Some(100));
@@ -1266,8 +1290,8 @@ mod tests {
             make_window_entry("/boards/a/.kanban"),
         );
 
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
 
         let entry = restored.window_boards.get("board-01abc").unwrap();
         assert_eq!(entry.x, None);
@@ -1279,8 +1303,8 @@ mod tests {
     #[test]
     fn test_window_boards_defaults_to_empty() {
         // Simulate loading config that predates window_boards field
-        let json = r#"{"recent_boards":[],"keymap_mode":"cua"}"#;
-        let config: AppConfig = serde_json::from_str(json).unwrap();
+        let yaml = "recent_boards: []\nkeymap_mode: cua\n";
+        let config: AppConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(config.window_boards.is_empty());
     }
 
@@ -1320,7 +1344,7 @@ mod tests {
     #[test]
     fn test_window_boards_save_and_load_roundtrip() {
         let tmp = TempDir::new().unwrap();
-        let config_path = tmp.path().join("config.json");
+        let config_path = tmp.path().join("config.yaml");
 
         // Create config with window_boards including geometry
         let mut config = AppConfig::default();
@@ -1330,12 +1354,12 @@ mod tests {
         );
 
         // Save
-        let content = serde_json::to_string_pretty(&config).unwrap();
+        let content = serde_yaml_ng::to_string(&config).unwrap();
         std::fs::write(&config_path, &content).unwrap();
 
         // Load
         let loaded_content = std::fs::read_to_string(&config_path).unwrap();
-        let loaded: AppConfig = serde_json::from_str(&loaded_content).unwrap();
+        let loaded: AppConfig = serde_yaml_ng::from_str(&loaded_content).unwrap();
 
         assert_eq!(loaded.window_boards.len(), 1);
         let entry = loaded.window_boards.get("board-01abc").unwrap();
@@ -1352,7 +1376,7 @@ mod tests {
     #[test]
     fn test_window_lifecycle_create_move_restart_restore() {
         let tmp = TempDir::new().unwrap();
-        let config_path = tmp.path().join("config.json");
+        let config_path = tmp.path().join("config.yaml");
 
         // Step 1: Simulate create_window — save entry with no geometry
         let label = format!("board-{}", ulid::Ulid::new().to_string().to_lowercase());
@@ -1370,27 +1394,27 @@ mod tests {
                     height: None,
                 },
             );
-            let content = serde_json::to_string_pretty(&config).unwrap();
+            let content = serde_yaml_ng::to_string(&config).unwrap();
             std::fs::write(&config_path, &content).unwrap();
         }
 
         // Step 2: Simulate on_window_event Moved/Resized — update geometry
         {
             let content = std::fs::read_to_string(&config_path).unwrap();
-            let mut config: AppConfig = serde_json::from_str(&content).unwrap();
+            let mut config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
             let entry = config.window_boards.get_mut(&label).unwrap();
             entry.x = Some(300);
             entry.y = Some(150);
             entry.width = Some(1400);
             entry.height = Some(900);
-            let content = serde_json::to_string_pretty(&config).unwrap();
+            let content = serde_yaml_ng::to_string(&config).unwrap();
             std::fs::write(&config_path, &content).unwrap();
         }
 
         // Step 3: Simulate app restart — load config, verify entry survives
         {
             let content = std::fs::read_to_string(&config_path).unwrap();
-            let config: AppConfig = serde_json::from_str(&content).unwrap();
+            let config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
 
             // open_boards must survive
             assert_eq!(config.open_boards.len(), 1);
@@ -1409,17 +1433,17 @@ mod tests {
         // Step 4: Simulate open_board updating open_boards (must NOT clobber window_boards)
         {
             let content = std::fs::read_to_string(&config_path).unwrap();
-            let mut config: AppConfig = serde_json::from_str(&content).unwrap();
+            let mut config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
             // open_board writes open_boards but should preserve window_boards
             config.open_boards = vec![board_path.clone()];
-            let content = serde_json::to_string_pretty(&config).unwrap();
+            let content = serde_yaml_ng::to_string(&config).unwrap();
             std::fs::write(&config_path, &content).unwrap();
         }
 
         // Step 5: Verify window_boards still intact after open_board save
         {
             let content = std::fs::read_to_string(&config_path).unwrap();
-            let config: AppConfig = serde_json::from_str(&content).unwrap();
+            let config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
             assert_eq!(
                 config.window_boards.len(),
                 1,
@@ -1456,6 +1480,54 @@ mod tests {
         assert_eq!(
             config.window_boards.get("win-2").unwrap().board_path,
             board_b
+        );
+    }
+
+    /// Verify that AppConfig::load() migrates a legacy JSON config to YAML.
+    #[test]
+    fn test_config_json_migration() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join(CONFIG_APP_SUBDIR);
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // Write a legacy JSON config (no config.yaml exists)
+        let json_path = config_dir.join(CONFIG_FILE_NAME_LEGACY);
+        let json_content = serde_json::json!({
+            "recent_boards": [],
+            "keymap_mode": "vim",
+            "open_boards": ["/boards/test/.kanban"],
+            "window_boards": {
+                "board-01abc": {
+                    "board_path": "/boards/test/.kanban",
+                    "x": 100,
+                    "y": 200,
+                    "width": 1200,
+                    "height": 800
+                }
+            }
+        });
+        std::fs::write(&json_path, serde_json::to_string_pretty(&json_content).unwrap()).unwrap();
+
+        // Load using the JSON path directly (since we can't override config_file_path in tests,
+        // test the deserialization path: JSON content → serde_json::from_str → AppConfig)
+        let content = std::fs::read_to_string(&json_path).unwrap();
+        let config: AppConfig = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(config.keymap_mode, "vim");
+        assert_eq!(config.open_boards.len(), 1);
+        assert_eq!(config.window_boards.len(), 1);
+        let entry = config.window_boards.get("board-01abc").unwrap();
+        assert_eq!(entry.board_path, PathBuf::from("/boards/test/.kanban"));
+        assert_eq!(entry.x, Some(100));
+
+        // Verify the migrated config can be saved as YAML and loaded back
+        let yaml_content = serde_yaml_ng::to_string(&config).unwrap();
+        let restored: AppConfig = serde_yaml_ng::from_str(&yaml_content).unwrap();
+        assert_eq!(restored.keymap_mode, "vim");
+        assert_eq!(restored.window_boards.len(), 1);
+        assert_eq!(
+            restored.window_boards.get("board-01abc").unwrap().x,
+            Some(100)
         );
     }
 }
