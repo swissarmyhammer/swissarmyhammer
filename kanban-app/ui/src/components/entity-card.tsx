@@ -31,7 +31,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
   function EntityCard({ entity, dragHandleProps, style, draggable, onDragStart, onDragEnd, ...rest }, ref) {
     const { updateField } = useFieldUpdate();
     const { getSchema } = useSchema();
-    const { getEntities } = useEntityStore();
+    const { getEntities, getEntity } = useEntityStore();
     const inspectEntity = useInspect();
     const tags = getEntities("tag");
     const schema = getSchema(entity.entity_type);
@@ -93,6 +93,11 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
                 onCommit={(value) => handleCommit(field.name, value)}
               />
             ))}
+            <DependencyPills
+              entity={entity}
+              getEntity={getEntity}
+              onInspect={inspectEntity}
+            />
           </div>
           <button
             type="button"
@@ -160,4 +165,70 @@ function CardFieldDispatch({
   }
 
   return null;
+}
+
+/** Truncate a string to maxLen chars with ellipsis. */
+function truncate(s: string, maxLen: number): string {
+  return s.length > maxLen ? s.slice(0, maxLen) + "…" : s;
+}
+
+/**
+ * Render dependency pills for blocked_by and blocks relationships.
+ *
+ * Shows compact clickable pills after tags in the card header.
+ * blocked_by pills are orange (warning), blocks pills are muted.
+ * Renders nothing if there are no dependencies.
+ */
+function DependencyPills({
+  entity,
+  getEntity,
+  onInspect,
+}: {
+  entity: Entity;
+  getEntity: (entityType: string, id: string) => Entity | undefined;
+  onInspect: (moniker: string) => void;
+}) {
+  const blockedBy = Array.isArray(entity.fields.blocked_by)
+    ? (entity.fields.blocked_by as string[])
+    : [];
+  const blocks = Array.isArray(entity.fields.blocks)
+    ? (entity.fields.blocks as string[])
+    : [];
+
+  if (blockedBy.length === 0 && blocks.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1 mt-1.5">
+      {blockedBy.map((id) => {
+        const dep = getEntity("task", id);
+        const title = dep ? getStr(dep, "title") || id : id;
+        return (
+          <button
+            key={`blocked-${id}`}
+            type="button"
+            className="inline-flex items-center rounded-full px-1.5 py-px text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/30 cursor-pointer hover:bg-amber-500/20"
+            onClick={(e) => { e.stopPropagation(); onInspect(moniker("task", id)); }}
+            title={`Blocked by: ${title}`}
+          >
+            ⊳ {truncate(title, 20)}
+          </button>
+        );
+      })}
+      {blocks.map((id) => {
+        const dep = getEntity("task", id);
+        const title = dep ? getStr(dep, "title") || id : id;
+        return (
+          <button
+            key={`blocks-${id}`}
+            type="button"
+            className="inline-flex items-center rounded-full px-1.5 py-px text-xs font-medium bg-muted text-muted-foreground border border-border cursor-pointer hover:bg-muted/80"
+            onClick={(e) => { e.stopPropagation(); onInspect(moniker("task", id)); }}
+            title={`Blocks: ${title}`}
+          >
+            ⊲ {truncate(title, 20)}
+          </button>
+        );
+      })}
+    </div>
+  );
 }

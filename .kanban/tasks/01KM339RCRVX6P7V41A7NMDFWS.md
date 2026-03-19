@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM3397BPR4801YWXTRFVYEY0
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: fffffff380
 title: Show dependency pills in card header after tags
 ---
 ## What
