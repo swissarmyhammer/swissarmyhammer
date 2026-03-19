@@ -284,11 +284,6 @@ rstest = "0.26.1"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 
-[build]
-rustflags = ["-Z", "threads=8"]
-rustc-wrapper = "sccache"
-
-
 # Profile for faster test compilation
 [profile.test]
 opt-level = 0       # No optimization for faster compilation
