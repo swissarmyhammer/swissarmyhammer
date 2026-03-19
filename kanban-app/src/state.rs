@@ -286,8 +286,7 @@ impl AppConfig {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = serde_yaml_ng::to_string(self)
-            .map_err(std::io::Error::other)?;
+        let content = serde_yaml_ng::to_string(self).map_err(std::io::Error::other)?;
         std::fs::write(&path, content)
     }
 
