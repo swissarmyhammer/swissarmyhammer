@@ -253,7 +253,10 @@ pub async fn set_keymap_mode(state: State<'_, AppState>, mode: String) -> Result
 ///
 /// The frontend calls this on mount to restore state across hot reloads.
 #[tauri::command]
-pub async fn get_ui_context(state: State<'_, AppState>, window_label: Option<String>) -> Result<Value, String> {
+pub async fn get_ui_context(
+    state: State<'_, AppState>,
+    window_label: Option<String>,
+) -> Result<Value, String> {
     let config = state.config.read().await;
     let label = window_label.as_deref().unwrap_or("main");
     if let Some(ws) = config.windows.get(label) {
@@ -275,7 +278,11 @@ pub async fn get_ui_context(state: State<'_, AppState>, window_label: Option<Str
 ///
 /// Creates the window entry on demand if it doesn't exist yet.
 #[tauri::command]
-pub async fn set_active_view(state: State<'_, AppState>, view_id: String, window_label: Option<String>) -> Result<Value, String> {
+pub async fn set_active_view(
+    state: State<'_, AppState>,
+    view_id: String,
+    window_label: Option<String>,
+) -> Result<Value, String> {
     let mut config = state.config.write().await;
     let label = window_label.as_deref().unwrap_or("main");
     let active_board = state.active_board.read().await;

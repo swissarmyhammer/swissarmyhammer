@@ -851,7 +851,11 @@ fn legacy_config_file_path() -> PathBuf {
     use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
 
     ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
-        .map(|dir| dir.root().join(CONFIG_APP_SUBDIR).join(CONFIG_FILE_NAME_LEGACY))
+        .map(|dir| {
+            dir.root()
+                .join(CONFIG_APP_SUBDIR)
+                .join(CONFIG_FILE_NAME_LEGACY)
+        })
         .unwrap_or_else(|_| {
             PathBuf::from(".")
                 .join(CONFIG_APP_SUBDIR)
@@ -1218,13 +1222,7 @@ mod tests {
         }
     }
 
-    fn make_window_entry_with_pos(
-        board_path: &str,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    ) -> WindowState {
+    fn make_window_entry_with_pos(board_path: &str, x: i32, y: i32, w: u32, h: u32) -> WindowState {
         WindowState {
             board_path: PathBuf::from(board_path),
             active_view_id: None,
@@ -1254,19 +1252,11 @@ mod tests {
 
         assert_eq!(restored.windows.len(), 2);
         assert_eq!(
-            restored
-                .windows
-                .get("board-01abc")
-                .unwrap()
-                .board_path,
+            restored.windows.get("board-01abc").unwrap().board_path,
             PathBuf::from("/boards/project-a/.kanban")
         );
         assert_eq!(
-            restored
-                .windows
-                .get("board-02def")
-                .unwrap()
-                .board_path,
+            restored.windows.get("board-02def").unwrap().board_path,
             PathBuf::from("/boards/project-b/.kanban")
         );
     }
@@ -1454,11 +1444,7 @@ mod tests {
         {
             let content = std::fs::read_to_string(&config_path).unwrap();
             let config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
-            assert_eq!(
-                config.windows.len(),
-                1,
-                "windows was clobbered!"
-            );
+            assert_eq!(config.windows.len(), 1, "windows was clobbered!");
             let entry = config.windows.get(&label).unwrap();
             assert_eq!(entry.x, Some(300), "geometry was lost!");
         }

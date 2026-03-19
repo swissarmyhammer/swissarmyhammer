@@ -116,7 +116,9 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
                         let t_col = t.get_str("position_column").unwrap_or("");
                         let t_swim = t.get_str("position_swimlane");
                         if t_col == column && t_swim == self.swimlane.as_deref() {
-                            let ord_str = t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
+                            let ord_str = t
+                                .get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR);
                             let ord = Ordinal::from_string(ord_str);
                             last_ordinal = Some(match last_ordinal {
                                 None => ord,

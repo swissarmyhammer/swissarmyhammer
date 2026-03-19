@@ -5,8 +5,8 @@
 
 use serde_json::json;
 use swissarmyhammer_kanban::{
-    dispatch::execute_operation, parse::parse_input, board::InitBoard, task::AddTask,
-    Execute, KanbanContext,
+    board::InitBoard, dispatch::execute_operation, parse::parse_input, task::AddTask, Execute,
+    KanbanContext,
 };
 use tempfile::TempDir;
 
@@ -207,16 +207,43 @@ async fn move_to_first_in_production_board_state() {
         .unwrap();
 
     // Create all 8 cards matching production
-    struct Card { title: &'static str, ordinal: &'static str }
+    struct Card {
+        title: &'static str,
+        ordinal: &'static str,
+    }
     let cards = [
-        Card { title: "Switch AppConfig persistence from JSON to YAML", ordinal: "80" },
-        Card { title: "Unify per-window state into windows map",        ordinal: "8180" },
-        Card { title: "Update Tauri commands to use per-window state",   ordinal: "8280" },
-        Card { title: "Frontend: strip localStorage/refs",               ordinal: "8380" },
-        Card { title: "Wire view switching through command dispatch",     ordinal: "8480" },
-        Card { title: "Remove grey opacity on blocked cards",            ordinal: "8580" },
-        Card { title: "Show dependency pills in card header after tags", ordinal: "8680" },
-        Card { title: "Fix same-board drag",                             ordinal: "8780" },
+        Card {
+            title: "Switch AppConfig persistence from JSON to YAML",
+            ordinal: "80",
+        },
+        Card {
+            title: "Unify per-window state into windows map",
+            ordinal: "8180",
+        },
+        Card {
+            title: "Update Tauri commands to use per-window state",
+            ordinal: "8280",
+        },
+        Card {
+            title: "Frontend: strip localStorage/refs",
+            ordinal: "8380",
+        },
+        Card {
+            title: "Wire view switching through command dispatch",
+            ordinal: "8480",
+        },
+        Card {
+            title: "Remove grey opacity on blocked cards",
+            ordinal: "8580",
+        },
+        Card {
+            title: "Show dependency pills in card header after tags",
+            ordinal: "8680",
+        },
+        Card {
+            title: "Fix same-board drag",
+            ordinal: "8780",
+        },
     ];
 
     let ectx = ctx.entity_context().await.unwrap();
@@ -249,7 +276,10 @@ async fn move_to_first_in_production_board_state() {
             assert!(
                 prev_ord < ord,
                 "Card {} ({}) should sort after card {} ({})",
-                i, ord, i - 1, prev_ord
+                i,
+                ord,
+                i - 1,
+                prev_ord
             );
         }
         prev_ord = ord;
@@ -288,10 +318,14 @@ async fn move_to_first_in_production_board_state() {
     let expected_order = [7, 0, 1, 2, 3, 4, 5, 6]; // drag first, then original order
     let actual_order: Vec<usize> = all_ords.iter().map(|(i, _)| *i).collect();
     assert_eq!(
-        actual_order, expected_order,
+        actual_order,
+        expected_order,
         "Full board order wrong. Got indices {:?}, ordinals: {:?}",
         actual_order,
-        all_ords.iter().map(|(i, o)| (cards[*i].title, o.as_str())).collect::<Vec<_>>()
+        all_ords
+            .iter()
+            .map(|(i, o)| (cards[*i].title, o.as_str()))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -309,16 +343,43 @@ async fn move_between_in_production_board_state() {
         .into_result()
         .unwrap();
 
-    struct Card { title: &'static str, ordinal: &'static str }
+    struct Card {
+        title: &'static str,
+        ordinal: &'static str,
+    }
     let cards = [
-        Card { title: "Switch AppConfig", ordinal: "80" },
-        Card { title: "Unify per-window", ordinal: "8180" },
-        Card { title: "Update Tauri",     ordinal: "8280" },
-        Card { title: "Frontend strip",   ordinal: "8380" },
-        Card { title: "Wire view",        ordinal: "8480" },
-        Card { title: "Remove grey",      ordinal: "8580" },
-        Card { title: "Show pills",       ordinal: "8680" },
-        Card { title: "Fix drag",         ordinal: "8780" },
+        Card {
+            title: "Switch AppConfig",
+            ordinal: "80",
+        },
+        Card {
+            title: "Unify per-window",
+            ordinal: "8180",
+        },
+        Card {
+            title: "Update Tauri",
+            ordinal: "8280",
+        },
+        Card {
+            title: "Frontend strip",
+            ordinal: "8380",
+        },
+        Card {
+            title: "Wire view",
+            ordinal: "8480",
+        },
+        Card {
+            title: "Remove grey",
+            ordinal: "8580",
+        },
+        Card {
+            title: "Show pills",
+            ordinal: "8680",
+        },
+        Card {
+            title: "Fix drag",
+            ordinal: "8780",
+        },
     ];
 
     let ectx = ctx.entity_context().await.unwrap();
@@ -357,11 +418,13 @@ async fn move_between_in_production_board_state() {
     assert!(
         ord_appconfig < ord_wire,
         "AppConfig ({}) < Wire ({})",
-        ord_appconfig, ord_wire
+        ord_appconfig,
+        ord_wire
     );
     assert!(
         ord_wire < ord_unify,
         "Wire ({}) < Unify ({})",
-        ord_wire, ord_unify
+        ord_wire,
+        ord_unify
     );
 }

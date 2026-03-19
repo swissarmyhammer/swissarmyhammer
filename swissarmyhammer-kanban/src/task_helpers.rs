@@ -282,7 +282,9 @@ pub fn task_entity_to_json(entity: &Entity) -> Value {
 
     let position_column = entity.get_str("position_column").unwrap_or("");
     let position_swimlane = entity.get_str("position_swimlane");
-    let position_ordinal = entity.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
+    let position_ordinal = entity
+        .get_str("position_ordinal")
+        .unwrap_or(Ordinal::DEFAULT_STR);
 
     let position = if let Some(swimlane) = position_swimlane {
         json!({
@@ -766,9 +768,13 @@ mod tests {
         let raw_order = Ordinal::DEFAULT_STR.cmp(valid_str);
         let parsed_order = default_ord.cmp(&valid_ord);
         assert_eq!(
-            raw_order, parsed_order,
+            raw_order,
+            parsed_order,
             "raw sort ({:?}) must match parsed sort ({:?}) for '{}' vs '{}'",
-            raw_order, parsed_order, Ordinal::DEFAULT_STR, valid_str
+            raw_order,
+            parsed_order,
+            Ordinal::DEFAULT_STR,
+            valid_str
         );
     }
 

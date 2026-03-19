@@ -157,63 +157,95 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                     })
                     .collect();
                 col_tasks.sort_by(|a, b| {
-                    let oa = a.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
-                    let ob = b.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
+                    let oa = a
+                        .get_str("position_ordinal")
+                        .unwrap_or(Ordinal::DEFAULT_STR);
+                    let ob = b
+                        .get_str("position_ordinal")
+                        .unwrap_or(Ordinal::DEFAULT_STR);
                     oa.cmp(ob)
                 });
 
                 if let Some(ref ref_id) = self.before_id {
-                    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id.as_str());
+                    let ref_idx = col_tasks
+                        .iter()
+                        .position(|t| t.id.as_str() == ref_id.as_str());
                     match ref_idx {
                         Some(0) => {
                             let ref_ord = Ordinal::from_string(
-                                col_tasks[0].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                                col_tasks[0]
+                                    .get_str("position_ordinal")
+                                    .unwrap_or(Ordinal::DEFAULT_STR),
                             );
                             compute_ordinal_for_neighbors(None, Some(&ref_ord))
                         }
                         Some(idx) => {
                             let pred_ord = Ordinal::from_string(
-                                col_tasks[idx - 1].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                                col_tasks[idx - 1]
+                                    .get_str("position_ordinal")
+                                    .unwrap_or(Ordinal::DEFAULT_STR),
                             );
                             let ref_ord = Ordinal::from_string(
-                                col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                                col_tasks[idx]
+                                    .get_str("position_ordinal")
+                                    .unwrap_or(Ordinal::DEFAULT_STR),
                             );
                             compute_ordinal_for_neighbors(Some(&pred_ord), Some(&ref_ord))
                         }
                         None => {
                             // Reference not found — append at end
                             compute_ordinal_for_neighbors(
-                                col_tasks.last().map(|t| Ordinal::from_string(
-                                    t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
-                                )).as_ref(),
+                                col_tasks
+                                    .last()
+                                    .map(|t| {
+                                        Ordinal::from_string(
+                                            t.get_str("position_ordinal")
+                                                .unwrap_or(Ordinal::DEFAULT_STR),
+                                        )
+                                    })
+                                    .as_ref(),
                                 None,
                             )
                         }
                     }
                 } else if let Some(ref ref_id) = self.after_id {
-                    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id.as_str());
+                    let ref_idx = col_tasks
+                        .iter()
+                        .position(|t| t.id.as_str() == ref_id.as_str());
                     match ref_idx {
                         Some(idx) if idx == col_tasks.len() - 1 => {
                             let ref_ord = Ordinal::from_string(
-                                col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                                col_tasks[idx]
+                                    .get_str("position_ordinal")
+                                    .unwrap_or(Ordinal::DEFAULT_STR),
                             );
                             compute_ordinal_for_neighbors(Some(&ref_ord), None)
                         }
                         Some(idx) => {
                             let ref_ord = Ordinal::from_string(
-                                col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                                col_tasks[idx]
+                                    .get_str("position_ordinal")
+                                    .unwrap_or(Ordinal::DEFAULT_STR),
                             );
                             let succ_ord = Ordinal::from_string(
-                                col_tasks[idx + 1].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                                col_tasks[idx + 1]
+                                    .get_str("position_ordinal")
+                                    .unwrap_or(Ordinal::DEFAULT_STR),
                             );
                             compute_ordinal_for_neighbors(Some(&ref_ord), Some(&succ_ord))
                         }
                         None => {
                             // Reference not found — append at end
                             compute_ordinal_for_neighbors(
-                                col_tasks.last().map(|t| Ordinal::from_string(
-                                    t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
-                                )).as_ref(),
+                                col_tasks
+                                    .last()
+                                    .map(|t| {
+                                        Ordinal::from_string(
+                                            t.get_str("position_ordinal")
+                                                .unwrap_or(Ordinal::DEFAULT_STR),
+                                        )
+                                    })
+                                    .as_ref(),
                                 None,
                             )
                         }
@@ -234,8 +266,10 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                     if t_col == self.column.as_str()
                         && t_swim == self.swimlane.as_ref().map(|s| s.as_str())
                     {
-                        let ord =
-                            Ordinal::from_string(t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR));
+                        let ord = Ordinal::from_string(
+                            t.get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR),
+                        );
                         last_ordinal = Some(match last_ordinal {
                             None => ord,
                             Some(ref o) if ord > *o => ord,
@@ -376,11 +410,21 @@ mod tests {
 
         let ord_c = get_ordinal(&ctx, &c).await;
         let ord_a = get_ordinal(&ctx, &a).await;
-        assert!(ord_c < ord_a, "C ({}) should sort before A ({})", ord_c, ord_a);
+        assert!(
+            ord_c < ord_a,
+            "C ({}) should sort before A ({})",
+            ord_c,
+            ord_a
+        );
 
         // B should be unchanged and after A
         let ord_b = get_ordinal(&ctx, &b).await;
-        assert!(ord_a < ord_b, "A ({}) should sort before B ({})", ord_a, ord_b);
+        assert!(
+            ord_a < ord_b,
+            "A ({}) should sort before B ({})",
+            ord_a,
+            ord_b
+        );
     }
 
     #[tokio::test]
@@ -401,7 +445,12 @@ mod tests {
 
         let ord_a = get_ordinal(&ctx, &a).await;
         let ord_c = get_ordinal(&ctx, &c).await;
-        assert!(ord_a > ord_c, "A ({}) should sort after C ({})", ord_a, ord_c);
+        assert!(
+            ord_a > ord_c,
+            "A ({}) should sort after C ({})",
+            ord_a,
+            ord_c
+        );
     }
 
     #[tokio::test]
@@ -465,7 +514,12 @@ mod tests {
 
         let ord_a = get_ordinal(&ctx, &a).await;
         // Ordinal wins: A should be AFTER B, not before it
-        assert!(ord_a > ord_b, "ordinal should take precedence over before_id: A ({}) > B ({})", ord_a, ord_b);
+        assert!(
+            ord_a > ord_b,
+            "ordinal should take precedence over before_id: A ({}) > B ({})",
+            ord_a,
+            ord_b
+        );
     }
 
     #[tokio::test]
