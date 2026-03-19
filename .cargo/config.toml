@@ -1,8 +1,8 @@
 # No special linker flags needed — objc2-core-ml uses direct ObjC FFI,
 # no Swift runtime dependency.
 
-[build]
-rustc-wrapper = "sccache"
+# sccache: set via RUSTC_WRAPPER=sccache in your shell environment
+# (not hardcoded here — CI runners don't have it installed)
 
 [target.aarch64-apple-darwin]
 # lld is significantly faster than Apple's default linker for large workspaces
