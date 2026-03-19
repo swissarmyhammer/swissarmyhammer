@@ -90,9 +90,9 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
   - Required: `id`
   - Optional: `title`, `description`, `assignees`, `tags`, `depends_on`, `attachments`
 
-- `move task` - Move task to a different column
+- `move task` - Move task to a different column or position
   - Required: `id`, `column`
-  - Optional: `swimlane`, `ordinal`
+  - Optional: `swimlane`, `ordinal`, `before_id` (place before this task), `after_id` (place after this task)
 
 - `delete task` - Delete a task (removes from dependencies)
   - Required: `id`

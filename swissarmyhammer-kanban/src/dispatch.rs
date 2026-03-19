@@ -178,6 +178,12 @@ pub async fn execute_operation(
             if let Some(ordinal) = op.get_string("ordinal") {
                 cmd.ordinal = Some(ordinal.to_string());
             }
+            if let Some(before_id) = op.get_string("before_id") {
+                cmd.before_id = Some(before_id.into());
+            }
+            if let Some(after_id) = op.get_string("after_id") {
+                cmd.after_id = Some(after_id.into());
+            }
             processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Task) => {

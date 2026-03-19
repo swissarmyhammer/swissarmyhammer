@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM0C2NDHKEB7QXG4XEAQ0KR5
-position_column: todo
-position_ordinal: 7f8280
+position_column: done
+position_ordinal: '7e80'
 title: Replace DOM snapshot with icon-based OS ghost + DOM draggable in target window
 ---
 ## What

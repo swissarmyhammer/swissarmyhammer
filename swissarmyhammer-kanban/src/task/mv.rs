@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task_helpers::task_entity_to_json;
+use crate::task_helpers::{compute_ordinal_for_neighbors, task_entity_to_json};
 use crate::types::{ColumnId, Ordinal, SwimlaneId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,6 +29,12 @@ pub struct MoveTask {
     /// Optional ordinal — if None, appends at end of column
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ordinal: Option<String>,
+    /// Place before this task ID (ordinal computed from neighbors)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_id: Option<TaskId>,
+    /// Place after this task ID (ordinal computed from neighbors)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_id: Option<TaskId>,
 }
 
 impl MoveTask {
@@ -39,6 +45,8 @@ impl MoveTask {
             column: column.into(),
             swimlane: None,
             ordinal: None,
+            before_id: None,
+            after_id: None,
         }
     }
 
@@ -53,12 +61,26 @@ impl MoveTask {
             column: column.into(),
             swimlane: Some(swimlane.into()),
             ordinal: None,
+            before_id: None,
+            after_id: None,
         }
     }
 
     /// Create a MoveTask with explicit ordinal placement
     pub fn with_ordinal(mut self, ordinal: impl Into<String>) -> Self {
         self.ordinal = Some(ordinal.into());
+        self
+    }
+
+    /// Place before the given task ID (ordinal computed from neighbors).
+    pub fn with_before(mut self, id: impl Into<TaskId>) -> Self {
+        self.before_id = Some(id.into());
+        self
+    }
+
+    /// Place after the given task ID (ordinal computed from neighbors).
+    pub fn with_after(mut self, id: impl Into<TaskId>) -> Self {
+        self.after_id = Some(id.into());
         self
     }
 }
@@ -121,16 +143,91 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                 }
             }
 
-            // Use explicit ordinal if provided, otherwise auto-calculate (append at end)
+            // Priority: explicit ordinal > before_id/after_id placement > append
             let ordinal = if let Some(ref ord) = self.ordinal {
                 Ordinal::from_string(ord)
+            } else if self.before_id.is_some() || self.after_id.is_some() {
+                // Load and sort all tasks in target column (excluding moved task)
+                let all_tasks = ectx.list("task").await?;
+                let mut col_tasks: Vec<_> = all_tasks
+                    .into_iter()
+                    .filter(|t| {
+                        t.get_str("position_column") == Some(self.column.as_str())
+                            && t.id.as_str() != self.id.as_str()
+                    })
+                    .collect();
+                col_tasks.sort_by(|a, b| {
+                    let oa = a.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
+                    let ob = b.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
+                    oa.cmp(ob)
+                });
+
+                if let Some(ref ref_id) = self.before_id {
+                    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id.as_str());
+                    match ref_idx {
+                        Some(0) => {
+                            let ref_ord = Ordinal::from_string(
+                                col_tasks[0].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                            );
+                            compute_ordinal_for_neighbors(None, Some(&ref_ord))
+                        }
+                        Some(idx) => {
+                            let pred_ord = Ordinal::from_string(
+                                col_tasks[idx - 1].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                            );
+                            let ref_ord = Ordinal::from_string(
+                                col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                            );
+                            compute_ordinal_for_neighbors(Some(&pred_ord), Some(&ref_ord))
+                        }
+                        None => {
+                            // Reference not found — append at end
+                            compute_ordinal_for_neighbors(
+                                col_tasks.last().map(|t| Ordinal::from_string(
+                                    t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                                )).as_ref(),
+                                None,
+                            )
+                        }
+                    }
+                } else if let Some(ref ref_id) = self.after_id {
+                    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id.as_str());
+                    match ref_idx {
+                        Some(idx) if idx == col_tasks.len() - 1 => {
+                            let ref_ord = Ordinal::from_string(
+                                col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                            );
+                            compute_ordinal_for_neighbors(Some(&ref_ord), None)
+                        }
+                        Some(idx) => {
+                            let ref_ord = Ordinal::from_string(
+                                col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                            );
+                            let succ_ord = Ordinal::from_string(
+                                col_tasks[idx + 1].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                            );
+                            compute_ordinal_for_neighbors(Some(&ref_ord), Some(&succ_ord))
+                        }
+                        None => {
+                            // Reference not found — append at end
+                            compute_ordinal_for_neighbors(
+                                col_tasks.last().map(|t| Ordinal::from_string(
+                                    t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
+                                )).as_ref(),
+                                None,
+                            )
+                        }
+                    }
+                } else {
+                    unreachable!()
+                }
             } else {
                 let all_tasks = ectx.list("task").await?;
                 let mut last_ordinal: Option<Ordinal> = None;
 
                 for t in &all_tasks {
                     if t.id == self.id.as_str() {
-                        continue; // Skip the task being moved
+                        continue;
                     }
                     let t_col = t.get_str("position_column").unwrap_or("");
                     let t_swim = t.get_str("position_swimlane");
@@ -239,6 +336,136 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["position"]["column"], "done");
+    }
+
+    /// Helper: add a task and return its ID.
+    async fn add_task(ctx: &KanbanContext, title: &str) -> String {
+        let result = AddTask::new(title)
+            .execute(ctx)
+            .await
+            .into_result()
+            .unwrap();
+        result["id"].as_str().unwrap().to_string()
+    }
+
+    /// Helper: read a task's ordinal.
+    async fn get_ordinal(ctx: &KanbanContext, id: &str) -> String {
+        let ectx = ctx.entity_context().await.unwrap();
+        let entity = ectx.read("task", id).await.unwrap();
+        entity
+            .get_str("position_ordinal")
+            .unwrap_or("80")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn test_move_task_before_id() {
+        let (_temp, ctx) = setup().await;
+
+        let a = add_task(&ctx, "A").await;
+        let b = add_task(&ctx, "B").await;
+        let c = add_task(&ctx, "C").await;
+
+        // Move C before A
+        MoveTask::to_column(c.as_str(), "todo")
+            .with_before(a.as_str())
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let ord_c = get_ordinal(&ctx, &c).await;
+        let ord_a = get_ordinal(&ctx, &a).await;
+        assert!(ord_c < ord_a, "C ({}) should sort before A ({})", ord_c, ord_a);
+
+        // B should be unchanged and after A
+        let ord_b = get_ordinal(&ctx, &b).await;
+        assert!(ord_a < ord_b, "A ({}) should sort before B ({})", ord_a, ord_b);
+    }
+
+    #[tokio::test]
+    async fn test_move_task_after_id() {
+        let (_temp, ctx) = setup().await;
+
+        let a = add_task(&ctx, "A").await;
+        let b = add_task(&ctx, "B").await;
+        let c = add_task(&ctx, "C").await;
+
+        // Move A after C
+        MoveTask::to_column(a.as_str(), "todo")
+            .with_after(c.as_str())
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let ord_a = get_ordinal(&ctx, &a).await;
+        let ord_c = get_ordinal(&ctx, &c).await;
+        assert!(ord_a > ord_c, "A ({}) should sort after C ({})", ord_a, ord_c);
+    }
+
+    #[tokio::test]
+    async fn test_move_task_before_id_between() {
+        let (_temp, ctx) = setup().await;
+
+        let a = add_task(&ctx, "A").await;
+        let b = add_task(&ctx, "B").await;
+        let c = add_task(&ctx, "C").await;
+
+        // Move C before B (between A and B)
+        MoveTask::to_column(c.as_str(), "todo")
+            .with_before(b.as_str())
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let ord_a = get_ordinal(&ctx, &a).await;
+        let ord_c = get_ordinal(&ctx, &c).await;
+        let ord_b = get_ordinal(&ctx, &b).await;
+        assert!(ord_a < ord_c, "A ({}) < C ({})", ord_a, ord_c);
+        assert!(ord_c < ord_b, "C ({}) < B ({})", ord_c, ord_b);
+    }
+
+    #[tokio::test]
+    async fn test_move_task_before_id_not_found_appends() {
+        let (_temp, ctx) = setup().await;
+
+        let a = add_task(&ctx, "A").await;
+
+        // Move A with before_id referencing nonexistent task — should append
+        let result = MoveTask::to_column(a.as_str(), "todo")
+            .with_before("nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["position"]["column"], "todo");
+    }
+
+    #[tokio::test]
+    async fn test_move_task_ordinal_takes_precedence() {
+        let (_temp, ctx) = setup().await;
+
+        let a = add_task(&ctx, "A").await;
+        let b = add_task(&ctx, "B").await;
+
+        // Get B's ordinal so we can verify before_id was NOT used
+        let ord_b = get_ordinal(&ctx, &b).await;
+
+        // Set both ordinal and before_id — ordinal should win.
+        // Use Ordinal::after(B) so we get a valid ordinal that's clearly after B,
+        // while before_id would place us before B.
+        let target_ord = Ordinal::after(&Ordinal::from_string(&ord_b));
+        let mut cmd = MoveTask::to_column(a.as_str(), "todo").with_before(b.as_str());
+        cmd.ordinal = Some(target_ord.as_str().to_string());
+
+        cmd.execute(&ctx).await.into_result().unwrap();
+
+        let ord_a = get_ordinal(&ctx, &a).await;
+        // Ordinal wins: A should be AFTER B, not before it
+        assert!(ord_a > ord_b, "ordinal should take precedence over before_id: A ({}) > B ({})", ord_a, ord_b);
     }
 
     #[tokio::test]

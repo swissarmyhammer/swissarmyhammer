@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM0C388YV94DZBTVMPHFR68J
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: 7d80
 title: Clean up legacy cross-window overlay and dead code
 ---
 ## What
