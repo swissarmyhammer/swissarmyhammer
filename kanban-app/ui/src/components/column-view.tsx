@@ -200,7 +200,6 @@ export function ColumnView({
                 )}
                 <DraggableTaskCard
                   entity={entity}
-                  isBlocked={entity.fields.ready === false}
                   onDragStart={onTaskDragStart}
                   onDragEnd={onTaskDragEnd}
                 />

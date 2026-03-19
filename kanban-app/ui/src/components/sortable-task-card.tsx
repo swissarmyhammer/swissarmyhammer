@@ -4,7 +4,6 @@ import type { Entity } from "@/types/kanban";
 
 interface DraggableTaskCardProps {
   entity: Entity;
-  isBlocked?: boolean;
   onDragStart?: (entity: Entity) => void;
   onDragEnd?: (entity: Entity, dropEffect: string) => void;
 }
@@ -18,7 +17,6 @@ interface DraggableTaskCardProps {
  */
 export function DraggableTaskCard({
   entity,
-  isBlocked,
   onDragStart,
   onDragEnd,
 }: DraggableTaskCardProps) {
@@ -68,7 +66,6 @@ export function DraggableTaskCard({
     <EntityCard
       ref={cardRef}
       entity={entity}
-      isBlocked={isBlocked}
       style={{ opacity: isDragging ? 0.3 : undefined }}
       draggable
       onDragStart={handleDragStart}

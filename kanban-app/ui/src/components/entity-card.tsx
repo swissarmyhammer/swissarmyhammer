@@ -14,7 +14,6 @@ import { getStr } from "@/types/kanban";
 
 interface EntityCardProps {
   entity: Entity;
-  isBlocked?: boolean;
   dragHandleProps?: Record<string, unknown>;
   style?: React.CSSProperties;
   draggable?: boolean;
@@ -29,7 +28,7 @@ interface EntityCardProps {
  * dispatch logic as EntityInspector — no hardcoded field names.
  */
 export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
-  function EntityCard({ entity, isBlocked, dragHandleProps, style, draggable, onDragStart, onDragEnd, ...rest }, ref) {
+  function EntityCard({ entity, dragHandleProps, style, draggable, onDragStart, onDragEnd, ...rest }, ref) {
     const { updateField } = useFieldUpdate();
     const { getSchema } = useSchema();
     const { getEntities } = useEntityStore();
@@ -71,9 +70,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
           draggable={draggable}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
-          className={`rounded-md bg-card px-3 py-2 text-sm border border-border hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 overflow-hidden ${
-            isBlocked ? "opacity-50" : ""
-          }`}
+          className="rounded-md bg-card px-3 py-2 text-sm border border-border hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 overflow-hidden"
           {...rest}
         >
           <button
