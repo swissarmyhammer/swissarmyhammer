@@ -23,10 +23,7 @@ Independent cards run in parallel. Dependent cards wait for their dependencies t
 
 1. **Set ralph**: call `ralph` with `op: "set ralph"` and instruction "Implement all kanban cards until the board is clear".
 2. **Query ready cards**: call `kanban` with `op: "list tasks"` and `ready: true` to get all cards with no incomplete dependencies.
-3. **Implement the batch**:
-   - **1 ready card**: Run `/implement` directly (sequential, same as before).
-   - **2-4 ready cards**: Spawn parallel `Agent` subagents, one per card. Each agent runs `/implement` for a specific card.  Send all Agent tool calls in a **single message** so they run concurrently.
-   - **5+ ready cards**: Spawn the first 4 in parallel. When any complete, spawn the next. Do not exceed 4 concurrent agents.
+3. **Implement the batch**: Spawn parallel `Agent` subagents, one per card. Each agent runs `/implement` for a specific card.  Send all Agent tool calls in a **single message** so they run concurrently.
 4. **Run `/test`** — after each batch completes, verify all tests pass.
 5. **Check for remaining cards**: query `kanban` with `op: "list tasks"` and `ready: true`.
 6. **If cards remain**: go back to step 3.
@@ -66,10 +63,8 @@ Each agent must target a specific card by ID. Do NOT let parallel agents call `n
 ### Parallel Safety
 
 - **Max 4 concurrent agents.** More than this risks resource exhaustion and merge conflicts.
-- **Use `isolation: "worktree"`** for parallel agents so each works on an isolated copy.
 - **After parallel agents complete**, check for merge conflicts in their worktrees before proceeding.
 - **If a parallel agent fails**, continue with the others. Report the failure at the end.
-- **Fall back to sequential** if worktree isolation is unavailable or if cards modify the same files.
 
 ### Scope
 
