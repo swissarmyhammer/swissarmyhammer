@@ -97,7 +97,7 @@ pub fn build_menu_from_manifest(
     file_menu.append(&PredefinedMenuItem::separator(app)?)?;
     file_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
 
-    // --- Edit menu (OS chrome only) ---
+    // --- Edit menu (OS chrome + manifest items) ---
     let edit_menu = Submenu::with_items(
         app,
         "Edit",
@@ -112,6 +112,17 @@ pub fn build_menu_from_manifest(
             &PredefinedMenuItem::select_all(app, None)?,
         ],
     )?;
+    if let Some(items) = menus.get("edit") {
+        edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
+        let mut last_group: Option<usize> = None;
+        for entry in items {
+            if last_group.is_some() && last_group != Some(entry.group) {
+                edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
+            }
+            edit_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            last_group = Some(entry.group);
+        }
+    }
 
     // --- Window menu ---
     let window_menu = Submenu::new(app, "Window", true)?;

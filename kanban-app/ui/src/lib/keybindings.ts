@@ -28,6 +28,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
   vim: {
     ":": "app.command",
     "/": "app.search",
+    "Mod+f": "app.search",
     "Mod+Shift+P": "app.palette",
     "u": "app.undo",
     "Mod+r": "app.redo",

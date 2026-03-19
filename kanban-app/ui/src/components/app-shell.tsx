@@ -170,8 +170,9 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
       },
       {
         id: "app.search",
-        name: "Search",
+        name: "Find",
         keys: { vim: "/", cua: "Mod+F", emacs: "Mod+F" },
+        menuPlacement: { menu: "edit", group: 0, order: 0 },
         execute: () => {
           setPaletteMode("search");
           setPaletteOpen(true);
