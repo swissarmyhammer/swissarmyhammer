@@ -36,10 +36,13 @@ export function DraggableTaskCard({
       // Clone the card DOM for the drag image
       if (cardRef.current) {
         const clone = cardRef.current.cloneNode(true) as HTMLElement;
-        clone.style.position = "absolute";
+        clone.style.position = "fixed";
         clone.style.left = "-9999px";
-        clone.style.top = "0";
+        clone.style.top = "-9999px";
         clone.style.width = `${cardRef.current.offsetWidth}px`;
+        clone.style.height = `${cardRef.current.offsetHeight}px`;
+        clone.style.transform = "none";
+        clone.style.zoom = "1";
         clone.style.opacity = "1";
         clone.style.pointerEvents = "none";
         document.body.appendChild(clone);

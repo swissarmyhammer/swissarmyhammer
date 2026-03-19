@@ -326,7 +326,13 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         // Cross-board drop — task doesn't exist here yet, complete via session
         // The backend handles creating/moving the task to this board
         const colTasks = baseLayout.get(columnId) ?? [];
-        completeSession(columnId, { dropIndex: colTasks.length });
+        const beforeId = insertIndex < colTasks.length ? colTasks[insertIndex] : undefined;
+        const afterId = !beforeId && colTasks.length > 0 ? colTasks[colTasks.length - 1] : undefined;
+        completeSession(columnId, {
+          dropIndex: insertIndex,
+          beforeId,
+          afterId,
+        });
       }
     },
     [taskMap, baseLayout, persistMove, cancelSession, completeSession],
