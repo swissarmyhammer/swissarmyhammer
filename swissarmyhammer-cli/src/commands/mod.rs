@@ -11,4 +11,5 @@ pub mod install;
 pub mod model;
 pub mod prompt;
 pub mod serve;
+pub mod tools;
 pub mod validate;

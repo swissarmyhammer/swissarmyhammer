@@ -299,6 +299,30 @@ Examples:
         subcommand: Option<AgentSubcommand>,
     },
 
+    /// Manage tool enable/disable state
+    #[command(long_about = "
+Manage which MCP tools are enabled or disabled.
+
+Tools are enabled by default. Disable tools you don't need to reduce
+the tool surface visible to AI agents.
+
+Examples:
+  sah tools                          # List all tools with status
+  sah tools disable                  # Disable all tools
+  sah tools enable shell git         # Enable specific tools
+  sah tools disable kanban web       # Disable specific tools
+  sah tools enable                   # Enable all tools
+  sah tools --global disable web     # Disable web globally
+")]
+    Tools {
+        /// Write to global config (~/.sah/tools.yaml) instead of project
+        #[arg(long)]
+        global: bool,
+
+        #[command(subcommand)]
+        subcommand: Option<ToolsSubcommand>,
+    },
+
     /// Render statusline from Claude Code JSON (stdin) or dump config
     #[command(long_about = "
 Render a styled statusline for Claude Code integration.
@@ -502,6 +526,20 @@ For editor configuration:
 pub enum StatuslineSubcommand {
     /// Dump the full annotated builtin config to stdout
     Config,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ToolsSubcommand {
+    /// Enable tools (all if no names given)
+    Enable {
+        /// Tool names to enable (omit for all)
+        names: Vec<String>,
+    },
+    /// Disable tools (all if no names given)
+    Disable {
+        /// Tool names to disable (omit for all)
+        names: Vec<String>,
+    },
 }
 
 impl Cli {
@@ -887,5 +925,93 @@ mod tests {
     fn test_global_format_flag_invalid() {
         let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "doctor"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tools_no_subcommand() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "tools"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Tools { global, subcommand }) = cli.command {
+            assert!(!global);
+            assert!(subcommand.is_none());
+        } else {
+            unreachable!("Expected Tools command");
+        }
+    }
+
+    #[test]
+    fn test_tools_enable_multiple_names() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "tools", "enable", "shell", "git"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Tools {
+            global,
+            subcommand: Some(ToolsSubcommand::Enable { names }),
+        }) = cli.command
+        {
+            assert!(!global);
+            assert_eq!(names, vec!["shell", "git"]);
+        } else {
+            unreachable!("Expected Tools Enable command with names");
+        }
+    }
+
+    #[test]
+    fn test_tools_disable_single_name() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "tools", "disable", "kanban"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Tools {
+            global,
+            subcommand: Some(ToolsSubcommand::Disable { names }),
+        }) = cli.command
+        {
+            assert!(!global);
+            assert_eq!(names, vec!["kanban"]);
+        } else {
+            unreachable!("Expected Tools Disable command with name");
+        }
+    }
+
+    #[test]
+    fn test_tools_global_flag_with_enable() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "tools", "--global", "enable", "shell"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Tools {
+            global,
+            subcommand: Some(ToolsSubcommand::Enable { names }),
+        }) = cli.command
+        {
+            assert!(global);
+            assert_eq!(names, vec!["shell"]);
+        } else {
+            unreachable!("Expected Tools Enable command with global flag");
+        }
+    }
+
+    #[test]
+    fn test_tools_enable_no_names() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "tools", "enable"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Tools {
+            global,
+            subcommand: Some(ToolsSubcommand::Enable { names }),
+        }) = cli.command
+        {
+            assert!(!global);
+            assert!(names.is_empty());
+        } else {
+            unreachable!("Expected Tools Enable command with empty names");
+        }
     }
 }

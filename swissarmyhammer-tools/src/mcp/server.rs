@@ -86,6 +86,8 @@ pub struct McpServer {
     agent_library: Arc<RwLock<AgentLibrary>>,
     /// Working directory — stored for deferred initialization (e.g. code-context)
     work_dir: Option<PathBuf>,
+    /// Watches tools.yaml for changes, reloads on list_tools() calls
+    tool_config_watcher: Arc<Mutex<super::tool_config::ToolConfigWatcher>>,
 }
 
 /// Determine if a retry should be attempted based on the error and attempt count.
@@ -281,6 +283,7 @@ impl McpServer {
             skill_library,
             agent_library,
             work_dir: Some(work_dir),
+            tool_config_watcher: Arc::new(Mutex::new(super::tool_config::ToolConfigWatcher::new())),
         };
 
         Ok(server)
@@ -778,6 +781,14 @@ impl McpServer {
             tracing::debug!("Removed agent-only tools (agent_mode=false)");
         }
 
+        // Apply tool enable/disable config from tools.yaml (global + project layers)
+        let tool_config = super::tool_config::load_merged_tool_config();
+        let disabled = tool_config.disabled_tools();
+        if !disabled.is_empty() {
+            super::tool_config::apply_tool_config(tool_registry, &tool_config);
+            tracing::info!("Applied tool config: {} tools disabled", disabled.len());
+        }
+
         tracing::debug!("Registered all tool handlers");
     }
 
@@ -838,6 +849,7 @@ impl McpServer {
             skill_library: self.skill_library.clone(),
             agent_library: self.agent_library.clone(),
             work_dir: self.work_dir.clone(),
+            tool_config_watcher: self.tool_config_watcher.clone(),
         }
     }
 
@@ -1513,8 +1525,16 @@ impl ServerHandler for McpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
+        // Hot reload: check if tools.yaml changed since last call.
+        // Acquire the write lock once and read from it directly — avoids a
+        // second lock acquisition for the list_tools() call below.
+        let mut registry = self.tool_registry.write().await;
+        {
+            let mut watcher = self.tool_config_watcher.lock().await;
+            watcher.check_and_reload(&mut registry);
+        }
         Ok(ListToolsResult {
-            tools: self.tool_registry.read().await.list_tools(),
+            tools: registry.list_tools(),
             next_cursor: None,
             meta: None,
         })

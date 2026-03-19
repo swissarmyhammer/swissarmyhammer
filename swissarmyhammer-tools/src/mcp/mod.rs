@@ -64,6 +64,7 @@ pub mod plan_notifications;
 pub mod responses;
 pub mod server;
 pub mod shared_utils;
+pub mod tool_config;
 pub mod tool_descriptions;
 pub mod tool_handlers;
 pub mod tool_registry;

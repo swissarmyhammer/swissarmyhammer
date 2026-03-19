@@ -226,7 +226,7 @@ use rmcp::model::{
     LoggingMessageNotificationParam, Tool,
 };
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -1003,6 +1003,12 @@ pub struct ToolRegistry {
     /// Uses HashMap for O(1) lookup performance. Tool names must be unique
     /// and are used as the primary key for tool resolution.
     tools: HashMap<String, Box<dyn McpTool>>,
+
+    /// Set of tool names that are currently disabled.
+    ///
+    /// Disabled tools are excluded from `list_tools()` and `get_tool()` so
+    /// that MCP clients cannot discover or invoke them.
+    disabled_tools: HashSet<String>,
 }
 
 impl ToolRegistry {
@@ -1010,6 +1016,7 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            disabled_tools: HashSet::new(),
         }
     }
 
@@ -1027,8 +1034,15 @@ impl ToolRegistry {
         self.tools.retain(|_, tool| !tool.is_agent_tool());
     }
 
-    /// Get a tool by name
+    /// Get a tool by name.
+    ///
+    /// Returns `None` if the tool is not registered **or** if it is currently disabled.
+    /// Callers that need to bypass the disabled filter should access `self.tools` directly
+    /// (available within this module).
     pub fn get_tool(&self, name: &str) -> Option<&dyn McpTool> {
+        if self.disabled_tools.contains(name) {
+            return None;
+        }
         self.tools.get(name).map(|tool| tool.as_ref())
     }
 
@@ -1074,15 +1088,22 @@ impl ToolRegistry {
             .map(|tool| tool.as_ref())
     }
 
-    /// List all registered tool names
+    /// List all registered tool names that are currently enabled.
     pub fn list_tool_names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+        self.tools
+            .keys()
+            .filter(|name| !self.disabled_tools.contains(*name))
+            .cloned()
+            .collect()
     }
 
-    /// Get all registered tools as Tool objects for MCP list_tools response
+    /// Get all registered tools as Tool objects for MCP list_tools response.
+    ///
+    /// Disabled tools are excluded from the result.
     pub fn list_tools(&self) -> Vec<Tool> {
         self.tools
             .values()
+            .filter(|tool| !self.disabled_tools.contains(McpTool::name(tool.as_ref())))
             .map(|tool| {
                 let schema = tool.schema();
                 let schema_map = if let serde_json::Value::Object(map) = schema {
@@ -1107,17 +1128,61 @@ impl ToolRegistry {
         self.tools.is_empty()
     }
 
-    /// Iterate over all registered tools
+    /// Iterate over all registered tools that are currently enabled.
     ///
-    /// Returns an iterator over references to all registered tools.
+    /// Returns an iterator over references to all registered, non-disabled tools.
     /// This is useful for operations that need to process all tools,
     /// such as health checking.
     ///
     /// # Returns
     ///
-    /// * Iterator yielding `&dyn McpTool` for each registered tool
+    /// * Iterator yielding `&dyn McpTool` for each enabled registered tool
     pub fn iter_tools(&self) -> impl Iterator<Item = &dyn McpTool> {
-        self.tools.values().map(|tool| tool.as_ref())
+        self.tools
+            .values()
+            .filter(|tool| !self.disabled_tools.contains(McpTool::name(tool.as_ref())))
+            .map(|tool| tool.as_ref())
+    }
+
+    /// Enable or disable a tool by name.
+    ///
+    /// When `enabled` is `false`, the tool is added to the disabled set and will be
+    /// excluded from `list_tools()`, `get_tool()`, and `iter_tools()`.
+    /// When `enabled` is `true`, the tool is removed from the disabled set.
+    ///
+    /// Tools that are not registered can still be added to the disabled set; they will
+    /// simply be ignored if registered later while disabled.
+    pub fn set_tool_enabled(&mut self, name: &str, enabled: bool) {
+        if enabled {
+            self.disabled_tools.remove(name);
+        } else {
+            self.disabled_tools.insert(name.to_string());
+        }
+    }
+
+    /// Check if a tool is enabled (i.e. not in the disabled set).
+    ///
+    /// Returns `true` for tools that are not in the disabled set, regardless of whether
+    /// they are actually registered.
+    pub fn is_tool_enabled(&self, name: &str) -> bool {
+        !self.disabled_tools.contains(name)
+    }
+
+    /// Enable or disable all currently registered tools at once.
+    ///
+    /// When `enabled` is `false`, all registered tool names are added to the disabled
+    /// set.  When `enabled` is `true`, the disabled set is cleared entirely.
+    pub fn set_all_enabled(&mut self, enabled: bool) {
+        if enabled {
+            self.disabled_tools.clear();
+        } else {
+            self.disabled_tools = self.tools.keys().cloned().collect();
+        }
+    }
+
+    /// Return a reference to the set of disabled tool names.
+    pub fn disabled_tools(&self) -> &HashSet<String> {
+        &self.disabled_tools
     }
 
     /// Get unique CLI categories from all registered tools
@@ -2562,5 +2627,78 @@ mod tests {
             field: "type".to_string(),
         };
         assert_error_severity(missing_field, ErrorSeverity::Error, "Missing schema field");
+    }
+
+    // --- disabled_tools tests ---
+
+    #[test]
+    fn test_default_all_enabled() {
+        // Fresh registry — no tools should be disabled
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "shell",
+            description: "shell tool",
+        });
+        assert!(registry.is_tool_enabled("shell"));
+        assert!(registry.disabled_tools().is_empty());
+        assert_eq!(registry.list_tools().len(), 1);
+    }
+
+    #[test]
+    fn test_disabled_tool_excluded_from_list_tools() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "shell",
+            description: "shell tool",
+        });
+
+        registry.set_tool_enabled("shell", false);
+
+        assert!(!registry.is_tool_enabled("shell"));
+        assert!(registry.list_tools().is_empty());
+        assert!(registry.list_tool_names().is_empty());
+        assert_eq!(registry.iter_tools().count(), 0);
+    }
+
+    #[test]
+    fn test_disabled_tool_blocked_from_get_tool() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "shell",
+            description: "shell tool",
+        });
+
+        assert!(registry.get_tool("shell").is_some());
+        registry.set_tool_enabled("shell", false);
+        assert!(registry.get_tool("shell").is_none());
+
+        // Re-enabling should restore access
+        registry.set_tool_enabled("shell", true);
+        assert!(registry.get_tool("shell").is_some());
+    }
+
+    #[test]
+    fn test_set_all_disabled_then_enable_one() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "shell",
+            description: "shell tool",
+        });
+        registry.register(MockTool {
+            name: "kanban",
+            description: "kanban tool",
+        });
+
+        // Disable everything
+        registry.set_all_enabled(false);
+        assert!(registry.list_tools().is_empty());
+
+        // Re-enable only shell
+        registry.set_tool_enabled("shell", true);
+
+        let names = registry.list_tool_names();
+        assert!(names.contains(&"shell".to_string()));
+        assert!(!names.contains(&"kanban".to_string()));
+        assert_eq!(registry.list_tools().len(), 1);
     }
 }
