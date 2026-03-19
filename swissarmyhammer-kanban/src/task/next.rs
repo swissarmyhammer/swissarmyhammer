@@ -125,8 +125,8 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                 let col_b = column_order
                     .get(b.get_str("position_column").unwrap_or(""))
                     .unwrap_or(&0);
-                let ord_a = Ordinal::from_string(a.get_str("position_ordinal").unwrap_or("a0"));
-                let ord_b = Ordinal::from_string(b.get_str("position_ordinal").unwrap_or("a0"));
+                let ord_a = Ordinal::from_string(a.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR));
+                let ord_b = Ordinal::from_string(b.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR));
                 col_a.cmp(col_b).then(ord_a.cmp(&ord_b))
             });
 

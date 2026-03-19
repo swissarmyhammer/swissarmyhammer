@@ -54,15 +54,7 @@ pub fn compute_ordinal_for_drop(tasks: &[Entity], drop_index: usize) -> Ordinal 
     if drop_index == 0 {
         let first = &tasks[0];
         let first_ord = get_ordinal(first);
-        // Use Ordinal::between with a synthetic lower bound to safely
-        // produce an ordinal before the first item, even when it starts
-        // with 'a' (where naive byte arithmetic would fail).
-        let lower = Ordinal::from_string("A");
-        let candidate = Ordinal::between(&lower, &first_ord);
-        if candidate.as_str() < first_ord.as_str() {
-            return candidate;
-        }
-        return Ordinal::first();
+        return Ordinal::before(&first_ord);
     }
 
     // Between two neighbors
@@ -290,7 +282,7 @@ pub fn task_entity_to_json(entity: &Entity) -> Value {
 
     let position_column = entity.get_str("position_column").unwrap_or("");
     let position_swimlane = entity.get_str("position_swimlane");
-    let position_ordinal = entity.get_str("position_ordinal").unwrap_or("a0");
+    let position_ordinal = entity.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
 
     let position = if let Some(swimlane) = position_swimlane {
         json!({
@@ -708,6 +700,75 @@ mod tests {
             "'{}' should be < '{}'",
             ordinal.as_str(),
             ord0.as_str()
+        );
+    }
+
+    #[test]
+    fn test_compute_ordinal_prepend_before_default_first() {
+        // When the first task has Ordinal::first() (the default/minimum),
+        // prepending at index 0 must still produce a strictly smaller ordinal.
+        // This is the scenario that triggers the synthetic lower bound path.
+        let ord0 = Ordinal::first();
+        let tasks = vec![make_ordinal_task("t1", &ord0)];
+        let ordinal = compute_ordinal_for_drop(&tasks, 0);
+        assert!(
+            ordinal < ord0,
+            "prepend before default first: '{}' should be < '{}' but isn't",
+            ordinal.as_str(),
+            ord0.as_str()
+        );
+        assert_ne!(
+            ordinal.as_str(),
+            ord0.as_str(),
+            "prepend must produce a distinct ordinal, not a duplicate"
+        );
+    }
+
+    #[test]
+    fn test_compute_ordinal_prepend_before_legacy_a0_ordinal() {
+        // A task with legacy ordinal "a0" (invalid FractionalIndex) should
+        // still allow prepending. The ordinal must be strictly less than "a0"
+        // in string comparison (which is how the column is sorted).
+        let mut task = Entity::new("task", "t1");
+        task.set("position_ordinal", serde_json::json!("a0"));
+        task.set("position_column", serde_json::json!("todo"));
+        let tasks = vec![task];
+        let ordinal = compute_ordinal_for_drop(&tasks, 0);
+        // The ordinal must sort before "a0" in the same comparison used to
+        // sort the column (string comparison on raw ordinal values).
+        assert!(
+            ordinal.as_str() < "a0",
+            "prepend before legacy 'a0': ordinal '{}' should string-compare < 'a0'",
+            ordinal.as_str(),
+        );
+    }
+
+    #[test]
+    fn test_sort_fallback_matches_ordinal_parse_fallback() {
+        // The raw-string sort fallback (Ordinal::DEFAULT_STR) and the parsed
+        // fallback (Ordinal::from_string on invalid input) must produce the
+        // same string, so sort order and ordinal computation agree.
+        let parsed_fallback = Ordinal::from_string("invalid-legacy-value");
+        assert_eq!(
+            Ordinal::DEFAULT_STR,
+            parsed_fallback.as_str(),
+            "DEFAULT_STR '{}' must equal from_string fallback '{}'",
+            Ordinal::DEFAULT_STR,
+            parsed_fallback.as_str()
+        );
+
+        // Verify that a valid ordinal sorts consistently whether compared
+        // as raw strings or as parsed Ordinals.
+        let valid_str = "8180"; // Ordinal::after(first)
+        let valid_ord = Ordinal::from_string(valid_str);
+        let default_ord = Ordinal::from_string(Ordinal::DEFAULT_STR);
+
+        let raw_order = Ordinal::DEFAULT_STR.cmp(valid_str);
+        let parsed_order = default_ord.cmp(&valid_ord);
+        assert_eq!(
+            raw_order, parsed_order,
+            "raw sort ({:?}) must match parsed sort ({:?}) for '{}' vs '{}'",
+            raw_order, parsed_order, Ordinal::DEFAULT_STR, valid_str
         );
     }
 

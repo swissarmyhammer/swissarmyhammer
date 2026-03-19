@@ -17,7 +17,8 @@
         "width": 1200,
         "height": 800,
         "resizable": true,
-        "visible": false
+        "visible": false,
+        "dragDropEnabled": false
       },
       {
         "label": "quick-capture",
@@ -32,7 +33,8 @@
         "center": true,
         "skipTaskbar": true,
         "transparent": true,
-        "shadow": false
+        "shadow": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

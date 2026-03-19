@@ -61,6 +61,18 @@ pub enum WatchEvent {
     },
 }
 
+/// Wrapper that pairs a `WatchEvent` with the board it belongs to.
+///
+/// When emitted to the frontend, the JSON includes all fields from the inner
+/// event (via `#[serde(flatten)]`) plus a `board_path` string so listeners
+/// can filter events for their active board.
+#[derive(Debug, Clone, Serialize)]
+pub struct BoardWatchEvent {
+    #[serde(flatten)]
+    pub event: WatchEvent,
+    pub board_path: String,
+}
+
 /// A single field-level change.
 #[derive(Debug, Clone, Serialize)]
 pub struct FieldChange {

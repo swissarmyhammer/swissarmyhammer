@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
@@ -22,6 +23,7 @@ import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import { ViewsProvider, useViews } from "@/lib/views-context";
 import { CommandScopeProvider, ActiveBoardPathProvider, type CommandDef } from "@/lib/command-scope";
+import { DragSessionProvider } from "@/lib/drag-session-context";
 import type {
   BoardData, OpenBoard, Entity, EntityBag,
 } from "@/types/kanban";
@@ -38,6 +40,9 @@ const IS_QUICK_CAPTURE = URL_PARAMS.get("window") === "quick-capture";
 /** Initial board path from URL (set when opening a new window for a specific board). */
 const INITIAL_BOARD_PATH = URL_PARAMS.get("board") ?? undefined;
 
+/** Window label for per-window state persistence. */
+const WINDOW_LABEL = getCurrentWindow().label;
+
 // Mark <html> so CSS can make the quick-capture window fully transparent.
 if (IS_QUICK_CAPTURE) {
   document.documentElement.setAttribute("data-quick-capture", "");
@@ -51,6 +56,7 @@ interface EntityCreatedEvent {
   entity_type: string;
   id: string;
   fields: Record<string, unknown>;
+  board_path?: string;
 }
 
 /** Payload for entity-removed Tauri event. */
@@ -58,6 +64,7 @@ interface EntityRemovedEvent {
   kind: "entity-removed";
   entity_type: string;
   id: string;
+  board_path?: string;
 }
 
 /** Payload for entity-field-changed Tauri event. */
@@ -69,6 +76,7 @@ interface EntityFieldChangedEvent {
   /** Full entity state including computed fields. Present for own-command
    *  events; absent for external file-watcher events. */
   fields?: Record<string, unknown>;
+  board_path?: string;
 }
 
 /** A panel entry is just an entity reference — entity type + id. */
@@ -87,14 +95,14 @@ function App() {
     [],
   );
   const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
-  /** Per-window active board path. Each window independently selects which board to display. */
+  /** Per-window active board path. Secondary windows get it from URL; main restores from backend. */
   const [activeBoardPath, setActiveBoardPath] = useState<string | undefined>(INITIAL_BOARD_PATH);
   const activeBoardPathRef = useRef(activeBoardPath);
   activeBoardPathRef.current = activeBoardPath;
+
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
-  const inspectorRestoredRef = useRef(false);
 
   /** Open an inspector for any entity. Replaces the stack for primary entities, pushes for secondary. */
   const inspectEntity = useCallback((entityType: string, entityId: string) => {
@@ -139,6 +147,8 @@ function App() {
       const active = result.openBoards.find((b) => b.is_active) ?? result.openBoards[0];
       setActiveBoardPath(active.path);
       activeBoardPathRef.current = active.path;
+      // Persist the fallback selection so it survives hot reload
+      invoke("switch_board", { windowLabel: WINDOW_LABEL, path: active.path }).catch(() => {});
     }
 
     if (result.openBoards.length === 0) {
@@ -155,44 +165,62 @@ function App() {
     setEntitiesByType(result.entitiesByType ?? {});
   }, []);
 
+  // Restore window state from backend on mount.
+  // For main window: reads board_path + inspector_stack from config.
+  // For secondary windows: board comes from URL param, this restores inspector.
   useEffect(() => {
-    refresh();
+    let cancelled = false;
+    (async () => {
+      // Restore board path from backend config (main window only — secondary gets it from URL)
+      if (!INITIAL_BOARD_PATH) {
+        try {
+          const ctx = await invoke<{ board_path: string | null; inspector_stack: string[] }>(
+            "get_ui_context",
+            { windowLabel: WINDOW_LABEL },
+          );
+          if (cancelled) return;
+          if (ctx.board_path) {
+            // Open board idempotently and persist window→board mapping
+            await invoke("switch_board", { windowLabel: WINDOW_LABEL, path: ctx.board_path });
+            if (cancelled) return;
+            setActiveBoardPath(ctx.board_path);
+            activeBoardPathRef.current = ctx.board_path;
+          }
+          // Restore inspector stack
+          if (ctx.inspector_stack?.length > 0) {
+            const validated: PanelEntry[] = [];
+            for (const moniker of ctx.inspector_stack) {
+              const sep = moniker.indexOf(":");
+              if (sep < 0) continue;
+              validated.push({ entityType: moniker.slice(0, sep), entityId: moniker.slice(sep + 1) });
+            }
+            if (validated.length > 0) setPanelStack(validated);
+          }
+        } catch {
+          // No saved state — will fall through to refresh below
+        }
+      }
+      if (cancelled) return;
+      await refresh();
+      if (cancelled) return;
+
+      // Main window restores secondary windows once boards are loaded
+      if (!INITIAL_BOARD_PATH) {
+        invoke("restore_windows").catch(() => {});
+      }
+    })();
+    return () => { cancelled = true; };
   }, [refresh]);
 
-  // Restore inspector stack from persisted config after initial data loads.
-  // Validates each moniker against loaded entities — drops missing ones.
+  // Persist inspector stack whenever it changes (after initial mount)
+  const inspectorInitialized = useRef(false);
   useEffect(() => {
-    if (inspectorRestoredRef.current) return;
-    const allEntities = Object.values(entitiesByType).flat();
-    if (allEntities.length === 0) return;
-    inspectorRestoredRef.current = true;
-
-    invoke<{ inspector_stack: string[] }>("get_ui_context")
-      .then(({ inspector_stack }) => {
-        if (!inspector_stack || inspector_stack.length === 0) return;
-        const validated: PanelEntry[] = [];
-        for (const moniker of inspector_stack) {
-          const sep = moniker.indexOf(":");
-          if (sep < 0) continue;
-          const entityType = moniker.slice(0, sep);
-          const entityId = moniker.slice(sep + 1);
-          // Validate entity still exists
-          if (allEntities.some((e) => e.entity_type === entityType && e.id === entityId)) {
-            validated.push({ entityType, entityId });
-          }
-        }
-        if (validated.length > 0) {
-          setPanelStack(validated);
-        }
-      })
-      .catch(() => {});
-  }, [entitiesByType]);
-
-  // Persist inspector stack whenever it changes
-  useEffect(() => {
-    if (!inspectorRestoredRef.current) return;
+    if (!inspectorInitialized.current) {
+      inspectorInitialized.current = true;
+      return;
+    }
     const monikers = panelStack.map((e) => `${e.entityType}:${e.entityId}`);
-    invoke("set_inspector_stack", { stack: monikers }).catch(() => {});
+    invoke("set_inspector_stack", { stack: monikers, windowLabel: WINDOW_LABEL }).catch(() => {});
   }, [panelStack]);
 
   // ---------------------------------------------------------------------------
@@ -203,7 +231,8 @@ function App() {
   useEffect(() => {
     const unlisteners = [
       listen<EntityCreatedEvent>("entity-created", (event) => {
-        const { entity_type, id } = event.payload;
+        const { entity_type, id, board_path } = event.payload;
+        if (board_path && activeBoardPathRef.current && board_path !== activeBoardPathRef.current) return;
         if (entity_type === "column" || entity_type === "swimlane") {
           refresh();
           return;
@@ -227,7 +256,8 @@ function App() {
           });
       }),
       listen<EntityRemovedEvent>("entity-removed", (event) => {
-        const { entity_type, id } = event.payload;
+        const { entity_type, id, board_path } = event.payload;
+        if (board_path && activeBoardPathRef.current && board_path !== activeBoardPathRef.current) return;
         if (entity_type === "column" || entity_type === "swimlane") {
           refresh();
         } else {
@@ -235,7 +265,8 @@ function App() {
         }
       }),
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        const { entity_type, id, fields: fullFields } = event.payload;
+        const { entity_type, id, fields: fullFields, board_path } = event.payload;
+        if (board_path && activeBoardPathRef.current && board_path !== activeBoardPathRef.current) return;
 
         const applyEntity = (entity: Entity) => {
           const replaceById = (entities: Entity[]) =>
@@ -266,25 +297,70 @@ function App() {
             });
         }
       }),
-      // Keep board-changed for structural operations (open/switch board).
-      // refresh() handles open boards list + active board fallback in one pass.
-      listen("board-changed", () => {
-        refresh();
+      // board-opened: emitted only to the window that initiated the open (via emit_to).
+      // Use window-scoped listen for defense-in-depth.
+      getCurrentWindow().listen<{ path: string }>("board-opened", async (event: { payload: { path: string } }) => {
+        const newPath = event.payload.path;
+        // Persist window→board mapping so it survives hot reload / restart
+        invoke("switch_board", { windowLabel: WINDOW_LABEL, path: newPath }).catch(() => {});
+        setActiveBoardPath(newPath);
+        activeBoardPathRef.current = newPath;
+        const result = await refreshBoards(newPath);
+        setOpenBoards(result.openBoards);
+        setBoard(result.boardData);
+        setEntitiesByType(result.entitiesByType ?? {});
+      }),
+      // board-changed: structural change (open/close/switch). All windows
+      // refresh their open boards list. If this window's board was closed,
+      // fall back to another open board.
+      listen("board-changed", async () => {
+        let boards: OpenBoard[] = [];
+        try {
+          boards = await invoke<OpenBoard[]>("list_open_boards");
+        } catch { /* ignore */ }
+        setOpenBoards(boards);
+
+        if (boards.length === 0) {
+          setBoard(null);
+          setEntitiesByType({});
+          setActiveBoardPath(undefined);
+          return;
+        }
+
+        // If this window's board is still open, keep it and refresh data
+        const currentPath = activeBoardPathRef.current;
+        const stillOpen = currentPath && boards.some((b) => b.path === currentPath);
+        if (stillOpen) {
+          const result = await refreshBoards(currentPath);
+          setBoard(result.boardData);
+          setEntitiesByType(result.entitiesByType ?? {});
+          return;
+        }
+
+        // Board was closed — fall back to another open board and persist
+        const fallback = boards.find((b) => b.is_active) ?? boards[0];
+        setActiveBoardPath(fallback.path);
+        activeBoardPathRef.current = fallback.path;
+        invoke("switch_board", { windowLabel: WINDOW_LABEL, path: fallback.path }).catch(() => {});
+        const result = await refreshBoards(fallback.path);
+        setBoard(result.boardData);
+        setEntitiesByType(result.entitiesByType ?? {});
       }),
     ];
     return () => {
       for (const p of unlisteners) {
-        p.then((fn) => fn());
+        p.then((fn: () => void) => fn());
       }
     };
   }, [refresh]);
 
-  /** Switch this window's active board. Updates local state + backend "last-used" default. */
+  /** Switch this window's active board. Persists via backend switch_board command. */
   const handleSwitchBoard = useCallback(async (path: string) => {
     setActiveBoardPath(path);
     activeBoardPathRef.current = path;
-    // Update backend's global active board (for commands that don't pass board_path)
-    try { await invoke("set_active_board", { path }); } catch { /* ignore */ }
+    try {
+      await invoke("switch_board", { windowLabel: WINDOW_LABEL, path });
+    } catch { /* ignore */ }
     refresh();
   }, [refresh]);
 
@@ -308,6 +384,7 @@ function App() {
     <UndoStackProvider>
     <InspectProvider onInspect={inspectEntity} onDismiss={dismissTopPanel}>
     <AppShell openBoards={openBoards} onSwitchBoard={handleSwitchBoard}>
+    <DragSessionProvider>
     <ViewsProvider>
     <ViewCommandScope>
     <div className="h-screen bg-background text-foreground flex flex-col">
@@ -366,6 +443,7 @@ function App() {
     </div>
     </ViewCommandScope>
     </ViewsProvider>
+    </DragSessionProvider>
     </AppShell>
     </InspectProvider>
     </UndoStackProvider>

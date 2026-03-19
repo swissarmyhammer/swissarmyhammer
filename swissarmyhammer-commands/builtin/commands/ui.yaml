@@ -29,7 +29,6 @@
 
 - id: ui.view.set
   name: Switch View
-  visible: false
   params:
     - name: view_id
       from: args

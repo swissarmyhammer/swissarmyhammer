@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ViewDef } from "@/types/kanban";
 
 interface ViewsContextValue {
@@ -12,15 +13,17 @@ interface ViewsContextValue {
 
 const ViewsContext = createContext<ViewsContextValue | null>(null);
 
+/** Window label for per-window view persistence. */
+const WINDOW_LABEL = getCurrentWindow().label;
+
 export function ViewsProvider({ children }: { children: ReactNode }) {
   const [views, setViews] = useState<ViewDef[]>([]);
   const [activeViewId, setActiveViewIdState] = useState<string | null>(null);
-  const restoredRef = useRef(false);
 
-  // Persist active view to backend on change
+  // Persist active view to backend per-window on change
   const setActiveViewId = useCallback((id: string) => {
     setActiveViewIdState(id);
-    invoke("set_active_view", { viewId: id }).catch(() => {});
+    invoke("set_active_view", { viewId: id, windowLabel: WINDOW_LABEL }).catch(() => {});
   }, []);
 
   const refresh = useCallback(async () => {
@@ -28,26 +31,7 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
       const result = await invoke<ViewDef[]>("list_views");
       setViews(result);
 
-      // On first load, restore persisted view; fall back to first view
-      if (!restoredRef.current) {
-        restoredRef.current = true;
-        try {
-          const ctx = await invoke<{ active_view_id: string | null }>("get_ui_context");
-          const persisted = ctx.active_view_id;
-          if (persisted && result.some((v) => v.id === persisted)) {
-            setActiveViewIdState(persisted);
-            return;
-          }
-        } catch {
-          // get_ui_context not available — fall through
-        }
-        if (result.length > 0) {
-          setActiveViewIdState(result[0].id);
-        }
-        return;
-      }
-
-      // Subsequent refreshes: keep current if still valid, else fall back
+      // Keep current selection if still valid, else fall back to first view
       setActiveViewIdState((prev) => {
         if (prev && result.some((v) => v.id === prev)) return prev;
         return result.length > 0 ? result[0].id : null;
@@ -57,8 +41,27 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // On mount: restore persisted view from backend, then load views
   useEffect(() => {
-    refresh();
+    let cancelled = false;
+    (async () => {
+      // Restore the persisted active view ID for this window
+      try {
+        const ctx = await invoke<{ active_view_id: string | null }>(
+          "get_ui_context",
+          { windowLabel: WINDOW_LABEL },
+        );
+        if (cancelled) return;
+        if (ctx.active_view_id) {
+          setActiveViewIdState(ctx.active_view_id);
+        }
+      } catch {
+        // No saved state — refresh will pick the first view
+      }
+      if (cancelled) return;
+      await refresh();
+    })();
+    return () => { cancelled = true; };
   }, [refresh]);
 
   // Re-fetch views when view entities change (file watcher or commands)

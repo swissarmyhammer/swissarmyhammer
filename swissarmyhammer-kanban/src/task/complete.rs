@@ -57,7 +57,7 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
                     continue; // Skip the task being completed
                 }
                 if t.get_str("position_column") == Some(terminal.id.as_str()) {
-                    let ord = Ordinal::from_string(t.get_str("position_ordinal").unwrap_or("a0"));
+                    let ord = Ordinal::from_string(t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR));
                     last_ordinal = Some(match last_ordinal {
                         None => ord,
                         Some(ref o) if ord > *o => ord,

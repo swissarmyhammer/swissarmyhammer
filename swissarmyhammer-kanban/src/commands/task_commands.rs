@@ -115,8 +115,8 @@ impl Command for MoveTaskCmd {
                 })
                 .collect();
             col_tasks.sort_by(|a, b| {
-                let oa = a.get_str("position_ordinal").unwrap_or("a0");
-                let ob = b.get_str("position_ordinal").unwrap_or("a0");
+                let oa = a.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
+                let ob = b.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
                 oa.cmp(ob)
             });
 
@@ -128,7 +128,7 @@ impl Command for MoveTaskCmd {
                     Some(0) => {
                         // Placing before the first task
                         let ref_ord = Ordinal::from_string(
-                            col_tasks[0].get_str("position_ordinal").unwrap_or("a0"),
+                            col_tasks[0].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
                         );
                         crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
                     }
@@ -137,10 +137,10 @@ impl Command for MoveTaskCmd {
                         let pred_ord = Ordinal::from_string(
                             col_tasks[idx - 1]
                                 .get_str("position_ordinal")
-                                .unwrap_or("a0"),
+                                .unwrap_or(Ordinal::DEFAULT_STR),
                         );
                         let ref_ord = Ordinal::from_string(
-                            col_tasks[idx].get_str("position_ordinal").unwrap_or("a0"),
+                            col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
                         );
                         crate::task_helpers::compute_ordinal_for_neighbors(
                             Some(&pred_ord),
@@ -154,7 +154,7 @@ impl Command for MoveTaskCmd {
                                 .last()
                                 .map(|t| {
                                     Ordinal::from_string(
-                                        t.get_str("position_ordinal").unwrap_or("a0"),
+                                        t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
                                     )
                                 })
                                 .as_ref(),
@@ -170,19 +170,19 @@ impl Command for MoveTaskCmd {
                     Some(idx) if idx == col_tasks.len() - 1 => {
                         // Placing after the last task
                         let ref_ord = Ordinal::from_string(
-                            col_tasks[idx].get_str("position_ordinal").unwrap_or("a0"),
+                            col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
                         );
                         crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
                     }
                     Some(idx) => {
                         // Between ref and successor
                         let ref_ord = Ordinal::from_string(
-                            col_tasks[idx].get_str("position_ordinal").unwrap_or("a0"),
+                            col_tasks[idx].get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
                         );
                         let succ_ord = Ordinal::from_string(
                             col_tasks[idx + 1]
                                 .get_str("position_ordinal")
-                                .unwrap_or("a0"),
+                                .unwrap_or(Ordinal::DEFAULT_STR),
                         );
                         crate::task_helpers::compute_ordinal_for_neighbors(
                             Some(&ref_ord),
@@ -196,7 +196,7 @@ impl Command for MoveTaskCmd {
                                 .last()
                                 .map(|t| {
                                     Ordinal::from_string(
-                                        t.get_str("position_ordinal").unwrap_or("a0"),
+                                        t.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR),
                                     )
                                 })
                                 .as_ref(),
@@ -223,8 +223,8 @@ impl Command for MoveTaskCmd {
                 .filter(|t| t.get_str("position_column") == Some(&column) && t.id != task_id)
                 .collect();
             column_tasks.sort_by(|a, b| {
-                let oa = a.get_str("position_ordinal").unwrap_or("a0");
-                let ob = b.get_str("position_ordinal").unwrap_or("a0");
+                let oa = a.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
+                let ob = b.get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR);
                 oa.cmp(ob)
             });
 
