@@ -1464,33 +1464,31 @@ mod tests {
         }
     }
 
-    /// Test that close_board removes the right windows entries
+    /// Window entries survive board close — windows are about windows, not boards.
+    /// close_board no longer touches config.windows. The frontend updates
+    /// board_path via switch_board when falling back to another board.
     #[test]
-    fn test_close_board_cleans_windows() {
+    fn test_window_entries_survive_board_close() {
         let mut config = AppConfig::default();
-        let board_a = PathBuf::from("/boards/a/.kanban");
-        let board_b = PathBuf::from("/boards/b/.kanban");
 
         config.windows.insert(
-            "win-1".to_string(),
+            "main".to_string(),
             make_window_entry_with_pos("/boards/a/.kanban", 100, 200, 1200, 800),
         );
         config.windows.insert(
             "win-2".to_string(),
-            make_window_entry_with_pos("/boards/b/.kanban", 500, 300, 1200, 800),
+            make_window_entry_with_pos("/boards/a/.kanban", 500, 300, 1200, 800),
         );
 
-        // Close board A — should remove win-1 but keep win-2
-        config
-            .windows
-            .retain(|_, entry| entry.board_path != board_a);
-
-        assert_eq!(config.windows.len(), 1);
+        // Closing board A does NOT remove window entries — both windows still exist
+        // (the frontend will update their board_path via switch_board)
+        assert_eq!(config.windows.len(), 2);
+        assert!(config.windows.contains_key("main"));
         assert!(config.windows.contains_key("win-2"));
-        assert_eq!(
-            config.windows.get("win-2").unwrap().board_path,
-            board_b
-        );
+
+        // Geometry is preserved
+        assert_eq!(config.windows.get("main").unwrap().x, Some(100));
+        assert_eq!(config.windows.get("win-2").unwrap().x, Some(500));
     }
 
     /// Verify that legacy JSON config with `window_boards` key migrates to `windows`.

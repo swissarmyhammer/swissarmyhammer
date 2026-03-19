@@ -151,15 +151,10 @@ pub async fn close_board(
 
     state.close_board(&target).await?;
 
-    // Clean up window→board mapping for the closed board
-    {
-        let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
-        let mut config = state.config.write().await;
-        config
-            .windows
-            .retain(|_, entry| entry.board_path != canonical);
-        let _ = config.save();
-    }
+    // Window entries are NOT removed here — they belong to the window, not
+    // the board. The frontend will call switch_board to update board_path
+    // when it falls back to another board. Secondary windows clean up their
+    // entries via the on_window_event Destroyed handler when actually closed.
 
     let _ = app.emit("board-changed", ());
 

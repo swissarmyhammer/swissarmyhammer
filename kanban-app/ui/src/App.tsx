@@ -147,6 +147,8 @@ function App() {
       const active = result.openBoards.find((b) => b.is_active) ?? result.openBoards[0];
       setActiveBoardPath(active.path);
       activeBoardPathRef.current = active.path;
+      // Persist the fallback selection so it survives hot reload
+      invoke("switch_board", { windowLabel: WINDOW_LABEL, path: active.path }).catch(() => {});
     }
 
     if (result.openBoards.length === 0) {
@@ -178,8 +180,8 @@ function App() {
           );
           if (cancelled) return;
           if (ctx.board_path) {
-            // Open board idempotently, then load data
-            await invoke("open_board", { path: ctx.board_path });
+            // Open board idempotently and persist window→board mapping
+            await invoke("switch_board", { windowLabel: WINDOW_LABEL, path: ctx.board_path });
             if (cancelled) return;
             setActiveBoardPath(ctx.board_path);
             activeBoardPathRef.current = ctx.board_path;
@@ -299,6 +301,8 @@ function App() {
       // Use window-scoped listen for defense-in-depth.
       getCurrentWindow().listen<{ path: string }>("board-opened", async (event: { payload: { path: string } }) => {
         const newPath = event.payload.path;
+        // Persist window→board mapping so it survives hot reload / restart
+        invoke("switch_board", { windowLabel: WINDOW_LABEL, path: newPath }).catch(() => {});
         setActiveBoardPath(newPath);
         activeBoardPathRef.current = newPath;
         const result = await refreshBoards(newPath);
@@ -333,10 +337,11 @@ function App() {
           return;
         }
 
-        // Board was closed — fall back to another open board
+        // Board was closed — fall back to another open board and persist
         const fallback = boards.find((b) => b.is_active) ?? boards[0];
         setActiveBoardPath(fallback.path);
         activeBoardPathRef.current = fallback.path;
+        invoke("switch_board", { windowLabel: WINDOW_LABEL, path: fallback.path }).catch(() => {});
         const result = await refreshBoards(fallback.path);
         setBoard(result.boardData);
         setEntitiesByType(result.entitiesByType ?? {});
