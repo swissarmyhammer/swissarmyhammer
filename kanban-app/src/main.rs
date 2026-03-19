@@ -118,7 +118,7 @@ fn main() {
             // The window starts hidden (visible: false in tauri.conf.json).
             // Restore saved geometry from our own config, then show.
             if let Some(win) = app.get_webview_window("main") {
-                if let Some(ref main_state) = config.windows.get("main") {
+                if let Some(main_state) = config.windows.get("main") {
                     if let (Some(x), Some(y)) = (main_state.x, main_state.y) {
                         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
                     }
