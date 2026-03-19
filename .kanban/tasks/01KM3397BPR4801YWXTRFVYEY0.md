@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: '8580'
+position_ordinal: 817f80
 title: Remove grey opacity on blocked cards
 ---
 ## What

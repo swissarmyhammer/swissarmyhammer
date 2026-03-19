@@ -248,11 +248,15 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   );
 
   const handleTaskDragEnd = useCallback(
-    (_entity: Entity, _dropEffect: string) => {
+    (_entity: Entity, dropEffect: string) => {
       setTaskDrag(null);
-      // Broadcast drag-ended for any listeners, then cancel session as fallback
       emit("drag-ended", {});
-      setTimeout(() => cancelSession(), 300);
+      // Only cancel the backend session if the drop was rejected (no valid target).
+      // Successful drops are handled by handleTaskDrop which calls persistMove
+      // or completeSession directly.
+      if (dropEffect === "none") {
+        cancelSession();
+      }
     },
     [cancelSession],
   );
