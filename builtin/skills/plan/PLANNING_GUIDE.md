@@ -24,46 +24,13 @@ Use `code_context` as the primary research tool:
 - **Check recent history** — `git` with `op: "get changes"` on affected files.
 - **Fall back to text search** — Glob, Grep, Read for string literals, config files, or patterns not in the index.
 
-### Every card must be actionable
-
-Card descriptions MUST include:
-
-```
-## What
-<what to implement — full paths of files to create or modify, approach, context>
-
-## Acceptance Criteria
-- [ ] <observable outcome that proves the work is done>
-
-## Tests
-- [ ] <specific test to write or update, with file path>
-- [ ] <test command to run and expected result>
-```
-
-A card without acceptance criteria and tests is not valid. Someone reading only the card (not the spec) should be able to implement it.
-
-### Card sizing limits
-
-| Dimension | Target | Split when |
-|-----------|--------|------------|
-| Lines of code | 200–500 generated or modified | > 500 lines |
-| Files touched | 2–4 files | > 5 files |
-| Subtasks | 3–5 per card | > 5 subtasks |
-| Concerns | 1 per card | Multiple distinct concerns |
-
-The subtask cap is the most important constraint. Split along natural seams (different files, layers, concerns) and link with `depends_on`. Two small cards with a dependency beat one mega-card.
-
-### Subtasks are checklist items in the description
-GFM checklists (`- [ ]` items) in the card description. No separate API.
+{% include "_partials/card-standards" %}
 
 ### Board naming
 Name the board for the workspace/repository, not the specific feature.
 
 ### Ordering
 Foundational changes first (data models, types, config), then core logic, then integration, then tests, then cleanup. Use `depends_on` for ordering constraints.
-
-### Specificity
-Use specific file paths, function names, and type names. "Add Result return type to parse_config and propagate errors to callers in main.rs and cli.rs" — not "improve error handling."
 
 ### Risks and open questions
 Track unresolved questions as kanban cards so they stay visible.

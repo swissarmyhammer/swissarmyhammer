@@ -4,7 +4,9 @@
 
 # SwissArmyHammer
 
-**Agent-driven engineering**
+**A multitool for agent-driven engineering.**
+
+**Every tool, any order. It's a multitool, not a pipeline.**
 
 [![CI](https://github.com/swissarmyhammer/swissarmyhammer/workflows/CI/badge.svg)](https://github.com/swissarmyhammer/swissarmyhammer/actions)
 [![License](https://img.shields.io/badge/License-blue.svg)](LICENSE)
@@ -17,7 +19,32 @@
 
 AI coding agents are powerful -- but without structure, they wander. They lose track of the plan. They skip tests. They write code that works but isn't reviewed. They forget what they were doing halfway through.
 
-SwissArmyHammer fixes this. It gives your agent real engineering discipline: a kanban board to track work, code review that creates actionable findings, test coverage analysis that finds the gaps, and workflows that chain it all together. One install, and your agent goes from "smart intern" to "senior engineer who follows the process."
+Other tools try to fix this by locking you into a rigid pipeline: discuss, then plan, then execute, then verify, then ship. In that order. Skip a step? Too bad.
+
+Real work isn't a pipeline. Sometimes you implement three things, then review them all at once. Sometimes you write tests first. Sometimes you skip review on a quick fix and just ship it.
+
+SwissArmyHammer gives you a kanban board and a set of sharp tools. You decide when to plan, implement, test, review, and commit. Every tool is always available. You pick the right one for the moment. No sprint ceremonies. No story points. No enterprise theater. Just tools for people who ship.
+
+```
+  ┌──────────┐
+  │  /plan   │  Break work into kanban cards
+  └────┬─────┘
+       │         ┌──────────────────────────┐
+       ▼         │  Any tool, any time,     │
+  ┌──────────┐   │  any order.              │
+  │/implement│   │                          │
+  └────┬─────┘   │  /test after /implement? │
+       │         │  /review before /commit? │
+       ▼         │  /implement three cards  │
+  ┌──────────┐   │  then /review them all?  │
+  │  /test   │   │                          │
+  └────┬─────┘   │  Your call.              │
+       │         └──────────────────────────┘
+       ▼
+  ┌──────────┐     ┌──────────┐
+  │ /review  │────▶│ /commit  │
+  └──────────┘     └──────────┘
+```
 
 Works with Claude Code, Cursor, Windsurf, or any MCP-compatible agent.
 
@@ -82,18 +109,11 @@ Either way, once the plan is on the board:
 
 ## What You Get
 
-### The Problem With Agents Today
+### The Problem With Other Approaches
 
-You ask an agent to build a feature. It writes some code, maybe runs some tests. But:
-- It doesn't plan first -- it just starts coding
-- It doesn't track what's done vs. what's left
-- It doesn't review its own work
-- It doesn't check coverage or find gaps
-- Each session starts from scratch
+Pipeline tools force a rigid sequence: discuss, plan, execute, verify, ship. Every task goes through the same ceremony, whether it's a three-month rewrite or a one-line fix. You can't skip steps, can't reorder them, can't adapt to how the work actually flows.
 
-### The SwissArmyHammer Approach
-
-Every stage of the software development lifecycle gets the same treatment: a **tool** for the raw capability, a **skill** that defines the workflow, and a specialized **agent** that executes it autonomously.
+SwissArmyHammer is different. Every stage of the software development lifecycle is an independent tool. Use what you need, skip what you don't. The kanban board is the shared state -- not a sequential pipeline.
 
 | Stage | What happens | Command |
 |-------|-------------|---------|
@@ -105,8 +125,11 @@ Every stage of the software development lifecycle gets the same treatment: a **t
 | **Commit** | Stage changes, write a conventional commit message | `/commit` |
 | **Explore** | Semantic code search and symbol lookup across 25+ languages | `/code-context` |
 | **Deduplicate** | Find near-duplicate code and refactor it | `/deduplicate` |
+| **Shell** | Execute commands with persistent, searchable output history | `/shell` |
+| **Double-check** | Verify recent work before moving on | `/double-check` |
+| **LSP** | Diagnose and install missing language servers | `/lsp` |
 
-These stages connect into pipelines. `/plan` creates tasks. `/implement` works through them. `/review` finds issues and creates new cards. `/implement` picks those up too. `/coverage` finds untested code and creates test cards. It's a closed loop.
+These tools connect into loops. `/plan` creates cards. `/implement` works through them. `/review` finds issues and creates new cards. `/implement` picks those up too. `/coverage` finds untested code and creates test cards. It's a closed loop -- but you control the order.
 
 ## Context Management -- The Hidden Superpower
 

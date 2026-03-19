@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffd080
+title: No test asserting that {{version}} is rendered in skill output
+---
+**File:** `swissarmyhammer-tools/src/mcp/tools/skill/mod.rs` (tests section)\n\n**What:** The existing tests (`test_skill_tool_use`, `test_skill_use_renders_test_skill_body`) exercise the render path but never assert that `{{version}}` is replaced with the actual version string. The `{{version}}` template variable is now used in all 14 SKILL.md frontmatter fields and all 10 AGENT.md files, but there is no test that verifies a rendered skill's output does not contain the literal string `{{version}}`.\n\n**Why:** If the template context key name were misspelled (e.g., `\"version\"` vs `\"ver\"`), or if the `TemplateContext::set` call were removed or reordered, the raw `{{version}}` placeholder would be silently passed through to the caller with no test failure. The fallback-on-error behavior in `render_skill_instructions` makes this even more important to catch.\n\n**Suggestion:** Add a test that:\n1. Uses a skill whose frontmatter contains `version: \"{{version}}\"`\n2. Calls `execute_use` (or invokes the tool end-to-end)\n3. Asserts the output does NOT contain the literal string `{{version}}`\n4. Optionally asserts the output contains the package version string\n\n**Verification:** `cargo nextest run -E 'rdeps(swissarmyhammer-tools)'` passes currently, but the version substitution path is not covered by any assertion." #review-finding

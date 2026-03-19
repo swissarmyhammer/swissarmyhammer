@@ -4,6 +4,9 @@
 //! wrapping Claude Code functionality to enable any ACP-compatible client
 //! to interact with Claude Code.
 
+/// Crate version, sourced from Cargo.toml at compile time.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod acp_error_conversion;
 pub mod agent;
 pub mod agent_cancellation;

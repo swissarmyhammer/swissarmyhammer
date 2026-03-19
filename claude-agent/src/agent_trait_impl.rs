@@ -93,9 +93,8 @@ impl Agent for ClaudeAgent {
         // This is an architectural decision - do not add authentication methods.
         // If remote authentication is needed in the future, it should be a separate feature.
 
-        let agent_info =
-            agent_client_protocol::Implementation::new("claude-agent", env!("CARGO_PKG_VERSION"))
-                .title(format!("Claude Agent v{}", env!("CARGO_PKG_VERSION")));
+        let agent_info = agent_client_protocol::Implementation::new("claude-agent", crate::VERSION)
+            .title(format!("Claude Agent v{}", crate::VERSION));
 
         let response =
             InitializeResponse::new(self.negotiate_protocol_version(&request.protocol_version))
