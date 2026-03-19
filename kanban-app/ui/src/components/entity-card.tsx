@@ -17,6 +17,9 @@ interface EntityCardProps {
   isBlocked?: boolean;
   dragHandleProps?: Record<string, unknown>;
   style?: React.CSSProperties;
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragEnd?: (e: React.DragEvent) => void;
 }
 
 /**
@@ -26,7 +29,7 @@ interface EntityCardProps {
  * dispatch logic as EntityInspector — no hardcoded field names.
  */
 export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
-  function EntityCard({ entity, isBlocked, dragHandleProps, style, ...rest }, ref) {
+  function EntityCard({ entity, isBlocked, dragHandleProps, style, draggable, onDragStart, onDragEnd, ...rest }, ref) {
     const { updateField } = useFieldUpdate();
     const { getSchema } = useSchema();
     const { getEntities } = useEntityStore();
@@ -65,6 +68,9 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
           ref={ref}
           style={style}
           data-entity-card={entity.id}
+          draggable={draggable}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
           className={`rounded-md bg-card px-3 py-2 text-sm border border-border hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 overflow-hidden ${
             isBlocked ? "opacity-50" : ""
           }`}

@@ -755,6 +755,7 @@ pub async fn create_window(
         .title("SwissArmyHammer")
         .inner_size(1200.0, 800.0)
         .resizable(true)
+        .disable_drag_drop_handler()
         .build()
         .map_err(|e| format!("Failed to create window: {e}"))?;
 
@@ -836,7 +837,8 @@ pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Resu
         let builder = WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))
             .title("SwissArmyHammer")
             .inner_size(1200.0, 800.0)
-            .resizable(true);
+            .resizable(true)
+            .disable_drag_drop_handler();
 
         match builder.build() {
             Ok(window) => {
@@ -1264,149 +1266,6 @@ pub async fn complete_drag_session(
     );
 
     result
-}
-
-/// Start an OS-level drag operation for cross-window task dragging.
-///
-/// Combines two operations atomically:
-/// 1. Starts a drag session (broadcasts `drag-session-active` to all windows)
-/// 2. Initiates a native OS drag via `drag::start_drag()` with a card ghost
-///
-/// The OS drag is blocking (runs on the main thread) and returns when the
-/// user drops or cancels. On completion, if the session hasn't been consumed
-/// by a drop handler, it is auto-cancelled.
-///
-/// `preview_image` is optional base64-encoded PNG data for the drag ghost.
-/// If not provided, a 1x1 transparent pixel is used as placeholder.
-#[tauri::command]
-pub async fn start_os_drag(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    task_id: String,
-    task_fields: Value,
-    board_path: String,
-    source_window_label: String,
-    preview_image: Option<String>,
-) -> Result<Value, String> {
-    // 1. Start the drag session (same logic as start_drag_session)
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    // Auto-cancel stale sessions
-    {
-        let mut guard = state.drag_session.write().await;
-        if let Some(ref existing) = *guard {
-            if now_ms.saturating_sub(existing.started_at_ms) > crate::state::DRAG_SESSION_MAX_AGE_MS
-            {
-                let _ = app.emit(
-                    "drag-session-cancelled",
-                    json!({ "session_id": existing.session_id }),
-                );
-                *guard = None;
-            }
-        }
-    }
-
-    let session = crate::state::DragSession {
-        session_id: ulid::Ulid::new().to_string(),
-        source_board_path: board_path,
-        source_window_label: source_window_label.clone(),
-        task_id: task_id.clone(),
-        task_fields: task_fields.clone(),
-        copy_mode: false,
-        started_at_ms: now_ms,
-    };
-    let session_id = session.session_id.clone();
-    let payload = serde_json::to_value(&session).map_err(|e| e.to_string())?;
-    *state.drag_session.write().await = Some(session);
-    let _ = app.emit("drag-session-active", &payload);
-
-    // 2. Build the drag image
-    let image = if let Some(ref b64) = preview_image {
-        // Strip data URI prefix if present
-        let raw = b64.strip_prefix("data:image/png;base64,").unwrap_or(b64);
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(raw)
-            .map_err(|e| format!("Invalid preview image: {}", e))?;
-        drag::Image::Raw(bytes)
-    } else {
-        // 1x1 transparent PNG as minimal placeholder
-        drag::Image::Raw(vec![
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, // RGBA
-            0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, // IDAT chunk
-            0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE5, 0x27, 0xDE,
-            0xFC, // compressed data
-            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND chunk
-            0xAE, 0x42, 0x60, 0x82,
-        ])
-    };
-
-    // 3. Run the OS drag on the main thread (blocking).
-    // DragItem::Data contains a non-Send provider closure, so both the item
-    // and the drag call must be constructed inside the main-thread closure.
-    let task_json = serde_json::to_vec(&task_fields).unwrap_or_default();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let window_label = source_window_label.clone();
-    let app_clone = app.clone();
-
-    app.run_on_main_thread(move || {
-        let item = drag::DragItem::Data {
-            provider: Box::new(move |requested_type| {
-                if requested_type == "dev.swissarmyhammer.task" {
-                    Some(task_json.clone())
-                } else {
-                    None
-                }
-            }),
-            types: vec!["dev.swissarmyhammer.task".to_string()],
-        };
-
-        let window = app_clone.get_webview_window(&window_label);
-        let result = match window {
-            Some(w) => drag::start_drag(
-                &w,
-                item,
-                image,
-                |_result, _cursor_pos| {
-                    // OS drag completed — callback fires on drop or cancel
-                },
-                drag::Options {
-                    skip_animatation_on_cancel_or_failure: true,
-                    mode: drag::DragMode::Move,
-                },
-            )
-            .map_err(|e| e.to_string()),
-            None => Err(format!("Window not found: {}", window_label)),
-        };
-        let _ = tx.send(result);
-    })
-    .map_err(|e| e.to_string())?;
-
-    // Wait for the OS drag to complete
-    let drag_result = rx.recv().map_err(|e| e.to_string())?;
-
-    // 5. Auto-cancel the session if it wasn't consumed by a drop handler
-    {
-        let mut guard = state.drag_session.write().await;
-        if let Some(ref s) = *guard {
-            if s.session_id == session_id {
-                // Session still exists — wasn't consumed, so cancel it
-                let _ = app.emit(
-                    "drag-session-cancelled",
-                    json!({ "session_id": session_id }),
-                );
-                *guard = None;
-            }
-        }
-    }
-
-    drag_result.map(|_| json!({ "session_id": session_id }))
 }
 
 /// Helper: invoke a command internally, reusing the dispatch logic.
