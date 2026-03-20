@@ -65,6 +65,20 @@ export function MentionPill({
   const description = entity
     ? getStr(entity, "description") || undefined
     : undefined;
+
+  // Resolve display name for tooltip — show full name when slug is abbreviated
+  const displayName = entity
+    ? getStr(entity, "title") ||
+      getStr(entity, "name") ||
+      getStr(entity, "tag_name") ||
+      undefined
+    : undefined;
+  const tooltipText =
+    displayName && displayName !== slug
+      ? description
+        ? `${displayName}\n\n${description}`
+        : displayName
+      : description;
   const entityId = entity?.id ?? slug;
   const scopeMoniker = moniker(entityType, entityId);
 
@@ -102,7 +116,7 @@ export function MentionPill({
         slug={slug}
         prefix={prefix}
         color={color}
-        description={description}
+        tooltipText={tooltipText}
         scopeMoniker={scopeMoniker}
         className={className}
       />
@@ -118,14 +132,14 @@ function MentionPillInner({
   slug,
   prefix,
   color,
-  description,
+  tooltipText,
   scopeMoniker,
   className,
 }: {
   slug: string;
   prefix: string;
   color: string;
-  description?: string;
+  tooltipText?: string;
   scopeMoniker: string;
   className?: string;
 }) {
@@ -157,7 +171,7 @@ function MentionPillInner({
     </span>
   );
 
-  if (!description) return pill;
+  if (!tooltipText) return pill;
 
   return (
     <Tooltip>
@@ -166,7 +180,7 @@ function MentionPillInner({
         side="bottom"
         className="prose prose-sm dark:prose-invert max-w-xs"
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{description}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{tooltipText}</ReactMarkdown>
       </TooltipContent>
     </Tooltip>
   );
