@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffea80
+position_ordinal: ffffffffef80
 title: Fix intra-window collision detection
 ---
 ## What

@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ffc180
+position_ordinal: fff980
 title: FocusScope registers/deregisters scopes
 ---

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffff8580
+position_ordinal: ffffffdb80
 title: 'heb/store.rs: init_schema() called on every open_connection() path implicitly but schema is only explicit in init_schema()'
 ---
 heb/src/store.rs:14-34 and heb/src/context.rs:34

@@ -2,7 +2,7 @@
 depends_on:
 - 01KKC7EVRBG6NX0TV5AP5WXCWS
 position_column: done
-position_ordinal: e2
+position_ordinal: ff9080
 title: 'Real LSP integration test: rust-analyzer documentSymbol end-to-end'
 ---
 ## What\nThe existing LSP tests are fake — `test_collect_lsp_symbols_and_persist` uses mocked `DocumentSymbol` structs, `test_lsp_json_rpc_communication` just prints a message, `test_lsp_server_startup` only checks the process spawned. None of them verify that rust-analyzer actually returns symbols for real Rust code.\n\nWrite a real integration test that:\n1. Creates a temp Rust project with `Cargo.toml` and known source files\n2. Spawns rust-analyzer via `LspJsonRpcClient`\n3. Sends `initialize` + `initialized`\n4. Sends `textDocument/documentSymbol` for a real `.rs` file\n5. Verifies the response contains expected symbols (struct names, function names)\n6. Calls `collect_and_persist_symbols` and verifies data in SQLite\n7. Verifies `lsp_indexed = 1` for that file, `ts_indexed` still 0\n\nFile: `swissarmyhammer-code-context/tests/integration_test.rs`\n\n## Acceptance Criteria\n- [ ] Test spawns real rust-analyzer, sends real LSP requests, gets real responses\n- [ ] Test verifies specific symbol names from known source code\n- [ ] Test verifies `lsp_indexed` and `ts_indexed` flags are independent\n- [ ] Test does NOT skip when rust-analyzer is available (use `#[ignore]` with CI flag instead)\n\n## Tests\n- [ ] `cargo test -p swissarmyhammer-code-context -- test_real_lsp_document_symbols --ignored` passes locally with rust-analyzer installed\n- [ ] Test correctly fails if symbols are not returned"

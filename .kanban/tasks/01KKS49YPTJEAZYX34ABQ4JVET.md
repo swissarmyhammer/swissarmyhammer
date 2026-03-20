@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffb80
+position_ordinal: ffffffbf80
 title: CM6 vim normal-mode Enter/Escape via Vim.defineAction + mapCommand
 ---
 ## What

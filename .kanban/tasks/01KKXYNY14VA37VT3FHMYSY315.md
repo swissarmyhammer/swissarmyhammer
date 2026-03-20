@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffcb80
+position_ordinal: ffffffffc080
 title: Add AVP checks to sah doctor
 ---
 ## What

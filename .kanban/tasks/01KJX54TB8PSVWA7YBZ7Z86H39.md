@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffa780
+position_ordinal: ffdf80
 title: Unify native menu and command palette — commands as single source of truth
 ---
 The native macOS menu (built in Rust via menu.rs) and the command palette (React) are completely separate systems with duplicated functionality. Keymap switching exists in both. Undo/Redo exists in both. Quit only exists in the native menu.

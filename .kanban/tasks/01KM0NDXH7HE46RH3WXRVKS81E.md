@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0C2NDHKEB7QXG4XEAQ0KR5
 position_column: done
-position_ordinal: '7e80'
+position_ordinal: '8180'
 title: Replace DOM snapshot with icon-based OS ghost + DOM draggable in target window
 ---
 ## What

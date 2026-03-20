@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffb80
+position_ordinal: ffffffc180
 title: 'swissarmyhammer-leader-election/bus.rs: Subscriber::recv_timeout() silently drops channel errors'
 ---
 swissarmyhammer-leader-election/src/bus.rs:241-243

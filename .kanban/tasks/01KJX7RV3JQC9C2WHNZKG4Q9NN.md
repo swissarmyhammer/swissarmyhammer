@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ff9780
+position_ordinal: ffcf80
 title: Add Entity-to-Tag adapter in EditableMarkdown consumers
 ---

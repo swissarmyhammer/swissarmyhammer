@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffffffffa080
 title: Wire TeammateIdle/TaskCompleted/PostCompact via ext_notification
 ---
 ## What

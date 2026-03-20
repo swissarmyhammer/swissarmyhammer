@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffffffff9380
 title: strategy.rs uses NotificationInput as stand-in — loses event-specific fields
 ---
 `avp-common/src/strategy/claude/strategy.rs:429-441`

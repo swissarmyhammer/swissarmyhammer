@@ -295,27 +295,6 @@ pub async fn set_active_view(
     Ok(json!({ "active_view_id": view_id }))
 }
 
-/// Persist the inspector panel stack to the window's config entry.
-///
-/// Creates the window entry on demand if it doesn't exist yet.
-#[tauri::command]
-pub async fn set_inspector_stack(
-    state: State<'_, AppState>,
-    stack: Vec<String>,
-    window_label: Option<String>,
-) -> Result<Value, String> {
-    let mut config = state.config.write().await;
-    let label = window_label.as_deref().unwrap_or("main");
-    let active_board = state.active_board.read().await;
-    let ws = config.windows.entry(label.to_string()).or_insert_with(|| {
-        crate::state::WindowState::new(active_board.clone().unwrap_or_default())
-    });
-    ws.inspector_stack = stack.clone();
-    drop(active_board);
-    config.save().map_err(|e| e.to_string())?;
-    Ok(json!({ "inspector_stack": stack }))
-}
-
 /// Get the field+entity schema for a given entity type.
 ///
 /// Returns the EntityDef plus each resolved FieldDef, serialized as JSON.
@@ -1099,6 +1078,21 @@ pub async fn dispatch_command(
     })?;
 
     tracing::info!(cmd = %cmd, undoable = undoable, result = %result, "command completed");
+
+    // Persist inspector stack changes to config as a side-effect of command
+    // execution. This replaces the separate set_inspector_stack Tauri command.
+    if let Ok(swissarmyhammer_commands::UIStateChange::InspectorStack(ref stack)) =
+        serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone())
+    {
+        let mut config = state.config.write().await;
+        let active_board = state.active_board.read().await;
+        let ws = config.windows.entry("main".to_string()).or_insert_with(|| {
+            crate::state::WindowState::new(active_board.clone().unwrap_or_default())
+        });
+        ws.inspector_stack = stack.clone();
+        drop(active_board);
+        let _ = config.save();
+    }
 
     // For undoable commands (data mutations), scan entity files for changes
     // and emit granular entity-level events. This also updates the watcher

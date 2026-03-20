@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKF019MAE9FM10WS4DFG5R72
 position_column: done
-position_ordinal: cc80
+position_ordinal: ed80
 title: Run tests and verify all pass
 ---
 cargo test -p swissarmyhammer-code-context and cargo test -p swissarmyhammer-tools

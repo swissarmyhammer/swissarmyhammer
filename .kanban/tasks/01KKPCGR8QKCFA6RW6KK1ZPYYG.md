@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffffffff9e80
 title: Forward-compat HookEvent::kind() maps to Notification — misleading
 ---
 `hookable_agent.rs` — HookEvent::kind()

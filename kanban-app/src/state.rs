@@ -360,15 +360,28 @@ pub(crate) struct AppState {
 
 impl AppState {
     /// Create a new AppState, loading config from disk.
+    ///
+    /// Restores the inspector stack from the persisted config into UIState
+    /// so the backend is the single source of truth from startup.
     pub fn new() -> Self {
         let sources = builtin_yaml_sources();
         let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+        let config = AppConfig::load();
+        let ui_state = Arc::new(UIState::new());
+
+        // Restore inspector stack from persisted config
+        if let Some(ws) = config.windows.get("main") {
+            if !ws.inspector_stack.is_empty() {
+                ui_state.set_inspector_stack(ws.inspector_stack.clone());
+            }
+        }
+
         Self {
             boards: RwLock::new(HashMap::new()),
             active_board: RwLock::new(None),
-            config: RwLock::new(AppConfig::load()),
+            config: RwLock::new(config),
             context_menu_ids: RwLock::new(HashSet::new()),
-            ui_state: Arc::new(UIState::new()),
+            ui_state,
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             focus_scope_chain: RwLock::new(Vec::new()),

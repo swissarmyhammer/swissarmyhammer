@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ffbf80
+position_ordinal: fff780
 title: Add moniker to CommandScope and CommandScopeProvider
 ---

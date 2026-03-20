@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffff980
+position_ordinal: ffffffba80
 title: 'heb/store.rs: seq field in header_json diverges from actual DB seq — stored value is always 0'
 ---
 heb/src/store.rs:43-58

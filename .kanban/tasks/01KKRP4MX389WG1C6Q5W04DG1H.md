@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffff8380
+position_ordinal: ffffffd580
 title: 'heb: HebError error messages have uppercase first letter, violating Rust convention'
 ---
 heb/src/error.rs:6-17

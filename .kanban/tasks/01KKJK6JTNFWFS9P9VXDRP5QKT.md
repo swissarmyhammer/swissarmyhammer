@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: fffffc80
+position_ordinal: ffffffc380
 title: 'Re-election loop: LSP workers not started on promotion'
 ---
 swissarmyhammer-tools/src/mcp/server.rs:406-444\n\nWhen a follower is promoted via the re-election loop, `start_indexing_workers_after_promotion` is called, which starts TS indexing, file watcher, AND attempts to start LSP workers by checking `LSP_SUPERVISOR.get()`. However, the LSP supervisor startup (`lsp_handle.await`) runs in a *separate* tokio task that awaits the LSP handle before starting LSP workers for an already-leader workspace. If a follower is promoted AFTER the LSP health-check task has already awaited `lsp_handle` and moved into the periodic health-check loop, the promotion path's LSP worker code in `start_indexing_workers_after_promotion` may succeed. But if the LSP supervisor has not yet completed startup when promotion fires, `LSP_SUPERVISOR.get()` returns `None` and LSP indexing is silently skipped with no retry.\n\nThis is a warning: a process that wins leadership after the original leader dies during LSP startup will index with TS only, never with LSP, for the lifetime of the process.\n\nSuggestion: Have `start_indexing_workers_after_promotion` either (a) wait for `LSP_SUPERVISOR` to be populated with a short poll/notify before starting LSP workers, or (b) document clearly that LSP workers will not run for a promoted follower if LSP hasn't finished starting yet, and log a warning when `LSP_SUPERVISOR.get()` returns `None`.",

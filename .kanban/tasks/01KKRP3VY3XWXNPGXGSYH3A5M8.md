@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffe80
+position_ordinal: ffffffca80
 title: 'avp-common/strategy/claude/strategy.rs: new hook types all route to Chain::success() with no validator support'
 ---
 avp-common/src/strategy/claude/strategy.rs:431-498

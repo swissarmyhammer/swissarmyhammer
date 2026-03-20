@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffd80
+position_ordinal: ffffffc780
 title: 'swissarmyhammer-leader-election/bus.rs: Subscriber ZMQ thread leaks after Subscriber is dropped'
 ---
 swissarmyhammer-leader-election/src/bus.rs:153-157

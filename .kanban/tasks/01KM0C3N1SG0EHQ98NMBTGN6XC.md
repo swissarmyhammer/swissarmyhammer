@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0C388YV94DZBTVMPHFR68J
 position_column: done
-position_ordinal: 7d80
+position_ordinal: '80'
 title: Clean up legacy cross-window overlay and dead code
 ---
 ## What

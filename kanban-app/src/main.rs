@@ -66,7 +66,6 @@ fn main() {
             commands::set_keymap_mode,
             commands::get_ui_context,
             commands::set_active_view,
-            commands::set_inspector_stack,
             commands::get_entity_schema,
             commands::list_entities,
             commands::get_entity,

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffff680
+position_ordinal: ffffffb380
 title: 'heb/context.rs: HebContext::open() workspace_root parameter is unused after election setup'
 ---
 heb/src/context.rs:28

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffff680
+position_ordinal: fffffffffb80
 title: main window on_window_event creates WindowState with empty board_path
 ---
 **main.rs:218-227**

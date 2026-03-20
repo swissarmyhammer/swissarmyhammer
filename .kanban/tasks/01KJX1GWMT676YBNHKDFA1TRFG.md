@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ab80
+position_ordinal: b880
 title: CommandScope provider and scope chain resolution
 ---
 Phase 1 deliverable from app-architecture.md.

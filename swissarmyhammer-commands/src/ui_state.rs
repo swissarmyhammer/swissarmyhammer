@@ -45,9 +45,6 @@ struct UIStateInner {
     scope_chain: Vec<String>,
 }
 
-/// Entity types considered "primary" for inspector stack replacement logic.
-const PRIMARY_TYPES: &[&str] = &["task", "column", "board"];
-
 impl UIState {
     /// Create a new UIState with default values.
     ///
@@ -67,22 +64,19 @@ impl UIState {
 
     /// Open the inspector for the given moniker.
     ///
-    /// Primary entity types (task, column, board) replace the entire stack.
-    /// Secondary types push onto the stack, replacing any existing entry of the
-    /// same entity type.
+    /// True stack: always pushes. If the moniker is already on top, no-op.
+    /// If the moniker exists deeper in the stack, removes it and pushes to top.
     pub fn inspect(&self, moniker: &str) -> UIStateChange {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        let entity_type = parse_moniker(moniker).map(|(t, _)| t).unwrap_or("");
 
-        if PRIMARY_TYPES.contains(&entity_type) {
-            inner.inspector_stack = vec![moniker.to_string()];
-        } else {
-            // Remove any existing entry with the same entity type
-            inner
-                .inspector_stack
-                .retain(|m| parse_moniker(m).map(|(t, _)| t) != Some(entity_type));
-            inner.inspector_stack.push(moniker.to_string());
+        // Already on top — no-op
+        if inner.inspector_stack.last().map(|s| s.as_str()) == Some(moniker) {
+            return UIStateChange::InspectorStack(inner.inspector_stack.clone());
         }
+
+        // Remove if already in stack (moves to top)
+        inner.inspector_stack.retain(|m| m != moniker);
+        inner.inspector_stack.push(moniker.to_string());
 
         UIStateChange::InspectorStack(inner.inspector_stack.clone())
     }
@@ -154,6 +148,12 @@ impl UIState {
         UIStateChange::ScopeChain(inner.scope_chain.clone())
     }
 
+    /// Set the inspector stack directly (used for startup restoration from config).
+    pub fn set_inspector_stack(&self, stack: Vec<String>) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.inspector_stack = stack;
+    }
+
     /// Get a clone of the current inspector stack.
     pub fn inspector_stack(&self) -> Vec<String> {
         self.inner
@@ -223,14 +223,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inspect_primary_replaces_stack() {
+    fn inspect_pushes_onto_stack() {
         let state = UIState::new();
         state.inspect("task:01XYZ");
         assert_eq!(state.inspector_stack(), vec!["task:01XYZ"]);
     }
 
     #[test]
-    fn inspect_secondary_pushes() {
+    fn inspect_stacks_any_types() {
         let state = UIState::new();
         state.inspect("task:01XYZ");
         state.inspect("tag:01TAG");
@@ -238,21 +238,32 @@ mod tests {
     }
 
     #[test]
-    fn inspect_primary_replaces_after_secondary() {
+    fn inspect_stacks_same_type() {
         let state = UIState::new();
         state.inspect("task:01XYZ");
         state.inspect("tag:01TAG");
         state.inspect("task:01ABC");
-        assert_eq!(state.inspector_stack(), vec!["task:01ABC"]);
+        assert_eq!(
+            state.inspector_stack(),
+            vec!["task:01XYZ", "tag:01TAG", "task:01ABC"]
+        );
     }
 
     #[test]
-    fn inspect_secondary_replaces_same_type() {
+    fn inspect_same_moniker_on_top_is_noop() {
+        let state = UIState::new();
+        state.inspect("task:01XYZ");
+        state.inspect("task:01XYZ");
+        assert_eq!(state.inspector_stack(), vec!["task:01XYZ"]);
+    }
+
+    #[test]
+    fn inspect_existing_moniker_moves_to_top() {
         let state = UIState::new();
         state.inspect("task:01XYZ");
         state.inspect("tag:01A");
-        state.inspect("tag:01B");
-        assert_eq!(state.inspector_stack(), vec!["task:01XYZ", "tag:01B"]);
+        state.inspect("task:01XYZ");
+        assert_eq!(state.inspector_stack(), vec!["tag:01A", "task:01XYZ"]);
     }
 
     #[test]
@@ -335,6 +346,13 @@ mod tests {
         let state = UIState::new();
         state.set_scope_chain(vec!["task:01XYZ".into(), "column:todo".into()]);
         assert_eq!(state.scope_chain(), vec!["task:01XYZ", "column:todo"]);
+    }
+
+    #[test]
+    fn set_inspector_stack_restores() {
+        let state = UIState::new();
+        state.set_inspector_stack(vec!["task:01XYZ".into(), "tag:01TAG".into()]);
+        assert_eq!(state.inspector_stack(), vec!["task:01XYZ", "tag:01TAG"]);
     }
 
     #[test]

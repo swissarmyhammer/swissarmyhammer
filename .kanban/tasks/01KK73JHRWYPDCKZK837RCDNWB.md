@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffb880
+position_ordinal: fffff080
 title: 'Bug: New task from + button goes to done column instead of clicked column'
 ---
 When clicking the + button on a column to add a new task, the task is created in the done column instead of the column where + was clicked. Additionally, only the 'todo' column should have the + button — it doesn't make sense to start cards in other columns.

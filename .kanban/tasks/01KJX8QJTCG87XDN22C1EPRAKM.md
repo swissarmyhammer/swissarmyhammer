@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffab80
+position_ordinal: ffe380
 title: Pervasive unsafe field access via `as string` / `as string[]` casts
 ---
 Throughout the UI components, entity fields are accessed via unchecked type assertions: `entity.fields.title as string`, `entity.fields.tags as string[]`, `entity.fields.order as number`, etc. If the backend sends unexpected data (null, missing field, wrong type), these will silently produce `undefined` or runtime errors.

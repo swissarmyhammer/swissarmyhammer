@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffd180
+position_ordinal: ffff8a80
 title: Tauri list_views command
 ---
 Expose the view registry to the frontend via Tauri commands, including CRUD and undo.\n\n## Key files\n- `swissarmyhammer-kanban-app/src/commands.rs` — add list_views query + execute_command arms\n- `swissarmyhammer-kanban-app/src/main.rs` — register list_views in invoke_handler\n\n## Commands\n- `list_views` — query command, returns `{ views: [...] }`\n- `execute_command(\"view.create\", args)` — create a new view\n- `execute_command(\"view.update\", args)` — update view properties\n- `execute_command(\"view.delete\", args)` — delete a view\n- `execute_command(\"view.undo\", args)` — undo via snapshot replay\n- `execute_command(\"view.redo\", args)` — redo via snapshot replay\n\n## Checklist\n- [ ] Add list_views command to commands.rs\n- [ ] Add view.create/update/delete/undo/redo arms to execute_command\n- [ ] Register list_views in main.rs invoke_handler\n- [ ] cargo build -p swissarmyhammer-kanban-app compiles\n\n#phase2-views

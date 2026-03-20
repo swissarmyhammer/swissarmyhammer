@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffd880
+position_ordinal: ffffffffd980
 title: '[WARNING] PLANNING_GUIDE.md partial include position inserts card-standards mid-section'
 ---
 ## What

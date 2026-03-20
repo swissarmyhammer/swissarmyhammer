@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKYWVXZZ5K148TD1W53SEQ6D
 position_column: done
-position_ordinal: ffffffce80
+position_ordinal: ffffffffc580
 title: Replace hardcoded versions in skill and agent frontmatter with {{version}}
 ---
 ## What

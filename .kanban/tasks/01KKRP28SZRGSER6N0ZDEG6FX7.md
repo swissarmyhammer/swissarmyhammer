@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffff780
+position_ordinal: ffffffb480
 title: 'heb/store.rs: ZMQ send failure silently swallowed in HebContext::publish()'
 ---
 heb/src/context.rs:62

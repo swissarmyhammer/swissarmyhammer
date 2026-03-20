@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffff8880
+position_ordinal: ffffffdf80
 title: 'blocker: xdg_base_dir accepts arbitrary env var values without path traversal defense'
 ---
 `swissarmyhammer-directory/src/directory.rs:280`\n\nThe `xdg_base_dir` function accepts whatever is stored in the named env var and constructs a `PathBuf` directly from it with no sanitization:\n\n```rust\nif let Ok(xdg) = std::env::var(env_var) {\n    Ok(PathBuf::from(xdg))\n}\n```\n\nA compromised or misconfigured env var like `XDG_CONFIG_HOME=../../../../etc` will resolve to a directory far outside the user's home. Since all XDG constructors (`xdg_config`, `xdg_data`, `xdg_cache`) call this function, and those constructors call `ManagedDirectory::new` which runs `fs::create_dir_all`, a malicious env value could create arbitrary directory trees and write `.gitignore` files there.\n\nThe XDG Base Directory spec requires that relative paths be ignored — only absolute paths from env vars should be used. Adding an `is_absolute()` guard before trusting the env value eliminates the traversal risk and follows the spec.\n\nSuggestion: Add a guard in `xdg_base_dir`:\n```rust\nif let Ok(xdg) = std::env::var(env_var) {\n    let p = PathBuf::from(xdg);\n    if p.is_absolute() {\n        return Ok(p);\n    }\n    // Fall through to home-relative default\n}\n```\nAlso add a test that sets `XDG_CONFIG_HOME=relative/path` and verifies the home fallback is used instead. #review-finding

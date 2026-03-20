@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffff580
+position_ordinal: ffffffaf80
 title: 'heb/context.rs: HebContext::open() ignores XDG dir for election, risking cross-workspace data sharing'
 ---
 heb/src/context.rs:36-47

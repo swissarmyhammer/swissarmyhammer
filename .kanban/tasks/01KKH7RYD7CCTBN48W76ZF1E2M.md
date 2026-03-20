@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ff80
+position_ordinal: ffb880
 title: 'fix: single DB write queue behind leader election'
 ---
 The indexing worker opens its own `Connection::open(db_path)` (line 72 of `indexing.rs`). The LSP worker uses the leader's `SharedDb`. Two connections = write contention under WAL = `SQLITE_BUSY` = files stuck at `ts_indexed=0` = 91% stall.

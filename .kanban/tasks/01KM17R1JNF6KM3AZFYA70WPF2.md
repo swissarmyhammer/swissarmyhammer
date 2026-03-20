@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffd680
+position_ordinal: ffffffffd580
 title: '[WARNING] UseSkill.arguments field is decoded but never passed to execute()'
 ---
 ## What
