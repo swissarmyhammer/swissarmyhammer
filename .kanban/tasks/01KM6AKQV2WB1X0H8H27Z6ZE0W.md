@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM6AK9FH267W0VAES4MRF7M6
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffcc80
 title: 'Add #[operation] macro to ArchiveTask + create UnarchiveTask and ListArchived operations'
 ---
 ## What

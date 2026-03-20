@@ -10,7 +10,7 @@ Implement the `languages` module that shows detected project language icons with
 
 **File**: `swissarmyhammer-statusline/src/modules/languages.rs`
 
-**Source data**: 
+**Source data**:
 - `swissarmyhammer-code-context` — query `indexed_files` table for file extensions
 - `swissarmyhammer-treesitter` — `LanguageRegistry::global()` for extension→language mapping
 - `swissarmyhammer-code-context::lsp_server::find_executable()` for LSP availability
