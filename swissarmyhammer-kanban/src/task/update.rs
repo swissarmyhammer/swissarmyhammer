@@ -121,8 +121,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
 
             ectx.write(&entity).await?;
 
-            // Auto-create Tag entities for any new #tag patterns in description
-            let tags = task_tags(&entity);
+            // Auto-create Tag entities for any new #tag patterns in description.
+            // Parse directly from body — the computed `tags` field may be stale.
+            let body = entity.get_str("body").unwrap_or("");
+            let tags = crate::tag_parser::parse_tags(body);
             for tag_name in &tags {
                 if !tag_name_exists_entity(ectx, tag_name).await {
                     let color = auto_color::auto_color(tag_name).to_string();
