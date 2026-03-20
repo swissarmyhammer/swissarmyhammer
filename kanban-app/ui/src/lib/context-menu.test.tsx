@@ -8,6 +8,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
+
 /** Wraps children in a CommandScopeProvider with the given commands. */
 function wrapper(commands: CommandDef[]) {
   return ({ children }: { children: React.ReactNode }) => (
@@ -51,7 +55,12 @@ describe("useContextMenu", () => {
 
   it("sends correct items to show_context_menu", () => {
     const commands: CommandDef[] = [
-      { id: "entity.inspect", name: "Inspect Task", contextMenu: true, execute: vi.fn() },
+      {
+        id: "entity.inspect",
+        name: "Inspect Task",
+        contextMenu: true,
+        execute: vi.fn(),
+      },
     ];
     const { result } = renderHook(() => useContextMenu(), {
       wrapper: wrapper(commands),
@@ -80,9 +89,7 @@ describe("useContextMenu", () => {
   });
 
   it("does not call invoke when no contextMenu commands", () => {
-    const commands: CommandDef[] = [
-      { id: "a", name: "A", execute: vi.fn() },
-    ];
+    const commands: CommandDef[] = [{ id: "a", name: "A", execute: vi.fn() }];
     const { result } = renderHook(() => useContextMenu(), {
       wrapper: wrapper(commands),
     });
@@ -136,6 +143,7 @@ describe("dispatchContextMenuCommand", () => {
       cmd: "task.untag",
       target: undefined,
       args: { id: "t1", tag: "bug" },
+      windowLabel: "main",
     });
   });
 
@@ -150,14 +158,18 @@ describe("dispatchContextMenuCommand", () => {
 
     // First open registers handler "a"
     const { result: r1, unmount } = renderHook(() => useContextMenu(), {
-      wrapper: wrapper([{ id: "a", name: "A", contextMenu: true, execute: exec1 }]),
+      wrapper: wrapper([
+        { id: "a", name: "A", contextMenu: true, execute: exec1 },
+      ]),
     });
     r1.current(fakeMouseEvent());
     unmount();
 
     // Second open registers handler "b" and clears "a"
     const { result: r2 } = renderHook(() => useContextMenu(), {
-      wrapper: wrapper([{ id: "b", name: "B", contextMenu: true, execute: exec2 }]),
+      wrapper: wrapper([
+        { id: "b", name: "B", contextMenu: true, execute: exec2 },
+      ]),
     });
     r2.current(fakeMouseEvent());
 

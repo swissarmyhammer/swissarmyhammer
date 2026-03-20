@@ -1,5 +1,13 @@
-import { createContext, useContext, useMemo, useCallback, type ReactNode, useRef } from "react";
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useCallback,
+  type ReactNode,
+  useRef,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // ---------------------------------------------------------------------------
 // ActiveBoardPath context — per-window board path for multi-window dispatch
@@ -8,7 +16,13 @@ import { invoke } from "@tauri-apps/api/core";
 const ActiveBoardPathContext = createContext<string | undefined>(undefined);
 
 /** Provide the per-window active board path so dispatch_command targets the correct board. */
-export function ActiveBoardPathProvider({ value, children }: { value: string | undefined; children: ReactNode }) {
+export function ActiveBoardPathProvider({
+  value,
+  children,
+}: {
+  value: string | undefined;
+  children: ReactNode;
+}) {
   return (
     <ActiveBoardPathContext.Provider value={value}>
       {children}
@@ -93,7 +107,11 @@ interface CommandScopeProviderProps {
  * React context.  Children see this scope as their nearest scope and can
  * resolve commands upward through the chain.
  */
-export function CommandScopeProvider({ commands, children, moniker }: CommandScopeProviderProps) {
+export function CommandScopeProvider({
+  commands,
+  children,
+  moniker,
+}: CommandScopeProviderProps) {
   const parent = useContext(CommandScopeContext);
 
   const scope = useMemo<CommandScope>(() => {
@@ -125,7 +143,10 @@ export function CommandScopeProvider({ commands, children, moniker }: CommandSco
  *
  * @returns The resolved CommandDef, or null if not found or blocked.
  */
-export function resolveCommand(scope: CommandScope | null, id: string): CommandDef | null {
+export function resolveCommand(
+  scope: CommandScope | null,
+  id: string,
+): CommandDef | null {
   let current = scope;
   while (current !== null) {
     const cmd = current.commands.get(id);
@@ -154,7 +175,9 @@ export interface CommandAtDepth {
  * @param scope - The starting scope to walk from.
  * @returns An array of `{ command, depth }` sorted by depth ascending (nearest first).
  */
-export function collectAvailableCommands(scope: CommandScope | null): CommandAtDepth[] {
+export function collectAvailableCommands(
+  scope: CommandScope | null,
+): CommandAtDepth[] {
   /**
    * Shadow key: `id + ":" + (target ?? "")`.
    * Same id + same target → shadow (inner wins).
@@ -201,10 +224,15 @@ export function useAvailableCommands(): CommandAtDepth[] {
  *   When provided, Rust routes the command to the correct board instead of the
  *   global "last-used" active board.
  */
-export async function dispatchCommand(cmd: CommandDef, boardPath?: string): Promise<void> {
+export async function dispatchCommand(
+  cmd: CommandDef,
+  boardPath?: string,
+): Promise<void> {
   if (cmd.execute) {
     // Log to Rust backend so every command appears in the unified log
-    Promise.resolve(invoke("log_command", { cmd: cmd.id, target: cmd.target })).catch(() => {});
+    Promise.resolve(
+      invoke("log_command", { cmd: cmd.id, target: cmd.target }),
+    ).catch(() => {});
     await cmd.execute();
   } else {
     // Dispatch to Rust by command ID (dispatch_command logs internally)
@@ -213,6 +241,7 @@ export async function dispatchCommand(cmd: CommandDef, boardPath?: string): Prom
       target: cmd.target,
       args: cmd.args,
       ...(boardPath ? { boardPath } : {}),
+      windowLabel: getCurrentWindow().label,
     });
   }
 }
