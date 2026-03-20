@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: a1
+position_ordinal: a580
 title: Incremental DB writes during tree-sitter scan
 ---
 ## What

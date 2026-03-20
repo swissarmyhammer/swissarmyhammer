@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffffffff9280
 title: 'Update AVP spec: triggers.md and schema.md'
 ---
 ## What

@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ffff8c80
+position_ordinal: ffffc480
 title: Create skeleton GridView component
 ---

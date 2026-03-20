@@ -6,7 +6,7 @@ depends_on:
 - 01KM0C1FK7M3D8QM6YQBH259RX
 - 01KM0C20RZ2K8F3S498TT1V0MV
 position_column: done
-position_ordinal: ffffffee80
+position_ordinal: fffffffff380
 title: Wire frontend drag start to OS drag + @dnd-kit hybrid
 ---
 ## What
@@ -21,7 +21,7 @@ Modify the frontend drag initiation so that when a task drag begins, it simultan
 In `handleDragStart`:
 1. @dnd-kit fires `onDragStart` as before (virtual layout, active task state)
 2. Capture the card DOM element as an image (from card 4)
-3. Call `invoke('start_os_drag', { taskId, taskFields, windowLabel, previewImage })` 
+3. Call `invoke('start_os_drag', { taskId, taskFields, windowLabel, previewImage })`
 4. The OS drag and @dnd-kit drag run concurrently
 
 **Key challenge:** @dnd-kit uses `PointerSensor` which captures pointer events. When the pointer leaves the window, @dnd-kit will fire `onDragEnd` with no `over` target (a cancel). The OS drag continues. We need to handle this gracefully:

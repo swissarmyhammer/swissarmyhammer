@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: '8580'
+position_ordinal: '8880'
 title: MCP server should auto-inject actor into kanban tool calls
 ---
 ## What

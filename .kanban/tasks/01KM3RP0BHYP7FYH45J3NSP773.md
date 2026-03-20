@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffb80
+position_ordinal: ffffffffff8180
 title: Board selection not persisting across restarts and hot reloads
 ---
 ## What

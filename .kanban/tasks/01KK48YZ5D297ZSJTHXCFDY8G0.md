@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffa780
+position_ordinal: ffffdf80
 title: Auto-create MCP agent actor on initialize
 ---
 When an MCP client connects, auto-create an agent actor from the client info.

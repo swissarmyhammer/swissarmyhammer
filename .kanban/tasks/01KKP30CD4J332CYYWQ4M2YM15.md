@@ -2,7 +2,7 @@
 depends_on:
 - 01KKP2ZGXYGR9S4KQW7H8BX73W
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffffffff8c80
 title: Add AVP output types for new hook events
 ---
 ## What

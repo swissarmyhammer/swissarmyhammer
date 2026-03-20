@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffd880
+position_ordinal: ffffffffd980
 title: '[WARNING] PLANNING_GUIDE.md partial include position inserts card-standards mid-section'
 ---
 ## What
@@ -24,4 +24,4 @@ Files:
 - [ ] Rendered output of both files has `### Every card must be actionable` at the same structural level as `### Board naming`.
 
 ## Tests
-- [ ] Visual inspection of rendered skill output via `skill { op: "use skill", name: "plan" }` confirms correct heading hierarchy. #review-finding #warning
+- [ ] Visual inspection of rendered skill output via `skill { op: "use skill", name: "plan" }` confirms correct heading hierarchy.

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffff180
+position_ordinal: fffffffff680
 title: Switch AppConfig persistence from JSON to YAML
 ---
 ## What

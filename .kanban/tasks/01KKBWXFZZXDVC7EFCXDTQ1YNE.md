@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: b8
+position_ordinal: cd80
 title: Add Initializable trait to swissarmyhammer-common
 ---
 ## What

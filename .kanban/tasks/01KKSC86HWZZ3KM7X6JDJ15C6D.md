@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ffffff8580
+position_ordinal: ffffffda80
 title: we need an avatar field display for inspector
 ---

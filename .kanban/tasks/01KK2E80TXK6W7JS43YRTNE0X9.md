@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffff9780
+position_ordinal: ffffcf80
 title: Cell editors + edit mode
 ---
 Implement cell editing flow: grid.edit (i/Enter) mounts editor in focused cell, commit persists value, returns to normal mode.

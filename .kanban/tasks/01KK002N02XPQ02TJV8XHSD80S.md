@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffec80
+position_ordinal: ffffa580
 title: File watcher for concurrent access with hash-based change detection
 ---
 Watch the `.kanban/` directory for external file changes and feed them through the same event system as user actions.
@@ -20,7 +20,7 @@ Watch the `.kanban/` directory for external file changes and feed them through t
 ## Testing
 
 - Test: external file modification triggers cache update and event
-- Test: external file creation triggers cache add and event  
+- Test: external file creation triggers cache add and event
 - Test: external file deletion triggers cache remove and event
 - Test: file touch without content change (same hash) triggers no event
 - Test: rapid successive changes are debounced into single event

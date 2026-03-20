@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffa80
+position_ordinal: ffffffffff80
 title: DependencyPills re-renders on every parent render (no memoization)
 ---
 **entity-card.tsx:DependencyPills**

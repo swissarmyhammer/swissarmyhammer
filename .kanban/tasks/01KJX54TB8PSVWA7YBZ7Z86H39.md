@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffa780
+position_ordinal: ffdf80
 title: Unify native menu and command palette — commands as single source of truth
 ---
 The native macOS menu (built in Rust via menu.rs) and the command palette (React) are completely separate systems with duplicated functionality. Keymap switching exists in both. Undo/Redo exists in both. Quit only exists in the native menu.
@@ -23,7 +23,7 @@ Commands are the single source of truth. Both the native menu and the command pa
 ### Commands to add
 - `app.quit` — Quit the application. In palette, executes `window.close()` or Tauri quit API
 - `app.keymap.vim` — Switch to vim mode
-- `app.keymap.cua` — Switch to CUA mode  
+- `app.keymap.cua` — Switch to CUA mode
 - `app.keymap.emacs` — Switch to emacs mode
 - `app.about` — Show about dialog
 - `file.new` — New board

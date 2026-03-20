@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: cf80
+position_ordinal: f080
 title: Keybinding layer — key sequences to command IDs with scope resolution
 ---
 Phase 1 deliverable from app-architecture.md.

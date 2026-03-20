@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffeb80
+position_ordinal: fffffffff080
 title: Add tauri-plugin-drag dependency and configure dragDropEnabled
 ---
 ## What

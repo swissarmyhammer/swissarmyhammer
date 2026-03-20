@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffd680
+position_ordinal: ffffffffd580
 title: '[WARNING] UseSkill.arguments field is decoded but never passed to execute()'
 ---
 ## What
@@ -23,4 +23,4 @@ Files:
 
 ## Tests
 - [ ] Add a test in `swissarmyhammer-tools/src/mcp/tools/skill/mod.rs` invoking `use skill` with `arguments: "fix the login bug"` against the `card` skill and verifying `{{arguments}}` is rendered in the output.
-- [ ] `cargo test -p swissarmyhammer-tools` passes. #review-finding #warning
+- [ ] `cargo test -p swissarmyhammer-tools` passes.

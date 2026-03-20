@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: ffffff9b80
+position_ordinal: fffffff280
 title: Make ralph a proper subsystem with DirectoryConfig, ManagedDirectory, and .ralph/
 ---
 ## What
@@ -23,7 +23,7 @@ The `*` + `!.gitignore` pattern ignores everything except the gitignore itself â
 Add `RalphConfig` to the config re-exports.
 
 ### 3. Update `swissarmyhammer-tools/src/mcp/tools/ralph/state.rs`
-- Replace manual `base_dir.join(".sah").join("ralph")` with `ManagedDirectory::<RalphConfig>::from_custom_root(base_dir)` 
+- Replace manual `base_dir.join(".sah").join("ralph")` with `ManagedDirectory::<RalphConfig>::from_custom_root(base_dir)`
 - Use `dir.root()` to get the path
 - Import from `swissarmyhammer_directory`
 

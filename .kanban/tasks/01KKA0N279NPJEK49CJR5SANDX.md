@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: a4
+position_ordinal: ab80
 title: Implement LSP document symbols collection
 ---
 ## What

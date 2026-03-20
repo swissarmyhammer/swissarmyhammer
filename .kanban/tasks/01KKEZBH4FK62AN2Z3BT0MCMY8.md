@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKEZAWBW9NMJWNPA0JY7PYTJ
 position_column: done
-position_ordinal: d480
+position_ordinal: fa80
 title: Add `lsp status` operation to code-context MCP tool
 ---
 ## What

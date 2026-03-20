@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffd580
+position_ordinal: ffffffffd380
 title: Parallel implementation in implement-loop
 ---
 Upgrade `/implement-loop` to run independent kanban cards concurrently instead of one at a time.

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffb180
+position_ordinal: ffffffff8c80
 title: Extend ComputeEngine with EntityQueryFn for aggregate derives
 ---
 ## What

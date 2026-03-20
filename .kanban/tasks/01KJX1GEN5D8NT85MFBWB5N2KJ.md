@@ -3,7 +3,7 @@ assignees:
 - assistant
 - wballard
 position_column: done
-position_ordinal: a380
+position_ordinal: aa80
 title: Complete FieldDefId newtype — eliminate bare Ulid in fields crate
 ---
 @Will Ballard

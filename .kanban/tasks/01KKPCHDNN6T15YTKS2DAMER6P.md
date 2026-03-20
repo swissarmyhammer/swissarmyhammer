@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: z00
+position_ordinal: ffffffffff9b80
 title: HookEvent variants with empty session_id — consider Option<String>
 ---
 `hookable_agent.rs` — to_base_json() for InstructionsLoaded, WorktreeCreate, WorktreeRemove
@@ -13,4 +13,4 @@ Consider either:
 
 This is minor since these are forward-compat and not fired today, but the empty string will be confusing in logs.
 
-**Severity**: nit #review-finding
+**Severity**: nit

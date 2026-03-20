@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffd980
+position_ordinal: ffffffffdc80
 title: '[WARNING] PLANNING_GUIDE.md partial replaces a slightly different "What" description line'
 ---
 ## What
@@ -30,4 +30,4 @@ Files:
 - [ ] The change is intentional and documented (not silently lost).
 
 ## Tests
-- [ ] Rendered output of `skill { op: "use skill", name: "plan" }` in agent/PLANNING_GUIDE context contains the accepted wording. #review-finding #warning
+- [ ] Rendered output of `skill { op: "use skill", name: "plan" }` in agent/PLANNING_GUIDE context contains the accepted wording.

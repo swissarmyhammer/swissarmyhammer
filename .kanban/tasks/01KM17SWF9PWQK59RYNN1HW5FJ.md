@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffda80
+position_ordinal: ffffffffde80
 title: '[NIT] card/SKILL.md: schema examples in skill tool don''t include arguments field'
 ---
 ## What
@@ -28,4 +28,4 @@ File:
 - [ ] At least one example in `generate_skill_examples()` demonstrates passing `arguments`.
 
 ## Tests
-- [ ] `cargo test -p swissarmyhammer-skills` passes after the change. #review-finding #nit
+- [ ] `cargo test -p swissarmyhammer-skills` passes after the change. #nit

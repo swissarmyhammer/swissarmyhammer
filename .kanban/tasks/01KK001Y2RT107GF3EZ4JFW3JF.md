@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffdf80
+position_ordinal: ffff9880
 title: Unified dispatch_command Tauri endpoint with scope chain and undoable flag
 ---
 Replace the current `execute_command` Tauri command with the new `dispatch_command` that uses `CommandInvocation` and the `CommandsRegistry`.
@@ -15,7 +15,7 @@ Replace the current `execute_command` Tauri command with the new `dispatch_comma
   - Calls `command.available(&ctx)` — returns error if false
   - If `command_def.undoable`: generate transaction ULID, set on EntityContext, execute, log, clear
   - If not undoable: execute without transaction
-  - Returns `{ operation_id?, result }` 
+  - Returns `{ operation_id?, result }`
 - New Tauri command `list_available_commands(context_menu: Option<bool>)` — returns available commands for current scope chain, optionally filtered to context_menu commands
 - New Tauri command `set_focus(scope_chain: Vec<String>)` — stores current scope chain in AppState
 - Remove old `execute_command` Tauri command entirely
