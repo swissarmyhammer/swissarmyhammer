@@ -411,6 +411,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_skill_use_renders_version_template() {
+        use super::use_op;
+
+        // Simulate a skill value with {{version}} in its instructions body
+        let value = serde_json::json!({
+            "name": "version-test",
+            "description": "Test skill",
+            "instructions": "Running version {{version}} of the tool."
+        });
+
+        let prompt_library = default_prompt_library();
+
+        let rendered =
+            use_op::render_skill_instructions_for_test(value, &prompt_library, None).await;
+
+        let instructions = rendered["instructions"].as_str().unwrap();
+
+        // The raw {{version}} placeholder must not appear in rendered output
+        assert!(
+            !instructions.contains("{{version}}"),
+            "Rendered output should not contain raw {{{{version}}}} placeholder"
+        );
+
+        // The actual version string should be present
+        assert!(
+            instructions.contains(crate::VERSION),
+            "Rendered output should contain the actual version string ({}), got: {}",
+            crate::VERSION,
+            instructions
+        );
+    }
+
+    #[tokio::test]
+    async fn test_skill_use_renders_arguments_template() {
+        use super::use_op;
+
+        // Simulate a skill value with {{arguments}} in its instructions body
+        let value = serde_json::json!({
+            "name": "arguments-test",
+            "description": "Test skill",
+            "instructions": "Task: {{arguments}}"
+        });
+
+        let prompt_library = default_prompt_library();
+
+        let rendered = use_op::render_skill_instructions_for_test(
+            value,
+            &prompt_library,
+            Some("fix the login bug"),
+        )
+        .await;
+
+        let instructions = rendered["instructions"].as_str().unwrap();
+
+        // The raw {{arguments}} placeholder must not appear in rendered output
+        assert!(
+            !instructions.contains("{{arguments}}"),
+            "Rendered output should not contain raw {{{{arguments}}}} placeholder"
+        );
+
+        // The actual argument string should be present
+        assert!(
+            instructions.contains("fix the login bug"),
+            "Rendered output should contain the arguments string, got: {}",
+            instructions
+        );
+    }
+
+    #[tokio::test]
     async fn test_skill_tool_schema_has_op_field() {
         let library = Arc::new(RwLock::new(SkillLibrary::new()));
         let tool = SkillTool::new(library, default_prompt_library());

@@ -341,6 +341,7 @@ mod tests {
             skills.contains_key("implement"),
             "should have implement skill"
         );
+        assert!(skills.contains_key("map"), "should have map skill");
     }
 
     #[test]

@@ -1,38 +1,450 @@
 # kanban
 
-Kanban board operations for task management. File-backed — one `.kanban` directory per repo.
+Kanban board operations for task management. This is the best way to keep a TODO list for a project.
+
+## Overview
+
+The kanban tool provides file-backed task board management. A `.kanban` directory in a repository root **is** the project - one board per repo.
 
 ## Operations
 
-The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task"). Parameters are defined in the JSON schema.
+The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 
-**Board**: `init board`, `get board`, `update board`
-**Columns**: `add column`, `get column`, `update column`, `delete column`, `list columns`
-**Swimlanes**: `add swimlane`, `get swimlane`, `update swimlane`, `delete swimlane`, `list swimlanes`
-**Actors**: `add actor` (use `ensure: true` for idempotent registration), `get actor`, `update actor`, `delete actor`, `list actors`
-**Tasks**: `add task`, `get task`, `update task`, `move task`, `delete task`, `complete task`, `assign task`, `unassign task`, `next task`, `tag task`, `untag task`, `list tasks`
-**Tags**: `add tag`, `get tag`, `update tag`, `delete tag`, `list tags`
-**Comments**: `add comment`, `get comment`, `update comment`, `delete comment`, `list comments`
-**Attachments**: `add attachment`, `get attachment`, `update attachment`, `delete attachment`, `list attachments`
-**Activity**: `list activity`
+### Board Operations
 
-## Important Behaviors
+- `init board` - Initialize a new board
+  - Required: `name`
+  - Optional: `description`
 
-- `list tasks`: **Always provide at least one filter** (`column`, `tag`, `assignee`, `ready`). Done tasks excluded by default. Prefer `next task` for one actionable card at a time.
-- `next task`: Returns oldest ready task (no incomplete dependencies) from any non-done column.
-- `depends_on`: Tasks with incomplete dependencies are blocked and hidden from `ready` queries.
-- Your actor is auto-created on MCP connect. Tasks you create are auto-assigned to you.
+- `get board` - Get board metadata
+
+- `update board` - Update board name or description
+  - Optional: `name`, `description`
+
+### Column Operations
+
+- `add column` - Add a workflow stage
+  - Required: `id`, `name`
+  - Optional: `order`
+
+- `get column` - Get column by ID
+  - Required: `id`
+
+- `update column` - Update column name or order
+  - Required: `id`
+  - Optional: `name`, `order`
+
+- `delete column` - Delete a column (fails if has tasks)
+  - Required: `id`
+
+- `list columns` - List all columns
+
+### Swimlane Operations
+
+- `add swimlane` - Add horizontal grouping
+  - Required: `id`, `name`
+  - Optional: `order`
+
+- `get swimlane` - Get swimlane by ID
+  - Required: `id`
+
+- `update swimlane` - Update swimlane name or order
+  - Required: `id`
+  - Optional: `name`, `order`
+
+- `delete swimlane` - Delete a swimlane
+  - Required: `id`
+
+- `list swimlanes` - List all swimlanes
+
+### Actor Operations
+
+- `add actor` - Register a person or agent
+  - Required: `id`, `name`, `type` (human|agent)
+  - Optional: `ensure` (boolean, default false)
+  - When `ensure: true`, returns existing actor instead of error if ID exists
+
+- `get actor` - Get actor by ID
+  - Required: `id`
+
+- `update actor` - Update actor name
+  - Required: `id`
+  - Optional: `name`
+
+- `delete actor` - Delete actor and remove from all task assignments
+  - Required: `id`
+
+- `list actors` - List all actors
+  - Optional: `type` (filter by human|agent)
+
+### Task Operations
+
+- `add task` - Create a new task
+  - Required: `title`
+  - Optional: `description`, `position`, `assignees`, `tags`, `depends_on`
+
+- `get task` - Get task by ID
+  - Required: `id`
+
+- `update task` - Update task properties
+  - Required: `id`
+  - Optional: `title`, `description`, `assignees`, `tags`, `depends_on`, `attachments`
+
+- `move task` - Move task to a different column or position
+  - Required: `id`, `column`
+  - Optional: `swimlane`, `ordinal`, `before_id` (place before this task), `after_id` (place after this task)
+
+- `delete task` - Delete a task (removes from dependencies)
+  - Required: `id`
+
+- `complete task` - Move task to the done column
+  - Required: `id`
+
+- `assign task` - Assign an actor to a task
+  - Required: `id`, `assignee`
+
+- `unassign task` - Remove an actor from a task
+  - Required: `id`, `assignee`
+
+- `tag task` - Add a tag to a task
+  - Required: `id` (task), `tag` (tag ID)
+
+- `untag task` - Remove a tag from a task
+  - Required: `id` (task), `tag` (tag ID)
+
+- `next task` - Get next actionable task from any non-done column (no incomplete dependencies)
+  - Optional: `tag`, `swimlane`, `assignee`
+
+- `list tasks` - List tasks with optional filters (excludes done tasks by default)
+  - Optional: `column`, `swimlane`, `tag`, `assignee`, `ready`
+  - **Important**: Never call with no parameters — always provide at least one filter. Done tasks are automatically excluded unless you explicitly pass `column: "done"`. Prefer `next task` to get one actionable card at a time.
+
+### Tag Operations
+
+- `add tag` - Create a tag for categorizing tasks
+  - Required: `id`, `name`, `color` (6-char hex without #)
+  - Optional: `description`
+
+- `get tag` - Get tag by ID
+  - Required: `id`
+
+- `update tag` - Update tag properties
+  - Required: `id`
+  - Optional: `name`, `description`, `color`
+
+- `delete tag` - Delete a tag (removes from all tasks)
+  - Required: `id`
+
+- `list tags` - List all tags
+
+### Comment Operations
+
+- `add comment` - Add a comment to a task
+  - Required: `task_id`, `body`, `author`
+
+- `get comment` - Get a specific comment
+  - Required: `task_id`, `id`
+
+- `update comment` - Update comment body
+  - Required: `task_id`, `id`
+  - Optional: `body`
+
+- `delete comment` - Delete a comment
+  - Required: `task_id`, `id`
+
+- `list comments` - List all comments on a task
+  - Required: `task_id`
+
+### Attachment Operations
+
+- `add attachment` - Add a file reference to a task
+  - Required: `task_id`, `name`, `path`
+  - Optional: `mime_type`, `size` (auto-detected if not provided)
+
+- `get attachment` - Get attachment by ID
+  - Required: `task_id`, `id`
+
+- `update attachment` - Update attachment properties
+  - Required: `task_id`, `id`
+  - Optional: `name`, `path`
+
+- `delete attachment` - Delete an attachment
+  - Required: `task_id`, `id`
+
+- `list attachments` - List all attachments on a task
+  - Required: `task_id`
+
+### Activity Operations
+
+- `list activity` - List recent operations (most recent first)
+  - Optional: `limit` (number of entries)
 
 ## Examples
 
+### Initialize a board
+
 ```json
-{"op": "init board", "name": "Sprint 1"}
-{"op": "add tag", "name": "bug", "color": "ff0000"}
-{"op": "add task", "title": "Fix login bug", "tags": ["bug"]}
-{"op": "move task", "id": "<task-id>", "column": "doing"}
-{"op": "next task"}
-{"op": "complete task", "id": "<task-id>"}
-{"op": "list tasks", "column": "todo"}
-{"op": "add task", "title": "Blocked work", "depends_on": ["<blocker-id>"]}
-{"op": "list activity", "limit": 10}
+{
+  "op": "init board",
+  "name": "My Project",
+  "description": "Sprint planning board"
+}
 ```
+
+### Add workflow columns
+
+```json
+{
+  "op": "add column",
+  "id": "review",
+  "name": "In Review",
+  "order": 2
+}
+```
+
+### Add swimlanes for organization
+
+```json
+{
+  "op": "add swimlane",
+  "id": "feature",
+  "name": "Feature Work"
+}
+```
+
+### Register actors
+
+```json
+{
+  "op": "add actor",
+  "id": "alice",
+  "name": "Alice Smith",
+  "type": "human"
+}
+```
+
+Agent self-registration (idempotent):
+```json
+{
+  "op": "add actor",
+  "id": "assistant",
+  "name": "AI Assistant",
+  "type": "agent",
+  "ensure": true
+}
+```
+
+### Create and manage tasks
+
+Add a task:
+```json
+{
+  "op": "add task",
+  "title": "Implement feature X",
+  "description": "Details about the feature",
+  "assignees": ["alice"],
+  "tags": ["feature"]
+}
+```
+
+Assign a task:
+```json
+{
+  "op": "assign task",
+  "id": "01ABC123...",
+  "assignee": "alice"
+}
+```
+
+Move a task:
+```json
+{
+  "op": "move task",
+  "id": "01ABC123...",
+  "column": "doing",
+  "swimlane": "feature"
+}
+```
+
+Complete a task:
+```json
+{
+  "op": "complete task",
+  "id": "01ABC123..."
+}
+```
+
+### Add tags for categorization
+
+```json
+{
+  "op": "add tag",
+  "id": "bug",
+  "color": "ff0000",
+  "description": "Bug fixes"
+}
+```
+
+Tag a task:
+```json
+{
+  "op": "tag task",
+  "id": "01ABC123...",
+  "tag": "bug"
+}
+```
+
+### Add comments
+
+```json
+{
+  "op": "add comment",
+  "task_id": "01ABC123...",
+  "body": "This needs review",
+  "author": "alice"
+}
+```
+
+### Add attachments
+
+```json
+{
+  "op": "add attachment",
+  "task_id": "01ABC123...",
+  "name": "screenshot.png",
+  "path": "./docs/screenshot.png"
+}
+```
+
+### Query tasks
+
+Get next actionable task (preferred — returns one card at a time):
+```json
+{
+  "op": "next task"
+}
+```
+
+List tasks in a column:
+```json
+{
+  "op": "list tasks",
+  "column": "todo"
+}
+```
+
+List ready tasks:
+```json
+{
+  "op": "list tasks",
+  "ready": true
+}
+```
+
+List tasks by assignee:
+```json
+{
+  "op": "list tasks",
+  "assignee": "alice"
+}
+```
+
+### Using dependencies
+
+Create a blocker task:
+```json
+{
+  "op": "add task",
+  "title": "Design API schema"
+}
+```
+
+Create a task that depends on the blocker (use the task ID from above):
+```json
+{
+  "op": "add task",
+  "title": "Implement API endpoints",
+  "depends_on": ["01ABC123..."]
+}
+```
+
+List only ready tasks (no incomplete dependencies):
+```json
+{
+  "op": "list tasks",
+  "ready": true
+}
+```
+
+The blocked task won't appear in ready tasks until the blocker is completed:
+```json
+{
+  "op": "complete task",
+  "id": "01ABC123..."
+}
+```
+
+### View activity log
+
+```json
+{
+  "op": "list activity",
+  "limit": 10
+}
+```
+
+## Complete Workflow Example
+
+Your actor is automatically created when you connect via MCP. Tasks you create are auto-assigned to you.
+
+```json
+// 1. Initialize board
+{"op": "init board", "name": "Sprint 1"}
+
+// 2. Add a tag
+{"op": "add tag", "id": "feature", "color": "00ff00"}
+
+// 3. Create a task (auto-assigned to you)
+{"op": "add task", "title": "Implement login", "tags": ["feature"]}
+
+// 4. Move to doing
+{"op": "move task", "id": "<task-id>", "column": "doing"}
+
+// 5. Add a comment
+{"op": "add comment", "task_id": "<task-id>", "body": "Implementation complete"}
+
+// 6. Complete the task
+{"op": "complete task", "id": "<task-id>"}
+```
+
+## Forgiving Input
+
+The tool accepts multiple input formats:
+
+```json
+// Explicit op
+{ "op": "add task", "title": "Fix bug" }
+
+// Shorthand
+{ "add": "task", "title": "Fix bug" }
+
+// Inferred (has title but no id)
+{ "title": "Fix bug" }
+```
+
+### Parameter Aliases
+
+Many parameters accept aliases for convenience:
+- `id` can be `task_id`, `column_id`, `tag_id`, etc.
+- `assignees` can be `assignee` (single value)
+- `tags` can be `tag` (single value)
+
+### Operation Inference
+
+If `op` is not provided, the tool attempts to infer the operation from:
+1. Presence of specific fields (e.g., `title` without `id` → "add task")
+2. Shorthand verb/noun fields (e.g., `{"add": "task"}`)
+
+### Batch Operations
+
+Multiple operations can be batched by providing an array of operation objects.

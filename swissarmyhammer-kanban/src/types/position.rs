@@ -63,6 +63,14 @@ impl std::hash::Hash for Ordinal {
 }
 
 impl Ordinal {
+    /// The string representation of the default ordinal.
+    ///
+    /// Use this as the fallback when reading raw ordinal strings from entity
+    /// fields (e.g. `get_str("position_ordinal").unwrap_or(Ordinal::DEFAULT_STR)`).
+    /// This ensures the raw-string sort order matches `Ordinal::from_string`'s
+    /// fallback, which also returns `Ordinal::first()`.
+    pub const DEFAULT_STR: &'static str = "80";
+
     fn wrap(fi: FractionalIndex) -> Self {
         let str_repr = fi.to_string();
         Self { fi, str_repr }
@@ -84,10 +92,15 @@ impl Ordinal {
     }
 
     /// Ordinal that sorts between `before` and `after`.
+    ///
+    /// When the underlying `new_between` fails (equal or misordered inputs),
+    /// falls back to `before(after)` so the result is at least less than the
+    /// `after` argument — preserving the caller's intent of "place before this
+    /// item" as closely as possible.
     pub fn between(before: &Ordinal, after: &Ordinal) -> Self {
         match FractionalIndex::new_between(&before.fi, &after.fi) {
             Some(fi) => Self::wrap(fi),
-            None => Self::after(before),
+            None => Self::before(after),
         }
     }
 
@@ -258,6 +271,24 @@ mod tests {
         // Legacy ordinals like "a0" can't be parsed — should fall back to default
         let ord = Ordinal::from_string("a0");
         assert!(!ord.as_str().is_empty());
+    }
+
+    #[test]
+    fn test_ordinal_between_equal_inputs_falls_back_to_before() {
+        // When both inputs are equal (e.g. duplicate ordinals from legacy data),
+        // between() must NOT silently produce a value AFTER both inputs.
+        // It should produce a value before `after` so the caller's intent
+        // ("place me between these two") degrades gracefully.
+        let a = Ordinal::first();
+        let b = Ordinal::first(); // same as a — simulates duplicate ordinals
+        let result = Ordinal::between(&a, &b);
+        // The result must be < b (the "after" argument), not > b
+        assert!(
+            result < b,
+            "between(equal, equal) produced '{}' which is >= after '{}' — should be <",
+            result.as_str(),
+            b.as_str()
+        );
     }
 
     #[test]

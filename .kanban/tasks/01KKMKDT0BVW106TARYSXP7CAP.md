@@ -2,7 +2,7 @@
 depends_on:
 - 01KKMKCX7JMCC9MW9FHE593V1J
 position_column: done
-position_ordinal: '8380'
+position_ordinal: '8680'
 title: Implement semantic embedding search over Entities
 ---
 ## What

@@ -46,7 +46,7 @@ impl crate::agent::ClaudeAgent {
                     "Verify client-agent compatibility requirements"
                 ],
                 "compatibilityInfo": {
-                    "agentVersion": env!("CARGO_PKG_VERSION"),
+                    "agentVersion": crate::VERSION,
                     "protocolSupport": "ACP v1.0.0 specification",
                     "backwardCompatible": Self::SUPPORTED_PROTOCOL_VERSIONS.len() > 1
                 },

@@ -1,8 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
-  closestCorners,
   PointerSensor,
   useSensor,
   useSensors,
@@ -16,10 +15,10 @@ import {
   horizontalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { useActiveBoardPath } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
-import { EntityCard } from "@/components/entity-card";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 /** Default title for new tasks — the Rust side also uses this as fallback. */
@@ -29,6 +28,7 @@ function defaultTaskTitle(_columnName: string): string {
 import { useFieldUpdate } from "@/lib/field-update-context";
 import { moniker } from "@/lib/moniker";
 import { useInspect } from "@/lib/inspect-context";
+import { useDragSession } from "@/lib/drag-session-context";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getNum } from "@/types/kanban";
 
@@ -37,14 +37,14 @@ interface BoardViewProps {
   tasks: Entity[];
 }
 
-/**
- * Virtual column layout: maps column id → ordered array of task ids.
- * This is the "live" arrangement shown during a drag, which may differ
- * from the persisted state.
- */
 type ColumnLayout = Map<string, string[]>;
 
-type DragType = "task" | "column";
+interface TaskDragState {
+  sourceTaskId: string;
+  sourceColumn: string;
+  targetColumn: string | null;
+  insertIndex: number | null;
+}
 
 export function BoardView({ board, tasks }: BoardViewProps) {
   const boardPath = useActiveBoardPath();
@@ -52,25 +52,29 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   boardPathRef.current = boardPath;
   const { setFocus } = useEntityFocus();
   const inspectEntity = useInspect();
+  const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
-  const boardCommands = useMemo(() => [
-    {
-      id: "entity.inspect",
-      name: "Inspect board",
-      target: boardMoniker,
-      contextMenu: true,
-      execute: () => inspectEntity(boardMoniker),
-    },
-  ], [boardMoniker, inspectEntity]);
-
-  const columns = useMemo(
-    () => [...board.columns].sort((a, b) =>
-      getNum(a, "order") - getNum(b, "order")
-    ),
-    [board.columns]
+  const boardCommands = useMemo(
+    () => [
+      {
+        id: "entity.inspect",
+        name: "Inspect board",
+        target: boardMoniker,
+        contextMenu: true,
+        execute: () => inspectEntity(boardMoniker),
+      },
+    ],
+    [boardMoniker, inspectEntity],
   );
 
-  const columnIds = useMemo(() => new Set(columns.map((c) => c.id)), [columns]);
+  const columns = useMemo(
+    () =>
+      [...board.columns].sort(
+        (a, b) => getNum(a, "order") - getNum(b, "order"),
+      ),
+    [board.columns],
+  );
+
   const columnIdList = useMemo(() => columns.map((c) => c.id), [columns]);
 
   const taskMap = useMemo(() => {
@@ -85,10 +89,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     return map;
   }, [columns]);
 
-  // Group tasks by column and sort each column by ordinal.
-  // The backend sorts on initial load, but incremental entity-field-changed
-  // events patch the tasks array in-place without re-sorting, so the frontend
-  // must sort to maintain correct visual order after moves.
   const baseLayout = useMemo<ColumnLayout>(() => {
     const map: ColumnLayout = new Map();
     for (const col of columns) map.set(col.id, []);
@@ -102,165 +102,114 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         const ta = taskMap.get(a)!;
         const tb = taskMap.get(b)!;
         return getStr(ta, "position_ordinal", "a0").localeCompare(
-          getStr(tb, "position_ordinal", "a0")
+          getStr(tb, "position_ordinal", "a0"),
         );
       });
     }
     return map;
   }, [columns, tasks, taskMap]);
 
-  // Virtual layout tracks live arrangement during drag
-  const [virtualLayout, setVirtualLayout] = useState<ColumnLayout | null>(null);
-  const [activeTask, setActiveTask] = useState<Entity | null>(null);
+  // --- Column drag state (managed by @dnd-kit) ---
   const [activeColumn, setActiveColumn] = useState<Entity | null>(null);
-  const [virtualColumnOrder, setVirtualColumnOrder] = useState<string[] | null>(null);
-  const activeColumnRef = useRef<string | null>(null);
-  const dragTypeRef = useRef<DragType | null>(null);
-
-  const currentLayout = virtualLayout ?? baseLayout;
+  const [virtualColumnOrder, setVirtualColumnOrder] = useState<string[] | null>(
+    null,
+  );
   const currentColumnOrder = virtualColumnOrder ?? columnIdList;
 
+  // --- HTML5 task drag state ---
+  const [taskDrag, setTaskDrag] = useState<TaskDragState | null>(null);
 
+  // Cancel backend drag session on Escape during an active task drag
+  useEffect(() => {
+    if (!taskDrag) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        cancelSession();
+        setTaskDrag(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [taskDrag, cancelSession]);
+
+  // @dnd-kit sensors — columns only
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
-    })
+    }),
   );
 
-  /** Find which column contains a given id in the current layout */
-  const findColumn = useCallback(
-    (id: string, layout: ColumnLayout): string | undefined => {
-      // Could be a column id itself
-      if (columnIds.has(id)) return id;
-      // Could be a column drop zone (prefixed with "drop:")
-      if (id.startsWith("drop:")) {
-        const colId = id.slice(5);
-        if (columnIds.has(colId)) return colId;
-      }
-      // Otherwise search for the task
-      for (const [colId, ids] of layout) {
-        if (ids.includes(id)) return colId;
-      }
-      return undefined;
-    },
-    [columnIds]
-  );
-
-  const handleDragStart = useCallback(
+  // --- Column drag handlers (@dnd-kit) ---
+  const handleColumnDragStart = useCallback(
     (event: DragStartEvent) => {
       const id = event.active.id as string;
-      const data = event.active.data.current;
-
-      if (data?.type === "column") {
-        // Column drag
-        dragTypeRef.current = "column";
-        setActiveColumn(columnMap.get(id) ?? null);
-        setVirtualColumnOrder([...columnIdList]);
-      } else {
-        // Task drag
-        dragTypeRef.current = "task";
-        const task = taskMap.get(id);
-        setActiveTask(task ?? null);
-        const clone: ColumnLayout = new Map();
-        for (const [k, v] of baseLayout) clone.set(k, [...v]);
-        setVirtualLayout(clone);
-        activeColumnRef.current = task ? getStr(task, "position_column") || null : null;
-      }
+      setActiveColumn(columnMap.get(id) ?? null);
+      setVirtualColumnOrder([...columnIdList]);
     },
-    [taskMap, baseLayout, columnMap, columnIdList]
+    [columnMap, columnIdList],
   );
 
-  /** Resolve any ID (task, drop zone, or column) to a column ID */
-  const resolveToColumnId = useCallback(
-    (id: string, layout: ColumnLayout): string | undefined => {
-      if (columnIds.has(id)) return id;
-      if (id.startsWith("drop:")) {
-        const colId = id.slice(5);
-        if (columnIds.has(colId)) return colId;
-      }
-      // Could be a task — find its column
-      for (const [colId, ids] of layout) {
-        if (ids.includes(id)) return colId;
-      }
-      return undefined;
-    },
-    [columnIds]
-  );
-
-  const handleDragOver = useCallback(
+  const handleColumnDragOver = useCallback(
     (event: DragOverEvent) => {
-      if (dragTypeRef.current === "column") {
-        // Column reorder during drag
-        const { active, over } = event;
-        if (!over || !virtualColumnOrder) return;
-        const activeId = active.id as string;
-        const rawOverId = over.id as string;
+      const { active, over } = event;
+      if (!over || !virtualColumnOrder) return;
+      const activeId = active.id as string;
+      const overId = over.id as string;
+      if (activeId === overId) return;
 
-        // Resolve the over target to a column ID (it might be a task or drop zone)
-        const overId = resolveToColumnId(rawOverId, currentLayout);
-        if (!overId || activeId === overId) return;
+      const oldIndex = virtualColumnOrder.indexOf(activeId);
+      const newIndex = virtualColumnOrder.indexOf(overId);
+      if (oldIndex === -1 || newIndex === -1) return;
 
-        const oldIndex = virtualColumnOrder.indexOf(activeId);
-        const newIndex = virtualColumnOrder.indexOf(overId);
-        if (oldIndex === -1 || newIndex === -1) return;
+      setVirtualColumnOrder(arrayMove(virtualColumnOrder, oldIndex, newIndex));
+    },
+    [virtualColumnOrder],
+  );
 
-        setVirtualColumnOrder(arrayMove(virtualColumnOrder, oldIndex, newIndex));
+  const handleColumnDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const colOrder = virtualColumnOrder ?? columnIdList;
+      setActiveColumn(null);
+
+      const { active, over } = event;
+      if (!over) {
+        setVirtualColumnOrder(null);
         return;
       }
 
-      // Task drag over
-      const { active, over } = event;
-      if (!over || !virtualLayout) return;
-
       const activeId = active.id as string;
-      const overId = over.id as string;
+      const oldIndex = columnIdList.indexOf(activeId);
+      const newIndex = colOrder.indexOf(activeId);
 
-      const fromCol = findColumn(activeId, virtualLayout);
-      const toCol = findColumn(overId, virtualLayout);
-      if (!fromCol || !toCol || fromCol === toCol) return;
+      if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) {
+        setVirtualColumnOrder(null);
+        return;
+      }
 
-      // Cross-column move: transfer task between columns in the virtual layout
-      setVirtualLayout((prev) => {
-        if (!prev) return prev;
-        const clone: ColumnLayout = new Map();
-        for (const [k, v] of prev) clone.set(k, [...v]);
-
-        const fromList = clone.get(fromCol)!;
-        const toList = clone.get(toCol)!;
-
-        // Remove from source
-        const idx = fromList.indexOf(activeId);
-        if (idx !== -1) fromList.splice(idx, 1);
-
-        // Insert into target
-        const isColumnDrop = columnIds.has(overId) || overId.startsWith("drop:");
-        if (isColumnDrop) {
-          toList.push(activeId);
-        } else {
-          const overIdx = toList.indexOf(overId);
-          if (overIdx !== -1) {
-            toList.splice(overIdx, 0, activeId);
-          } else {
-            toList.push(activeId);
-          }
-        }
-
-        return clone;
-      });
+      try {
+        await invoke("dispatch_command", {
+          cmd: "column.reorder",
+          args: { id: activeId, target_index: newIndex },
+          ...(boardPathRef.current
+            ? { boardPath: boardPathRef.current }
+            : {}),
+        });
+      } catch (e) {
+        console.error("Failed to reorder columns:", e);
+      } finally {
+        setVirtualColumnOrder(null);
+      }
     },
-    [virtualLayout, virtualColumnOrder, findColumn, columnIds, resolveToColumnId, currentLayout]
+    [virtualColumnOrder, columnIdList],
   );
 
-  /**
-   * Tell the backend: put taskId in column, before or after a reference task.
-   * The backend computes the ordinal. Only ONE entity is touched.
-   */
+  // --- HTML5 task drag handlers ---
   const persistMove = useCallback(
     async (
       taskId: string,
       column: string,
       entity: Entity,
-      placement: { before?: string; after?: string }
+      placement: { before?: string; after?: string },
     ) => {
       try {
         const args: Record<string, unknown> = {
@@ -273,104 +222,124 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await invoke("dispatch_command", {
           cmd: "task.move",
           args,
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
+          ...(boardPathRef.current
+            ? { boardPath: boardPathRef.current }
+            : {}),
         });
       } catch (e) {
         console.error("Failed to move task:", e);
       }
     },
-    []
+    [],
   );
 
-  const handleDragEnd = useCallback(
-    async (event: DragEndEvent) => {
-      if (dragTypeRef.current === "column") {
-        const colOrder = virtualColumnOrder ?? columnIdList;
-        setActiveColumn(null);
-        dragTypeRef.current = null;
+  const handleTaskDragStart = useCallback(
+    (entity: Entity) => {
+      const sourceColumn = getStr(entity, "position_column");
+      setTaskDrag({
+        sourceTaskId: entity.id,
+        sourceColumn,
+        targetColumn: null,
+        insertIndex: null,
+      });
+      startSession(entity.id, entity.fields, false);
+    },
+    [startSession],
+  );
 
-        const { active, over } = event;
-        if (!over) {
-          setVirtualColumnOrder(null);
-          return;
-        }
-
-        const activeId = active.id as string;
-        const oldIndex = columnIdList.indexOf(activeId);
-        const newIndex = colOrder.indexOf(activeId);
-
-        if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) {
-          setVirtualColumnOrder(null);
-          return;
-        }
-
-        try {
-          await invoke("dispatch_command", {
-            cmd: "column.reorder",
-            args: { id: activeId, target_index: newIndex },
-            ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          });
-        } catch (e) {
-          console.error("Failed to reorder columns:", e);
-        } finally {
-          setVirtualColumnOrder(null);
-        }
-        return;
-      }
-
-      // Task drag end
-      const { active, over } = event;
-      const layout = virtualLayout ?? baseLayout;
-
-      setActiveTask(null);
-      setVirtualLayout(null);
-      dragTypeRef.current = null;
-
-      if (!over) return;
-
-      const activeId = active.id as string;
-      const overId = over.id as string;
-
-      const draggedTask = taskMap.get(activeId);
-      if (!draggedTask) return;
-
-      const targetColumn = findColumn(activeId, layout);
-      if (!targetColumn) return;
-
-      const draggedColumn = getStr(draggedTask, "position_column");
-
-      // No-op: dropped on itself, same column
-      if (activeId === overId && targetColumn === draggedColumn) return;
-
-      // Resolve overId: is it a column/drop-zone, or a task?
-      const isColumnDrop = columnIds.has(overId) || overId.startsWith("drop:");
-
-      if (isColumnDrop && targetColumn !== draggedColumn) {
-        // Cross-column drop onto column zone — append at end (no before/after)
-        await persistMove(activeId, targetColumn, draggedTask, {});
-        return;
-      }
-
-      if (isColumnDrop && targetColumn === draggedColumn) {
-        // Same-column drop onto column zone — no-op (can't determine intent)
-        return;
-      }
-
-      // Dropped onto a specific task (overId is a task ID).
-      // Simple rule: "put me before overId".
-      // The backend reads overId's ordinal and computes a new ordinal
-      // that sorts just before it. One entity touched.
-      const oldIndex = (baseLayout.get(draggedColumn) ?? []).indexOf(activeId);
-      const overIndex = (layout.get(targetColumn) ?? []).indexOf(overId);
-
-      // If dragging downward within same column, place AFTER the target instead
-      if (targetColumn === draggedColumn && oldIndex < overIndex) {
-        await persistMove(activeId, targetColumn, draggedTask, { after: overId });
-      } else {
-        await persistMove(activeId, targetColumn, draggedTask, { before: overId });
+  const handleTaskDragEnd = useCallback(
+    (_entity: Entity, dropEffect: string) => {
+      setTaskDrag(null);
+      emit("drag-ended", {});
+      // Only cancel the backend session if the drop was rejected (no valid target).
+      // Successful drops are handled by handleTaskDrop which calls persistMove
+      // or completeSession directly.
+      if (dropEffect === "none") {
+        cancelSession();
       }
     },
-    [virtualLayout, virtualColumnOrder, baseLayout, taskMap, findColumn, columnIds, columnIdList, persistMove]
+    [cancelSession],
+  );
+
+  const handleColumnDragOverHTML5 = useCallback(
+    (columnId: string, insertIndex: number) => {
+      setTaskDrag((prev) => {
+        if (!prev) return prev;
+        return { ...prev, targetColumn: columnId, insertIndex };
+      });
+    },
+    [],
+  );
+
+  const handleColumnDragEnter = useCallback((columnId: string) => {
+    setTaskDrag((prev) => {
+      if (!prev) return prev;
+      return { ...prev, targetColumn: columnId };
+    });
+  }, []);
+
+  const handleColumnDragLeave = useCallback((_columnId: string) => {
+    setTaskDrag((prev) => {
+      if (!prev) return prev;
+      return { ...prev, targetColumn: null, insertIndex: null };
+    });
+  }, []);
+
+  const handleTaskDrop = useCallback(
+    (columnId: string, taskData: string, insertIndex: number) => {
+      setTaskDrag(null);
+      let entity: Entity | null = null;
+      if (taskData) {
+        try {
+          entity = JSON.parse(taskData);
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!entity) {
+        cancelSession();
+        return;
+      }
+
+      const taskId = entity.id;
+      const isLocalTask = taskMap.has(taskId);
+
+      if (isLocalTask) {
+        // Same-board drop — task exists locally, move it directly
+        cancelSession();
+        const colTasks = baseLayout.get(columnId) ?? [];
+
+        if (colTasks.length === 0 || insertIndex >= colTasks.length) {
+          const lastId =
+            colTasks.length > 0 ? colTasks[colTasks.length - 1] : undefined;
+          persistMove(taskId, columnId, entity, lastId ? { after: lastId } : {});
+        } else {
+          const beforeId = colTasks[insertIndex];
+          const sourceColumn = getStr(entity, "position_column");
+          const sourceIndex = (baseLayout.get(sourceColumn) ?? []).indexOf(
+            taskId,
+          );
+          if (columnId === sourceColumn && sourceIndex < insertIndex) {
+            persistMove(taskId, columnId, entity, { after: beforeId });
+          } else {
+            persistMove(taskId, columnId, entity, { before: beforeId });
+          }
+        }
+      } else {
+        // Cross-board drop — task doesn't exist here yet, complete via session
+        // The backend handles creating/moving the task to this board
+        const colTasks = baseLayout.get(columnId) ?? [];
+        const beforeId = insertIndex < colTasks.length ? colTasks[insertIndex] : undefined;
+        const afterId = !beforeId && colTasks.length > 0 ? colTasks[colTasks.length - 1] : undefined;
+        completeSession(columnId, {
+          dropIndex: insertIndex,
+          beforeId,
+          afterId,
+        });
+      }
+    },
+    [taskMap, baseLayout, persistMove, cancelSession, completeSession],
   );
 
   const { updateField } = useFieldUpdate();
@@ -383,7 +352,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         // updateField already logs errors
       }
     },
-    [updateField]
+    [updateField],
   );
 
   const handleAddTask = useCallback(
@@ -391,24 +360,37 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        await invoke("dispatch_command", { cmd: "task.add", args: { title, column: columnId }, ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}) });
+        await invoke("dispatch_command", {
+          cmd: "task.add",
+          args: { title, column: columnId },
+          ...(boardPathRef.current
+            ? { boardPath: boardPathRef.current }
+            : {}),
+        });
       } catch (e) {
         console.error("Failed to add task:", e);
       }
     },
-    [columnMap]
+    [columnMap],
   );
 
   return (
-    <FocusScope moniker={boardMoniker} commands={boardCommands} className="flex flex-col flex-1 min-h-0">
+    <FocusScope
+      moniker={boardMoniker}
+      commands={boardCommands}
+      className="flex flex-col flex-1 min-h-0 relative"
+    >
+      {/* @dnd-kit context for column reordering only */}
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragEnd={handleDragEnd}
+        onDragStart={handleColumnDragStart}
+        onDragOver={handleColumnDragOver}
+        onDragEnd={handleColumnDragEnd}
       >
-        <div className="flex flex-1 min-h-0 overflow-x-auto" onClick={() => setFocus(null)}>
+        <div
+          className="flex flex-1 min-h-0 overflow-x-auto"
+          onClick={() => setFocus(null)}
+        >
           <SortableContext
             items={currentColumnOrder}
             strategy={horizontalListSortingStrategy}
@@ -416,19 +398,32 @@ export function BoardView({ board, tasks }: BoardViewProps) {
             {currentColumnOrder.map((colId, i) => {
               const col = columnMap.get(colId);
               if (!col) return null;
-              const taskIds = currentLayout.get(col.id) ?? [];
+              const taskIds = baseLayout.get(col.id) ?? [];
               const colTasks = taskIds
                 .map((id) => taskMap.get(id))
                 .filter((t): t is Entity => t !== undefined);
               return (
-                <SortableColumn key={col.id} id={col.id} showSeparator={i > 0}>
+                <SortableColumn
+                  key={col.id}
+                  id={col.id}
+                  showSeparator={i > 0}
+                >
                   <ColumnView
                     column={col}
                     tasks={colTasks}
-                    // Only the first column gets the + button — new tasks should
-                    // always enter at the first workflow stage.
                     onAddTask={i === 0 ? handleAddTask : undefined}
                     onRenameColumn={handleRenameColumn}
+                    onTaskDragStart={handleTaskDragStart}
+                    onTaskDragEnd={handleTaskDragEnd}
+                    onDragOver={handleColumnDragOverHTML5}
+                    onDrop={handleTaskDrop}
+                    onDragEnter={handleColumnDragEnter}
+                    onDragLeave={handleColumnDragLeave}
+                    insertAtIndex={
+                      taskDrag?.targetColumn === col.id
+                        ? taskDrag.insertIndex
+                        : null
+                    }
                   />
                 </SortableColumn>
               );
@@ -436,7 +431,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
           </SortableContext>
         </div>
         <DragOverlay dropAnimation={null}>
-          {activeTask ? <EntityCard entity={activeTask} /> : null}
           {activeColumn ? (
             <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
               {getStr(activeColumn, "name")}

@@ -1,36 +1,75 @@
-import { useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { useCallback, useRef, useState } from "react";
 import { EntityCard } from "@/components/entity-card";
 import type { Entity } from "@/types/kanban";
 
-interface SortableEntityCardProps {
+interface DraggableTaskCardProps {
   entity: Entity;
-  isBlocked?: boolean;
+  onDragStart?: (entity: Entity) => void;
+  onDragEnd?: (entity: Entity, dropEffect: string) => void;
 }
 
-export function SortableEntityCard({ entity, isBlocked }: SortableEntityCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: entity.id, data: { type: "task" } });
+/**
+ * HTML5 draggable task card.
+ *
+ * Uses a DOM clone as the OS drag ghost — visible in source window and
+ * between windows. The target window's BoardView overlays a full-size
+ * EntityCard on top so the shrunken OS ghost is covered.
+ */
+export function DraggableTaskCard({
+  entity,
+  onDragStart,
+  onDragEnd,
+}: DraggableTaskCardProps) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
-  const style: React.CSSProperties = {
-    transform: CSS.Translate.toString(transform),
-    transition,
-    opacity: isDragging ? 0.3 : undefined,
-  };
+  const handleDragStart = useCallback(
+    (e: React.DragEvent) => {
+      e.dataTransfer.setData(
+        "application/x-swissarmyhammer-task",
+        JSON.stringify(entity),
+      );
+      e.dataTransfer.effectAllowed = "move";
+
+      // Clone the card DOM for the drag image
+      if (cardRef.current) {
+        const clone = cardRef.current.cloneNode(true) as HTMLElement;
+        clone.style.position = "fixed";
+        clone.style.left = "-9999px";
+        clone.style.top = "-9999px";
+        clone.style.width = `${cardRef.current.offsetWidth}px`;
+        clone.style.height = `${cardRef.current.offsetHeight}px`;
+        clone.style.transform = "none";
+        clone.style.zoom = "1";
+        clone.style.opacity = "1";
+        clone.style.pointerEvents = "none";
+        document.body.appendChild(clone);
+        e.dataTransfer.setDragImage(clone, 20, 20);
+        requestAnimationFrame(() => clone.remove());
+      }
+
+      setIsDragging(true);
+      onDragStart?.(entity);
+    },
+    [entity, onDragStart],
+  );
+
+  const handleDragEnd = useCallback(
+    (e: React.DragEvent) => {
+      setIsDragging(false);
+      onDragEnd?.(entity, e.dataTransfer.dropEffect);
+    },
+    [entity, onDragEnd],
+  );
 
   return (
     <EntityCard
-      ref={setNodeRef}
-      style={style}
+      ref={cardRef}
       entity={entity}
-      isBlocked={isBlocked}
-      dragHandleProps={{ ...listeners, ...attributes }}
+      style={{ opacity: isDragging ? 0.3 : undefined }}
+      draggable
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
     />
   );
 }

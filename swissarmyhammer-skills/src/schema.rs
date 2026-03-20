@@ -26,6 +26,10 @@ fn generate_skill_examples() -> Vec<Value> {
             "value": {"op": "use skill", "name": "plan"}
         }),
         json!({
+            "description": "Activate a skill with arguments",
+            "value": {"op": "use skill", "name": "card", "arguments": "fix the login bug"}
+        }),
+        json!({
             "description": "Search for skills by keyword",
             "value": {"op": "search skill", "query": "commit"}
         }),
