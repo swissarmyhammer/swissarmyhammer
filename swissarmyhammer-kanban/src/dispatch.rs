@@ -14,8 +14,8 @@ use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColum
 use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
-    AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask,
-    UnassignTask, UntagTask, UpdateTask,
+    AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
+    MoveTask, NextTask, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
 };
 use crate::types::{ActorId, Noun, Operation as KanbanOperation, TaskId, Verb};
 use crate::{KanbanContext, KanbanError, KanbanOperationProcessor, OperationProcessor};
@@ -397,6 +397,17 @@ pub async fn execute_operation(
             processor.process(&cmd, ctx).await
         }
 
+        // Archive operations
+        (Verb::Archive, Noun::Task) => {
+            let id = req(op, "id")?;
+            processor.process(&ArchiveTask::new(id), ctx).await
+        }
+        (Verb::Unarchive, Noun::Task) => {
+            let id = req(op, "id")?;
+            processor.process(&UnarchiveTask::new(id), ctx).await
+        }
+        (Verb::List, Noun::Archived) => processor.process(&ListArchived, ctx).await,
+
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
@@ -470,5 +481,79 @@ mod tests {
         );
         let result = execute_operation(&ctx, &op).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn dispatch_archive_task() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task
+        let ops = parse_input(json!({"op": "add task", "title": "Task to archive"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        // Archive the task via dispatch
+        let ops = parse_input(json!({"op": "archive task", "id": task_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["archived"], true);
+        assert_eq!(result["id"].as_str().unwrap(), task_id);
+
+        // List tasks — the archived task should not appear
+        let ops = parse_input(json!({"op": "list tasks", "column": "todo"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(
+            result["count"], 0,
+            "archived task should not appear in list tasks"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_unarchive_task() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task and archive it
+        let ops = parse_input(json!({"op": "add task", "title": "Task to unarchive"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "archive task", "id": task_id})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Unarchive via dispatch
+        let ops = parse_input(json!({"op": "unarchive task", "id": task_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["unarchived"], true);
+        assert_eq!(result["id"].as_str().unwrap(), task_id);
+
+        // List tasks — the task should be back
+        let ops = parse_input(json!({"op": "list tasks", "column": "todo"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(
+            result["count"], 1,
+            "unarchived task should reappear in list tasks"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_archived() {
+        let (_temp, ctx) = setup().await;
+
+        // Add two tasks and archive one
+        let ops = parse_input(json!({"op": "add task", "title": "Will be archived"})).unwrap();
+        let r1 = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id1 = r1["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "add task", "title": "Still live"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "archive task", "id": id1})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // List archived
+        let ops = parse_input(json!({"op": "list archived"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["count"], 1, "should list exactly one archived task");
+        let tasks = result["tasks"].as_array().unwrap();
+        assert_eq!(tasks[0]["title"], "Will be archived");
     }
 }

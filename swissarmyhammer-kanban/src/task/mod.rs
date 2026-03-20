@@ -15,7 +15,7 @@ mod untag;
 mod update;
 
 pub use add::AddTask;
-pub use archive::ArchiveTask;
+pub use archive::{ArchiveTask, ListArchived, UnarchiveTask};
 pub use assign::AssignTask;
 pub use complete::CompleteTask;
 pub use delete::DeleteTask;
