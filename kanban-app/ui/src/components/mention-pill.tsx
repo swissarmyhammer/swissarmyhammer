@@ -117,6 +117,7 @@ export function MentionPill({
         prefix={prefix}
         color={color}
         tooltipText={tooltipText}
+        richTooltip={!!description}
         scopeMoniker={scopeMoniker}
         className={className}
       />
@@ -140,6 +141,7 @@ function MentionPillInner({
   prefix,
   color,
   tooltipText,
+  richTooltip,
   scopeMoniker,
   className,
 }: {
@@ -147,6 +149,7 @@ function MentionPillInner({
   prefix: string;
   color: string;
   tooltipText?: string;
+  richTooltip?: boolean;
   scopeMoniker: string;
   className?: string;
 }) {
@@ -185,9 +188,13 @@ function MentionPillInner({
       <TooltipTrigger asChild>{pill}</TooltipTrigger>
       <TooltipContent
         side="bottom"
-        className="prose prose-sm dark:prose-invert max-w-xs"
+        className={richTooltip ? "prose prose-sm dark:prose-invert max-w-xs" : "max-w-xs"}
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{tooltipText}</ReactMarkdown>
+        {richTooltip ? (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{tooltipText}</ReactMarkdown>
+        ) : (
+          tooltipText
+        )}
       </TooltipContent>
     </Tooltip>
   );
