@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM5JYX09RBFTQFD2T715FAEW
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: 7f80
 title: Consolidate TagPill into MentionPill as unified pill component
 ---
 ## What

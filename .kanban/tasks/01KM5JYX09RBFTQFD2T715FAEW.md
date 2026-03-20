@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: '80'
 title: Add slugify utility for mention slugs
 ---
 ## What
