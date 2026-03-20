@@ -340,6 +340,8 @@ mod tests {
 
         assert_eq!(entity.name, "task");
         assert_eq!(entity.body_field, Some("body".into()));
+        assert_eq!(entity.mention_prefix, Some("^".to_string()));
+        assert_eq!(entity.mention_display_field, Some("title".into()));
         assert!(entity.fields.iter().any(|f| f == "title"));
         assert!(entity.fields.iter().any(|f| f == "position_column"));
         assert!(entity.fields.iter().any(|f| f == "position_swimlane"));

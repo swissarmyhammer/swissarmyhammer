@@ -1,12 +1,14 @@
 name: task
 body_field: body
 search_display_field: title
+mention_prefix: "^"
+mention_display_field: title
 fields:
   - title
   - tags
-  - progress
   - assignees
   - depends_on
+  - progress
   - body
   - position_column
   - position_swimlane

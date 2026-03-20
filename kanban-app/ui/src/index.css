@@ -112,8 +112,15 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-      Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family:
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      Roboto,
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
   }
   /* Quick-capture window needs a fully transparent backdrop so only the
      card is visible (the Tauri window has transparent: true). */
@@ -126,4 +133,17 @@
 /* Entity focus — subtle darkening */
 [data-focused] {
   filter: brightness(0.97);
+}
+
+/* CM6 autocomplete — prevent long completions from overflowing the viewport */
+.cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 30em;
+}
+.cm-tooltip.cm-completionInfo {
+  max-width: 20em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

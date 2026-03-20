@@ -14,12 +14,19 @@ import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
-import { createMentionCompletionSource, createMentionAutocomplete, type MentionSearchResult } from "@/lib/cm-mention-autocomplete";
+import {
+  createMentionCompletionSource,
+  createMentionAutocomplete,
+  type MentionSearchResult,
+} from "@/lib/cm-mention-autocomplete";
 import { createDebouncedSearch } from "@/lib/debounced-search";
-import { createMentionTooltips, type MentionMeta } from "@/lib/cm-mention-tooltip";
+import {
+  createMentionTooltips,
+  type MentionMeta,
+} from "@/lib/cm-mention-tooltip";
 import { remarkMentions } from "@/lib/remark-mentions";
-import { TagPill } from "@/components/tag-pill";
 import { MentionPill } from "@/components/mention-pill";
+import { slugify } from "@/lib/slugify";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -59,8 +66,14 @@ function toggleCheckbox(source: string, index: number): string | null {
 
 const INFRA_CACHE_LIMIT = 20;
 
-const mentionInfra = new Map<string, ReturnType<typeof createMentionDecorations>>();
-const tooltipInfra = new Map<string, ReturnType<typeof createMentionTooltips>>();
+const mentionInfra = new Map<
+  string,
+  ReturnType<typeof createMentionDecorations>
+>();
+const tooltipInfra = new Map<
+  string,
+  ReturnType<typeof createMentionTooltips>
+>();
 
 /** Get or create decoration infrastructure, clearing cache if it exceeds the size cap. */
 function getDecoInfra(prefix: string, entityType: string) {
@@ -85,39 +98,46 @@ function getTooltipInfra(prefix: string, entityType: string) {
   return tooltipInfra.get(key)!;
 }
 
-/** Build a slug→color map for a mentionable entity type. */
-function buildColorMap(entities: Entity[], displayField: string): Map<string, string> {
+/** Build a slug→color map for a mentionable entity type. Slugifies keys for fields with spaces. */
+function buildColorMap(
+  entities: Entity[],
+  displayField: string,
+): Map<string, string> {
   const map = new Map<string, string>();
   for (const e of entities) {
-    const slug = getStr(e, displayField);
+    const raw = getStr(e, displayField);
     const color = getStr(e, "color", "888888");
-    if (slug) map.set(slug, color);
+    if (raw) map.set(slugify(raw), color);
   }
   return map;
 }
 
-/** Build a slug→meta map for tooltips. */
-function buildMetaMap(entities: Entity[], displayField: string): Map<string, MentionMeta> {
+/** Build a slug→meta map for tooltips. Slugifies keys for fields with spaces. */
+function buildMetaMap(
+  entities: Entity[],
+  displayField: string,
+): Map<string, MentionMeta> {
   const map = new Map<string, MentionMeta>();
   for (const e of entities) {
-    const slug = getStr(e, displayField);
+    const raw = getStr(e, displayField);
     const color = getStr(e, "color", "888888");
     const description = getStr(e, "description") || undefined;
-    if (slug) map.set(slug, { color, description });
+    if (raw) map.set(slugify(raw), { color, description });
   }
   return map;
 }
 
-/** Build a debounced async search function that calls the Tauri backend. */
-function buildAsyncSearch(entityType: string): (query: string) => Promise<MentionSearchResult[]> {
+/** Build a debounced async search function that calls the Tauri backend. Slugifies display names. */
+function buildAsyncSearch(
+  entityType: string,
+): (query: string) => Promise<MentionSearchResult[]> {
   const rawSearch = async (query: string): Promise<MentionSearchResult[]> => {
     try {
-      const results = await invoke<Array<{ id: string; display_name: string; color: string }>>(
-        "search_mentions",
-        { entityType, query },
-      );
+      const results = await invoke<
+        Array<{ id: string; display_name: string; color: string }>
+      >("search_mentions", { entityType, query });
       return results.map((r) => ({
-        slug: r.display_name,
+        slug: slugify(r.display_name),
         displayName: r.display_name,
         color: r.color,
       }));
@@ -224,7 +244,7 @@ export function EditableMarkdown({
         }
       }
     },
-    [mode]
+    [mode],
   );
 
   const displayRef = useRef<HTMLDivElement>(null);
@@ -239,7 +259,7 @@ export function EditableMarkdown({
         if (updated !== null) onCommit(updated);
       }
     },
-    [value, onCommit]
+    [value, onCommit],
   );
 
   const handleClick = useCallback(
@@ -248,7 +268,7 @@ export function EditableMarkdown({
       setDraft(value);
       setEditing(true);
     },
-    [value]
+    [value],
   );
 
   // Build mention data for all mentionable types from context
@@ -261,7 +281,10 @@ export function EditableMarkdown({
         entities,
         colorMap: buildColorMap(entities, mt.displayField),
         metaMap: buildMetaMap(entities, mt.displayField),
-        slugs: entities.map((e) => getStr(e, mt.displayField)).filter(Boolean),
+        slugs: entities
+          .map((e) => getStr(e, mt.displayField))
+          .filter(Boolean)
+          .map(slugify),
       };
     });
   }, [multiline, mentionableTypes, getEntities]);
@@ -272,12 +295,19 @@ export function EditableMarkdown({
   const mentionExtensions = useMemo((): Extension[] => {
     if (!multiline) return [];
     const exts: Extension[] = [];
-    const completionSources: Array<ReturnType<typeof createMentionCompletionSource>> = [];
+    const completionSources: Array<
+      ReturnType<typeof createMentionCompletionSource>
+    > = [];
     for (const md of mentionData) {
       if (md.colorMap.size === 0) continue;
       const decoInfra = getDecoInfra(md.prefix, md.entityType);
       exts.push(decoInfra.extension(md.colorMap));
-      completionSources.push(createMentionCompletionSource(md.prefix, buildAsyncSearch(md.entityType)));
+      completionSources.push(
+        createMentionCompletionSource(
+          md.prefix,
+          buildAsyncSearch(md.entityType),
+        ),
+      );
       const tooltipInfraInstance = getTooltipInfra(md.prefix, md.entityType);
       exts.push(tooltipInfraInstance.extension(md.metaMap));
     }
@@ -309,16 +339,22 @@ export function EditableMarkdown({
       }),
       ...mentionExtensions,
     ],
-    [mode, multiline, mentionExtensions]
+    [mode, multiline, mentionExtensions],
   );
 
   // Build remark plugins for all mentionable types (must be before early return)
   const remarkPlugins = useMemo(() => {
-    const plugins: Array<ReturnType<typeof remarkMentions> | typeof remarkGfm> = [remarkGfm];
+    const plugins: Array<ReturnType<typeof remarkMentions> | typeof remarkGfm> =
+      [remarkGfm];
     for (const md of mentionData) {
       if (md.slugs.length === 0) continue;
       plugins.push(
-        remarkMentions(md.prefix, md.slugs, `${md.entityType}Pill`, `${md.entityType}-pill`)
+        remarkMentions(
+          md.prefix,
+          md.slugs,
+          `${md.entityType}Pill`,
+          `${md.entityType}-pill`,
+        ),
       );
     }
     return plugins;
@@ -328,21 +364,15 @@ export function EditableMarkdown({
   const mentionComponents = useMemo(() => {
     const comps: Record<string, React.ComponentType> = {};
     for (const md of mentionData) {
-      if (md.entityType === "tag") {
-        comps["tag-pill"] = (props: { slug?: string }) => (
-          <TagPill slug={props.slug ?? ""} tags={md.entities} />
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ) as any;
-      } else {
-        comps[`${md.entityType}-pill`] = (props: { slug?: string }) => (
+      comps[`${md.entityType}-pill`] = (props: { slug?: string }) =>
+        (
           <MentionPill
             entityType={md.entityType}
             slug={props.slug ?? ""}
             prefix={md.prefix}
           />
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ) as any;
-      }
+        ) as // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any;
     }
     return comps;
   }, [mentionData]);

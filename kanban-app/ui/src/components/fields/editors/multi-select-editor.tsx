@@ -26,6 +26,7 @@ import {
 } from "@/lib/cm-mention-autocomplete";
 import { AvatarDisplay } from "@/components/fields/displays/avatar-display";
 import { createDebouncedSearch } from "@/lib/debounced-search";
+import { slugify } from "@/lib/slugify";
 import { getStr } from "@/types/kanban";
 import type { FieldDef, Entity } from "@/types/kanban";
 import type { EditorProps } from "./markdown-editor";
@@ -49,8 +50,7 @@ export function MultiSelectEditor({
 
   // Determine target entity type and mention config
   const isComputedTags =
-    field.type.kind === "computed" &&
-    field.type.derive === "parse-body-tags";
+    field.type.kind === "computed" && field.type.derive === "parse-body-tags";
 
   const targetEntityType = isComputedTags
     ? "tag"
@@ -66,7 +66,8 @@ export function MultiSelectEditor({
   );
 
   const prefix = mentionConfig?.prefix ?? (isComputedTags ? "#" : "");
-  const displayField = mentionConfig?.displayField ?? (isComputedTags ? "tag_name" : "name");
+  const displayField =
+    mentionConfig?.displayField ?? (isComputedTags ? "tag_name" : "name");
 
   // Target entities for building maps
   const targetEntities = useMemo(
@@ -74,12 +75,12 @@ export function MultiSelectEditor({
     [targetEntityType, getEntities],
   );
 
-  // Maps: ID ↔ display name
+  // Maps: ID ↔ display name (slugified for fields with spaces like task titles)
   const idToDisplay = useMemo(() => {
     const map = new Map<string, string>();
     for (const e of targetEntities) {
-      const name = getStr(e, displayField) || e.id;
-      map.set(e.id, name);
+      const raw = getStr(e, displayField) || e.id;
+      map.set(e.id, slugify(raw));
     }
     return map;
   }, [targetEntities, displayField]);
@@ -88,7 +89,10 @@ export function MultiSelectEditor({
     const map = new Map<string, string>();
     for (const e of targetEntities) {
       const name = getStr(e, displayField);
-      if (name) map.set(name.toLowerCase(), e.id);
+      if (name) {
+        map.set(slugify(name), e.id);
+        map.set(name.toLowerCase(), e.id);
+      }
       map.set(e.id.toLowerCase(), e.id);
     }
     return map;
@@ -96,7 +100,8 @@ export function MultiSelectEditor({
 
   // Current selected values
   const currentIds: string[] = useMemo(() => {
-    if (Array.isArray(value)) return value.filter((v): v is string => typeof v === "string");
+    if (Array.isArray(value))
+      return value.filter((v): v is string => typeof v === "string");
     return [];
   }, [value]);
 
@@ -110,12 +115,9 @@ export function MultiSelectEditor({
   }, []);
 
   // Remove an item from the selection
-  const removeItem = useCallback(
-    (id: string) => {
-      setSelectedIds((prev) => prev.filter((x) => x !== id));
-    },
-    [],
-  );
+  const removeItem = useCallback((id: string) => {
+    setSelectedIds((prev) => prev.filter((x) => x !== id));
+  }, []);
 
   // Commit: process any remaining text, then call onCommit with the full selection.
   // Both reference and computed fields use the same path — the backend DeriveHandler
@@ -123,9 +125,13 @@ export function MultiSelectEditor({
   const commit = useCallback(() => {
     const text = editorRef.current?.view?.state.doc.toString().trim();
     if (text) {
-      const clean = text.replace(new RegExp(`^\\${prefix}`), "").trim().toLowerCase();
+      const clean = text.replace(new RegExp(`^\\${prefix}`), "").trim();
       if (clean) {
-        const id = displayToId.get(clean) ?? (commitDisplayNames ? clean : undefined);
+        const slug = slugify(clean);
+        const id =
+          displayToId.get(slug) ??
+          displayToId.get(clean.toLowerCase()) ??
+          (commitDisplayNames ? slug : undefined);
         if (id && !selectedIdsRef.current.includes(id)) {
           selectedIdsRef.current = [...selectedIdsRef.current, id];
         }
@@ -133,7 +139,9 @@ export function MultiSelectEditor({
     }
     // For computed tags, commit display names (slugs) instead of entity IDs
     if (commitDisplayNames) {
-      const slugs = selectedIdsRef.current.map((id) => idToDisplay.get(id) ?? id);
+      const slugs = selectedIdsRef.current.map(
+        (id) => idToDisplay.get(id) ?? id,
+      );
       onCommit(slugs);
     } else {
       onCommit(selectedIdsRef.current);
@@ -148,17 +156,19 @@ export function MultiSelectEditor({
     if (!targetEntityType) return null;
     const rawSearch = async (query: string): Promise<MentionSearchResult[]> => {
       try {
-        const results = await invoke<Array<{ id: string; display_name: string; color: string }>>(
-          "search_mentions",
-          { entityType: targetEntityType, query },
-        );
+        const results = await invoke<
+          Array<{ id: string; display_name: string; color: string }>
+        >("search_mentions", { entityType: targetEntityType, query });
         return results
           .filter((r) => {
-            const id = displayToId.get(r.display_name.toLowerCase()) ?? r.display_name;
+            const id =
+              displayToId.get(slugify(r.display_name)) ??
+              displayToId.get(r.display_name.toLowerCase()) ??
+              r.display_name;
             return !selectedIdsRef.current.includes(id);
           })
           .map((r) => ({
-            slug: r.display_name,
+            slug: slugify(r.display_name),
             displayName: r.display_name,
             color: r.color,
           }));
@@ -222,51 +232,50 @@ export function MultiSelectEditor({
       {/* Selected items — actors use AvatarDisplay (same component as grid/inspector) */}
       {selectedIds.length > 0 && (
         <div className="flex flex-wrap items-center gap-1">
-          {targetEntityType === "actor" ? (
-            /* Each actor: AvatarDisplay renders the avatar identically to grid/inspector,
+          {targetEntityType === "actor"
+            ? /* Each actor: AvatarDisplay renders the avatar identically to grid/inspector,
                wrapped with a remove button for editor interactivity */
-            selectedIds.map((id) => (
-              <span key={id} className="inline-flex items-center gap-0.5">
-                <AvatarDisplay value={[id]} />
-                <button
-                  type="button"
-                  className="hover:opacity-70 leading-none text-muted-foreground text-xs"
-                  onClick={() => removeItem(id)}
-                  onMouseDown={(e) => e.preventDefault()}
-                  title={`Remove ${idToDisplay.get(id) ?? id}`}
-                >
-                  &times;
-                </button>
-              </span>
-            ))
-          ) : (
-            selectedIds.map((id) => {
-              const name = idToDisplay.get(id) ?? id;
-              const ent = targetEntities.find((e) => e.id === id);
-              const color = ent ? getStr(ent, "color", "888888") : "888888";
-              return (
-                <span
-                  key={id}
-                  className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-xs font-medium"
-                  style={{
-                    backgroundColor: `color-mix(in srgb, #${color} 20%, transparent)`,
-                    color: `#${color}`,
-                    border: `1px solid color-mix(in srgb, #${color} 30%, transparent)`,
-                  }}
-                >
-                  {prefix}{name}
+              selectedIds.map((id) => (
+                <span key={id} className="inline-flex items-center gap-0.5">
+                  <AvatarDisplay value={[id]} />
                   <button
                     type="button"
-                    className="ml-0.5 hover:opacity-70 leading-none"
+                    className="hover:opacity-70 leading-none text-muted-foreground text-xs"
                     onClick={() => removeItem(id)}
                     onMouseDown={(e) => e.preventDefault()}
+                    title={`Remove ${idToDisplay.get(id) ?? id}`}
                   >
                     &times;
                   </button>
                 </span>
-              );
-            })
-          )}
+              ))
+            : selectedIds.map((id) => {
+                const name = idToDisplay.get(id) ?? id;
+                const ent = targetEntities.find((e) => e.id === id);
+                const color = ent ? getStr(ent, "color", "888888") : "888888";
+                return (
+                  <span
+                    key={id}
+                    className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-xs font-medium"
+                    style={{
+                      backgroundColor: `color-mix(in srgb, #${color} 20%, transparent)`,
+                      color: `#${color}`,
+                      border: `1px solid color-mix(in srgb, #${color} 30%, transparent)`,
+                    }}
+                  >
+                    {prefix}
+                    {name}
+                    <button
+                      type="button"
+                      className="ml-0.5 hover:opacity-70 leading-none"
+                      onClick={() => removeItem(id)}
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                );
+              })}
         </div>
       )}
       {/* CM6 input */}
