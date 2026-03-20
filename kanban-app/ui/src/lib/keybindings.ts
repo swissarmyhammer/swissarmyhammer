@@ -55,7 +55,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
 const SEQUENCE_TABLES: Record<KeymapMode, SequenceTable> = {
   vim: {
     g: { g: "board.firstColumn" },
-    d: { d: "task.archive" },
+    d: { d: "entity.archive" },
     z: { o: "task.toggleCollapse" },
   },
   cua: {},

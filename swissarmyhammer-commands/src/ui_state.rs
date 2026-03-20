@@ -2,8 +2,6 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::parse_moniker;
-
 /// Payload returned by UIState mutation methods.
 ///
 /// The caller (Tauri layer) uses this to decide which events to emit.

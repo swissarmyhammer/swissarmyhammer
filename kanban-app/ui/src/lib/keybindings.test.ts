@@ -319,7 +319,7 @@ describe("createKeyHandler", () => {
     expect(executeCommand).not.toHaveBeenCalled();
 
     handler(fakeKeyEvent("d"));
-    expect(executeCommand).toHaveBeenCalledWith("task.archive");
+    expect(executeCommand).toHaveBeenCalledWith("entity.archive");
   });
 
   it("handles vim zo sequence", () => {

@@ -4,7 +4,7 @@ use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::tag::tag_name_exists_entity;
-use crate::task_helpers::{task_entity_to_json, task_tags};
+use crate::task_helpers::task_entity_to_json;
 use crate::types::{ActorId, SwimlaneId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

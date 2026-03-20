@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
+import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { CellDispatch } from "@/components/cells";
 import type { UseGridReturn } from "@/hooks/use-grid";
 import type { Entity, FieldDef } from "@/types/kanban";
@@ -41,11 +42,26 @@ interface DataTableProps {
   grouping?: string[];
   /** Called when the visible data row count changes (e.g. group collapse). */
   onVisibleRowCount?: (count: number) => void;
+  /** Show a leading selector column before field columns (default true). */
+  showRowSelector?: boolean;
+  /**
+   * Optional factory that returns entity-specific commands for a given row.
+   *
+   * When provided, each row's selector cell is wrapped in a per-row
+   * CommandScopeProvider so that right-clicking row N always resolves
+   * commands for row N's entity — regardless of the grid cursor position.
+   *
+   * This eliminates the race between `grid.setCursor()` (async state update)
+   * and `contextMenuHandler(e)` (synchronous) when the user right-clicks a
+   * row that isn't the current cursor row.
+   */
+  rowEntityCommands?: (entity: Entity) => CommandDef[];
 }
 
-export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, renderEditor, grouping: groupingProp, onVisibleRowCount }: DataTableProps) {
+export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, renderEditor, grouping: groupingProp, onVisibleRowCount, showRowSelector = true, rowEntityCommands }: DataTableProps) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
+  // Grid-level context menu handler — used when rowEntityCommands is not set.
   const contextMenuHandler = useContextMenu();
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
@@ -161,6 +177,13 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
         <TableHeader className="sticky top-0 z-[1] bg-muted/80 backdrop-blur-sm">
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id} className="border-b border-border hover:bg-transparent">
+              {showRowSelector && (
+                <TableHead
+                  data-testid="row-selector-header"
+                  className="w-10 px-0 py-1.5 bg-muted/80"
+                  style={{ width: 40 }}
+                />
+              )}
               {headerGroup.headers.map((header, ci) => {
                 const isSorted = header.column.getIsSorted();
                 const isGrouped = header.column.getIsGrouped();
@@ -194,13 +217,15 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
           {flatRows.map((row, ri) => {
             // Group header rows — not part of grid cursor navigation
             if (row.getIsGrouped()) {
+              // colSpan covers all field columns plus the selector column when visible
+              const groupColSpan = showRowSelector ? columns.length + 1 : columns.length;
               return (
                 <TableRow
                   key={row.id}
                   className="border-b border-border/50 bg-muted/20 hover:bg-muted/40 cursor-pointer"
                   onClick={() => row.toggleExpanded()}
                 >
-                  <TableCell colSpan={columns.length} className="px-4 py-1.5 font-medium text-sm">
+                  <TableCell colSpan={groupColSpan} className="px-4 py-1.5 font-medium text-sm">
                     <span className="flex items-center gap-1.5">
                       {row.getIsExpanded()
                         ? <ChevronDown className="h-3.5 w-3.5" />
@@ -230,6 +255,37 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                   contextMenuHandler(e);
                 }}
               >
+                {showRowSelector && (
+                  rowEntityCommands ? (
+                    <RowSelectorWithScope
+                      entity={entity}
+                      di={di}
+                      cursorRow={grid.cursor.row}
+                      cursorCol={grid.cursor.col}
+                      commands={rowEntityCommands(entity)}
+                      onCellClick={handleCellClick}
+                      onRowContextMenu={onRowContextMenu}
+                    />
+                  ) : (
+                    <TableCell
+                      data-testid="row-selector"
+                      data-active={di === grid.cursor.row ? "true" : "false"}
+                      className={cn(
+                        "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
+                        di === grid.cursor.row && "bg-muted text-foreground",
+                      )}
+                      style={{ width: 40 }}
+                      onClick={() => handleCellClick(di, grid.cursor.col)}
+                      onContextMenu={(e) => {
+                        grid.setCursor(di, grid.cursor.col);
+                        onRowContextMenu?.(entity, e);
+                        contextMenuHandler(e);
+                      }}
+                    >
+                      {di + 1}
+                    </TableCell>
+                  )
+                )}
                 {columns.map((col, ci) => {
                   const isCursor = di === grid.cursor.row && ci === grid.cursor.col;
                   const isSel = isSelected(di, ci);
@@ -274,6 +330,100 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+interface RowSelectorWithScopeProps {
+  entity: Entity;
+  di: number;
+  cursorRow: number;
+  cursorCol: number;
+  commands: CommandDef[];
+  onCellClick: (row: number, col: number) => void;
+  onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
+}
+
+/**
+ * Renders a row selector cell wrapped in a per-row CommandScopeProvider.
+ *
+ * This component exists so that `useContextMenu()` is called from inside the
+ * row-specific scope. When the user right-clicks this cell, the context menu
+ * resolves commands from `commands` (built for this row's entity) rather than
+ * from the grid-level scope — eliminating the race between `grid.setCursor()`
+ * (async state update) and the synchronous context menu open.
+ */
+function RowSelectorWithScope({
+  entity,
+  di,
+  cursorRow,
+  cursorCol,
+  commands,
+  onCellClick,
+  onRowContextMenu,
+}: RowSelectorWithScopeProps) {
+  return (
+    <CommandScopeProvider commands={commands}>
+      <RowSelectorCell
+        entity={entity}
+        di={di}
+        cursorRow={cursorRow}
+        cursorCol={cursorCol}
+        onCellClick={onCellClick}
+        onRowContextMenu={onRowContextMenu}
+      />
+    </CommandScopeProvider>
+  );
+}
+
+interface RowSelectorCellProps {
+  entity: Entity;
+  di: number;
+  cursorRow: number;
+  cursorCol: number;
+  onCellClick: (row: number, col: number) => void;
+  onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
+}
+
+/**
+ * The inner selector cell rendered inside the per-row CommandScopeProvider.
+ *
+ * Calls `useContextMenu()` here so the hook reads from the row-specific scope,
+ * not the grid-level scope. The `data-row-entity-id` attribute on the wrapping
+ * `<td>` enables tests to verify which entity's scope is active per row.
+ */
+function RowSelectorCell({
+  entity,
+  di,
+  cursorRow,
+  cursorCol,
+  onCellClick,
+  onRowContextMenu,
+}: RowSelectorCellProps) {
+  const contextMenuHandler = useContextMenu();
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      onRowContextMenu?.(entity, e);
+      contextMenuHandler(e);
+    },
+    [entity, onRowContextMenu, contextMenuHandler],
+  );
+
+  return (
+    <TableCell
+      data-testid="row-selector"
+      data-active={di === cursorRow ? "true" : "false"}
+      data-row-entity-id={entity.id}
+      className={cn(
+        "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
+        di === cursorRow && "bg-muted text-foreground",
+      )}
+      style={{ width: 40 }}
+      onClick={() => onCellClick(di, cursorCol)}
+      onContextMenu={handleContextMenu}
+    >
+      {di + 1}
+    </TableCell>
   );
 }
 

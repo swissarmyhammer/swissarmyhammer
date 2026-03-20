@@ -394,4 +394,66 @@ mod tests {
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Todo task");
     }
+
+    #[tokio::test]
+    async fn test_next_task_skips_archived() {
+        let (_temp, ctx) = setup().await;
+
+        // Create 2 tasks — first is archived, second should be returned
+        let r1 = AddTask::new("Task 1 (to archive)")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id1 = r1["id"].as_str().unwrap().to_string();
+
+        AddTask::new("Task 2 (active)")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Archive the first task via the entity context
+        let ectx = ctx.entity_context().await.unwrap();
+        ectx.archive("task", &id1).await.unwrap();
+
+        // next task should skip the archived one and return the second
+        let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(
+            result["title"], "Task 2 (active)",
+            "next task should skip archived task and return the second"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_next_task_all_archived_returns_null() {
+        let (_temp, ctx) = setup().await;
+
+        // Create 2 tasks and archive both
+        let r1 = AddTask::new("Task 1")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id1 = r1["id"].as_str().unwrap().to_string();
+
+        let r2 = AddTask::new("Task 2")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id2 = r2["id"].as_str().unwrap().to_string();
+
+        // Archive both tasks
+        let ectx = ctx.entity_context().await.unwrap();
+        ectx.archive("task", &id1).await.unwrap();
+        ectx.archive("task", &id2).await.unwrap();
+
+        // next task should return null — no active tasks remain
+        let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
+        assert!(
+            result.is_null(),
+            "next task should return null when all tasks are archived, got: {result}"
+        );
+    }
 }

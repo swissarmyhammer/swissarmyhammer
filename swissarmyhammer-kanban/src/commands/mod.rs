@@ -55,6 +55,14 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "entity.delete".into(),
         Arc::new(entity_commands::DeleteEntityCmd),
     );
+    map.insert(
+        "entity.archive".into(),
+        Arc::new(entity_commands::ArchiveEntityCmd),
+    );
+    map.insert(
+        "entity.unarchive".into(),
+        Arc::new(entity_commands::UnarchiveEntityCmd),
+    );
 
     // Tag commands
     map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
@@ -146,8 +154,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 2 entity + 1 tag + 1 attachment + 1 column + 6 UI + 6 app = 22
-        assert_eq!(cmds.len(), 22);
+        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 6 UI + 6 app = 24
+        assert_eq!(cmds.len(), 24);
     }
 
     // =========================================================================
@@ -256,6 +264,30 @@ mod tests {
         let cmd = cmds.get("entity.delete").unwrap();
         let ctx = ctx_scope(&[]);
         assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn archive_entity_available_with_target() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.archive").unwrap();
+        let ctx = ctx_with(&[], Some("task:01ABC"), None);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn archive_entity_not_available_without_target() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.archive").unwrap();
+        let ctx = ctx_scope(&[]);
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn unarchive_entity_available_with_target() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.unarchive").unwrap();
+        let ctx = ctx_with(&[], Some("task:01ABC"), None);
+        assert!(cmd.available(&ctx));
     }
 
     // =========================================================================

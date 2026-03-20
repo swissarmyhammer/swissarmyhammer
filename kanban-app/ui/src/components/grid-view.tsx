@@ -248,14 +248,14 @@ export function GridView({ view }: GridViewProps) {
         execute: () => inspectEntity(currentEntityMoniker),
       },
       {
-        id: `${entityType}.archive`,
+        id: "entity.archive",
         name: "Archive",
         target: currentEntityMoniker,
         contextMenu: true,
         execute: () => {
           invoke("dispatch_command", {
-            cmd: `${entityType}.archive`,
-            args: { id: currentEntity.id },
+            cmd: "entity.archive",
+            target: currentEntityMoniker,
             ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
           }).catch((err) => console.error("Failed to archive:", err));
         },
@@ -266,6 +266,40 @@ export function GridView({ view }: GridViewProps) {
   const handleCellClick = useCallback((row: number, col: number) => {
     grid.setCursor(row, col);
   }, [grid]);
+
+  /**
+   * Factory that builds entity-specific context menu commands for a given row.
+   *
+   * Used by DataTable to wrap each row's selector cell in its own
+   * CommandScopeProvider so right-clicking row N always resolves commands for
+   * row N's entity — regardless of the grid cursor position at the time of
+   * the right-click.
+   */
+  const buildRowEntityCommands = useCallback((entity: Entity): CommandDef[] => {
+    const entityMoniker = moniker(entityType, entity.id);
+    return [
+      {
+        id: "entity.inspect",
+        name: `Inspect ${entityType}`,
+        target: entityMoniker,
+        contextMenu: true,
+        execute: () => inspectEntity(entityMoniker),
+      },
+      {
+        id: "entity.archive",
+        name: "Archive",
+        target: entityMoniker,
+        contextMenu: true,
+        execute: () => {
+          invoke("dispatch_command", {
+            cmd: "entity.archive",
+            target: entityMoniker,
+            ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
+          }).catch((err) => console.error("Failed to archive:", err));
+        },
+      },
+    ];
+  }, [entityType, inspectEntity]);
 
   const renderEditor = useCallback(
     (entity: Entity, field: FieldDef, onCommit: (value: unknown) => void, onCancel: () => void) => {
@@ -316,6 +350,7 @@ export function GridView({ view }: GridViewProps) {
           onCellClick={handleCellClick}
           renderEditor={renderEditor}
           onVisibleRowCount={setVisibleRowCount}
+          rowEntityCommands={buildRowEntityCommands}
         />
       </main>
     </CommandScopeProvider>
