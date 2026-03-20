@@ -121,11 +121,12 @@ jobs:
           TAG: ${{ steps.tag.outputs.value }}
         run: |
           echo "Uploading to release $TAG"
-          # Upload versioned DMG (original filename includes version)
-          gh release upload "$TAG" "${{ steps.find-dmg.outputs.dmg_path }}" --clobber
-          # Upload stable-name DMG for permanent download URLs
-          cp "${{ steps.find-dmg.outputs.dmg_path }}" "${{ matrix.app.product }}-latest.dmg"
-          gh release upload "$TAG" "${{ matrix.app.product }}-latest.dmg" --clobber
+          # Upload with stable architecture-only name for permanent URLs:
+          # releases/latest/download/Mirdan_aarch64.dmg
+          # releases/latest/download/Kanban_aarch64.dmg
+          STABLE_NAME="${{ matrix.app.product }}_aarch64.dmg"
+          cp "${{ steps.find-dmg.outputs.dmg_path }}" "$STABLE_NAME"
+          gh release upload "$TAG" "$STABLE_NAME" --clobber
 
       - name: Upload DMG as workflow artifact
         uses: actions/upload-artifact@v4
@@ -194,10 +195,10 @@ jobs:
         env:
           VERSION: ${{ steps.tag.outputs.value }}
           SHA256: ${{ steps.sha.outputs.sha256 }}
-          DMG_NAME: ${{ steps.sha.outputs.dmg_name }}
         run: |
           # Strip leading 'v' from tag for version
           CASK_VERSION="${VERSION#v}"
+          STABLE_NAME="${{ matrix.app.product }}_aarch64.dmg"
 
           mkdir -p homebrew-tap/Casks
 
@@ -206,7 +207,7 @@ jobs:
             version "${CASK_VERSION}"
             sha256 "${SHA256}"
 
-            url "https://github.com/swissarmyhammer/swissarmyhammer/releases/download/${VERSION}/${DMG_NAME}"
+            url "https://github.com/swissarmyhammer/swissarmyhammer/releases/download/${VERSION}/${STABLE_NAME}"
             name "${{ matrix.app.product }}"
             desc "${{ matrix.app.desc }}"
             homepage "${{ matrix.app.homepage }}"
