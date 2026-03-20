@@ -12,7 +12,7 @@ Move all UI state from React contexts into a Rust-owned `UIState` struct that em
   - `inspect(moniker)` — push onto stack with primary/secondary logic (task/column/board replaces stack, tag pushes)
   - `inspector_close()` — pop top
   - `inspector_close_all()` — clear stack
-  - `set_active_view(id)` 
+  - `set_active_view(id)`
   - `set_palette_open(bool)`
   - `set_keymap_mode(mode)`
 - Each mutation emits a targeted event with the full current value:

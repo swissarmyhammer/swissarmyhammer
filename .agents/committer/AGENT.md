@@ -233,6 +233,8 @@ use the skill tool to load the full instructions, then follow them.
 ### Available Skills
 
 
+- **card**: Create a single, well-researched kanban card. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode. (local)
+
 - **code-context**: Use this tool first when you need to understand code structure, find symbols, trace dependencies, or assess the impact of changes. It is faster and more accurate than grepping files or reading directory trees. (local)
 
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
@@ -250,6 +252,8 @@ use the skill tool to load the full instructions, then follow them.
 - **kanban**: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item. (local)
 
 - **lsp**: Diagnose and install missing LSP servers for your project. Use when the user says "lsp", "language servers", "check lsp", or wants to ensure code intelligence is fully working. (local)
+
+- **map**: Generate a visual architecture overview of the codebase with Mermaid diagrams. Produces ARCHITECTURE.md at repo root. Use when the user says "map", "architecture", "overview", or wants to understand the codebase structure. (local)
 
 - **plan**: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban cards as the plan artifact. (local)
 

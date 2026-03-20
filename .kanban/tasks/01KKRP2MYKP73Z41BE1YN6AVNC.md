@@ -11,4 +11,4 @@ heb/src/store.rs:43-58
 
 This is a data correctness bug. Callers using `replay()` will receive headers with seq=0 and cannot use them to resume a subscription position accurately.
 
-Suggestion: after the `INSERT`, update the header's seq field and rewrite `header_json` in a second UPDATE, or store seq as a separate column and reconstruct on read. #review-finding
+Suggestion: after the `INSERT`, update the header's seq field and rewrite `header_json` in a second UPDATE, or store seq as a separate column and reconstruct on read.

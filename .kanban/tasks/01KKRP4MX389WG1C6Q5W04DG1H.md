@@ -18,4 +18,4 @@ Per the Rust `thiserror`/`Display` convention (and the project's own RUST_REVIEW
 
 Similarly in `ElectionError` in swissarmyhammer-leader-election/src/error.rs: `"Discovery file error: {0}"`, `"Bus error: {0}"`, `"Serialization error: {0}"`, `"Message error: {0}"` are all uppercase.
 
-Suggestion: lowercase the first character of each error message string. #review-finding
+Suggestion: lowercase the first character of each error message string.

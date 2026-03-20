@@ -13,4 +13,4 @@ Consider either:
 
 This is minor since these are forward-compat and not fired today, but the empty string will be confusing in logs.
 
-**Severity**: nit #review-finding
+**Severity**: nit

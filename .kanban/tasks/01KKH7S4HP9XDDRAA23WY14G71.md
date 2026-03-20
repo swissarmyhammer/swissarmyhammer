@@ -10,5 +10,3 @@ title: 'fix: delete old chunks before re-inserting in write_ts_chunks'
 **Fix**: Add `DELETE FROM ts_chunks WHERE file_path = ?` before the INSERT loop in `write_ts_chunks`.
 
 **Files**: `swissarmyhammer-code-context/src/indexing.rs`
-
-#bug #code-context

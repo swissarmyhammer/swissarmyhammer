@@ -89,11 +89,12 @@ Every planned work item becomes a kanban card. The kanban board IS the plan. No 
 Use `code_context` as the primary research tool. Always check blast radius (`op: "get blastradius"`) on files you expect to change — this is how you discover downstream work you'd otherwise miss. Use symbol search, call graphs, and text search (Glob/Grep/Read) to fill in the picture.
 
 ### Every card must be actionable
+
 Card descriptions MUST include:
 
 ```
 ## What
-<what to implement — affected files, approach, context>
+<what to implement — full paths of files to create or modify, approach, context>
 
 ## Acceptance Criteria
 - [ ] <observable outcome that proves the work is done>
@@ -117,7 +118,13 @@ A card without acceptance criteria and tests is not a valid card. Include enough
 The subtask cap is the most important constraint. More than 5 subtasks means the card bundles multiple concerns — split along natural seams (different files, layers, or concerns) and link with `depends_on`. Two small cards with a dependency beat one mega-card.
 
 ### Subtasks are checklist items in the description
+
 Subtasks go in the card's `description` as GFM checklists (`- [ ]` items). There is no separate "add subtask" API.
+
+### Specificity
+
+Use specific file paths, function names, and type names — not vague descriptions. "Add Result return type to parse_config and propagate errors to callers in main.rs and cli.rs" not "improve error handling."
+
 
 ### Board naming
 Name the board for the workspace/repository, not the specific feature being planned.
@@ -132,9 +139,6 @@ When the user exits plan mode or approves the plan, do NOT begin implementing. I
 
 ### Ordering
 Foundational changes come first (data models, types, configuration), then core logic, then integration, then tests, then cleanup. Use `depends_on` to encode ordering constraints between cards.
-
-### Specificity
-Use specific file paths, function names, and type names — not vague descriptions. "Add Result return type to parse_config and propagate errors to callers in main.rs and cli.rs" not "improve error handling."
 
 ## Autonomous Agent Mode
 

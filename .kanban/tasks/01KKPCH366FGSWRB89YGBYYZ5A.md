@@ -13,4 +13,4 @@ The forward-compat match arm deserializes all 9 new hook types as `NotificationI
 
 This is a correctness issue when validators are eventually added for these hook types — they'd receive a NotificationInput instead of the correct typed input.
 
-**Severity**: warning #review-finding
+**Severity**: warning

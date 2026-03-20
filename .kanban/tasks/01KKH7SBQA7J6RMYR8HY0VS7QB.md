@@ -10,5 +10,3 @@ In `swissarmyhammer-code-context/src/indexing.rs` (line 127), `let _ = mark_ts_i
 **Fix**: Replace `let _ =` with proper error logging (at minimum `eprintln!` or `tracing::warn!`). Ideally, failed files should be retried on the next worker loop iteration rather than silently dropped.
 
 **Files**: `swissarmyhammer-code-context/src/indexing.rs`
-
-#bug #code-context

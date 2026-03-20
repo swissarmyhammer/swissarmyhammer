@@ -26,4 +26,4 @@ File:
 - [ ] Either: the description is updated to "Create a single, well-researched kanban card for a coding task" to match the partials, OR the coding partials are made conditional on project detection, OR a comment explains why unconditional inclusion is acceptable.
 
 ## Tests
-- [ ] No automated test needed; this is a documentation/semantics alignment issue. #review-finding #nit
+- [ ] No automated test needed; this is a documentation/semantics alignment issue. #nit

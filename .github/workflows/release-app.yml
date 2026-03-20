@@ -1,8 +1,9 @@
 # Build, sign, notarize, and publish the Mirdan tray app and Kanban app (Tauri v2).
 #
-# This workflow runs alongside the cargo-dist release.yml workflow.
+# Triggered automatically after the cargo-dist "Release" workflow completes successfully.
 # cargo-dist creates the GitHub Release and publishes the lean CLI binary.
 # This workflow builds the Tauri .app / .dmg for each app and uploads them to the same release.
+# Can also be triggered manually via workflow_dispatch with a tag input.
 
 name: Release App
 
@@ -10,13 +11,20 @@ permissions:
   contents: write
 
 on:
-  push:
-    tags:
-      - "**[0-9]+.[0-9]+.[0-9]+*"
+  # Trigger after the cargo-dist Release workflow creates the GitHub Release
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
 
 jobs:
   build-macos:
+    # Skip if workflow_run triggered by a failed/cancelled Release
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: self-hosted
     strategy:
       fail-fast: false
@@ -32,10 +40,23 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            # workflow_run: the tag is the head_branch of the triggering run
+            TAG="${{ github.event.workflow_run.head_branch }}"
+          fi
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: $TAG"
+
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           submodules: recursive
+          ref: ${{ steps.tag.outputs.value }}
 
       - name: Install Rust toolchain
         run: |
@@ -96,23 +117,16 @@ jobs:
           echo "Found DMG: $DMG"
 
       - name: Upload DMG to GitHub Release
-        if: ${{ github.ref_type == 'tag' }}
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          # Wait for cargo-dist to create the release (it may take a few minutes)
-          for i in $(seq 1 30); do
-            if gh release view "$TAG" > /dev/null 2>&1; then
-              echo "Release $TAG found"
-              break
-            fi
-            echo "Waiting for release $TAG to be created... ($i/30)"
-            sleep 10
-          done
-          # Upload versioned DMG (original filename includes version)
-          gh release upload "$TAG" "${{ steps.find-dmg.outputs.dmg_path }}" --clobber
-          # Upload stable-name DMG for permanent download URLs
-          cp "${{ steps.find-dmg.outputs.dmg_path }}" "${{ matrix.app.product }}-latest.dmg"
-          gh release upload "$TAG" "${{ matrix.app.product }}-latest.dmg" --clobber
+          echo "Uploading to release $TAG"
+          # Upload with stable architecture-only name for permanent URLs:
+          # releases/latest/download/Mirdan_aarch64.dmg
+          # releases/latest/download/Kanban_aarch64.dmg
+          STABLE_NAME="${{ matrix.app.product }}_aarch64.dmg"
+          cp "${{ steps.find-dmg.outputs.dmg_path }}" "$STABLE_NAME"
+          gh release upload "$TAG" "$STABLE_NAME" --clobber
 
       - name: Upload DMG as workflow artifact
         uses: actions/upload-artifact@v4
@@ -127,7 +141,6 @@ jobs:
 
   publish-homebrew-cask:
     needs: build-macos
-    if: ${{ github.ref_type == 'tag' }}
     runs-on: self-hosted
     strategy:
       fail-fast: false
@@ -144,6 +157,16 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.event.workflow_run.head_branch }}"
+          fi
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Download DMG artifact
         uses: actions/download-artifact@v4
         with:
@@ -170,12 +193,12 @@ jobs:
 
       - name: Update cask
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ steps.tag.outputs.value }}
           SHA256: ${{ steps.sha.outputs.sha256 }}
-          DMG_NAME: ${{ steps.sha.outputs.dmg_name }}
         run: |
           # Strip leading 'v' from tag for version
           CASK_VERSION="${VERSION#v}"
+          STABLE_NAME="${{ matrix.app.product }}_aarch64.dmg"
 
           mkdir -p homebrew-tap/Casks
 
@@ -184,7 +207,7 @@ jobs:
             version "${CASK_VERSION}"
             sha256 "${SHA256}"
 
-            url "https://github.com/swissarmyhammer/swissarmyhammer/releases/download/${VERSION}/${DMG_NAME}"
+            url "https://github.com/swissarmyhammer/swissarmyhammer/releases/download/${VERSION}/${STABLE_NAME}"
             name "${{ matrix.app.product }}"
             desc "${{ matrix.app.desc }}"
             homepage "${{ matrix.app.homepage }}"
@@ -202,7 +225,7 @@ jobs:
           git config user.name "mirdan bot"
           git config user.email "bot@mirdan.ai"
           git add Casks/${{ matrix.app.name }}.rb
-          git commit -m "${{ matrix.app.name }} cask ${GITHUB_REF_NAME}"
+          git commit -m "${{ matrix.app.name }} cask ${{ steps.tag.outputs.value }}"
           git push
 
   # Placeholder for future Windows build

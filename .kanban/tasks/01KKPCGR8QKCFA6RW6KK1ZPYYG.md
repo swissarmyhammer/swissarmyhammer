@@ -13,4 +13,4 @@ These events should either:
 
 The current mapping could cause unintended hook execution if a Notification hook is registered and one of these events is manually fired.
 
-**Severity**: warning #review-finding
+**Severity**: warning

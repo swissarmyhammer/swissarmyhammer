@@ -12,16 +12,16 @@ The new `install()` becomes:
 pub fn install(target: InstallTarget) -> Result<(), String> {
     let scope: InitScope = target.into();
     let mut registry = InitRegistry::new();
-    
+
     // System components
     register_system_components(&mut registry);
-    
+
     // Tool components (lightweight instances, no MCP server)
     register_tool_components(&mut registry);
-    
+
     let results = registry.run_all_init(&scope);
     display_results(&results);
-    
+
     check_for_errors(&results)
 }
 ```

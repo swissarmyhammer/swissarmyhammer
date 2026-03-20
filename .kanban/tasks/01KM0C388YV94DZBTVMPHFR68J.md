@@ -18,7 +18,7 @@ In target windows, listen for Tauri's `DragDropEvent` to detect when an OS drag 
 **Approach:**
 Tauri emits `DragDropEvent` with variants:
 - `Enter { paths, position }` — drag entered the webview
-- `Over { position }` — drag is moving over the webview  
+- `Over { position }` — drag is moving over the webview
 - `Drop { paths, position }` — drag was released
 - `Leave` — drag left without dropping
 

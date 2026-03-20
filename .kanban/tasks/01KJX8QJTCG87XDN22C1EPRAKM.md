@@ -12,4 +12,4 @@ function getStrList(entity: Entity, field: string): string[]
 function getNum(entity: Entity, field: string, fallback: number): number
 ```
 
-This mirrors the Rust side which already has `entity.get_str()` and `entity.get_string_list()`. Files affected: board-view.tsx, column-view.tsx, task-card.tsx, task-detail-panel.tsx, tag-inspector.tsx, tag-pill.tsx, nav-bar.tsx. #warning
+This mirrors the Rust side which already has `entity.get_str()` and `entity.get_string_list()`. Files affected: board-view.tsx, column-view.tsx, task-card.tsx, task-detail-panel.tsx, tag-inspector.tsx, tag-pill.tsx, nav-bar.tsx.

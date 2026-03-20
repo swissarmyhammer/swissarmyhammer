@@ -28,4 +28,4 @@ File:
 - [ ] At least one example in `generate_skill_examples()` demonstrates passing `arguments`.
 
 ## Tests
-- [ ] `cargo test -p swissarmyhammer-skills` passes after the change. #review-finding #nit
+- [ ] `cargo test -p swissarmyhammer-skills` passes after the change. #nit

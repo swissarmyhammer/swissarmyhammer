@@ -30,4 +30,4 @@ Files:
 - [ ] The change is intentional and documented (not silently lost).
 
 ## Tests
-- [ ] Rendered output of `skill { op: "use skill", name: "plan" }` in agent/PLANNING_GUIDE context contains the accepted wording. #review-finding #warning
+- [ ] Rendered output of `skill { op: "use skill", name: "plan" }` in agent/PLANNING_GUIDE context contains the accepted wording.

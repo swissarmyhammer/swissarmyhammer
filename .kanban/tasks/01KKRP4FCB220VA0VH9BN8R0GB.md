@@ -18,4 +18,4 @@ The new `HookEvent` variants use required (non-Optional) `String` fields for pro
 
 This creates an impedance mismatch: constructors of `HookEvent` must provide a fallback string (e.g., `""`) for missing protocol fields, losing the optionality information. Matchers that use `matcher_value()` will get `Some("")` instead of `None` for absent fields, which may trigger unintended hooks.
 
-Suggestion: mirror the optionality from the input types in the `HookEvent` variants. #review-finding
+Suggestion: mirror the optionality from the input types in the `HookEvent` variants.

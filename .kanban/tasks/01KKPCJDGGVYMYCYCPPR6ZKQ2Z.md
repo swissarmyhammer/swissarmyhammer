@@ -7,4 +7,4 @@ title: AvpWorktreeCreateOutput missing deny_from_validator constructor
 
 AvpWorktreeCreateOutput has `deny()` but no `deny_from_validator()`. The existing deny-capable type AvpPreToolUseOutput has `deny_from_validator()`. AvpWorktreeCreateOutput should follow the same pattern.
 
-**Severity**: nit #review-finding
+**Severity**: nit

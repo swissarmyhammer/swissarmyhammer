@@ -9,4 +9,4 @@ AvpElicitationOutput has `deny_from_validator()` but AvpElicitationResultOutput,
 
 The existing blockable types (AvpStopOutput, AvpSubagentStopOutput) all have `block_from_validator()`. The new blockable types should follow the same pattern for consistency and so validators can properly attribute their blocks.
 
-**Severity**: warning #review-finding
+**Severity**: warning

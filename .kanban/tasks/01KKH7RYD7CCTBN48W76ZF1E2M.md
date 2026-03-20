@@ -16,5 +16,3 @@ Design options:
 Either way: one connection, one writer, no contention. Workers become pure producers of write intents.
 
 **Files**: `swissarmyhammer-code-context/src/indexing.rs`, `swissarmyhammer-code-context/src/lsp_worker.rs`, `swissarmyhammer-code-context/src/lib.rs`
-
-#bug #code-context

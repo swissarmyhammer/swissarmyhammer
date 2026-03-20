@@ -35,7 +35,7 @@ When a remote drag session is active, show drop zone overlays in target windows 
 
 **Edge cases:**
 - Drag session cancelled while overlay showing → overlay disappears
-- Drag session completed by another window → overlay disappears  
+- Drag session completed by another window → overlay disappears
 - Window showing same board as source → same-board move (simpler, no transfer needed)
 - Pointer leaves target window without dropping → overlay stays until session cancelled or completed elsewhere
 
