@@ -1003,6 +1003,7 @@ pub async fn log_command(cmd: String, target: Option<String>) {
 /// Looks up the command definition in the registry, resolves the scope
 /// chain, checks availability, and executes via the trait implementation.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn dispatch_command(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1011,6 +1012,7 @@ pub async fn dispatch_command(
     target: Option<String>,
     args: Option<Value>,
     board_path: Option<String>,
+    window_label: Option<String>,
 ) -> Result<Value, String> {
     // Validate command ID: non-empty, reasonable length, ASCII-only
     if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
@@ -1086,7 +1088,8 @@ pub async fn dispatch_command(
     {
         let mut config = state.config.write().await;
         let active_board = state.active_board.read().await;
-        let ws = config.windows.entry("main".to_string()).or_insert_with(|| {
+        let label = window_label.as_deref().unwrap_or("main");
+        let ws = config.windows.entry(label.to_string()).or_insert_with(|| {
             crate::state::WindowState::new(active_board.clone().unwrap_or_default())
         });
         ws.inspector_stack = stack.clone();

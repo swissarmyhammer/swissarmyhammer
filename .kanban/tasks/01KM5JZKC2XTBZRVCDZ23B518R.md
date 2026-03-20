@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KM5JYNBZW86RNHCVS9VMZ31D
 - 01KM5JYX09RBFTQFD2T715FAEW
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffae80
 title: Update mention infrastructure for slugified task titles
 ---
 ## What

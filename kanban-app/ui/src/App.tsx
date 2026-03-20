@@ -141,6 +141,7 @@ function App() {
     invoke<{ result?: { InspectorStack?: string[] } }>("dispatch_command", {
       cmd: "ui.inspect",
       target,
+      windowLabel: WINDOW_LABEL,
     })
       .then((res) => {
         const stack = parsePanelStack(res);
@@ -151,10 +152,14 @@ function App() {
 
   /** Close the topmost inspector panel via the command architecture. */
   const closeTopPanel = useCallback(() => {
+    // Optimistic: pop immediately for instant visual feedback
+    setPanelStack((prev) => prev.slice(0, -1));
     invoke<{ result?: { InspectorStack?: string[] } }>("dispatch_command", {
       cmd: "ui.inspector.close",
+      windowLabel: WINDOW_LABEL,
     })
       .then((res) => {
+        // Reconcile with backend — backend wins if diverged
         const stack = parsePanelStack(res);
         if (stack) setPanelStack(stack);
       })
@@ -164,8 +169,11 @@ function App() {
   /** Close the topmost panel. Returns true if a panel was actually closed. */
   const dismissTopPanel = useCallback((): boolean => {
     if (panelStackRef.current.length === 0) return false;
+    // Optimistic: pop immediately for instant visual feedback
+    setPanelStack((prev) => prev.slice(0, -1));
     invoke<{ result?: { InspectorStack?: string[] } }>("dispatch_command", {
       cmd: "ui.inspector.close",
+      windowLabel: WINDOW_LABEL,
     })
       .then((res) => {
         const stack = parsePanelStack(res);
@@ -177,8 +185,11 @@ function App() {
 
   /** Close all inspector panels via the command architecture. */
   const closeAll = useCallback(() => {
+    // Optimistic: clear immediately for instant visual feedback
+    setPanelStack([]);
     invoke<{ result?: { InspectorStack?: string[] } }>("dispatch_command", {
       cmd: "ui.inspector.close_all",
+      windowLabel: WINDOW_LABEL,
     })
       .then((res) => {
         const stack = parsePanelStack(res);

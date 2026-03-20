@@ -6,6 +6,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
+
 import {
   CommandScopeProvider,
   resolveCommand,
@@ -20,7 +24,10 @@ import {
 /* ---------- helpers ---------- */
 
 /** Build a CommandScope value directly (no React) for unit-testing resolveCommand. */
-function makeScope(commands: CommandDef[], parent: CommandScope | null = null): CommandScope {
+function makeScope(
+  commands: CommandDef[],
+  parent: CommandScope | null = null,
+): CommandScope {
   const map = new Map<string, CommandDef>();
   for (const cmd of commands) map.set(cmd.id, cmd);
   return { commands: map, parent };
@@ -32,12 +39,16 @@ function cmd(id: string, overrides: Partial<CommandDef> = {}): CommandDef {
 }
 
 /** Wrap children in one or more nested CommandScopeProviders. */
-function wrapper(layers: CommandDef[][]): ({ children }: { children: ReactNode }) => ReactNode {
+function wrapper(
+  layers: CommandDef[][],
+): ({ children }: { children: ReactNode }) => ReactNode {
   return ({ children }: { children: ReactNode }) => {
     let el = children;
     // Wrap from outermost (last) to innermost (first)
     for (let i = layers.length - 1; i >= 0; i--) {
-      el = <CommandScopeProvider commands={layers[i]}>{el}</CommandScopeProvider>;
+      el = (
+        <CommandScopeProvider commands={layers[i]}>{el}</CommandScopeProvider>
+      );
     }
     return el;
   };
@@ -153,9 +164,9 @@ describe("useAvailableCommands", () => {
   it("handles three-level nesting correctly", () => {
     const { result } = renderHook(() => useAvailableCommands(), {
       wrapper: wrapper([
-        [cmd("a"), cmd("b")],       // depth 2  (grandparent)
+        [cmd("a"), cmd("b")], // depth 2  (grandparent)
         [cmd("b", { name: "B2" })], // depth 1  (parent — shadows b)
-        [cmd("c")],                 // depth 0  (child)
+        [cmd("c")], // depth 0  (child)
       ]),
     });
     expect(result.current).toHaveLength(3);
@@ -218,10 +229,7 @@ describe("useExecuteCommand", () => {
   it("executes parent command when child does not register it", async () => {
     const parentFn = vi.fn();
     const { result } = renderHook(() => useExecuteCommand(), {
-      wrapper: wrapper([
-        [cmd("save", { execute: parentFn })],
-        [cmd("open")],
-      ]),
+      wrapper: wrapper([[cmd("save", { execute: parentFn })], [cmd("open")]]),
     });
 
     let executed: boolean = false;
@@ -321,17 +329,25 @@ describe("multiple scope branches", () => {
 
     const wrapperA = ({ children }: { children: ReactNode }) => (
       <CommandScopeProvider commands={parentCmds}>
-        <CommandScopeProvider commands={branchA}>{children}</CommandScopeProvider>
+        <CommandScopeProvider commands={branchA}>
+          {children}
+        </CommandScopeProvider>
       </CommandScopeProvider>
     );
     const wrapperB = ({ children }: { children: ReactNode }) => (
       <CommandScopeProvider commands={parentCmds}>
-        <CommandScopeProvider commands={branchB}>{children}</CommandScopeProvider>
+        <CommandScopeProvider commands={branchB}>
+          {children}
+        </CommandScopeProvider>
       </CommandScopeProvider>
     );
 
-    const { result: a } = renderHook(() => useAvailableCommands(), { wrapper: wrapperA });
-    const { result: b } = renderHook(() => useAvailableCommands(), { wrapper: wrapperB });
+    const { result: a } = renderHook(() => useAvailableCommands(), {
+      wrapper: wrapperA,
+    });
+    const { result: b } = renderHook(() => useAvailableCommands(), {
+      wrapper: wrapperB,
+    });
 
     const aIds = a.current.map((c) => c.command.id);
     const bIds = b.current.map((c) => c.command.id);
@@ -355,13 +371,25 @@ describe("CommandScope moniker", () => {
     const scope = makeScope([cmd("save")]);
     expect(scope.moniker).toBeUndefined();
 
-    const namedScope: CommandScope = { commands: new Map(), parent: null, moniker: "task:abc" };
+    const namedScope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "task:abc",
+    };
     expect(namedScope.moniker).toBe("task:abc");
   });
 
   it("resolveCommand works with moniker-bearing scopes", () => {
-    const parent: CommandScope = { commands: new Map([["global", cmd("global")]]), parent: null, moniker: "board:main" };
-    const child: CommandScope = { commands: new Map([["local", cmd("local")]]), parent, moniker: "task:abc" };
+    const parent: CommandScope = {
+      commands: new Map([["global", cmd("global")]]),
+      parent: null,
+      moniker: "board:main",
+    };
+    const child: CommandScope = {
+      commands: new Map([["local", cmd("local")]]),
+      parent,
+      moniker: "task:abc",
+    };
     expect(resolveCommand(child, "global")).toBeTruthy();
     expect(resolveCommand(child, "local")).toBeTruthy();
   });
@@ -417,6 +445,7 @@ describe("dispatchCommand", () => {
       cmd: "entity.delete",
       target: "task:abc",
       args: { moniker: "task:abc" },
+      windowLabel: "main",
     });
   });
 
@@ -432,7 +461,10 @@ describe("dispatchCommand", () => {
     });
     expect(execute).toHaveBeenCalledOnce();
     // invoke should NOT have been called for dispatch_command
-    expect(invoke).not.toHaveBeenCalledWith("dispatch_command", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.anything(),
+    );
   });
 
   it("dispatches to Rust when no execute is set (no args)", async () => {
@@ -443,6 +475,7 @@ describe("dispatchCommand", () => {
       cmd: "app.undo",
       target: undefined,
       args: undefined,
+      windowLabel: "main",
     });
   });
 });
