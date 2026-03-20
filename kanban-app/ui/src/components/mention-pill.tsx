@@ -124,6 +124,13 @@ export function MentionPill({
   );
 }
 
+/** Shorten a slug to at most 3 hyphen-separated words for compact display. */
+function briefSlug(slug: string): string {
+  const parts = slug.split("-");
+  if (parts.length <= 3) return slug;
+  return parts.slice(0, 3).join("-") + "…";
+}
+
 /**
  * Inner component rendered inside FocusScope so it can access
  * useContextMenu() from the correct CommandScope context.
@@ -167,7 +174,7 @@ function MentionPillInner({
       onContextMenu={handleContextMenu}
     >
       {prefix}
-      {slug}
+      {briefSlug(slug)}
     </span>
   );
 
