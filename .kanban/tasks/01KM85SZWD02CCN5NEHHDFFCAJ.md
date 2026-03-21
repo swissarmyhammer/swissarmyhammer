@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM85SH3GXFQSE4MMAPGX9M9C
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffd580
 title: Add UIState read endpoint and React hook
 ---
 ## What
