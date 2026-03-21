@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM85WCYYAT2XC8J2FDVRFMNT
-position_column: todo
-position_ordinal: '8980'
+position_column: done
+position_ordinal: ffffffffffe180
 title: 'Remove AppConfig: delete struct and all references'
 ---
 ## What

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM85WRY04E2VAQEEZ23VBVKG
-position_column: todo
-position_ordinal: 8a80
+position_column: done
+position_ordinal: ffffffffffe380
 title: 'Remove AppState: replace with UIState as single state owner'
 ---
 ## What
