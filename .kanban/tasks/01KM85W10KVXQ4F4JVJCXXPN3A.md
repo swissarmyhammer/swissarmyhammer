@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM85VKK0GZ27A4N1WX102HBK
-position_column: todo
-position_ordinal: '8780'
+position_column: done
+position_ordinal: ffffffffffdb80
 title: Migrate window state (geometry + inspector_stack) into UIState
 ---
 ## What
