@@ -58,7 +58,6 @@ fn main() {
             commands::show_context_menu,
             commands::list_open_boards,
             commands::get_ui_state,
-            commands::get_ui_context,
             commands::get_entity_schema,
             commands::list_entities,
             commands::get_entity,

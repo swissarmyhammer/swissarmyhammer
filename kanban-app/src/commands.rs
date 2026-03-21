@@ -102,26 +102,6 @@ pub async fn get_ui_state(state: State<'_, AppState>) -> Result<Value, String> {
     Ok(state.ui_state.to_json())
 }
 
-/// Get the persisted window state (board path, inspector stack).
-///
-/// The frontend calls this on mount to restore state across hot reloads.
-/// Reads from UIState as the authoritative source for both board assignment
-/// and per-window inspector stack.
-#[tauri::command]
-pub async fn get_ui_context(
-    state: State<'_, AppState>,
-    window_label: Option<String>,
-) -> Result<Value, String> {
-    let label = window_label.as_deref().unwrap_or("main");
-    let board_path = state.ui_state.window_board(label);
-    let inspector_stack = state.ui_state.inspector_stack(label);
-    Ok(json!({
-        "board_path": board_path,
-        "active_view_id": state.ui_state.active_view_id(label),
-        "inspector_stack": inspector_stack,
-    }))
-}
-
 /// Get the field+entity schema for a given entity type.
 ///
 /// Returns the EntityDef plus each resolved FieldDef, serialized as JSON.

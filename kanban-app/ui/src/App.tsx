@@ -242,40 +242,39 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // Restore board path from backend config (main window only — secondary gets it from URL)
-      if (!INITIAL_BOARD_PATH) {
-        try {
-          const ctx = await invoke<{
-            board_path: string | null;
-            inspector_stack: string[];
-          }>("get_ui_context", { windowLabel: WINDOW_LABEL });
-          if (cancelled) return;
-          if (ctx.board_path) {
-            // Open board idempotently and persist window→board mapping
-            await invoke("dispatch_command", {
-              cmd: "file.switchBoard",
-              args: { windowLabel: WINDOW_LABEL, path: ctx.board_path },
-            });
-            if (cancelled) return;
-            setActiveBoardPath(ctx.board_path);
-            activeBoardPathRef.current = ctx.board_path;
-          }
-        } catch {
-          // No saved state — will fall through to refresh below
-        }
-      }
-
-      // Restore inspector stack for ALL windows (main + secondary).
-      // Secondary windows skip the block above (board comes from URL),
-      // but they still need their inspector stack restored.
+      // Restore window state from UIState (board path + inspector stack).
+      // UIState.windows[windowLabel] holds all per-window state; no need for a
+      // separate get_ui_context command.
       try {
-        const ctx = await invoke<{
-          inspector_stack: string[];
-        }>("get_ui_context", { windowLabel: WINDOW_LABEL });
+        const uiState = await invoke<{
+          windows: Record<
+            string,
+            {
+              board_path?: string;
+              inspector_stack?: string[];
+              active_view_id?: string;
+            }
+          >;
+        }>("get_ui_state");
         if (cancelled) return;
-        if (ctx.inspector_stack?.length > 0) {
+        const winState = uiState.windows?.[WINDOW_LABEL];
+
+        // Restore board path from backend config (main window only — secondary gets it from URL)
+        if (!INITIAL_BOARD_PATH && winState?.board_path) {
+          // Open board idempotently and persist window→board mapping
+          await invoke("dispatch_command", {
+            cmd: "file.switchBoard",
+            args: { windowLabel: WINDOW_LABEL, path: winState.board_path },
+          });
+          if (cancelled) return;
+          setActiveBoardPath(winState.board_path);
+          activeBoardPathRef.current = winState.board_path;
+        }
+
+        // Restore inspector stack for ALL windows (main + secondary).
+        if (winState?.inspector_stack && winState.inspector_stack.length > 0) {
           const validated: PanelEntry[] = [];
-          for (const moniker of ctx.inspector_stack) {
+          for (const moniker of winState.inspector_stack) {
             const sep = moniker.indexOf(":");
             if (sep < 0) continue;
             validated.push({
@@ -286,7 +285,7 @@ function App() {
           if (validated.length > 0) setPanelStack(validated);
         }
       } catch {
-        // No saved inspector state
+        // No saved state — will fall through to refresh below
       }
       if (cancelled) return;
       await refresh();

@@ -9,7 +9,7 @@ use swissarmyhammer_commands::{
 };
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
-use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor};
+use swissarmyhammer_kanban::KanbanContext;
 use tokio::sync::RwLock;
 
 use swissarmyhammer_kanban::actor::AddActor;
@@ -23,7 +23,6 @@ const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
 /// A handle to a single open kanban board.
 pub(crate) struct BoardHandle {
     pub(crate) ctx: Arc<KanbanContext>,
-    pub(crate) processor: KanbanOperationProcessor,
     /// Entity cache for detecting external file changes with field-level diffing.
     pub(crate) entity_cache: EntityCache,
     /// In-memory search index over all entities.
@@ -102,7 +101,6 @@ impl BoardHandle {
 
         Ok(Self {
             ctx: Arc::new(ctx),
-            processor: KanbanOperationProcessor::new(),
             entity_cache,
             search_index,
             _watcher: None,
