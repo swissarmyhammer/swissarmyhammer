@@ -94,13 +94,6 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     Ok(json!(list))
 }
 
-/// Get the MRU list of recently opened boards.
-#[tauri::command]
-pub async fn get_recent_boards(state: State<'_, AppState>) -> Result<Value, String> {
-    let config = state.config.read().await;
-    serde_json::to_value(&config.recent_boards).map_err(|e| e.to_string())
-}
-
 /// Return the full UIState as JSON for the frontend.
 ///
 /// Returns a snapshot of all UIState fields including transient ones
@@ -799,9 +792,8 @@ pub async fn rebuild_menu_from_manifest(
     state: State<'_, AppState>,
     manifest: Vec<MenuItemEntry>,
 ) -> Result<(), String> {
-    let config = state.config.read().await;
-    menu::build_menu_from_manifest(&app, &manifest, &config.recent_boards)
-        .map_err(|e| e.to_string())?;
+    let recent = state.ui_state.recent_boards();
+    menu::build_menu_from_manifest(&app, &manifest, &recent).map_err(|e| e.to_string())?;
     Ok(())
 }
 

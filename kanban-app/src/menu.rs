@@ -1,8 +1,9 @@
 //! Native menu bar construction and event handling.
 
 use crate::commands::MenuItemEntry;
-use crate::state::{resolve_kanban_path, AppState, RecentBoard};
+use crate::state::{resolve_kanban_path, AppState};
 use std::path::{Path, PathBuf};
+use swissarmyhammer_commands::RecentBoard;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -89,7 +90,7 @@ pub fn build_menu_from_manifest(
     // Open Recent submenu
     let recent_submenu = Submenu::new(app, "Open Recent", !recent.is_empty())?;
     for rb in recent {
-        let id = format!("open_recent:{}", rb.path.display());
+        let id = format!("open_recent:{}", rb.path);
         let item = MenuItem::with_id(app, id, &rb.name, true, None::<&str>)?;
         recent_submenu.append(&item)?;
     }

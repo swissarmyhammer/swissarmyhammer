@@ -57,7 +57,6 @@ fn main() {
             commands::list_available_commands,
             commands::show_context_menu,
             commands::list_open_boards,
-            commands::get_recent_boards,
             commands::get_ui_state,
             commands::get_ui_context,
             commands::get_entity_schema,
@@ -83,7 +82,9 @@ fn main() {
             // Build initial menu with OS chrome only — the frontend will
             // send the full manifest via rebuild_menu_from_manifest once loaded.
             let config = crate::state::AppConfig::load();
-            let _ = menu::build_menu_from_manifest(app.handle(), &[], &config.recent_boards);
+            let state = app.state::<AppState>();
+            let recent = state.ui_state.recent_boards();
+            let _ = menu::build_menu_from_manifest(app.handle(), &[], &recent);
 
             // Handle deep-link URLs at cold start
             {

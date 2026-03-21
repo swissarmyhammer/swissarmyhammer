@@ -1,6 +1,5 @@
 //! Application state management with multi-board support and MRU persistence.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -19,7 +18,6 @@ use swissarmyhammer_kanban::Execute;
 
 use crate::watcher::{self, BoardWatcher, EntityCache};
 
-const MAX_RECENT_BOARDS: usize = 20;
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
 const CONFIG_FILE_NAME: &str = "config.yaml";
 const CONFIG_FILE_NAME_LEGACY: &str = "config.json";
@@ -198,18 +196,9 @@ impl BoardHandle {
     }
 }
 
-/// A recently opened board entry for MRU persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RecentBoard {
-    pub(crate) path: PathBuf,
-    pub(crate) name: String,
-    pub(crate) last_opened: DateTime<Utc>,
-}
-
 /// Persisted app configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct AppConfig {
-    pub(crate) recent_boards: Vec<RecentBoard>,
     /// Paths of boards that were open when the app last ran.
     /// Restored on startup so multi-board sessions survive reloads.
     #[serde(default)]
@@ -289,25 +278,6 @@ impl AppConfig {
         }
         let content = serde_yaml_ng::to_string(self).map_err(std::io::Error::other)?;
         std::fs::write(&path, content)
-    }
-
-    /// Add or update a board in the MRU list.
-    pub fn touch_recent(&mut self, path: &Path, name: &str) {
-        // Remove existing entry for this path
-        self.recent_boards.retain(|r| r.path != path);
-
-        // Insert at front
-        self.recent_boards.insert(
-            0,
-            RecentBoard {
-                path: path.to_path_buf(),
-                name: name.to_string(),
-                last_opened: Utc::now(),
-            },
-        );
-
-        // Truncate to max
-        self.recent_boards.truncate(MAX_RECENT_BOARDS);
     }
 }
 
@@ -469,10 +439,11 @@ impl AppState {
             open_paths = boards.keys().cloned().collect();
         }
 
-        // Update MRU + persist open boards list (no boards lock held)
+        // Update MRU via UIState + persist open boards list (no boards lock held)
+        self.ui_state
+            .touch_recent(&canonical.display().to_string(), &board_name);
         {
             let mut config = self.config.write().await;
-            config.touch_recent(&canonical, &board_name);
             config.open_boards = open_paths;
             let _ = config.save();
         }
@@ -591,9 +562,9 @@ impl AppState {
 
         // Strategy 3: fall back to MRU — the most recently opened board
         if board_dir.is_none() {
-            let config = self.config.read().await;
-            if let Some(recent) = config.recent_boards.first() {
-                let path = &recent.path;
+            let recent_boards = self.ui_state.recent_boards();
+            if let Some(recent) = recent_boards.first() {
+                let path = std::path::PathBuf::from(&recent.path);
                 tracing::info!(
                     path = %path.display(),
                     name = %recent.name,
@@ -601,7 +572,7 @@ impl AppState {
                 );
                 // MRU stores the canonical .kanban path — check its parent exists
                 if path.is_dir() {
-                    board_dir = Some(path.clone());
+                    board_dir = Some(path);
                 } else {
                     tracing::warn!(
                         path = %path.display(),
@@ -975,19 +946,17 @@ mod tests {
     }
 
     #[test]
-    fn test_mru_config_touch_and_truncate() {
-        let mut config = AppConfig::default();
+    fn test_mru_uistate_touch_and_truncate() {
+        let ui_state = swissarmyhammer_commands::UIState::new();
 
         for i in 0..25 {
-            config.touch_recent(
-                &PathBuf::from(format!("/board/{}", i)),
-                &format!("Board {}", i),
-            );
+            ui_state.touch_recent(&format!("/board/{}", i), &format!("Board {}", i));
         }
 
-        assert_eq!(config.recent_boards.len(), MAX_RECENT_BOARDS);
-        // Most recent should be first
-        assert_eq!(config.recent_boards[0].name, "Board 24");
+        let boards = ui_state.recent_boards();
+        assert_eq!(boards.len(), 20); // MAX_RECENT_BOARDS
+                                      // Most recent should be first
+        assert_eq!(boards[0].name, "Board 24");
     }
 
     #[test]
@@ -1023,15 +992,15 @@ mod tests {
 
     #[test]
     fn test_mru_deduplicates() {
-        let mut config = AppConfig::default();
-        let path = PathBuf::from("/board/a");
+        let ui_state = swissarmyhammer_commands::UIState::new();
 
-        config.touch_recent(&path, "Board A");
-        config.touch_recent(&PathBuf::from("/board/b"), "Board B");
-        config.touch_recent(&path, "Board A Updated");
+        ui_state.touch_recent("/board/a", "Board A");
+        ui_state.touch_recent("/board/b", "Board B");
+        ui_state.touch_recent("/board/a", "Board A Updated");
 
-        assert_eq!(config.recent_boards.len(), 2);
-        assert_eq!(config.recent_boards[0].name, "Board A Updated");
+        let boards = ui_state.recent_boards();
+        assert_eq!(boards.len(), 2);
+        assert_eq!(boards[0].name, "Board A Updated");
     }
 
     // =========================================================================

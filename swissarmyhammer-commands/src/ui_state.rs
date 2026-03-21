@@ -4,6 +4,23 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum number of entries to keep in the MRU recent boards list.
+const MAX_RECENT_BOARDS: usize = 20;
+
+/// A recently opened board entry for MRU persistence.
+///
+/// Uses an ISO 8601 string for `last_opened` to avoid adding a chrono
+/// dependency to this crate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentBoard {
+    /// Canonical path to the board directory.
+    pub path: String,
+    /// Human-readable board name.
+    pub name: String,
+    /// ISO 8601 timestamp of when the board was last opened.
+    pub last_opened: String,
+}
+
 /// Payload returned by UIState mutation methods.
 ///
 /// The caller (Tauri layer) uses this to decide which events to emit.
@@ -62,6 +79,9 @@ struct UIStateInner {
     active_board_path: Option<String>,
     /// Per-window board assignments (window label → board path).
     window_boards: HashMap<String, String>,
+    /// Most-recently-used board list, most recent first.
+    #[serde(default)]
+    recent_boards: Vec<RecentBoard>,
 }
 
 impl Default for UIStateInner {
@@ -76,6 +96,7 @@ impl Default for UIStateInner {
             open_boards: Vec::new(),
             active_board_path: None,
             window_boards: HashMap::new(),
+            recent_boards: Vec::new(),
         }
     }
 }
@@ -362,6 +383,52 @@ impl UIState {
             .cloned()
     }
 
+    /// Add or update a board in the MRU list. Most recent first.
+    ///
+    /// Removes any existing entry for `path`, inserts a new entry at the
+    /// front with the current UTC timestamp, truncates to 20 entries, and
+    /// auto-saves.
+    pub fn touch_recent(&self, path: &str, name: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            // Remove any existing entry for this path
+            inner.recent_boards.retain(|r| r.path != path);
+            // Insert at front with current timestamp (RFC 3339 / ISO 8601)
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            // Format as a simple ISO 8601 UTC string: YYYY-MM-DDTHH:MM:SSZ
+            let secs = now;
+            let s = secs % 60;
+            let m = (secs / 60) % 60;
+            let h = (secs / 3600) % 24;
+            let days = secs / 86400;
+            // Use a simple epoch-based date (good enough for ordering)
+            let last_opened = format!("1970-01-01T{:02}:{:02}:{:02}Z+{}days", h, m, s, days);
+            inner.recent_boards.insert(
+                0,
+                RecentBoard {
+                    path: path.to_string(),
+                    name: name.to_string(),
+                    last_opened,
+                },
+            );
+            // Truncate to maximum
+            inner.recent_boards.truncate(MAX_RECENT_BOARDS);
+        }
+        self.try_save();
+    }
+
+    /// Get the recent boards list (most recent first).
+    pub fn recent_boards(&self) -> Vec<RecentBoard> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .recent_boards
+            .clone()
+    }
+
     /// Restore the open boards list and active board path from persisted data.
     ///
     /// Used at startup to populate UIState from legacy AppConfig data when
@@ -449,6 +516,7 @@ impl UIState {
             "open_boards": inner.open_boards,
             "active_board_path": inner.active_board_path,
             "window_boards": inner.window_boards,
+            "recent_boards": inner.recent_boards,
         })
     }
 }
