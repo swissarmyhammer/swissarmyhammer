@@ -112,12 +112,15 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
       const bp = boardPathRef.current;
       if (!bp) return;
       try {
-        await invoke("start_drag_session", {
-          taskId,
-          taskFields,
-          boardPath: bp,
-          sourceWindowLabel: getCurrentWindow().label,
-          copyMode,
+        await invoke("dispatch_command", {
+          cmd: "drag.start",
+          args: {
+            taskId,
+            taskFields,
+            boardPath: bp,
+            sourceWindowLabel: getCurrentWindow().label,
+            copyMode,
+          },
         });
         setIsSource(true);
       } catch (e) {

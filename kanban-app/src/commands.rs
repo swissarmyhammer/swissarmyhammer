@@ -951,6 +951,12 @@ pub(crate) async fn dispatch_command_internal(
         }
     }
 
+    // Emit drag-session-active event when drag.start completes successfully.
+    if let Some(drag_start) = result.get("DragStart") {
+        let payload = drag_start.clone();
+        let _ = app.emit("drag-session-active", &payload);
+    }
+
     // After any UIStateChange, push the full state snapshot to the frontend.
     // This broad approach ensures the React UIStateProvider stays in sync
     // without needing per-field event types. Optimise per-field later if needed.
@@ -1041,58 +1047,6 @@ pub async fn list_available_commands(
 // ---------------------------------------------------------------------------
 // Drag session commands — cross-window drag coordination
 // ---------------------------------------------------------------------------
-
-/// Start a cross-window drag session.
-///
-/// Called when a drag begins in any window. Stores the session in AppState
-/// and broadcasts a `drag-session-active` event to all windows.
-///
-/// If a stale session exists (older than 30 seconds), it is silently replaced.
-#[tauri::command]
-pub async fn start_drag_session(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    task_id: String,
-    task_fields: Value,
-    board_path: String,
-    source_window_label: String,
-    copy_mode: bool,
-) -> Result<Value, String> {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    // Auto-cancel stale sessions (>30s old)
-    if let Some(ref existing) = state.ui_state.drag_session() {
-        if now_ms.saturating_sub(existing.started_at_ms) > crate::state::DRAG_SESSION_MAX_AGE_MS {
-            tracing::info!(
-                session_id = %existing.session_id,
-                "auto-cancelling stale drag session"
-            );
-            let _ = app.emit(
-                "drag-session-cancelled",
-                json!({ "session_id": existing.session_id }),
-            );
-            state.ui_state.cancel_drag();
-        }
-    }
-
-    let session = swissarmyhammer_commands::DragSession {
-        session_id: ulid::Ulid::new().to_string(),
-        source_board_path: board_path,
-        source_window_label,
-        task_id,
-        task_fields,
-        copy_mode,
-        started_at_ms: now_ms,
-    };
-    let session_id = session.session_id.clone();
-    let payload = serde_json::to_value(&session).map_err(|e| e.to_string())?;
-    state.ui_state.start_drag(session);
-    let _ = app.emit("drag-session-active", &payload);
-    Ok(json!({ "session_id": session_id }))
-}
 
 /// Cancel the active drag session.
 ///

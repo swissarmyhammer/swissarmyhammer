@@ -120,20 +120,23 @@ describe("DragSessionProvider", () => {
     expect(result.current.isSource).toBe(false);
   });
 
-  it("startSession invokes start_drag_session with correct params", async () => {
-    mockInvoke.mockResolvedValue({ session_id: "new-sess" });
+  it("startSession invokes dispatch_command drag.start with correct params", async () => {
+    mockInvoke.mockResolvedValue({ result: { DragStart: { session_id: "new-sess" } }, undoable: false });
     const { result } = renderHook(() => useDragSession(), { wrapper });
 
     await act(async () => {
       await result.current.startSession("task-42", { title: "My task" }, false);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("start_drag_session", {
-      taskId: "task-42",
-      taskFields: { title: "My task" },
-      boardPath: "/board/a/.kanban",
-      sourceWindowLabel: "main",
-      copyMode: false,
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.start",
+      args: {
+        taskId: "task-42",
+        taskFields: { title: "My task" },
+        boardPath: "/board/a/.kanban",
+        sourceWindowLabel: "main",
+        copyMode: false,
+      },
     });
   });
 

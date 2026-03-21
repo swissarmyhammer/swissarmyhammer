@@ -6,6 +6,7 @@
 
 pub mod app_commands;
 pub mod column_commands;
+pub mod drag_commands;
 pub mod entity_commands;
 pub mod file_commands;
 pub mod task_commands;
@@ -104,6 +105,9 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     );
     map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
 
+    // Drag session commands
+    map.insert("drag.start".into(), Arc::new(drag_commands::DragStartCmd));
+
     // File / board management commands
     map.insert(
         "file.switchBoard".into(),
@@ -166,8 +170,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file = 27
-        assert_eq!(cmds.len(), 27);
+        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 1 drag = 28
+        assert_eq!(cmds.len(), 28);
     }
 
     // =========================================================================
@@ -557,5 +561,137 @@ mod tests {
         assert!(cmd.available(&ctx));
         cmd.execute(&ctx).await.unwrap();
         assert_eq!(ui.keymap_mode(), "vim");
+    }
+
+    // =========================================================================
+    // Drag command tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn drag_start_cmd_stores_session() {
+        let cmds = register_commands();
+        let cmd = cmds.get("drag.start").unwrap();
+        let ui = Arc::new(UIState::new());
+        assert!(ui.drag_session().is_none());
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("boardPath".into(), serde_json::json!("/boards/a/.kanban"));
+        args.insert("taskId".into(), serde_json::json!("task-123"));
+        args.insert("taskFields".into(), serde_json::json!({"title": "My Task"}));
+        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        ctx.ui_state = Some(Arc::clone(&ui));
+
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok(), "drag.start should succeed: {:?}", result);
+
+        let session = ui.drag_session().expect("session should be stored");
+        assert_eq!(session.task_id, "task-123");
+        assert_eq!(session.source_board_path, "/boards/a/.kanban");
+        assert_eq!(session.source_window_label, "main");
+        assert!(!session.copy_mode);
+    }
+
+    #[tokio::test]
+    async fn drag_start_cmd_returns_drag_start_result() {
+        let cmds = register_commands();
+        let cmd = cmds.get("drag.start").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("boardPath".into(), serde_json::json!("/boards/b/.kanban"));
+        args.insert("taskId".into(), serde_json::json!("task-456"));
+        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        ctx.ui_state = Some(Arc::clone(&ui));
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert!(
+            result.get("DragStart").is_some(),
+            "result must have DragStart key"
+        );
+        let drag_start = result.get("DragStart").unwrap();
+        assert_eq!(drag_start["task_id"].as_str().unwrap(), "task-456");
+        assert_eq!(
+            drag_start["source_board_path"].as_str().unwrap(),
+            "/boards/b/.kanban"
+        );
+    }
+
+    #[tokio::test]
+    async fn drag_start_cmd_replaces_existing_session() {
+        let cmds = register_commands();
+        let cmd = cmds.get("drag.start").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        // Start first session
+        let mut args1 = std::collections::HashMap::new();
+        args1.insert("boardPath".into(), serde_json::json!("/boards/a"));
+        args1.insert("taskId".into(), serde_json::json!("task-1"));
+        let mut ctx1 = CommandContext::new("drag.start", vec![], None, args1);
+        ctx1.ui_state = Some(Arc::clone(&ui));
+        cmd.execute(&ctx1).await.unwrap();
+
+        // Start second session — should replace
+        let mut args2 = std::collections::HashMap::new();
+        args2.insert("boardPath".into(), serde_json::json!("/boards/b"));
+        args2.insert("taskId".into(), serde_json::json!("task-2"));
+        let mut ctx2 = CommandContext::new("drag.start", vec![], None, args2);
+        ctx2.ui_state = Some(Arc::clone(&ui));
+        cmd.execute(&ctx2).await.unwrap();
+
+        let session = ui.drag_session().unwrap();
+        assert_eq!(session.task_id, "task-2");
+        assert_eq!(session.source_board_path, "/boards/b");
+    }
+
+    #[tokio::test]
+    async fn drag_start_cmd_missing_task_id_returns_error() {
+        let cmds = register_commands();
+        let cmd = cmds.get("drag.start").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("boardPath".into(), serde_json::json!("/boards/a"));
+        // taskId intentionally omitted
+        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        ctx.ui_state = Some(Arc::clone(&ui));
+
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without taskId");
+    }
+
+    #[tokio::test]
+    async fn drag_start_cmd_copy_mode_defaults_to_false() {
+        let cmds = register_commands();
+        let cmd = cmds.get("drag.start").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("boardPath".into(), serde_json::json!("/boards/a"));
+        args.insert("taskId".into(), serde_json::json!("task-1"));
+        // copyMode not provided
+        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        ctx.ui_state = Some(Arc::clone(&ui));
+
+        cmd.execute(&ctx).await.unwrap();
+        let session = ui.drag_session().unwrap();
+        assert!(!session.copy_mode);
+    }
+
+    #[tokio::test]
+    async fn drag_start_cmd_copy_mode_can_be_set() {
+        let cmds = register_commands();
+        let cmd = cmds.get("drag.start").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("boardPath".into(), serde_json::json!("/boards/a"));
+        args.insert("taskId".into(), serde_json::json!("task-1"));
+        args.insert("copyMode".into(), serde_json::json!(true));
+        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        ctx.ui_state = Some(Arc::clone(&ui));
+
+        cmd.execute(&ctx).await.unwrap();
+        let session = ui.drag_session().unwrap();
+        assert!(session.copy_mode);
     }
 }

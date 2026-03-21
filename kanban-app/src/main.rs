@@ -70,7 +70,6 @@ fn main() {
             commands::rebuild_menu_from_manifest,
             commands::list_views,
             commands::create_window,
-            commands::start_drag_session,
             commands::cancel_drag_session,
             commands::complete_drag_session,
             commands::restore_windows,

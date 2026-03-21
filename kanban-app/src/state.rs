@@ -192,7 +192,6 @@ impl BoardHandle {
 }
 
 /// Maximum age of a drag session before it is considered stale (30 seconds).
-pub(crate) const DRAG_SESSION_MAX_AGE_MS: u64 = 30_000;
 
 /// The shared application state, managed by Tauri.
 pub(crate) struct AppState {
@@ -1035,13 +1034,13 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
 
-        // Session just started — not stale
+        // Session just started — not stale (max age is 30 seconds = 30_000 ms)
         session.started_at_ms = now_ms;
-        assert!(now_ms.saturating_sub(session.started_at_ms) <= DRAG_SESSION_MAX_AGE_MS);
+        assert!(now_ms.saturating_sub(session.started_at_ms) <= 30_000);
 
         // Session 31 seconds ago — stale
         session.started_at_ms = now_ms - 31_000;
-        assert!(now_ms.saturating_sub(session.started_at_ms) > DRAG_SESSION_MAX_AGE_MS);
+        assert!(now_ms.saturating_sub(session.started_at_ms) > 30_000);
     }
 
     #[test]

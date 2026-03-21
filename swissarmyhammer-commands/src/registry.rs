@@ -185,6 +185,7 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
             include_str!("../builtin/commands/settings.yaml"),
         ),
         ("file", include_str!("../builtin/commands/file.yaml")),
+        ("drag", include_str!("../builtin/commands/drag.yaml")),
     ]
 }
 
