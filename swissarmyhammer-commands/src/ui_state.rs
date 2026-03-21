@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
@@ -25,38 +26,127 @@ pub enum UIStateChange {
 /// Thread-safe via internal `RwLock`. All mutation methods return a
 /// `UIStateChange` describing what changed, so the caller can emit events.
 /// Methods return `None` when the mutation would be a no-op.
+///
+/// When constructed via `UIState::load(path)`, mutations are automatically
+/// persisted to the YAML config file. When constructed via `UIState::new()`,
+/// no persistence occurs (suitable for tests).
 pub struct UIState {
     inner: RwLock<UIStateInner>,
+    /// Path to the YAML config file, if persistence is enabled.
+    config_path: Option<PathBuf>,
 }
 
 /// Interior mutable state behind the RwLock.
+///
+/// Fields marked `#[serde(skip)]` are transient — they reset on restart
+/// and are not written to the config file.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 struct UIStateInner {
     /// Stack of open inspector monikers (e.g. `["task:01XYZ", "tag:01TAG"]`).
     inspector_stack: Vec<String>,
     /// ID of the currently active view.
     active_view_id: String,
-    /// Whether the command palette is open.
+    /// Whether the command palette is open. Transient — not persisted.
+    #[serde(skip)]
     palette_open: bool,
     /// Current keymap mode: "cua", "vim", or "emacs".
     keymap_mode: String,
-    /// Current focus scope chain (innermost first).
+    /// Current focus scope chain (innermost first). Transient — not persisted.
+    #[serde(skip)]
     scope_chain: Vec<String>,
 }
 
+impl Default for UIStateInner {
+    /// Returns the default UI state values.
+    fn default() -> Self {
+        Self {
+            inspector_stack: Vec::new(),
+            active_view_id: String::new(),
+            palette_open: false,
+            keymap_mode: "cua".to_string(),
+            scope_chain: Vec::new(),
+        }
+    }
+}
+
 impl UIState {
-    /// Create a new UIState with default values.
+    /// Create a new UIState with default values and no persistence.
     ///
     /// Defaults: empty inspector stack, empty active_view_id, palette closed,
-    /// keymap mode "cua", empty scope chain.
+    /// keymap mode "cua", empty scope chain. Suitable for tests.
     pub fn new() -> Self {
         Self {
-            inner: RwLock::new(UIStateInner {
-                inspector_stack: Vec::new(),
-                active_view_id: String::new(),
-                palette_open: false,
-                keymap_mode: "cua".to_string(),
-                scope_chain: Vec::new(),
-            }),
+            inner: RwLock::new(UIStateInner::default()),
+            config_path: None,
+        }
+    }
+
+    /// Load UIState from a YAML config file, or return defaults if the file is
+    /// missing or malformed.
+    ///
+    /// Once loaded, all subsequent mutations will auto-save to the same path.
+    /// Parent directories are created on first save if they don't exist.
+    pub fn load(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        let inner = Self::read_from_file(&path);
+        Self {
+            inner: RwLock::new(inner),
+            config_path: Some(path),
+        }
+    }
+
+    /// Read state from a YAML file, returning defaults on any error.
+    fn read_from_file(path: &Path) -> UIStateInner {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => match serde_yaml_ng::from_str::<UIStateInner>(&contents) {
+                Ok(inner) => inner,
+                Err(err) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "UIState: failed to parse YAML config, using defaults"
+                    );
+                    UIStateInner::default()
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => UIStateInner::default(),
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "UIState: failed to read config file, using defaults"
+                );
+                UIStateInner::default()
+            }
+        }
+    }
+
+    /// Save current state to the configured YAML path.
+    ///
+    /// Creates parent directories if needed. Returns an error if writing fails.
+    /// No-op if no config path was set (i.e. constructed via `UIState::new()`).
+    pub fn save(&self) -> std::io::Result<()> {
+        let Some(ref path) = self.config_path else {
+            return Ok(());
+        };
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let yaml = serde_yaml_ng::to_string(&*inner)
+            .map_err(|e| std::io::Error::other(format!("YAML serialization failed: {e}")))?;
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(path, yaml)
+    }
+
+    /// Try to save; log errors but never panic or propagate.
+    ///
+    /// Called internally after every persisted mutation.
+    fn try_save(&self) {
+        if let Err(err) = self.save() {
+            tracing::warn!(error = %err, "UIState: failed to auto-save config");
         }
     }
 
@@ -64,60 +154,81 @@ impl UIState {
     ///
     /// True stack: always pushes. If the moniker is already on top, no-op.
     /// If the moniker exists deeper in the stack, removes it and pushes to top.
+    /// Auto-saves if a config path is configured.
     pub fn inspect(&self, moniker: &str) -> UIStateChange {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
 
-        // Already on top — no-op
-        if inner.inspector_stack.last().map(|s| s.as_str()) == Some(moniker) {
-            return UIStateChange::InspectorStack(inner.inspector_stack.clone());
-        }
+            // Already on top — no-op
+            if inner.inspector_stack.last().map(|s| s.as_str()) == Some(moniker) {
+                return UIStateChange::InspectorStack(inner.inspector_stack.clone());
+            }
 
-        // Remove if already in stack (moves to top)
-        inner.inspector_stack.retain(|m| m != moniker);
-        inner.inspector_stack.push(moniker.to_string());
+            // Remove if already in stack (moves to top)
+            inner.inspector_stack.retain(|m| m != moniker);
+            inner.inspector_stack.push(moniker.to_string());
 
-        UIStateChange::InspectorStack(inner.inspector_stack.clone())
+            UIStateChange::InspectorStack(inner.inspector_stack.clone())
+        };
+        self.try_save();
+        change
     }
 
     /// Close the topmost inspector entry.
     ///
     /// Returns `None` if the stack was already empty.
+    /// Auto-saves if a config path is configured.
     pub fn inspector_close(&self) -> Option<UIStateChange> {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.inspector_stack.is_empty() {
-            return None;
-        }
-        inner.inspector_stack.pop();
-        Some(UIStateChange::InspectorStack(inner.inspector_stack.clone()))
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if inner.inspector_stack.is_empty() {
+                return None;
+            }
+            inner.inspector_stack.pop();
+            Some(UIStateChange::InspectorStack(inner.inspector_stack.clone()))
+        };
+        self.try_save();
+        change
     }
 
     /// Close all inspector entries.
     ///
     /// Returns `None` if the stack was already empty.
+    /// Auto-saves if a config path is configured.
     pub fn inspector_close_all(&self) -> Option<UIStateChange> {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.inspector_stack.is_empty() {
-            return None;
-        }
-        inner.inspector_stack.clear();
-        Some(UIStateChange::InspectorStack(inner.inspector_stack.clone()))
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if inner.inspector_stack.is_empty() {
+                return None;
+            }
+            inner.inspector_stack.clear();
+            Some(UIStateChange::InspectorStack(inner.inspector_stack.clone()))
+        };
+        self.try_save();
+        change
     }
 
     /// Set the active view ID.
     ///
     /// Returns `None` if the view ID is unchanged.
+    /// Auto-saves if a config path is configured.
     pub fn set_active_view(&self, id: &str) -> Option<UIStateChange> {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.active_view_id == id {
-            return None;
-        }
-        inner.active_view_id = id.to_string();
-        Some(UIStateChange::ActiveView(inner.active_view_id.clone()))
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if inner.active_view_id == id {
+                return None;
+            }
+            inner.active_view_id = id.to_string();
+            Some(UIStateChange::ActiveView(inner.active_view_id.clone()))
+        };
+        self.try_save();
+        change
     }
 
     /// Set whether the command palette is open.
     ///
-    /// Returns `None` if the value is unchanged.
+    /// Returns `None` if the value is unchanged. Palette state is transient
+    /// and is NOT persisted to the config file.
     pub fn set_palette_open(&self, open: bool) -> Option<UIStateChange> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if inner.palette_open == open {
@@ -125,31 +236,45 @@ impl UIState {
         }
         inner.palette_open = open;
         Some(UIStateChange::PaletteOpen(inner.palette_open))
+        // No try_save — palette_open is transient (#[serde(skip)])
     }
 
     /// Set the keymap mode (e.g. "cua", "vim", "emacs").
     ///
     /// Returns `None` if the mode is unchanged.
+    /// Auto-saves if a config path is configured.
     pub fn set_keymap_mode(&self, mode: &str) -> Option<UIStateChange> {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.keymap_mode == mode {
-            return None;
-        }
-        inner.keymap_mode = mode.to_string();
-        Some(UIStateChange::KeymapMode(inner.keymap_mode.clone()))
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if inner.keymap_mode == mode {
+                return None;
+            }
+            inner.keymap_mode = mode.to_string();
+            Some(UIStateChange::KeymapMode(inner.keymap_mode.clone()))
+        };
+        self.try_save();
+        change
     }
 
     /// Set the focus scope chain. Always returns the new scope chain.
+    ///
+    /// Scope chain is transient and is NOT persisted to the config file.
     pub fn set_scope_chain(&self, chain: Vec<String>) -> UIStateChange {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.scope_chain = chain;
         UIStateChange::ScopeChain(inner.scope_chain.clone())
+        // No try_save — scope_chain is transient (#[serde(skip)])
     }
 
     /// Set the inspector stack directly (used for startup restoration from config).
+    ///
+    /// Auto-saves if a config path is configured.
     pub fn set_inspector_stack(&self, stack: Vec<String>) {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.inspector_stack = stack;
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.inspector_stack = stack;
+        }
+        self.try_save();
     }
 
     /// Get a clone of the current inspector stack.
@@ -206,6 +331,7 @@ impl std::fmt::Debug for UIState {
             .field("palette_open", &inner.palette_open)
             .field("keymap_mode", &inner.keymap_mode)
             .field("scope_chain", &inner.scope_chain)
+            .field("config_path", &self.config_path)
             .finish()
     }
 }
@@ -219,6 +345,8 @@ impl Default for UIState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::fs;
 
     #[test]
     fn inspect_pushes_onto_stack() {
@@ -351,6 +479,100 @@ mod tests {
         let state = UIState::new();
         state.set_inspector_stack(vec!["task:01XYZ".into(), "tag:01TAG".into()]);
         assert_eq!(state.inspector_stack(), vec!["task:01XYZ", "tag:01TAG"]);
+    }
+
+    // --- Persistence tests ---
+
+    /// Returns a unique temp file path for each test run, avoiding collisions.
+    fn temp_yaml_path(suffix: &str) -> PathBuf {
+        let mut dir = env::temp_dir();
+        dir.push(format!(
+            "ui_state_test_{suffix}_{}.yaml",
+            std::process::id()
+        ));
+        dir
+    }
+
+    #[test]
+    fn load_missing_file_returns_defaults() {
+        let path = temp_yaml_path("missing");
+        // Ensure the file does not exist
+        let _ = fs::remove_file(&path);
+        let state = UIState::load(&path);
+        assert_eq!(state.keymap_mode(), "cua");
+        assert!(state.inspector_stack().is_empty());
+        assert_eq!(state.active_view_id(), "");
+    }
+
+    #[test]
+    fn load_malformed_yaml_returns_defaults() {
+        let path = temp_yaml_path("malformed");
+        fs::write(&path, b":::not valid yaml:::").unwrap();
+        let state = UIState::load(&path);
+        assert_eq!(state.keymap_mode(), "cua");
+        assert!(state.inspector_stack().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn round_trip_persists_state() {
+        let path = temp_yaml_path("roundtrip");
+        {
+            let state = UIState::load(&path);
+            state.set_keymap_mode("vim");
+            state.inspect("task:01XYZ");
+            state.set_active_view("board-view");
+            state.save().unwrap();
+        }
+        // Load again and verify
+        let state2 = UIState::load(&path);
+        assert_eq!(state2.keymap_mode(), "vim");
+        assert_eq!(state2.inspector_stack(), vec!["task:01XYZ"]);
+        assert_eq!(state2.active_view_id(), "board-view");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn transient_fields_not_persisted() {
+        let path = temp_yaml_path("transient");
+        {
+            let state = UIState::load(&path);
+            state.set_palette_open(true);
+            state.set_scope_chain(vec!["scope:x".to_string()]);
+            state.set_keymap_mode("emacs"); // persisted — forces a file to exist
+            state.save().unwrap();
+        }
+        let state2 = UIState::load(&path);
+        // Transient fields reset to defaults
+        assert!(!state2.palette_open());
+        assert!(state2.scope_chain().is_empty());
+        // Persisted field is intact
+        assert_eq!(state2.keymap_mode(), "emacs");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn auto_save_on_mutation() {
+        let path = temp_yaml_path("autosave");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            // Mutate — should auto-save without explicit save() call
+            state.set_keymap_mode("vim");
+        }
+        // Load from same path; mutation should have been persisted automatically
+        let state2 = UIState::load(&path);
+        assert_eq!(state2.keymap_mode(), "vim");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn new_without_path_no_persistence() {
+        // UIState::new() has no config_path — save() is a no-op
+        let state = UIState::new();
+        state.set_keymap_mode("vim");
+        // save() should return Ok without writing any file
+        state.save().expect("save on new() should be a no-op Ok");
     }
 
     #[test]
