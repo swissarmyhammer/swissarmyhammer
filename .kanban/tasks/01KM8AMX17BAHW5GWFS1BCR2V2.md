@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM85W10KVXQ4F4JVJCXXPN3A
-position_column: todo
-position_ordinal: 8b80
+position_column: done
+position_ordinal: ffffffffffe480
 title: Replace active_board_path with most_recent_board_path driven by window focus
 ---
 ## What
