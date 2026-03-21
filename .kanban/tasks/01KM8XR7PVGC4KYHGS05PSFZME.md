@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM8XQXTYWQ7R4EZ5PW8M2NZE
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffed80
 title: Route cancel_drag_session through dispatch_command
 ---
 ## What
