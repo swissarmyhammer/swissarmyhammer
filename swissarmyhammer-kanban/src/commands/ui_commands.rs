@@ -139,6 +139,36 @@ impl Command for PaletteCloseCmd {
     }
 }
 
+/// Set the focus scope chain.
+///
+/// Always available. Required arg: `scope_chain` (array of strings).
+/// This replaces the standalone `set_focus` Tauri command, routing through
+/// the unified command dispatch pipeline.
+pub struct SetFocusCmd;
+
+#[async_trait]
+impl Command for SetFocusCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+        let scope_chain: Vec<String> = ctx
+            .args
+            .get("scope_chain")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let change = ui.set_scope_chain(scope_chain);
+        Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+    }
+}
+
 /// Set the active view by ID.
 ///
 /// Always available. Required arg: `view_id`.

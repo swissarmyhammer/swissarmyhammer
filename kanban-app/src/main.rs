@@ -53,7 +53,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::log_command,
             commands::dispatch_command,
-            commands::set_focus,
             commands::list_available_commands,
             commands::show_context_menu,
             commands::list_open_boards,

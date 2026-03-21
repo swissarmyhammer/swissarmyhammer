@@ -413,9 +413,9 @@ mod tests {
         //         entity.delete, entity.archive, entity.unarchive, tag.update,
         //         column.reorder, attachment.delete = 11
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
-        //     palette.close, view.set = 6
+        //     palette.close, view.set, setFocus = 7
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
-        assert_eq!(registry.all_commands().len(), 23);
+        assert_eq!(registry.all_commands().len(), 24);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());

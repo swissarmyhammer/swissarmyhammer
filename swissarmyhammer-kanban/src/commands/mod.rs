@@ -102,6 +102,7 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "ui.view.set".into(),
         Arc::new(ui_commands::SetActiveViewCmd),
     );
+    map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
 
     // File / board management commands
     map.insert(
@@ -165,8 +166,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 6 UI + 6 app + 2 file = 26
-        assert_eq!(cmds.len(), 26);
+        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file = 27
+        assert_eq!(cmds.len(), 27);
     }
 
     // =========================================================================
@@ -407,6 +408,60 @@ mod tests {
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert_eq!(ui.keymap_mode(), "vim");
+    }
+
+    #[tokio::test]
+    async fn set_focus_cmd_sets_scope_chain() {
+        let cmds = register_commands();
+        let cmd = cmds.get("ui.setFocus").unwrap();
+        let ui = Arc::new(UIState::new());
+        assert!(ui.scope_chain().is_empty());
+
+        let mut args = std::collections::HashMap::new();
+        args.insert(
+            "scope_chain".to_string(),
+            serde_json::json!(["task:01XYZ", "column:todo"]),
+        );
+        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, args);
+        ctx.ui_state = Some(Arc::clone(&ui));
+
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert_eq!(ui.scope_chain(), vec!["task:01XYZ", "column:todo"]);
+    }
+
+    #[tokio::test]
+    async fn set_focus_cmd_clears_scope_chain_with_empty_arg() {
+        let cmds = register_commands();
+        let cmd = cmds.get("ui.setFocus").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.set_scope_chain(vec!["task:01XYZ".to_string()]);
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("scope_chain".to_string(), serde_json::json!([]));
+        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, args);
+        ctx.ui_state = Some(Arc::clone(&ui));
+
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(ui.scope_chain().is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_focus_cmd_defaults_to_empty_when_no_arg() {
+        let cmds = register_commands();
+        let cmd = cmds.get("ui.setFocus").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.set_scope_chain(vec!["task:01XYZ".to_string()]);
+
+        // No scope_chain arg — should default to empty
+        let ctx_empty: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, ctx_empty);
+        ctx.ui_state = Some(Arc::clone(&ui));
+
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(ui.scope_chain().is_empty());
     }
 
     #[tokio::test]

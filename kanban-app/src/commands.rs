@@ -769,22 +769,6 @@ pub async fn rebuild_menu_from_manifest(
 }
 
 // ---------------------------------------------------------------------------
-// set_focus — store the current focus scope chain
-// ---------------------------------------------------------------------------
-
-/// Store the current focus scope chain from the frontend.
-///
-/// The scope chain is an ordered list of `type:id` monikers representing
-/// the focused element hierarchy. It is used by `dispatch_command` when
-/// no explicit scope chain is provided.
-#[tauri::command]
-pub async fn set_focus(state: State<'_, AppState>, scope_chain: Vec<String>) -> Result<(), String> {
-    tracing::debug!(scope_chain = ?scope_chain, "set_focus");
-    state.ui_state.set_scope_chain(scope_chain);
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // log_command — lightweight log entry for commands that execute in the frontend
 // ---------------------------------------------------------------------------
 

@@ -41,10 +41,12 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
         }
         current = current.parent;
       }
-      // Fire and forget -- don't await
-      invoke("set_focus", { scopeChain: chain }).catch((error) => console.error("set_focus failed:", error));
+      // Fire and forget -- don't await.
+      // Route through dispatch_command so focus changes flow through the unified
+      // command pipeline (logging, UIState sync, etc.).
+      invoke("dispatch_command", { cmd: "ui.setFocus", args: { scope_chain: chain } }).catch((error) => console.error("ui.setFocus failed:", error));
     } else {
-      invoke("set_focus", { scopeChain: [] }).catch((error) => console.error("set_focus failed:", error));
+      invoke("dispatch_command", { cmd: "ui.setFocus", args: { scope_chain: [] } }).catch((error) => console.error("ui.setFocus failed:", error));
     }
   }, []);
 
